@@ -4,4 +4,5 @@
 # depends on.  See docs/architecture/architecture.md for the full picture.
 
 add_subdirectory(base)
+add_subdirectory(url)
 add_subdirectory(browser)

@@ -44,6 +44,16 @@ apply_compiler_warnings(neko_base_tests)
 gtest_discover_tests(neko_base_tests DISCOVERY_MODE PRE_TEST)
 
 # -----------------------------------------------------------------------------
+# neko_url_tests
+# -----------------------------------------------------------------------------
+add_executable(neko_url_tests
+  url/url_test.cpp
+)
+target_link_libraries(neko_url_tests PRIVATE neko::url gtest_main)
+apply_compiler_warnings(neko_url_tests)
+gtest_discover_tests(neko_url_tests DISCOVERY_MODE PRE_TEST)
+
+# -----------------------------------------------------------------------------
 # neko_browser_tests
 # -----------------------------------------------------------------------------
 add_executable(neko_browser_tests
