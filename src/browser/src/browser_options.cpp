@@ -23,8 +23,8 @@ std::string UsageText() {
          "      --verbose              Enable debug logging.\n"
          "      --log-level <level>    One of trace, debug, info, warning, error, fatal.\n"
          "\n"
-         "Phase 0 status: navigation, rendering and the GUI are NOT IMPLEMENTED yet.\n"
-         "This executable currently validates the CLI, logging and build pipeline.\n";
+         "Phase 6 status: http:// fetching, HTML parsing, styling, layout and\n"
+         "software rendering are implemented; the GUI is not yet available.\n";
 }
 
 ParseResult ParseCommandLine(int argc, char** argv) {
