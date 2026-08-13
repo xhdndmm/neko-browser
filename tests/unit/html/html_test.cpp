@@ -195,5 +195,27 @@ TEST(HtmlTest, NoahsArkBoundsFormattingElements) {
             "<html><head></head><body><b class=\"x\"><b><b class=\"x\"><b>y</b></b></b></b></body></html>");
 }
 
+TEST(HtmlTest, ScriptDataEscapedComment) {
+  auto doc = ParseDoc("<script>a<!--b-->c</script><p>x</p>");
+  dom::Element* script = dom::QuerySelector(*doc, "script");
+  ASSERT_NE(script, nullptr);
+  EXPECT_EQ(script->TextContent(), "a<!--b-->c");
+  dom::Element* p = dom::QuerySelector(*doc, "p");
+  ASSERT_NE(p, nullptr);
+  EXPECT_EQ(p->TextContent(), "x");
+}
+
+TEST(HtmlTest, ScriptDataDoubleEscape) {
+  // A nested <script> inside an HTML-comment-like <!-- --> region must not
+  // close the outer script; it enters the double-escaped state instead.
+  auto doc = ParseDoc("<script><!--<script></script>--></script><p>x</p>");
+  dom::Element* script = dom::QuerySelector(*doc, "script");
+  ASSERT_NE(script, nullptr);
+  EXPECT_EQ(script->TextContent(), "<!--<script></script>-->");
+  dom::Element* p = dom::QuerySelector(*doc, "p");
+  ASSERT_NE(p, nullptr);
+  EXPECT_EQ(p->TextContent(), "x");
+}
+
 }  // namespace
 }  // namespace neko::html

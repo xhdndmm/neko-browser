@@ -83,7 +83,13 @@ Tokenizer::Tokenizer(std::string_view input) : input_(input) {}
 
 void Tokenizer::StartRawText(std::string_view tag_name) {
   raw_text_tag_ = std::string(tag_name);
-  state_ = (tag_name == "title" || tag_name == "textarea") ? State::kRcdata : State::kRawtext;
+  if (tag_name == "title" || tag_name == "textarea") {
+    state_ = State::kRcdata;
+  } else if (tag_name == "script") {
+    state_ = State::kScriptData;
+  } else {
+    state_ = State::kRawtext;
+  }
 }
 
 std::string_view Tokenizer::Peek(std::size_t offset) const {
@@ -205,10 +211,33 @@ std::string Tokenizer::ConsumeCharacterReference() {
 
 void Tokenizer::ProcessEof() {
   FlushCharacterRun();
+  // A pending "</..." literal that was being matched is emitted as text.
+  if (!pending_text_.empty()) {
+    Emit(Token::MakeCharacter(std::move(pending_text_)));
+    pending_text_.clear();
+  }
   switch (state_) {
     case State::kData:
     case State::kRcdata:
     case State::kRawtext:
+    case State::kScriptData:
+    case State::kScriptDataLessThanSign:
+    case State::kScriptDataEndTagOpen:
+    case State::kScriptDataEndTagName:
+    case State::kScriptDataEscapeStart:
+    case State::kScriptDataEscapeStartDash:
+    case State::kScriptDataEscaped:
+    case State::kScriptDataEscapedDash:
+    case State::kScriptDataEscapedDashDash:
+    case State::kScriptDataEscapedLessThanSign:
+    case State::kScriptDataEscapedEndTagOpen:
+    case State::kScriptDataEscapedEndTagName:
+    case State::kScriptDataDoubleEscapeStart:
+    case State::kScriptDataDoubleEscaped:
+    case State::kScriptDataDoubleEscapedDash:
+    case State::kScriptDataDoubleEscapedDashDash:
+    case State::kScriptDataDoubleEscapedLessThanSign:
+    case State::kScriptDataDoubleEscapeEnd:
       break;
     case State::kTagName:
     case State::kBeforeAttributeName:
@@ -640,6 +669,287 @@ void Tokenizer::ProcessChar(char c) {
       } else {
         // Public/system identifiers are not parsed yet; skip to '>'.
         state_ = State::kAfterDoctypeName;
+      }
+      break;
+
+    case State::kScriptData:
+      if (c == '<') {
+        FlushCharacterRun();
+        state_ = State::kScriptDataLessThanSign;
+      } else {
+        char_run_.push_back(c);
+      }
+      break;
+
+    case State::kScriptDataLessThanSign:
+      if (c == '/') {
+        pending_text_.clear();
+        pending_text_.append("</");
+        end_tag_name_.clear();
+        state_ = State::kScriptDataEndTagOpen;
+      } else if (c == '!') {
+        char_run_.append("<!");
+        state_ = State::kScriptDataEscapeStart;
+      } else {
+        char_run_.push_back('<');
+        ReconsumeIn(State::kScriptData);
+      }
+      break;
+
+    case State::kScriptDataEndTagOpen:
+      if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+        pending_text_.push_back(c);
+        end_tag_name_.push_back(static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c));
+        state_ = State::kScriptDataEndTagName;
+      } else {
+        FlushCharacterRun();
+        char_run_ += pending_text_;
+        pending_text_.clear();
+        ReconsumeIn(State::kScriptData);
+      }
+      break;
+
+    case State::kScriptDataEndTagName:
+      if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+        pending_text_.push_back(c);
+        end_tag_name_.push_back(static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c));
+      } else if (c == '>') {
+        if (end_tag_name_ == raw_text_tag_) {
+          Emit(Token::MakeEndTag(std::move(end_tag_name_)));
+          pending_text_.clear();
+          state_ = State::kData;
+        } else {
+          FlushCharacterRun();
+          char_run_ += pending_text_;
+          char_run_.push_back('>');
+          pending_text_.clear();
+          end_tag_name_.clear();
+          state_ = State::kScriptData;
+        }
+      } else if (IsAsciiWhitespace(c) || c == '/') {
+        if (end_tag_name_ == raw_text_tag_) {
+          Emit(Token::MakeEndTag(std::move(end_tag_name_)));
+          pending_text_.clear();
+          state_ = State::kData;
+        } else {
+          FlushCharacterRun();
+          char_run_ += pending_text_;
+          pending_text_.clear();
+          end_tag_name_.clear();
+          ReconsumeIn(State::kScriptData);
+        }
+      } else {
+        FlushCharacterRun();
+        char_run_ += pending_text_;
+        char_run_.push_back(c);
+        pending_text_.clear();
+        end_tag_name_.clear();
+        state_ = State::kScriptData;
+      }
+      break;
+
+    case State::kScriptDataEscapeStart:
+      if (c == '-') {
+        char_run_.push_back('-');
+        state_ = State::kScriptDataEscapeStartDash;
+      } else {
+        ReconsumeIn(State::kScriptData);
+      }
+      break;
+
+    case State::kScriptDataEscapeStartDash:
+      if (c == '-') {
+        char_run_.push_back('-');
+        state_ = State::kScriptDataEscapedDashDash;
+      } else {
+        ReconsumeIn(State::kScriptData);
+      }
+      break;
+
+    case State::kScriptDataEscaped:
+      if (c == '-') {
+        char_run_.push_back('-');
+        state_ = State::kScriptDataEscapedDash;
+      } else if (c == '<') {
+        state_ = State::kScriptDataEscapedLessThanSign;
+      } else {
+        char_run_.push_back(c);
+      }
+      break;
+
+    case State::kScriptDataEscapedDash:
+      if (c == '-') {
+        char_run_.push_back('-');
+        state_ = State::kScriptDataEscapedDashDash;
+      } else if (c == '<') {
+        state_ = State::kScriptDataEscapedLessThanSign;
+      } else {
+        char_run_.push_back(c);
+        state_ = State::kScriptDataEscaped;
+      }
+      break;
+
+    case State::kScriptDataEscapedDashDash:
+      if (c == '-') {
+        char_run_.push_back('-');
+      } else if (c == '<') {
+        state_ = State::kScriptDataEscapedLessThanSign;
+      } else if (c == '>') {
+        char_run_.push_back('>');
+        state_ = State::kScriptData;
+      } else {
+        char_run_.push_back(c);
+        state_ = State::kScriptDataEscaped;
+      }
+      break;
+
+    case State::kScriptDataEscapedLessThanSign:
+      if (c == '/') {
+        pending_text_.clear();
+        pending_text_.append("</");
+        end_tag_name_.clear();
+        state_ = State::kScriptDataEscapedEndTagOpen;
+      } else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+        temp_buffer_.clear();
+        char_run_.push_back('<');
+        ReconsumeIn(State::kScriptDataDoubleEscapeStart);
+      } else {
+        char_run_.push_back('<');
+        ReconsumeIn(State::kScriptDataEscaped);
+      }
+      break;
+
+    case State::kScriptDataEscapedEndTagOpen:
+      if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+        pending_text_.push_back(c);
+        end_tag_name_.push_back(static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c));
+        state_ = State::kScriptDataEscapedEndTagName;
+      } else {
+        FlushCharacterRun();
+        char_run_ += pending_text_;
+        pending_text_.clear();
+        ReconsumeIn(State::kScriptDataEscaped);
+      }
+      break;
+
+    case State::kScriptDataEscapedEndTagName:
+      if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+        pending_text_.push_back(c);
+        end_tag_name_.push_back(static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c));
+      } else if (c == '>') {
+        if (end_tag_name_ == raw_text_tag_) {
+          Emit(Token::MakeEndTag(std::move(end_tag_name_)));
+          pending_text_.clear();
+          state_ = State::kData;
+        } else {
+          FlushCharacterRun();
+          char_run_ += pending_text_;
+          char_run_.push_back('>');
+          pending_text_.clear();
+          end_tag_name_.clear();
+          state_ = State::kScriptDataEscaped;
+        }
+      } else if (IsAsciiWhitespace(c) || c == '/') {
+        if (end_tag_name_ == raw_text_tag_) {
+          Emit(Token::MakeEndTag(std::move(end_tag_name_)));
+          pending_text_.clear();
+          state_ = State::kData;
+        } else {
+          FlushCharacterRun();
+          char_run_ += pending_text_;
+          pending_text_.clear();
+          end_tag_name_.clear();
+          ReconsumeIn(State::kScriptDataEscaped);
+        }
+      } else {
+        FlushCharacterRun();
+        char_run_ += pending_text_;
+        char_run_.push_back(c);
+        pending_text_.clear();
+        end_tag_name_.clear();
+        state_ = State::kScriptDataEscaped;
+      }
+      break;
+
+    case State::kScriptDataDoubleEscapeStart:
+      if (IsAsciiWhitespace(c) || c == '/' || c == '>') {
+        char_run_.push_back(c);
+        state_ = (temp_buffer_ == "script") ? State::kScriptDataDoubleEscaped
+                                            : State::kScriptDataEscaped;
+      } else if (c >= 'A' && c <= 'Z') {
+        temp_buffer_.push_back(static_cast<char>(c + 32));
+        char_run_.push_back(c);
+      } else if (c >= 'a' && c <= 'z') {
+        temp_buffer_.push_back(c);
+        char_run_.push_back(c);
+      } else {
+        ReconsumeIn(State::kScriptDataEscaped);
+      }
+      break;
+
+    case State::kScriptDataDoubleEscaped:
+      if (c == '-') {
+        char_run_.push_back('-');
+        state_ = State::kScriptDataDoubleEscapedDash;
+      } else if (c == '<') {
+        char_run_.push_back('<');
+        state_ = State::kScriptDataDoubleEscapedLessThanSign;
+      } else {
+        char_run_.push_back(c);
+      }
+      break;
+
+    case State::kScriptDataDoubleEscapedDash:
+      if (c == '-') {
+        char_run_.push_back('-');
+        state_ = State::kScriptDataDoubleEscapedDashDash;
+      } else if (c == '<') {
+        char_run_.push_back('<');
+        state_ = State::kScriptDataDoubleEscapedLessThanSign;
+      } else {
+        char_run_.push_back(c);
+        state_ = State::kScriptDataDoubleEscaped;
+      }
+      break;
+
+    case State::kScriptDataDoubleEscapedDashDash:
+      if (c == '-') {
+        char_run_.push_back('-');
+      } else if (c == '<') {
+        char_run_.push_back('<');
+        state_ = State::kScriptDataDoubleEscapedLessThanSign;
+      } else if (c == '>') {
+        char_run_.push_back('>');
+        state_ = State::kScriptData;
+      } else {
+        char_run_.push_back(c);
+        state_ = State::kScriptDataDoubleEscaped;
+      }
+      break;
+
+    case State::kScriptDataDoubleEscapedLessThanSign:
+      if (c == '/') {
+        temp_buffer_.clear();
+        char_run_.push_back('/');
+        state_ = State::kScriptDataDoubleEscapeEnd;
+      } else {
+        ReconsumeIn(State::kScriptDataDoubleEscaped);
+      }
+      break;
+
+    case State::kScriptDataDoubleEscapeEnd:
+      if (IsAsciiWhitespace(c) || c == '/' || c == '>') {
+        char_run_.push_back(c);
+        state_ = (temp_buffer_ == "script") ? State::kScriptDataEscaped
+                                            : State::kScriptDataDoubleEscaped;
+      } else if (c >= 'A' && c <= 'Z') {
+        temp_buffer_.push_back(static_cast<char>(c + 32));
+        char_run_.push_back(c);
+      } else if (c >= 'a' && c <= 'z') {
+        temp_buffer_.push_back(c);
+        char_run_.push_back(c);
+      } else {
+        ReconsumeIn(State::kScriptDataDoubleEscaped);
       }
       break;
 

@@ -13,10 +13,10 @@ namespace neko::html {
 //
 // Supported features: tags, attributes (all quoting styles), comments,
 // doctype, character references (numeric + a common named subset), raw text
-// elements (script/style: RAWTEXT; title/textarea: RCDATA).
+// elements (script: script data with escape/double-escape states; style:
+// RAWTEXT; title/textarea: RCDATA).
 //
 // Known deviations (see docs/html/README.md):
-//   - script content uses RAWTEXT semantics (no JS escape states);
 //   - only a subset of the WHATWG named character reference table;
 //   - CDATA sections and <! handling are simplified.
 class Tokenizer {
@@ -66,6 +66,24 @@ class Tokenizer {
     kRawtextLessThanSign,
     kRawtextEndTagOpen,
     kRawtextEndTagName,
+    kScriptData,
+    kScriptDataLessThanSign,
+    kScriptDataEndTagOpen,
+    kScriptDataEndTagName,
+    kScriptDataEscapeStart,
+    kScriptDataEscapeStartDash,
+    kScriptDataEscaped,
+    kScriptDataEscapedDash,
+    kScriptDataEscapedDashDash,
+    kScriptDataEscapedLessThanSign,
+    kScriptDataEscapedEndTagOpen,
+    kScriptDataEscapedEndTagName,
+    kScriptDataDoubleEscapeStart,
+    kScriptDataDoubleEscaped,
+    kScriptDataDoubleEscapedDash,
+    kScriptDataDoubleEscapedDashDash,
+    kScriptDataDoubleEscapedLessThanSign,
+    kScriptDataDoubleEscapeEnd,
   };
 
   void ProcessChar(char c);
@@ -107,6 +125,9 @@ class Tokenizer {
   std::string raw_text_tag_;
   std::string pending_text_;  // "</..." candidate text if the end tag fails
   std::string end_tag_name_;  // accumulated end-tag name while matching
+
+  // Script data handling (WHATWG "temporary buffer").
+  std::string temp_buffer_;
 };
 
 }  // namespace neko::html
