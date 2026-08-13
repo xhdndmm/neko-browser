@@ -33,6 +33,16 @@ void Painter::PaintBox(const layout::LayoutBox& box, DisplayList& list) const {
                    *box.image, box.style.object_fit);
   }
 
+  // Atomic inline boxes (replaced <img>) within lines.
+  for (const layout::Line& line : box.lines) {
+    for (const layout::InlineBox& inline_box : line.boxes) {
+      if (inline_box.image != nullptr && !inline_box.image->empty()) {
+        list.DrawImage(inline_box.x, inline_box.y, inline_box.width, inline_box.height,
+                       *inline_box.image, inline_box.style.object_fit);
+      }
+    }
+  }
+
   // Inline text.
   for (const layout::Line& line : box.lines) {
     for (const layout::TextRun& run : line.runs) {

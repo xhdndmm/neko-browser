@@ -20,8 +20,8 @@ Layout Tree → Painter → DisplayList → Rasterizer → RGBA 缓冲 → PPM
   回退、抗锯齿、任意字号、UTF-8 解码、glyph 缓存）；`DrawImage` 按 object-fit
   计算具体对象尺寸后最近邻缩放 blit（含滚动与裁剪），无字体可用时回退到内嵌
   8x8 位图字体（公有领域，见 `font8x8.h` 头注释）。
-- `Painter`：按 背景 → 边框 → replaced 内容（<img>）→ 行内文本 → 块级子盒
-  的顺序生成命令。
+- `Painter`：按 背景 → 边框 → 行内 replaced 内容（`Line.boxes` 里的 `<img>`）
+  → 行内文本 → 块级子盒 的顺序生成命令。
 
 ## 文本渲染决策（ADR 0005 → ADR 0009）
 

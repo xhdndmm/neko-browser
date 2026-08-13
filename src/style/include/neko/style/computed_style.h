@@ -30,6 +30,9 @@ enum class TextAlign { kLeft, kCenter, kRight, kJustify };
 // object-fit (CSS Images 3 §4.5): how replaced content fits its box.
 enum class ObjectFit { kFill, kContain, kCover, kNone, kScaleDown };
 
+// vertical-align (CSS 2.2 §10.8): inline-level box alignment within a line.
+enum class VerticalAlign { kBaseline, kMiddle, kTop, kBottom, kTextTop, kTextBottom };
+
 enum class BorderStyle { kNone, kSolid, kDashed, kDotted };
 
 // A length that may be a percentage (resolved against the containing block).
@@ -66,6 +69,7 @@ struct ComputedStyle {
 
   // Replaced content fitting (img).
   ObjectFit object_fit = ObjectFit::kFill;
+  VerticalAlign vertical_align = VerticalAlign::kBaseline;
 
   // Font (inherited).
   float font_size = 16;

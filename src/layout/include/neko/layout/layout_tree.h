@@ -42,9 +42,21 @@ struct TextRun {
   const dom::Element* element = nullptr;  // source element (for hit-testing)
 };
 
+// A positioned atomic inline box (a replaced <img>) within a line.
+struct InlineBox {
+  const dom::Element* element = nullptr;
+  const image::Image* image = nullptr;
+  style::ComputedStyle style;
+  float x = 0;
+  float y = 0;
+  float width = 0;
+  float height = 0;
+};
+
 // A line of inline content.
 struct Line {
   std::vector<TextRun> runs;
+  std::vector<InlineBox> boxes;  // atomic inline boxes (replaced <img>)
   float height = 0;
   float baseline_offset = 0;  // distance from line top to run top
 };

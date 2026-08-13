@@ -255,8 +255,13 @@ TEST(LayoutTest, ImageBoxSizing) {
     return std::make_pair(std::move(doc), std::move(root));
   };
   const auto img_box = [](const std::unique_ptr<dom::Document>& doc,
-                          const std::unique_ptr<LayoutBox>& root) -> const LayoutBox* {
-    return FindBox(*root, "img", *doc);
+                          const std::unique_ptr<LayoutBox>& root) -> const InlineBox* {
+    // The <img> is an atomic inline box in the body's first line.
+    const LayoutBox* body = FindBox(*root, "body", *doc);
+    if (body == nullptr || body->lines.empty() || body->lines[0].boxes.empty()) {
+      return nullptr;
+    }
+    return &body->lines[0].boxes[0];
   };
 
   FakeProvider provider;
@@ -264,7 +269,7 @@ TEST(LayoutTest, ImageBoxSizing) {
   // Intrinsic size used when nothing is specified.
   {
     auto [doc, root] = build(&provider, "<body><img></body>");
-    const LayoutBox* box = img_box(doc, root);
+    const InlineBox* box = img_box(doc, root);
     ASSERT_NE(box, nullptr);
     EXPECT_FLOAT_EQ(box->width, 100.0f);
     EXPECT_FLOAT_EQ(box->height, 50.0f);
@@ -273,7 +278,7 @@ TEST(LayoutTest, ImageBoxSizing) {
   // Explicit width keeps the aspect ratio.
   {
     auto [doc, root] = build(&provider, "<body><img style=\"width: 200px\"></body>");
-    const LayoutBox* box = img_box(doc, root);
+    const InlineBox* box = img_box(doc, root);
     ASSERT_NE(box, nullptr);
     EXPECT_FLOAT_EQ(box->width, 200.0f);
     EXPECT_FLOAT_EQ(box->height, 100.0f);
@@ -282,7 +287,7 @@ TEST(LayoutTest, ImageBoxSizing) {
   // Both dimensions specified win.
   {
     auto [doc, root] = build(&provider, "<body><img style=\"width: 40px; height: 30px\"></body>");
-    const LayoutBox* box = img_box(doc, root);
+    const InlineBox* box = img_box(doc, root);
     ASSERT_NE(box, nullptr);
     EXPECT_FLOAT_EQ(box->width, 40.0f);
     EXPECT_FLOAT_EQ(box->height, 30.0f);
@@ -291,7 +296,7 @@ TEST(LayoutTest, ImageBoxSizing) {
   // Presentational width attribute acts as a fallback.
   {
     auto [doc, root] = build(&provider, "<body><img width=\"20\"></body>");
-    const LayoutBox* box = img_box(doc, root);
+    const InlineBox* box = img_box(doc, root);
     ASSERT_NE(box, nullptr);
     EXPECT_FLOAT_EQ(box->width, 20.0f);
     EXPECT_FLOAT_EQ(box->height, 10.0f);
@@ -300,11 +305,72 @@ TEST(LayoutTest, ImageBoxSizing) {
   // No provider: image boxes collapse to zero.
   {
     auto [doc, root] = build(nullptr, "<body><img></body>");
-    const LayoutBox* box = img_box(doc, root);
+    const InlineBox* box = img_box(doc, root);
     ASSERT_NE(box, nullptr);
     EXPECT_FLOAT_EQ(box->width, 0.0f);
     EXPECT_FLOAT_EQ(box->height, 0.0f);
   }
+}
+
+TEST(LayoutTest, InlineImageFlowsWithText) {
+  // <img> between text runs must share a line (no forced break).
+  struct FakeProvider : public layout::ImageProvider {
+    image::Image img;
+    FakeProvider() {
+      img.width = 20;
+      img.height = 20;
+    }
+    const image::Image* Find(const dom::Element&) const override { return &img; }
+  };
+  FakeProvider provider;
+  auto doc = html::Parser("<body><p>a<img>b</p></body>").Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles, nullptr, &provider);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+  const LayoutBox* p = FindBox(*root, "p", *doc);
+  ASSERT_NE(p, nullptr);
+  ASSERT_GE(p->lines.size(), 1u);
+  ASSERT_EQ(p->lines[0].boxes.size(), 1u);
+  // One line holds "a", the image, then "b" in that order.
+  ASSERT_GE(p->lines[0].runs.size(), 2u);
+  EXPECT_EQ(p->lines[0].runs[0].text, "a");
+  EXPECT_EQ(p->lines[0].runs.back().text, "b");
+  const InlineBox& img = p->lines[0].boxes[0];
+  EXPECT_FLOAT_EQ(img.width, 20.0f);
+  EXPECT_FLOAT_EQ(img.height, 20.0f);
+  // The image sits horizontally after "a" and before "b".
+  EXPECT_GT(img.x, p->lines[0].runs[0].x);
+  EXPECT_LT(img.x, p->lines[0].runs.back().x);
+}
+
+TEST(LayoutTest, ImageInTableCellTranslatedToSlot) {
+  // Regression: an <img> inside a table cell is laid out at a local origin and
+  // then translated to its grid slot; the InlineBox must move with the cell
+  // (it used to stay at the local y, overlapping earlier content).
+  struct FakeProvider : public layout::ImageProvider {
+    image::Image img;
+    FakeProvider() {
+      img.width = 20;
+      img.height = 20;
+    }
+    const image::Image* Find(const dom::Element&) const override { return &img; }
+  };
+  FakeProvider provider;
+  auto doc = html::Parser("<body><table><tr><td><img></td></tr></table></body>").Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles, nullptr, &provider);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+
+  const LayoutBox* td = FindBox(*root, "td", *doc);
+  ASSERT_NE(td, nullptr);
+  ASSERT_GE(td->lines.size(), 1u);
+  ASSERT_GE(td->lines[0].boxes.size(), 1u);
+  const InlineBox& img = td->lines[0].boxes[0];
+  // The image sits at the cell's content origin (body margin offset), not the
+  // local (0,0) it was measured at.
+  EXPECT_FLOAT_EQ(img.y, td->content_y());
 }
 
 TEST(LayoutTest, NestedBlockHeightInherits) {

@@ -21,6 +21,10 @@ struct InlineItem {
   const style::ComputedStyle* style;
   const dom::Element* element;  // source element (null for block-level text)
   bool line_break = false;      // <br>: force a line break
+  bool atomic = false;          // atomic inline box (replaced <img>)
+  const image::Image* image = nullptr;
+  float width = 0;
+  float height = 0;
 };
 
 // True when |c| is an ASCII whitespace character used for word breaking.
@@ -72,9 +76,20 @@ void CollectText(std::string_view text, const style::ComputedStyle& style,
   }
 }
 
-// Collects inline content: text nodes and inline elements (recursively).
+// Computes the content-box size of a replaced <img> (CSS Images 3 §4.3):
+// explicit CSS width/height, else the presentational width/height attributes,
+// else intrinsic, preserving the aspect ratio when only one axis is given.
+// Defined after ParseNonNegativeInt; declared here for CollectInline.
+void ComputeReplacedSize(const style::ComputedStyle& style, const dom::Element& element,
+                         const image::Image* img, float containing_width, float& out_w,
+                         float& out_h);
+
+// Collects inline content: text nodes, atomic inline boxes (<img>) and inline
+// elements (recursively).  |containing_width| is the block container's content
+// width, used to resolve percentage image sizes.
 void CollectInline(dom::Node& node, const style::ComputedStyle& style, const dom::Element* element,
-                   const style::StyleEngine& styles, std::vector<InlineItem>& items) {
+                   const style::StyleEngine& styles, const ImageProvider* images,
+                   float containing_width, std::vector<InlineItem>& items) {
   if (node.node_type() == dom::NodeType::kText) {
     CollectText(static_cast<const dom::Text&>(node).data(), style, element, items);
     return;
@@ -90,8 +105,17 @@ void CollectInline(dom::Node& node, const style::ComputedStyle& style, const dom
     items.push_back(InlineItem{{}, &child_style, &child_element, /*line_break=*/true});
     return;
   }
+  if (child_element.tag_name() == "img") {
+    const image::Image* img = images != nullptr ? images->Find(child_element) : nullptr;
+    float w = 0;
+    float h = 0;
+    ComputeReplacedSize(child_style, child_element, img, containing_width, w, h);
+    items.push_back(InlineItem{{}, &child_style, &child_element, /*line_break=*/false,
+                               /*atomic=*/true, img, w, h});
+    return;
+  }
   for (dom::Node* child : node.ChildNodes()) {
-    CollectInline(*child, child_style, &child_element, styles, items);
+    CollectInline(*child, child_style, &child_element, styles, images, containing_width, items);
   }
 }
 
@@ -107,16 +131,51 @@ void LayoutLines(const std::vector<InlineItem>& items, float available_width, fl
   float line_top = 0;
 
   auto flush_line = [&]() {
-    if (line.runs.empty() && line.height <= 0) {
+    if (line.runs.empty() && line.boxes.empty() && line.height <= 0) {
       // Nothing to emit: no content and no height (e.g. leading whitespace).
       return;
     }
-    if (!line.runs.empty()) {
-      // Position runs vertically within the line.
-      for (TextRun& run : line.runs) {
-        run.y = origin_y + line_top + (line.height - run.font_size) / 2.0f;
-        run.x = origin_x + run.x;
+    // Position text runs within the line (vertically centered); the first run's
+    // bottom edge approximates the line's text baseline for <img> alignment.
+    float text_bottom = 0;
+    bool has_text = false;
+    for (TextRun& run : line.runs) {
+      const float run_y = (line.height - run.font_size) / 2.0f;
+      if (!has_text) {
+        text_bottom = run_y + run.font_size;
+        has_text = true;
       }
+      run.y = origin_y + line_top + run_y;
+      run.x = origin_x + run.x;
+    }
+    if (!has_text) {
+      text_bottom = line.height;  // no text: baseline sits at the line bottom
+    }
+    // Position atomic inline boxes (replaced <img>) per vertical-align.
+    for (InlineBox& b : line.boxes) {
+      float y = 0;
+      switch (b.style.vertical_align) {
+        case style::VerticalAlign::kTop:
+        case style::VerticalAlign::kTextTop:
+          y = 0;
+          break;
+        case style::VerticalAlign::kBottom:
+        case style::VerticalAlign::kTextBottom:
+          y = line.height - b.height;
+          break;
+        case style::VerticalAlign::kMiddle:
+          y = text_bottom - b.height / 2.0f;
+          break;
+        case style::VerticalAlign::kBaseline:
+        default:
+          y = text_bottom - b.height;  // bottom edge sits on the baseline
+          if (y < 0) {
+            y = 0;  // an image taller than the line clips to the line top
+          }
+          break;
+      }
+      b.y = origin_y + line_top + y;
+      b.x = origin_x + b.x;
     }
     // Empty lines (line.height > 0, no runs) are emitted too: they are the
     // lines produced by <br>.
@@ -160,6 +219,24 @@ void LayoutLines(const std::vector<InlineItem>& items, float available_width, fl
         flush_line();
       }
       line.height = std::max(line.height, style.line_height);
+      continue;
+    }
+    if (item.atomic) {
+      // Atomic inline box (replaced <img>): an indivisible box flowing on the
+      // current line.
+      if (x + item.width > available_width && x > 0) {
+        flush_line();
+      }
+      InlineBox box;
+      box.element = item.element;
+      box.image = item.image;
+      box.style = style;
+      box.x = x;
+      box.width = item.width;
+      box.height = item.height;
+      line.boxes.push_back(std::move(box));
+      line.height = std::max(line.height, item.height);
+      x += item.width;
       continue;
     }
     const graphics::FontSelector* selector =
@@ -367,6 +444,42 @@ int ResolveRowspan(const dom::Element& element, bool& grows_downward) {
   return static_cast<int>(std::min<std::int64_t>(*v, 65534));
 }
 
+void ComputeReplacedSize(const style::ComputedStyle& style, const dom::Element& element,
+                         const image::Image* img, float containing_width, float& out_w,
+                         float& out_h) {
+  const float intrinsic_w = img != nullptr ? static_cast<float>(img->width) : 0.0f;
+  const float intrinsic_h = img != nullptr ? static_cast<float>(img->height) : 0.0f;
+
+  // Specified size: CSS width/height win over the width/height attributes
+  // (presentational hints, HTML spec).
+  std::optional<float> spec_w;
+  std::optional<float> spec_h;
+  if (style.width.has_value()) {
+    spec_w = ResolveSize(style.width.value(), containing_width);
+  } else if (const std::optional<std::int64_t> attr = ParseNonNegativeInt(element, "width")) {
+    spec_w = static_cast<float>(attr.value());
+  }
+  if (style.height.has_value()) {
+    spec_h = ResolveSize(style.height.value(), containing_width);
+  } else if (const std::optional<std::int64_t> attr = ParseNonNegativeInt(element, "height")) {
+    spec_h = static_cast<float>(attr.value());
+  }
+
+  if (spec_w.has_value() && spec_h.has_value()) {
+    out_w = spec_w.value();
+    out_h = spec_h.value();
+  } else if (spec_w.has_value()) {
+    out_w = spec_w.value();
+    out_h = intrinsic_w > 0 ? out_w * intrinsic_h / intrinsic_w : 0.0f;
+  } else if (spec_h.has_value()) {
+    out_h = spec_h.value();
+    out_w = intrinsic_h > 0 ? out_h * intrinsic_w / intrinsic_h : 0.0f;
+  } else {
+    out_w = intrinsic_w;
+    out_h = intrinsic_h;
+  }
+}
+
 // Shifts a laid-out box (and its descendants and text runs) by (dx, dy).  Used
 // to move a cell's content from its local (0,0) origin into its grid slot.
 void TranslateBox(LayoutBox& box, float dx, float dy) {
@@ -376,6 +489,10 @@ void TranslateBox(LayoutBox& box, float dx, float dy) {
     for (TextRun& run : line.runs) {
       run.x += dx;
       run.y += dy;
+    }
+    for (InlineBox& inline_box : line.boxes) {
+      inline_box.x += dx;
+      inline_box.y += dy;
     }
   }
   for (auto& child : box.children) {
@@ -490,15 +607,7 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
         if (child_style.display == style::Display::kNone) {
           continue;
         }
-        if (child_element.tag_name() == "img") {
-          // Replaced element: an atomic block-level box sized from the decoded
-          // image (intrinsic) plus explicit width/height.  Inline <img> is not
-          // modeled yet; images are laid out on their own line.
-          std::unique_ptr<LayoutBox> child_box = BuildImage(
-              child_element, avail_width, box.content_x(), box.content_y() + cursor_y);
-          cursor_y += child_box->margin_top + child_box->height + child_box->margin_bottom;
-          box.children.push_back(std::move(child_box));
-        } else if (child_style.display == style::Display::kBlock) {
+        if (child_style.display == style::Display::kBlock) {
           std::unique_ptr<LayoutBox> child_box = BuildBlock(
               child_element, avail_width, box.content_x(), box.content_y() + cursor_y);
           cursor_y += child_box->margin_top + child_box->height + child_box->margin_bottom;
@@ -509,8 +618,10 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
           cursor_y += child_box->margin_top + child_box->height + child_box->margin_bottom;
           box.children.push_back(std::move(child_box));
         } else {
-          // Inline element: its text flows into this box's lines.
-          CollectInline(child_element, child_style, &child_element, styles, inline_items);
+          // Inline element: its text (and atomic <img> boxes) flows into this
+          // box's lines.
+          CollectInline(child_element, child_style, &child_element, styles, images,
+                        avail_width, inline_items);
         }
       }
 
@@ -562,68 +673,6 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       }
       box->height = content_height + box->border_top + box->border_bottom + box->padding_top +
                     box->padding_bottom;
-      return box;
-    }
-
-    // Lays out an <img> as a replaced block box (CSS Images 3 §4.3 sizing):
-    // explicit CSS width/height (or the presentational width/height
-    // attributes) override the intrinsic dimensions; when only one dimension
-    // is given the aspect ratio is preserved.
-    std::unique_ptr<LayoutBox> BuildImage(dom::Element& element, float containing_width,
-                                          float origin_x, float origin_y) {
-      auto box = std::make_unique<LayoutBox>();
-      box->element = &element;
-      box->style = styles.StyleFor(element);
-      ResolveBoxEdges(*box, containing_width);
-
-      const image::Image* img = images != nullptr ? images->Find(element) : nullptr;
-      box->image = img;
-      const float intrinsic_w = img != nullptr ? static_cast<float>(img->width) : 0.0f;
-      const float intrinsic_h = img != nullptr ? static_cast<float>(img->height) : 0.0f;
-
-      // Specified size: CSS width/height win over the width/height attributes
-      // (presentational hints, HTML spec).
-      std::optional<float> spec_w;
-      std::optional<float> spec_h;
-      if (box->style.width.has_value()) {
-        spec_w = ResolveSize(box->style.width.value(), containing_width);
-      } else if (const std::optional<std::int64_t> attr = ParseNonNegativeInt(element, "width")) {
-        spec_w = static_cast<float>(attr.value());
-      }
-      if (box->style.height.has_value()) {
-        spec_h = ResolveSize(box->style.height.value(), containing_width);
-      } else if (const std::optional<std::int64_t> attr = ParseNonNegativeInt(element, "height")) {
-        spec_h = static_cast<float>(attr.value());
-      }
-
-      float content_w = 0;
-      float content_h = 0;
-      if (spec_w.has_value() && spec_h.has_value()) {
-        content_w = spec_w.value();
-        content_h = spec_h.value();
-      } else if (spec_w.has_value()) {
-        content_w = spec_w.value();
-        content_h = intrinsic_w > 0 ? content_w * intrinsic_h / intrinsic_w : 0.0f;
-      } else if (spec_h.has_value()) {
-        content_h = spec_h.value();
-        content_w = intrinsic_h > 0 ? content_h * intrinsic_w / intrinsic_h : 0.0f;
-      } else {
-        content_w = intrinsic_w;
-        content_h = intrinsic_h;
-      }
-
-      box->width = content_w + box->border_left + box->border_right + box->padding_left +
-                   box->padding_right;
-      box->height = content_h + box->border_top + box->border_bottom + box->padding_top +
-                    box->padding_bottom;
-      float rel_x = 0;
-      float rel_y = 0;
-      if (box->style.position == style::Position::kRelative) {
-        rel_x = box->style.left;
-        rel_y = box->style.top;
-      }
-      box->x = origin_x + box->margin_left - box->border_left - box->padding_left + rel_x;
-      box->y = origin_y + box->margin_top - box->border_top - box->padding_top + rel_y;
       return box;
     }
 

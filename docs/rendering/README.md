@@ -13,14 +13,16 @@
   逐字符字体回退，栈末尾自动附加 CJK 字体 → 中文可显示
 - 粗体/斜体变体匹配（font-weight/font-style → 相邻字体文件，如
   LiberationSans-Bold/-Italic，缺失时回退常规字形）
-- 页面内 `<img>`：子资源抓取 → `neko::image` 解码注入 → replaced 盒（固有尺寸/
-  显式宽高/比例保持、width/height 属性）→ DrawImage 按 object-fit
-  （fill/contain/cover/none/scale-down）绘制
+- 页面内 `<img>`：子资源抓取 → `neko::image` 解码注入 → 行内原子盒（与文字
+  同行，replaced 尺寸：固有/显式宽高/比例保持、width/height 属性）→ DrawImage
+  按 object-fit（fill/contain/cover/none/scale-down）绘制，vertical-align
+  对齐（baseline/middle/top/bottom）
 
 ## 未实现
 
 - HarfBuzz 文本整形
-- inline 模式的 `<img>`（当前图片独占一行，按块级布局）
+- inline-block / 通用原子行内盒（当前仅 `<img>`；nav 类 inline-block 元素未做）
+- 精确字体基线（`<img>` 的 baseline 对齐近似为文本底边，未含 descender）
 - 图片增量加载/懒加载、alt 文本渲染、srcset
 - `text-align` 对齐、连字符断行、CJK 逐字断行
 - 完整系统字体目录扫描（当前内置候选路径表；具体名按文件名匹配）

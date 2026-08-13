@@ -411,6 +411,24 @@ void StyleEngine::ComputeElement(dom::Element& element, const ComputedStyle& inh
     }
   }
 
+  // vertical-align.
+  if (const css::Declaration* d = find("vertical-align")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kKeyword) {
+      if (v.text == "middle") {
+        out.vertical_align = VerticalAlign::kMiddle;
+      } else if (v.text == "top") {
+        out.vertical_align = VerticalAlign::kTop;
+      } else if (v.text == "bottom") {
+        out.vertical_align = VerticalAlign::kBottom;
+      } else if (v.text == "text-top") {
+        out.vertical_align = VerticalAlign::kTextTop;
+      } else if (v.text == "text-bottom") {
+        out.vertical_align = VerticalAlign::kTextBottom;
+      }
+    }
+  }
+
   // line-height.
   if (const css::Declaration* d = find("line-height")) {
     const css::CssValue v = css::ParseCssValue(d->value);

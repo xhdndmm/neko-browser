@@ -537,17 +537,21 @@ void FetchPageImages(renderer::Page& page, const std::string& base_url,
       target = url::Url::Parse(*src, base.value());
     }
     if (!target.has_value()) {
+      NEKO_LOG_WARNING("img: cannot resolve src \"" + std::string(*src) + "\"");
       continue;
     }
     const auto response = fetch(target.value(), {});
     if (!response) {
+      NEKO_LOG_WARNING("img: fetch failed for " + target.value().Serialize());
       continue;
     }
     auto decoded = image::DecodeImage(response.value().body);
     if (!decoded) {
+      NEKO_LOG_WARNING("img: decode failed for " + target.value().Serialize());
       continue;
     }
     page.SetElementImage(*element, std::move(decoded.value()));
+    NEKO_LOG_INFO("img: injected " + target.value().Serialize());
   }
 }
 

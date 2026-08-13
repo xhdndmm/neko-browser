@@ -71,7 +71,17 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page, const std::strin
           "https:// requires TLS (planned for a later phase)"));
     }
     if (url.scheme() == "file") {
-      return page.LoadFile(url.path());
+      const auto r = page.LoadFile(url.path());
+      if (!r) {
+        return r;
+      }
+      // Local pages may still reference absolute http(s) images; fetch those.
+      neko::browser::FetchPageImages(
+          page, /*base_url=*/"",
+          [](const neko::url::Url& u, std::string_view) {
+            return neko::network::HttpGet(u);
+          });
+      return neko::base::Ok();
     }
     return neko::base::Err(
         neko::base::Error::NotImplemented("unsupported URL scheme: " + url.scheme()));
