@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "neko/dom/element.h"
+#include "neko/graphics/font_face.h"
 
 namespace neko::layout {
 namespace {
@@ -21,6 +22,35 @@ struct InlineItem {
 
 // True when |c| is an ASCII whitespace character used for word breaking.
 bool IsWordBreak(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
+
+// Measures the advance width of |text| at |font_size| using the real font when
+// available; falls back to the monospace model (font_size per character).
+float MeasureTextWidth(const graphics::FontFace* font, std::string_view text, float font_size) {
+  if (font == nullptr) {
+    return static_cast<float>(text.size()) * font_size;
+  }
+  return font->TextWidth(text, font_size);
+}
+
+// Width of the widest space-separated word in |text| (the min-content width).
+float WidestWordWidth(const graphics::FontFace* font, std::string_view text, float font_size) {
+  float widest = 0;
+  std::size_t start = 0;
+  while (start < text.size()) {
+    while (start < text.size() && IsWordBreak(text[start])) {
+      ++start;
+    }
+    if (start >= text.size()) {
+      break;
+    }
+    const std::size_t end = text.find_first_of(" \t\n\r", start);
+    const std::string_view word = text.substr(
+        start, end == std::string_view::npos ? text.size() - start : end - start);
+    widest = std::max(widest, MeasureTextWidth(font, word, font_size));
+    start = end == std::string_view::npos ? text.size() : end;
+  }
+  return widest;
+}
 
 float ResolveSize(const style::SizeSpec& spec, float containing) {
   if (spec.percent) {
@@ -54,9 +84,12 @@ void CollectInline(dom::Node& node, const style::ComputedStyle& style, const dom
 }
 
 // Breaks inline items into wrapped lines and fills |out_lines|.  Positions are
-// relative to the box (origin_x/origin_y are the content box origin).
+// relative to the box (origin_x/origin_y are the content box origin).  Word
+// widths come from |font| when provided (real advances); otherwise the
+// monospace fallback is used.
 void LayoutLines(const std::vector<InlineItem>& items, float available_width, float origin_x,
-                 float origin_y, std::vector<Line>& out_lines, float& total_height) {
+                 float origin_y, const graphics::FontFace* font, std::vector<Line>& out_lines,
+                 float& total_height) {
   Line line;
   float x = 0;
   float line_top = 0;
@@ -83,7 +116,7 @@ void LayoutLines(const std::vector<InlineItem>& items, float available_width, fl
 
   auto add_word = [&](std::string_view word, const style::ComputedStyle& style,
                       const dom::Element* element) {
-    const float word_width = static_cast<float>(word.size()) * style.font_size;
+    const float word_width = MeasureTextWidth(font, word, style.font_size);
     if (x + word_width > available_width && x > 0) {
       flush_line();
     }
@@ -91,6 +124,7 @@ void LayoutLines(const std::vector<InlineItem>& items, float available_width, fl
     run.text = std::string(word);
     run.x = x;
     run.font_size = style.font_size;
+    run.width = word_width;
     run.color = style.color.value_or(css::Color{0, 0, 0, 255});
     run.underline = style.text_decoration_underline;
     run.element = element;
@@ -105,7 +139,7 @@ void LayoutLines(const std::vector<InlineItem>& items, float available_width, fl
     const std::string& text = item.text;
     while (start < text.size()) {
       while (start < text.size() && IsWordBreak(text[start])) {
-        const float space_width = style.font_size * 0.5f;
+        const float space_width = MeasureTextWidth(font, " ", style.font_size);
         if (x + space_width > available_width && x > 0) {
           flush_line();
         }
@@ -144,8 +178,10 @@ float HorizontalExtras(const style::ComputedStyle& style) {
 // Measures the min/max intrinsic content width of |element|, recursing through
 // the inline + block content model.  Replaced elements (img/input/...) use
 // their explicit width (zero when auto).  Percentages, floats and positioning
-// are out of scope for this measurement.
-IntrinsicWidths MeasureContent(const dom::Element& element, const style::StyleEngine& styles) {
+// are out of scope for this measurement.  Text is measured with |font| when
+// provided (real advances), else with the monospace fallback.
+IntrinsicWidths MeasureContent(const dom::Element& element, const style::StyleEngine& styles,
+                               const graphics::FontFace* font) {
   const style::ComputedStyle& style = styles.StyleFor(element);
   const bool replaced = element.tag_name() == "img" || element.tag_name() == "input" ||
                         element.tag_name() == "textarea" || element.tag_name() == "select";
@@ -173,18 +209,8 @@ IntrinsicWidths MeasureContent(const dom::Element& element, const style::StyleEn
   for (const dom::Node* child : element.ChildNodes()) {
     if (child->node_type() == dom::NodeType::kText) {
       const std::string& text = static_cast<const dom::Text&>(*child).data();
-      float word = 0;
-      for (const char c : text) {
-        if (IsWordBreak(c)) {
-          line_min = std::max(line_min, word);
-          line_max += word + style.font_size * 0.5f;
-          word = 0;
-        } else {
-          word += style.font_size;
-        }
-      }
-      line_min = std::max(line_min, word);
-      line_max += word;
+      line_min = std::max(line_min, WidestWordWidth(font, text, style.font_size));
+      line_max += MeasureTextWidth(font, text, style.font_size);
       continue;
     }
     if (child->node_type() != dom::NodeType::kElement) {
@@ -204,12 +230,12 @@ IntrinsicWidths MeasureContent(const dom::Element& element, const style::StyleEn
     if (block_level) {
       // Block-level content starts a new line.
       flush_line();
-      const IntrinsicWidths cw = MeasureContent(child_el, styles);
+      const IntrinsicWidths cw = MeasureContent(child_el, styles, font);
       out.min = std::max(out.min, cw.min);
       out.max = std::max(out.max, cw.max);
     } else {
       // Inline content flows onto the current line.
-      const IntrinsicWidths cw = MeasureContent(child_el, styles);
+      const IntrinsicWidths cw = MeasureContent(child_el, styles, font);
       line_min = std::max(line_min, cw.min);
       line_max += cw.max;
     }
@@ -384,6 +410,7 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
   // inside a containing block whose content box starts at |origin_x|/|origin_y|.
   struct Builder {
     const style::StyleEngine& styles;
+    const graphics::FontFace* font;  // may be null (monospace fallback)
 
     // Resolves the box-model edges (margins, borders, padding) of |box|.
     void ResolveBoxEdges(LayoutBox& box, float containing_width) {
@@ -437,7 +464,7 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       }
 
       float lines_height = 0;
-      LayoutLines(inline_items, avail_width, box.content_x(), box.content_y() + cursor_y,
+      LayoutLines(inline_items, avail_width, box.content_x(), box.content_y() + cursor_y, font,
                   box.lines, lines_height);
       return cursor_y + lines_height;
     }
@@ -678,7 +705,7 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
 
       // Intrinsic widths for auto column sizing.
       for (CellInfo& cell : cells) {
-        const IntrinsicWidths w = MeasureContent(*cell.element, styles);
+        const IntrinsicWidths w = MeasureContent(*cell.element, styles, font);
         cell.min_width = w.min;
         cell.max_width = w.max;
       }
@@ -759,7 +786,7 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
   if (root == nullptr) {
     return nullptr;
   }
-  Builder builder{styles_};
+  Builder builder{styles_, font_};
   return builder.BuildBlock(*root, viewport_width, 0, 0);
 }
 

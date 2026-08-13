@@ -10,6 +10,7 @@
 
 #include "neko/base/status.h"
 #include "neko/graphics/font_face.h"
+#include "neko/graphics/utf8.h"
 #include "neko/paint/font8x8.h"
 
 namespace neko::paint {
@@ -42,53 +43,6 @@ void BlendPixel(uint8_t& dr, uint8_t& dg, uint8_t& db, uint8_t& da, css::Color s
   dg = blend(dg, src.g);
   db = blend(db, src.b);
   da = static_cast<uint8_t>(out_a * 255.0f + 0.5f);
-}
-
-// Decodes |text| (UTF-8) into code points; invalid sequences become U+FFFD.
-void DecodeUtf8(std::string_view text, std::vector<uint32_t>& out) {
-  std::size_t i = 0;
-  while (i < text.size()) {
-    const unsigned char lead = static_cast<unsigned char>(text[i]);
-    uint32_t code_point = 0;
-    std::size_t len = 0;
-    if (lead < 0x80) {
-      code_point = lead;
-      len = 1;
-    } else if ((lead & 0xE0) == 0xC0) {
-      code_point = lead & 0x1F;
-      len = 2;
-    } else if ((lead & 0xF0) == 0xE0) {
-      code_point = lead & 0x0F;
-      len = 3;
-    } else if ((lead & 0xF8) == 0xF0) {
-      code_point = lead & 0x07;
-      len = 4;
-    } else {
-      out.push_back(0xFFFDU);
-      ++i;
-      continue;
-    }
-    if (i + len > text.size()) {
-      out.push_back(0xFFFDU);
-      break;
-    }
-    bool valid = true;
-    for (std::size_t k = 1; k < len; ++k) {
-      const unsigned char cc = static_cast<unsigned char>(text[i + k]);
-      if ((cc & 0xC0) != 0x80) {
-        valid = false;
-        break;
-      }
-      code_point = (code_point << 6) | (cc & 0x3F);
-    }
-    if (!valid) {
-      out.push_back(0xFFFDU);
-      ++i;
-      continue;
-    }
-    out.push_back(code_point);
-    i += len;
-  }
 }
 
 }  // namespace
@@ -203,7 +157,7 @@ void Rasterizer::DrawText8x8(const DrawCommand& command) {
 
 void Rasterizer::DrawTextFreetype(const DrawCommand& command) {
   std::vector<uint32_t> code_points;
-  DecodeUtf8(command.text, code_points);
+  graphics::DecodeUtf8(command.text, code_points);
 
   const float baseline = command.y + font_->Ascent(command.font_size);
   float pen_x = command.x;

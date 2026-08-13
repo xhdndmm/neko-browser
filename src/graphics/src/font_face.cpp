@@ -8,6 +8,7 @@
 
 #include "internal.h"
 #include "neko/graphics/glyph_cache.h"
+#include "neko/graphics/utf8.h"
 
 namespace neko::graphics {
 namespace {
@@ -57,6 +58,16 @@ float FontFace::Advance(uint32_t code_point, float px_size) const {
     return 0.0f;
   }
   return static_cast<float>(impl_->face->glyph->advance.x) / 64.0f;
+}
+
+float FontFace::TextWidth(std::string_view text, float px_size) const {
+  std::vector<uint32_t> code_points;
+  DecodeUtf8(text, code_points);
+  float width = 0;
+  for (const uint32_t code_point : code_points) {
+    width += Advance(code_point, px_size);
+  }
+  return width;
 }
 
 const GlyphBitmap* FontFace::RenderGlyph(uint32_t code_point, float px_size) const {

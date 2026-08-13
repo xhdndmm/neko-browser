@@ -14,6 +14,9 @@ DOM 与布局树分离：布局树持有几何信息（盒模型、行盒、文�
 - 块级子盒垂直堆叠；内联内容（文本节点 + inline 元素）按词换行生成 `Line`
   与 `TextRun`（含字号与颜色）。
 - 宽度：显式 px/% 或填满包含块内容宽；高度：内容驱动或显式值。
+- 文本测量：`LayoutEngine` 接受可选 `graphics::FontFace`；提供时词宽/空格宽用
+  FreeType 真实 advance（`TextRun.width` 记录），表格 max-content 测量与命中
+  测试同样基于真实宽度；无字体时回退"每字符 = font_size"等宽模型。
 - `position: relative` 用 left/top 偏移；absolute/fixed 按 static 处理（未实现）。
 - 表格（`display: table`）走独立算法：先收集行/单元格（展平 thead/tbody/tfoot、
   支持匿名直接 `<tr>`），用 colspan/rowspan 建占用网格；列宽由显式单元格宽固定、
@@ -36,3 +39,5 @@ DOM 与布局树分离：布局树持有几何信息（盒模型、行盒、文�
   （margin 折叠未实现：子盒 margin 不穿透父盒）。
 - 表格：border-collapse/border-spacing、`vertical-align`、`<caption>` 定位、
   auto 表格宽度的 shrink-to-fit（当前填满包含块）、跨行单元格的完整行高分配。
+- 文本对齐（CSS Text 3 §7 `text-align`）解析了但未应用；换行仅在词边界
+  （CSS Text 3 §5 软换行机会的子集：无连字符、无 CJK 逐字断行、无断字规则）。

@@ -118,7 +118,8 @@ TEST(PageTest, ElementAtHitTestsInlineContent) {
   std::function<void(const layout::LayoutBox&)> walk = [&](const layout::LayoutBox& box) {
     for (const layout::Line& line : box.lines) {
       for (const layout::TextRun& run : line.runs) {
-        const float cx = run.x + static_cast<float>(run.text.size()) * run.font_size / 2.0f;
+        // Use the run's measured width (real font advances when available).
+        const float cx = run.x + run.width / 2.0f;
         const float cy = run.y + run.font_size / 2.0f;
         const dom::Element* hit = page.ElementAt(cx, cy);
         if (run.element == link && run.text == "link") {

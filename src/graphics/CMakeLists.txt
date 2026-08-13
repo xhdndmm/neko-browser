@@ -13,6 +13,7 @@ add_library(neko_graphics
   src/font_face.cpp
   src/glyph_cache.cpp
   src/system_fonts.cpp
+  src/utf8.cpp
 )
 add_library(neko::graphics ALIAS neko_graphics)
 

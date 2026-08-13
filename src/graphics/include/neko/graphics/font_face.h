@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace neko::graphics {
 
@@ -38,6 +39,9 @@ class FontFace {
 
   // Horizontal advance (px) of |code_point| at |px_size| (font size in px).
   float Advance(uint32_t code_point, float px_size) const;
+
+  // Total horizontal advance (px) of |text| (UTF-8) at |px_size|.
+  float TextWidth(std::string_view text, float px_size) const;
 
   // Rasterized glyph for |code_point| at |px_size| (cached).  Returns nullptr
   // for an unusable face or invalid input.

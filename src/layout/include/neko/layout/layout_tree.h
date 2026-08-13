@@ -9,6 +9,10 @@
 #include "neko/style/computed_style.h"
 #include "neko/style/style_engine.h"
 
+namespace neko::graphics {
+class FontFace;
+}
+
 namespace neko::layout {
 
 // A positioned text run within a line box.
@@ -17,6 +21,7 @@ struct TextRun {
   float x = 0;
   float y = 0;  // top of the run (glyph ascent area)
   float font_size = 16;
+  float width = 0;  // measured advance width (real font or monospace fallback)
   css::Color color{0, 0, 0, 255};
   bool underline = false;
   const dom::Element* element = nullptr;  // source element (for hit-testing)
@@ -83,13 +88,17 @@ struct LayoutBox {
 class LayoutEngine {
  public:
   // |styles| must outlive the engine; it holds the computed styles for the
-  // documents being laid out.
-  explicit LayoutEngine(const style::StyleEngine& styles) : styles_(styles) {}
+  // documents being laid out.  |font| (optional) provides real glyph advances
+  // for text measurement; when null a monospace fallback (font_size per
+  // character) is used.
+  explicit LayoutEngine(const style::StyleEngine& styles, const graphics::FontFace* font = nullptr)
+      : styles_(styles), font_(font) {}
 
   std::unique_ptr<LayoutBox> BuildLayoutTree(dom::Document& document, float viewport_width);
 
  private:
   const style::StyleEngine& styles_;
+  const graphics::FontFace* font_ = nullptr;
 };
 
 }  // namespace neko::layout

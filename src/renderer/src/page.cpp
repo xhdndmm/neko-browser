@@ -25,7 +25,10 @@ const dom::Element* ElementAt(const layout::LayoutBox& box, float x, float y) {
   }
   for (const layout::Line& line : box.lines) {
     for (const layout::TextRun& run : line.runs) {
-      const float width = static_cast<float>(run.text.size()) * run.font_size;
+      // Prefer the measured width; fall back to the monospace model for runs
+      // built without a font (width stays 0 only in that case).
+      const float width =
+          run.width > 0 ? run.width : static_cast<float>(run.text.size()) * run.font_size;
       if (x >= run.x && x < run.x + width && y >= run.y && y < run.y + run.font_size) {
         return run.element;
       }
@@ -69,7 +72,7 @@ void Page::Layout(float viewport_width) {
     return;
   }
   viewport_width_ = viewport_width;
-  layout::LayoutEngine engine(styles_);
+  layout::LayoutEngine engine(styles_, default_font_);
   root_ = engine.BuildLayoutTree(*document_, viewport_width);
 }
 

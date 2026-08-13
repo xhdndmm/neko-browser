@@ -8,6 +8,9 @@
 - 盒模型（margin/border/padding，百分比按包含块宽度解析）
 - block layout（垂直堆叠、宽度填充/显式/百分比、内容高度/显式高度）
 - inline layout（词级换行 → 行盒 → 文本游程，inline 元素样式作用于文本）
+- 文本宽度：注入 `neko::graphics` 字体时按 FreeType 真实 advance 测量（词宽、
+  空格宽、表格 max-content 测量、命中测试），无字体时回退"每字符 = font_size"
+  等宽模型
 - display:none 跳过、position:relative 偏移
 - table layout（table/tr/td/th 网格、colspan/rowspan、显式列宽 px/%、auto 列按
   max-content 比例分配剩余宽度、行高按内容）

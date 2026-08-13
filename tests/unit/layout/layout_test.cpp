@@ -1,10 +1,14 @@
 #include "neko/layout/layout_tree.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
 #include "neko/dom/query.h"
+#include "neko/graphics/font_face.h"
+#include "neko/graphics/font_library.h"
+#include "neko/graphics/system_fonts.h"
 #include "neko/html/parser.h"
 #include "neko/style/style_engine.h"
 #include <gtest/gtest.h>
@@ -177,6 +181,48 @@ TEST(LayoutTest, NestedBlockHeightInherits) {
   const LayoutBox* inner = outer->children[0].get();
   // outer height = inner height (both content-based).
   EXPECT_FLOAT_EQ(outer->height, inner->height);
+}
+
+TEST(LayoutTest, RealFontAdvancesWhenFontProvided) {
+  const std::optional<std::string> path =
+      graphics::FindSystemFont(graphics::GenericFamily::kSansSerif);
+  if (!path.has_value()) {
+    GTEST_SKIP() << "no system sans-serif font available";
+  }
+  graphics::FontLibrary library;
+  const graphics::FontFace* face = library.LoadFace(*path);
+  ASSERT_NE(face, nullptr);
+
+  // Same HTML, laid out with and without a font.
+  struct Built {
+    std::unique_ptr<dom::Document> doc;
+    std::unique_ptr<LayoutBox> root;
+  };
+  const auto build = [&](const graphics::FontFace* font) -> Built {
+    auto doc = html::Parser("<body><p>hello</p></body>").Parse();
+    style::StyleEngine styles;
+    styles.ApplyStyles(*doc);
+    layout::LayoutEngine engine(styles, font);
+    std::unique_ptr<LayoutBox> root = engine.BuildLayoutTree(*doc, 800);
+    return Built{std::move(doc), std::move(root)};
+  };
+  Built monospace = build(nullptr);
+  Built real = build(face);
+
+  const auto hello_width = [](const Built& built) {
+    const LayoutBox* p_box = FindBox(*built.root, "p", *built.doc);
+    EXPECT_NE(p_box, nullptr);
+    return p_box->lines[0].runs[0].width;
+  };
+  const float monospace_width = hello_width(monospace);
+  const float real_width = hello_width(real);
+
+  // Monospace fallback: 5 chars * 16px.
+  EXPECT_FLOAT_EQ(monospace_width, 80.0f);
+  // Real advances are nonzero and narrower than the monospace model for a
+  // proportional font.
+  EXPECT_GT(real_width, 0.0f);
+  EXPECT_LT(real_width, 80.0f);
 }
 
 TEST(LayoutTest, TableCellsAreSideBySide) {

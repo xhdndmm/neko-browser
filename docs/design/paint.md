@@ -24,11 +24,11 @@ Layout Tree → Painter → DisplayList → Rasterizer → RGBA 缓冲 → PPM
 
 Phase 6 先用内嵌 8x8 位图字体渲染 ASCII（ADR 0005）；随后迁移到 FreeType
 （ADR 0009）：ASCII 获得真实字形与抗锯齿，为中文/全 Unicode 铺路。布局层的
-等宽度量（每字符 = font_size）仍是中间态，真实 advance 测量在后续里程碑
-统一；`font-family` 匹配与中文字体回退链也在后续里程碑。
+文本宽度已按真实 advance 测量（与绘制一致）；`font-family` 匹配与中文字体
+回退链在后续里程碑（M3）。
 
 ## 未实现
 
 - 图像、渐变、变换、滤镜、分层合成、GPU 后端。
-- 文本：布局真实 advance 测量、`font-family` 匹配、中文字体回退、HarfBuzz
-  整形、粗体/斜体变体匹配。
+- 文本：`font-family` 匹配、中文字体回退、HarfBuzz 整形、粗体/斜体变体匹配、
+  `text-align` 对齐。
