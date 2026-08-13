@@ -3,6 +3,7 @@
 #include "neko/url/url.h"
 
 #include <atomic>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -64,6 +65,12 @@ class TestHttpServer {
   bool IsValid() const { return listen_fd_ >= 0; }
   uint16_t port() const { return port_; }
 
+  // The raw request headers of every handled request, in order.
+  std::vector<std::string> Requests() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return requests_;
+  }
+
  private:
   void Run(int max_connections) {
     int handled = 0;
@@ -92,6 +99,10 @@ class TestHttpServer {
       if (request.find("\r\n\r\n") != std::string::npos) {
         break;
       }
+    }
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      requests_.push_back(request);
     }
     const std::size_t path_start = request.find(' ');
     const std::size_t path_end = request.find(' ', path_start + 1);
@@ -125,6 +136,8 @@ class TestHttpServer {
   int listen_fd_ = -1;
   uint16_t port_ = 0;
   std::thread thread_;
+  std::mutex mutex_;
+  std::vector<std::string> requests_;
 };
 #endif
 
@@ -220,6 +233,44 @@ TEST(HttpTest, CompressionNotImplemented) {
   const auto result = HttpGet(url.value());
   ASSERT_FALSE(result.has_value());
   EXPECT_EQ(result.error().category(), base::ErrorCategory::kNotImplemented);
+}
+
+TEST(HttpTest, ExtraHeadersSent) {
+  TestHttpServer server;
+  ASSERT_TRUE(server.IsValid());
+  const std::string host = "http://127.0.0.1:" + std::to_string(server.port()) + "/";
+  const auto url = url::Url::Parse(host);
+  ASSERT_TRUE(url.has_value());
+  const auto result = HttpGet(url.value(), 5, [](const url::Url&) {
+    return std::vector<HttpHeader>{{ "cookie", "session=abc123" }};
+  });
+  ASSERT_TRUE(result.has_value());
+  const auto requests = server.Requests();
+  ASSERT_EQ(requests.size(), 1u);
+  // Header names are emitted verbatim from the provider (lowercase here;
+  // HTTP header names are case-insensitive on the wire).
+  EXPECT_NE(requests[0].find("cookie: session=abc123"), std::string::npos);
+}
+
+TEST(HttpTest, ExtraHeadersRecomputedPerRedirectHop) {
+  TestHttpServer server;
+  ASSERT_TRUE(server.IsValid());
+  const std::string host = "http://127.0.0.1:" + std::to_string(server.port()) + "/redirect";
+  const auto url = url::Url::Parse(host);
+  ASSERT_TRUE(url.has_value());
+  int calls = 0;
+  const auto result = HttpGet(url.value(), 5, [&calls](const url::Url& target) {
+    ++calls;
+    // Cookie scoped to the redirect target host.
+    return std::vector<HttpHeader>{ { "cookie", "host=" + target.host() } };
+  });
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result.value().status_code, 200);
+  EXPECT_GE(calls, 2);  // initial request + redirect hop
+  const auto requests = server.Requests();
+  ASSERT_EQ(requests.size(), 2u);
+  // The cookie header on the redirected request targets the final host.
+  EXPECT_NE(requests[1].find("cookie: host="), std::string::npos);
 }
 
 TEST(SocketTest, ConnectRefused) {

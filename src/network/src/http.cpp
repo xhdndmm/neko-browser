@@ -161,7 +161,8 @@ base::Result<HttpResponse> ParseHttpResponse(std::string_view raw) {
   return response;
 }
 
-base::Result<HttpResponse> HttpGet(const url::Url& url, int redirect_limit) {
+base::Result<HttpResponse> HttpGet(const url::Url& url, int redirect_limit,
+                                  const HeaderProvider& extra_headers) {
   if (url.scheme() != "http") {
     return base::Err(base::Error::NotImplemented(
         "only http:// is supported; https:// requires TLS (planned)"));
@@ -184,6 +185,14 @@ base::Result<HttpResponse> HttpGet(const url::Url& url, int redirect_limit) {
   request += "Connection: close\r\n";
   request += "User-Agent: neko-browser/0.1.0\r\n";
   request += "Accept: text/html,application/xhtml+xml\r\n";
+  if (extra_headers) {
+    for (const HttpHeader& header : extra_headers(url)) {
+      request += header.name;
+      request += ": ";
+      request += header.value;
+      request += "\r\n";
+    }
+  }
   request += "\r\n";
 
   base::Result<Socket> socket = Socket::Connect(url.host(), url.effective_port());
@@ -211,7 +220,7 @@ base::Result<HttpResponse> HttpGet(const url::Url& url, int redirect_limit) {
     if (!location.empty()) {
       const base::Result<url::Url> next = url::Url::Parse(location, url);
       if (next) {
-        return HttpGet(next.value(), redirect_limit - 1);
+        return HttpGet(next.value(), redirect_limit - 1, extra_headers);
       }
     }
   }
