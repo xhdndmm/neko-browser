@@ -36,15 +36,24 @@ void Page::Layout(float viewport_width) {
   root_ = engine.BuildLayoutTree(*document_, viewport_width);
 }
 
-paint::Rasterizer Page::Rasterize(int width, int height) const {
+paint::Rasterizer Page::Rasterize(int width, int height, float y_offset) const {
   paint::Rasterizer image(width, height);
   image.Clear(css::Color{255, 255, 255, 255});
   if (root_ == nullptr) {
     return image;
   }
+  image.SetScrollOffset(y_offset);
   const paint::Painter painter(root_.get());
   image.Rasterize(painter.Paint());
   return image;
+}
+
+float Page::ContentHeight() const {
+  if (root_ == nullptr) {
+    return 0;
+  }
+  // The root box spans the full laid-out content.
+  return root_->height;
 }
 
 std::string Page::DumpDom() const {

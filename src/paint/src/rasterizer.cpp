@@ -81,7 +81,11 @@ void Rasterizer::Rasterize(const DisplayList& list) {
   }
 }
 
+void Rasterizer::SetScrollOffset(float offset) { scroll_offset_ = offset; }
+
 void Rasterizer::FillRect(float x, float y, float width, float height, css::Color color) {
+  // Shift up by the scroll offset; scrolled-out content is clipped by Clamp.
+  y -= scroll_offset_;
   const int x0 = Clamp(static_cast<int>(std::floor(x)), 0, width_ - 1);
   const int y0 = Clamp(static_cast<int>(std::floor(y)), 0, height_ - 1);
   const int x1 = Clamp(static_cast<int>(std::ceil(x + width)), 0, width_);

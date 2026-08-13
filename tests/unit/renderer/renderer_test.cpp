@@ -49,6 +49,48 @@ TEST(PageTest, RasterizeProducesImage) {
   EXPECT_EQ(image.pixels()[offset + 2], 0);
 }
 
+TEST(PageTest, ContentHeight) {
+  Page page;
+  EXPECT_EQ(page.ContentHeight(), 0.0f);  // no layout yet
+
+  ASSERT_TRUE(page.LoadHtml("<body><div style=\"height:500px\">x</div></body>").has_value());
+  EXPECT_EQ(page.ContentHeight(), 0.0f);  // loaded but not laid out yet
+
+  page.Layout(400);
+  // body default margin (8px top + 8px bottom) plus the 500px div.
+  EXPECT_FLOAT_EQ(page.ContentHeight(), 516.0f);
+}
+
+TEST(PageTest, RasterizeScrollsContent) {
+  Page page;
+  ASSERT_TRUE(page.LoadHtml(
+                          "<body style=\"background-color:#ffffff\">"
+                          "<div style=\"background-color:#ff0000;width:100px;height:50px\">x</div>"
+                          "</body>")
+                  .has_value());
+  page.Layout(400);
+
+  const auto pixel = [](const paint::Rasterizer& image, int x, int y) {
+    const std::size_t offset =
+        (static_cast<std::size_t>(y) * static_cast<std::size_t>(image.width()) +
+         static_cast<std::size_t>(x)) *
+        4;
+    return css::Color{image.pixels()[offset], image.pixels()[offset + 1],
+                      image.pixels()[offset + 2], image.pixels()[offset + 3]};
+  };
+
+  const paint::Rasterizer top = page.Rasterize(400, 300, 0);
+  const paint::Rasterizer scrolled = page.Rasterize(400, 300, 20);
+
+  // The red div spans y=8..58 at offset 0; at offset 20 it moves up to y=0..38.
+  EXPECT_EQ(pixel(top, 50, 20), (css::Color{255, 0, 0, 255}));
+  EXPECT_EQ(pixel(scrolled, 50, 20), (css::Color{255, 0, 0, 255}));
+  EXPECT_EQ(pixel(top, 50, 50), (css::Color{255, 0, 0, 255}));
+  EXPECT_EQ(pixel(scrolled, 50, 50), (css::Color{255, 255, 255, 255}));
+  EXPECT_EQ(pixel(top, 50, 0), (css::Color{255, 255, 255, 255}));
+  EXPECT_EQ(pixel(scrolled, 50, 0), (css::Color{255, 0, 0, 255}));
+}
+
 TEST(PageTest, LoadMissingFile) {
   Page page;
   const auto result = page.LoadFile("/nonexistent/neko_missing_file.html");

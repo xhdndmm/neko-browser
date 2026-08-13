@@ -29,8 +29,12 @@ class Page {
   // Builds the layout tree at the given viewport width.
   void Layout(float viewport_width);
 
-  // Rasterizes the laid-out page into a |width| x |height| image.
-  paint::Rasterizer Rasterize(int width, int height) const;
+  // Rasterizes the laid-out page into a |width| x |height| image.  |y_offset|
+  // scrolls the visible region (see paint::Rasterizer::SetScrollOffset).
+  paint::Rasterizer Rasterize(int width, int height, float y_offset = 0) const;
+
+  // Total content height in px after Layout(); 0 before Layout().
+  float ContentHeight() const;
 
   dom::Document* document() { return document_.get(); }
   const layout::LayoutBox* layout_root() const { return root_.get(); }

@@ -22,6 +22,11 @@ class Rasterizer {
   void Clear(css::Color color);
   void Rasterize(const DisplayList& list);
 
+  // Scrolls the visible region: all draw commands are shifted up by |offset|
+  // pixels, so content below the viewport can be panned into view.  Content
+  // scrolled out of the buffer is clipped.
+  void SetScrollOffset(float offset);
+
   int width() const { return width_; }
   int height() const { return height_; }
 
@@ -39,6 +44,7 @@ class Rasterizer {
 
   int width_;
   int height_;
+  float scroll_offset_ = 0;
   std::vector<uint8_t> pixels_;
 };
 

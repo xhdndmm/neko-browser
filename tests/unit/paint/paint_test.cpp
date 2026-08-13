@@ -37,6 +37,29 @@ TEST(RasterizerTest, FillRect) {
   EXPECT_EQ(Pixel(image, 15, 15), (css::Color{255, 255, 255, 255}));
 }
 
+TEST(RasterizerTest, SetScrollOffset) {
+  Rasterizer image(20, 20);
+  image.Clear(css::Color{255, 255, 255, 255});
+  DisplayList list;
+  list.FillRect(2, 2, 10, 10, css::Color{255, 0, 0, 255});
+  image.SetScrollOffset(5.0f);
+  image.Rasterize(list);
+
+  // The rect (y=2..12) shifts up by 5 to y=-3..7, i.e. visible at y=0..6.
+  EXPECT_EQ(Pixel(image, 5, 1), (css::Color{255, 0, 0, 255}));   // newly revealed top
+  EXPECT_EQ(Pixel(image, 5, 9), (css::Color{255, 255, 255, 255}));  // scrolled-out bottom
+}
+
+TEST(RasterizerTest, SetScrollOffsetClipsScrolledOutContent) {
+  Rasterizer image(20, 20);
+  image.Clear(css::Color{255, 255, 255, 255});
+  DisplayList list;
+  list.FillRect(0, 0, 20, 20, css::Color{255, 0, 0, 255});
+  image.SetScrollOffset(40.0f);  // fully scrolled out
+  image.Rasterize(list);
+  EXPECT_EQ(Pixel(image, 10, 10), (css::Color{255, 255, 255, 255}));
+}
+
 TEST(RasterizerTest, AlphaBlend) {
   Rasterizer image(10, 10);
   image.Clear(css::Color{255, 255, 255, 255});
