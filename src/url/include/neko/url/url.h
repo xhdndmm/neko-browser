@@ -55,7 +55,7 @@ class Url {
 
   // Parser helpers (defined in url.cpp) need access to the component fields.
   friend bool ParseAuthority(std::string_view authority, Url& url);
-  friend void SplitPathQueryFragment(std::string_view rest, Url& url);
+  friend base::Result<void> SplitPathQueryFragment(std::string_view rest, Url& url);
   friend base::Result<Url> ParseAbsoluteInternal(std::string_view input);
   friend base::Result<Url> ResolveNetworkPath(std::string_view input, const Url& base);
   friend base::Result<Url> ResolveRelative(std::string_view input, const Url& base);

@@ -191,6 +191,16 @@ TEST(UrlTest, InvalidUrls) {
   EXPECT_FALSE(Url::Parse("http://exa mple.com/").has_value());  // space in host
   EXPECT_FALSE(Url::Parse("http:/example.com").has_value());  // special scheme needs //
   EXPECT_FALSE(Url::Parse("http://[::1").has_value());        // unterminated IPv6
+  // Control characters in path/query would let untrusted input inject bytes
+  // into the HTTP request line; they must be rejected.
+  EXPECT_FALSE(Url::Parse("http://example.com/\r\nX-Injected: 1").has_value());
+  EXPECT_FALSE(Url::Parse("http://example.com/\n").has_value());
+  EXPECT_FALSE(Url::Parse("http://example.com/?a=b\r\nc").has_value());
+  // Relative resolution must reject control characters too.
+  const auto base = Url::Parse("http://example.com/base/");
+  ASSERT_TRUE(base.has_value());
+  EXPECT_FALSE(Url::Parse("\r\n", base.value()).has_value());
+  EXPECT_FALSE(Url::Parse("x\r\n", base.value()).has_value());
 }
 
 TEST(UrlTest, IPv6Host) {

@@ -193,9 +193,25 @@ bool ParseAuthority(std::string_view authority, Url& url) {
   return true;
 }
 
+// True when |c| is an ASCII control character (0x00-0x1F or 0x7F).  These
+// must never appear raw in a URL's path/query: they are not valid in a
+// request target and would let untrusted input inject bytes into the HTTP
+// request line (CRLF injection).
+bool IsControlChar(char c) {
+  const unsigned char u = static_cast<unsigned char>(c);
+  return u < 0x20 || u == 0x7F;
+}
+
 // Splits the remainder of a URL (after scheme or authority) into
-// path / query / fragment.
-void SplitPathQueryFragment(std::string_view rest, Url& url) {
+// path / query / fragment.  Rejects control characters anywhere in the
+// path/query portion.
+base::Result<void> SplitPathQueryFragment(std::string_view rest, Url& url) {
+  for (const char c : rest) {
+    if (IsControlChar(c)) {
+      return base::Err(base::Error::Parse("URL contains a control character"));
+    }
+  }
+
   const size_t question = rest.find('?');
   const size_t hash = rest.find('#');
   const size_t path_end = std::min(question == std::string_view::npos ? rest.size() : question,
@@ -215,6 +231,7 @@ void SplitPathQueryFragment(std::string_view rest, Url& url) {
     url.has_fragment_ = true;
     url.fragment_ = std::string(rest.substr(hash + 1));
   }
+  return base::Ok();
 }
 
 base::Result<Url> ParseAbsoluteInternal(std::string_view input) {
@@ -254,7 +271,10 @@ base::Result<Url> ParseAbsoluteInternal(std::string_view input) {
     return base::Err(base::Error::Parse("special scheme requires '//'"));
   }
 
-  SplitPathQueryFragment(rest, url);
+  const base::Result<void> split = SplitPathQueryFragment(rest, url);
+  if (!split) {
+    return base::Err(split.error());
+  }
   return url;
 }
 
@@ -273,8 +293,11 @@ base::Result<Url> ResolveNetworkPath(std::string_view input, const Url& base) {
     return base::Err(base::Error::Parse("URL has an empty host"));
   }
   rest = (authority_end == std::string_view::npos) ? std::string_view{}
-                                                   : rest.substr(authority_end);
-  SplitPathQueryFragment(rest, url);
+                                                    : rest.substr(authority_end);
+  const base::Result<void> split = SplitPathQueryFragment(rest, url);
+  if (!split) {
+    return base::Err(split.error());
+  }
   return url;
 }
 
@@ -294,6 +317,11 @@ std::string MergePaths(const Url& base, std::string_view relative) {
 base::Result<Url> ResolveRelative(std::string_view input, const Url& base) {
   if (input.empty()) {
     return base;
+  }
+  for (const char c : input) {
+    if (IsControlChar(c)) {
+      return base::Err(base::Error::Parse("URL contains a control character"));
+    }
   }
   if (input[0] == '?') {
     Url t = base;
