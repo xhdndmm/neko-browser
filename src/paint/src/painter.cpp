@@ -29,7 +29,8 @@ void Painter::PaintBox(const layout::LayoutBox& box, DisplayList& list) const {
   for (const layout::Line& line : box.lines) {
     for (const layout::TextRun& run : line.runs) {
       if (!run.text.empty()) {
-        list.DrawText(run.x, run.y, run.text, run.font_size, run.color, run.underline);
+        list.DrawText(run.x, run.y, run.text, run.font_size, run.color, run.underline,
+                      run.font_family);
       }
     }
   }

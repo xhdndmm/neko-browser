@@ -10,7 +10,7 @@
 namespace neko::graphics {
 
 struct FontLibrary::Impl {
-  std::unordered_map<std::string, std::unique_ptr<FontFace>> faces;
+  mutable std::unordered_map<std::string, std::unique_ptr<FontFace>> faces;
 };
 
 FontLibrary::FontLibrary() : impl_(new Impl) {}
@@ -19,7 +19,7 @@ FontLibrary::~FontLibrary() = default;
 
 bool FontLibrary::valid() const { return SharedFreeTypeLibrary() != nullptr; }
 
-const FontFace* FontLibrary::LoadFace(const std::string& path) {
+const FontFace* FontLibrary::LoadFace(const std::string& path) const {
   if (!valid()) {
     return nullptr;
   }

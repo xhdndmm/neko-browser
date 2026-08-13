@@ -37,6 +37,9 @@ class FontFace {
   bool valid() const;
   const std::string& path() const { return path_; }
 
+  // True when |code_point| has a glyph in this face (fallback support).
+  bool HasGlyph(uint32_t code_point) const;
+
   // Horizontal advance (px) of |code_point| at |px_size| (font size in px).
   float Advance(uint32_t code_point, float px_size) const;
 

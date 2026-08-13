@@ -20,12 +20,15 @@ class FontLibrary {
   bool valid() const;
 
   // Loads (or returns the cached) face for |path|; nullptr when the library is
-  // unusable or the file does not parse.
-  const FontFace* LoadFace(const std::string& path);
+  // unusable or the file does not parse.  Const-safe: the face cache is a
+  // mutable memo.
+  const FontFace* LoadFace(const std::string& path) const;
 
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
+  // Mutable so LoadFace() is callable from const contexts (layout/paint
+  // receive a const registry).
 };
 
 }  // namespace neko::graphics

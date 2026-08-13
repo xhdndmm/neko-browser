@@ -29,6 +29,7 @@ struct DrawCommand {
 
   // Text for kDrawText.
   std::string text;
+  std::string font_family = "sans-serif";  // CSS font-family for glyph selection
   float font_size = 16;
   css::Color text_color{0, 0, 0, 255};
   bool underline = false;
@@ -41,7 +42,7 @@ class DisplayList {
   void BorderRect(float x, float y, float width, float height, float top, float right,
                   float bottom, float left, css::Color color);
   void DrawText(float x, float y, std::string text, float font_size, css::Color color,
-                bool underline = false);
+                bool underline = false, std::string font_family = "sans-serif");
 
   const std::vector<DrawCommand>& commands() const { return commands_; }
   std::size_t size() const { return commands_.size(); }

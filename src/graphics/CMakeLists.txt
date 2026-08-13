@@ -11,6 +11,8 @@ add_library(neko_graphics
   src/internal.cpp
   src/font_library.cpp
   src/font_face.cpp
+  src/font_selector.cpp
+  src/font_registry.cpp
   src/glyph_cache.cpp
   src/system_fonts.cpp
   src/utf8.cpp

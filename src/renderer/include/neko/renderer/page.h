@@ -6,7 +6,7 @@
 
 #include "neko/base/status.h"
 #include "neko/dom/element.h"
-#include "neko/graphics/font_library.h"
+#include "neko/graphics/font_registry.h"
 #include "neko/layout/layout_tree.h"
 #include "neko/paint/rasterizer.h"
 #include "neko/style/style_engine.h"
@@ -56,8 +56,7 @@ class Page {
   std::unique_ptr<layout::LayoutBox> root_;
   float viewport_width_ = 800;
 
-  graphics::FontLibrary fonts_;
-  const graphics::FontFace* default_font_ = nullptr;  // system sans, may be null
+  graphics::FontRegistry fonts_;
 };
 
 }  // namespace neko::renderer

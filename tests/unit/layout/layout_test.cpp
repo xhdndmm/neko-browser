@@ -6,8 +6,7 @@
 #include <string_view>
 
 #include "neko/dom/query.h"
-#include "neko/graphics/font_face.h"
-#include "neko/graphics/font_library.h"
+#include "neko/graphics/font_registry.h"
 #include "neko/graphics/system_fonts.h"
 #include "neko/html/parser.h"
 #include "neko/style/style_engine.h"
@@ -184,30 +183,27 @@ TEST(LayoutTest, NestedBlockHeightInherits) {
 }
 
 TEST(LayoutTest, RealFontAdvancesWhenFontProvided) {
-  const std::optional<std::string> path =
-      graphics::FindSystemFont(graphics::GenericFamily::kSansSerif);
-  if (!path.has_value()) {
+  // Skip unless a system font exists (any desktop has one).
+  if (graphics::FindSystemFonts(graphics::GenericFamily::kSansSerif).empty()) {
     GTEST_SKIP() << "no system sans-serif font available";
   }
-  graphics::FontLibrary library;
-  const graphics::FontFace* face = library.LoadFace(*path);
-  ASSERT_NE(face, nullptr);
+  graphics::FontRegistry registry;
 
-  // Same HTML, laid out with and without a font.
+  // Same HTML, laid out with and without a font registry.
   struct Built {
     std::unique_ptr<dom::Document> doc;
     std::unique_ptr<LayoutBox> root;
   };
-  const auto build = [&](const graphics::FontFace* font) -> Built {
+  const auto build = [&](const graphics::FontRegistry* fonts) -> Built {
     auto doc = html::Parser("<body><p>hello</p></body>").Parse();
     style::StyleEngine styles;
     styles.ApplyStyles(*doc);
-    layout::LayoutEngine engine(styles, font);
+    layout::LayoutEngine engine(styles, fonts);
     std::unique_ptr<LayoutBox> root = engine.BuildLayoutTree(*doc, 800);
     return Built{std::move(doc), std::move(root)};
   };
   Built monospace = build(nullptr);
-  Built real = build(face);
+  Built real = build(&registry);
 
   const auto hello_width = [](const Built& built) {
     const LayoutBox* p_box = FindBox(*built.root, "p", *built.doc);

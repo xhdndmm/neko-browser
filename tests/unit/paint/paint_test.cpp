@@ -9,8 +9,7 @@
 #include <string_view>
 
 #include "neko/dom/query.h"
-#include "neko/graphics/font_face.h"
-#include "neko/graphics/font_library.h"
+#include "neko/graphics/font_registry.h"
 #include "neko/graphics/system_fonts.h"
 #include "neko/html/parser.h"
 #include "neko/layout/layout_tree.h"
@@ -132,19 +131,14 @@ TEST(RasterizerTest, TextMetrics) {
 }
 
 TEST(RasterizerTest, FreeTypeTextRendering) {
-  const std::optional<std::string> path =
-      graphics::FindSystemFont(graphics::GenericFamily::kSansSerif);
-  if (!path.has_value()) {
+  if (graphics::FindSystemFonts(graphics::GenericFamily::kSansSerif).empty()) {
     GTEST_SKIP() << "no system sans-serif font available";
   }
-  graphics::FontLibrary library;
-  const graphics::FontFace* face = library.LoadFace(*path);
-  ASSERT_NE(face, nullptr);
-  ASSERT_TRUE(face->valid());
+  graphics::FontRegistry registry;
 
   Rasterizer image(64, 32);
   image.Clear(css::Color{255, 255, 255, 255});
-  image.SetFont(face);
+  image.SetFontRegistry(&registry);
   DisplayList list;
   list.DrawText(0, 0, "A", 16, css::Color{0, 0, 0, 255});
   image.Rasterize(list);

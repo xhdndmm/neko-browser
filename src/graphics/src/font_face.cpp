@@ -46,6 +46,13 @@ FontFace::~FontFace() {
 
 bool FontFace::valid() const { return impl_->face != nullptr; }
 
+bool FontFace::HasGlyph(uint32_t code_point) const {
+  if (!valid()) {
+    return false;
+  }
+  return FT_Get_Char_Index(impl_->face, static_cast<FT_ULong>(code_point)) != 0;
+}
+
 float FontFace::Advance(uint32_t code_point, float px_size) const {
   if (!valid() || !SetPixelSize(impl_->face, px_size)) {
     return 0.0f;

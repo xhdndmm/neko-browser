@@ -10,7 +10,7 @@
 #include "neko/style/style_engine.h"
 
 namespace neko::graphics {
-class FontFace;
+class FontRegistry;
 }
 
 namespace neko::layout {
@@ -18,6 +18,7 @@ namespace neko::layout {
 // A positioned text run within a line box.
 struct TextRun {
   std::string text;
+  std::string font_family;  // CSS font-family the run was measured with
   float x = 0;
   float y = 0;  // top of the run (glyph ascent area)
   float font_size = 16;
@@ -88,17 +89,18 @@ struct LayoutBox {
 class LayoutEngine {
  public:
   // |styles| must outlive the engine; it holds the computed styles for the
-  // documents being laid out.  |font| (optional) provides real glyph advances
-  // for text measurement; when null a monospace fallback (font_size per
-  // character) is used.
-  explicit LayoutEngine(const style::StyleEngine& styles, const graphics::FontFace* font = nullptr)
-      : styles_(styles), font_(font) {}
+  // documents being laid out.  |registry| (optional) provides real glyph
+  // advances (with per-character font fallback) for text measurement; when
+  // null a monospace fallback (font_size per character) is used.
+  explicit LayoutEngine(const style::StyleEngine& styles,
+                        const graphics::FontRegistry* registry = nullptr)
+      : styles_(styles), registry_(registry) {}
 
   std::unique_ptr<LayoutBox> BuildLayoutTree(dom::Document& document, float viewport_width);
 
  private:
   const style::StyleEngine& styles_;
-  const graphics::FontFace* font_ = nullptr;
+  const graphics::FontRegistry* registry_ = nullptr;
 };
 
 }  // namespace neko::layout

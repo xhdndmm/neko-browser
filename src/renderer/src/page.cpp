@@ -7,7 +7,6 @@
 
 #include "neko/base/logging.h"
 #include "neko/base/status.h"
-#include "neko/graphics/system_fonts.h"
 #include "neko/html/parser.h"
 #include "neko/paint/painter.h"
 
@@ -45,10 +44,9 @@ const dom::Element* ElementAt(const layout::LayoutBox& box, float x, float y) {
 }  // namespace
 
 Page::Page() {
-  const std::optional<std::string> path = graphics::FindSystemFont(graphics::GenericFamily::kSansSerif);
-  if (path.has_value()) {
-    default_font_ = fonts_.LoadFace(path.value());
-  }
+  // Touch the default sans-serif selector so the first layout/paint pass does
+  // not pay the font-discovery cost; failure is fine (8x8 fallback).
+  fonts_.SelectorFor("sans-serif");
 }
 
 base::Result<void> Page::LoadHtml(std::string_view html) {
@@ -72,13 +70,13 @@ void Page::Layout(float viewport_width) {
     return;
   }
   viewport_width_ = viewport_width;
-  layout::LayoutEngine engine(styles_, default_font_);
+  layout::LayoutEngine engine(styles_, &fonts_);
   root_ = engine.BuildLayoutTree(*document_, viewport_width);
 }
 
 paint::Rasterizer Page::Rasterize(int width, int height, float y_offset) const {
   paint::Rasterizer image(width, height);
-  image.SetFont(default_font_);
+  image.SetFontRegistry(&fonts_);
   image.Clear(css::Color{255, 255, 255, 255});
   if (root_ == nullptr) {
     return image;

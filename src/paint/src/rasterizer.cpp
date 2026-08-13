@@ -10,6 +10,8 @@
 
 #include "neko/base/status.h"
 #include "neko/graphics/font_face.h"
+#include "neko/graphics/font_registry.h"
+#include "neko/graphics/font_selector.h"
 #include "neko/graphics/utf8.h"
 #include "neko/paint/font8x8.h"
 
@@ -113,7 +115,7 @@ void Rasterizer::DrawBorder(const DrawCommand& command) {
 }
 
 void Rasterizer::DrawText(const DrawCommand& command) {
-  if (font_ == nullptr) {
+  if (registry_ == nullptr) {
     DrawText8x8(command);
     return;
   }
@@ -156,14 +158,18 @@ void Rasterizer::DrawText8x8(const DrawCommand& command) {
 }
 
 void Rasterizer::DrawTextFreetype(const DrawCommand& command) {
+  const graphics::FontSelector* selector = registry_->SelectorFor(command.font_family);
+  if (selector == nullptr) {
+    return;
+  }
   std::vector<uint32_t> code_points;
   graphics::DecodeUtf8(command.text, code_points);
 
-  const float baseline = command.y + font_->Ascent(command.font_size);
+  const float baseline = command.y + selector->Ascent(command.font_size);
   float pen_x = command.x;
   float total_width = 0;
   for (const uint32_t code_point : code_points) {
-    const graphics::GlyphBitmap* glyph = font_->RenderGlyph(code_point, command.font_size);
+    const graphics::GlyphBitmap* glyph = selector->RenderGlyph(code_point, command.font_size);
     if (glyph == nullptr) {
       pen_x += command.font_size * 0.5f;
       continue;

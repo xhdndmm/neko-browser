@@ -32,12 +32,13 @@ void DisplayList::BorderRect(float x, float y, float width, float height, float 
 }
 
 void DisplayList::DrawText(float x, float y, std::string text, float font_size,
-                           css::Color color, bool underline) {
+                           css::Color color, bool underline, std::string font_family) {
   DrawCommand command;
   command.type = CommandType::kDrawText;
   command.x = x;
   command.y = y;
   command.text = std::move(text);
+  command.font_family = std::move(font_family);
   command.font_size = font_size;
   command.text_color = color;
   command.underline = underline;
