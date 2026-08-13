@@ -18,7 +18,15 @@ std::string UsageText() {
          "      --url <url>            URL to navigate to.\n"
          "      --dump-dom             Dump the DOM after load (requires Phase 3).\n"
          "      --screenshot <path>    Render a screenshot to <path> (requires Phase 6).\n"
-         "      --profile <name>       Use the named browser profile.\n"
+         "      --dump-history         Print the browsing history.\n"
+         "      --dump-bookmarks       Print the bookmarks.\n"
+         "      --show-cookies         Print the stored cookies.\n"
+         "      --download <url>       Download a URL to the download directory.\n"
+         "      --download-dir <dir>   Download directory (default: <profile>/downloads).\n"
+         "      --extract-pdf <file>   Extract text from a PDF.\n"
+         "      --audio-info <file>    Print WAV metadata.\n"
+         "      --image-info <file>    Decode an image; optionally write PPM via --image-out.\n"
+         "      --profile <dir>        Browser profile directory.\n"
          "      --disable-gpu          Force software rendering.\n"
          "      --verbose              Enable debug logging.\n"
          "      --log-level <level>    One of trace, debug, info, warning, error, fatal.\n"
@@ -74,6 +82,72 @@ ParseResult ParseCommandLine(int argc, char** argv) {
         return result;
       }
       result.options.screenshot_path = std::string(args[++i]);
+      continue;
+    }
+    if (arg == "--dump-history") {
+      result.options.dump_history = true;
+      continue;
+    }
+    if (arg == "--dump-bookmarks") {
+      result.options.dump_bookmarks = true;
+      continue;
+    }
+    if (arg == "--show-cookies") {
+      result.options.show_cookies = true;
+      continue;
+    }
+    if (arg == "--download") {
+      if (i + 1 >= args.size()) {
+        result.action = ParseResult::Action::kError;
+        result.error_message = "option '--download' requires an argument";
+        return result;
+      }
+      result.options.download_url = std::string(args[++i]);
+      continue;
+    }
+    if (arg == "--download-dir") {
+      if (i + 1 >= args.size()) {
+        result.action = ParseResult::Action::kError;
+        result.error_message = "option '--download-dir' requires an argument";
+        return result;
+      }
+      result.options.download_dir = std::string(args[++i]);
+      continue;
+    }
+    if (arg == "--extract-pdf") {
+      if (i + 1 >= args.size()) {
+        result.action = ParseResult::Action::kError;
+        result.error_message = "option '--extract-pdf' requires an argument";
+        return result;
+      }
+      result.options.extract_pdf_path = std::string(args[++i]);
+      continue;
+    }
+    if (arg == "--audio-info") {
+      if (i + 1 >= args.size()) {
+        result.action = ParseResult::Action::kError;
+        result.error_message = "option '--audio-info' requires an argument";
+        return result;
+      }
+      result.options.audio_info_path = std::string(args[++i]);
+      continue;
+    }
+    if (arg == "--image-info") {
+      if (i + 1 >= args.size()) {
+        result.action = ParseResult::Action::kError;
+        result.error_message = "option '--image-info' requires an argument";
+        return result;
+      }
+      result.options.image_info_path = std::string(args[++i]);
+      continue;
+    }
+    if (arg == "--image-out") {
+      if (i + 1 >= args.size()) {
+        result.action = ParseResult::Action::kError;
+        result.error_message = "option '--image-out' requires an argument";
+        return result;
+      }
+      result.options.image_out_ppm = std::string(args[++i]);
       continue;
     }
     if (arg == "--profile") {

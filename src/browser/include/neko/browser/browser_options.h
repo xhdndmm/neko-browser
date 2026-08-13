@@ -20,12 +20,23 @@ struct BrowserOptions {
   bool dump_dom = false;
   // --screenshot <path>: render and write a screenshot (requires Phase 6).
   std::optional<std::string> screenshot_path;
-  // --profile <name>: browser profile to use.
+  // --profile <dir>: browser profile directory.
   std::optional<std::string> profile_name;
   // --disable-gpu: force software rendering.
   bool disable_gpu = false;
   // --verbose / --log-level <level>.
   base::LogLevel log_level = base::LogLevel::kInfo;
+
+  // Storage / content commands.
+  bool dump_history = false;    // print the browsing history
+  bool dump_bookmarks = false;  // print bookmarks
+  bool show_cookies = false;    // print stored cookies
+  std::optional<std::string> download_url;     // --download <url>
+  std::optional<std::string> download_dir;     // --download-dir <dir>
+  std::optional<std::string> extract_pdf_path; // --extract-pdf <file>
+  std::optional<std::string> audio_info_path;  // --audio-info <file>
+  std::optional<std::string> image_info_path;  // --image-info <file>
+  std::optional<std::string> image_out_ppm;    // --image-out <path>
 };
 
 struct ParseResult {
