@@ -18,6 +18,12 @@ function(apply_compiler_warnings target)
       /EHsc
       /utf-8
     )
+    # The code uses standard C/POSIX functions (strerror, fopen, ...) rather
+    # than MSVC's _s variants; silence the corresponding deprecation warnings.
+    target_compile_definitions(${target} PRIVATE
+      _CRT_SECURE_NO_WARNINGS
+      _CRT_NONSTDC_NO_WARNINGS
+    )
     if(NEKO_WARNINGS_AS_ERRORS)
       target_compile_options(${target} PRIVATE /WX)
     endif()
