@@ -195,6 +195,40 @@ TEST(HttpTest, RejectsContentLengthOverflow) {
   EXPECT_FALSE(result.has_value());
 }
 
+TEST(HttpTest, RejectsConflictingContentLength) {
+  // Two different Content-Length values make the body boundary ambiguous
+  // (a request-smuggling / response-splitting vector); reject (RFC 7230
+  // 3.3.3).
+  const auto result = ParseHttpResponse(
+      "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 100\r\n\r\nhello");
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST(HttpTest, AcceptsIdenticalContentLength) {
+  // Duplicate but identical Content-Length values are permitted.
+  const auto result = ParseHttpResponse(
+      "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 5\r\n\r\nhello");
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result.value().body, "hello");
+}
+
+TEST(HttpTest, RejectsTransferEncodingWithContentLength) {
+  // Content-Length alongside Transfer-Encoding is ambiguous and must be
+  // rejected (RFC 7230 3.3.3).
+  const auto result = ParseHttpResponse(
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n"
+      "5\r\nhello\r\n0\r\n\r\n");
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST(HttpTest, RejectsUnsupportedTransferEncoding) {
+  // A non-chunked Transfer-Encoding must not be silently treated as a plain
+  // body.
+  const auto result = ParseHttpResponse(
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\n\x1f\x8b\x08\x00");
+  EXPECT_FALSE(result.has_value());
+}
+
 TEST(HttpTest, HttpsNotImplemented) {
   const auto url = url::Url::Parse("https://example.com/");
   ASSERT_TRUE(url.has_value());

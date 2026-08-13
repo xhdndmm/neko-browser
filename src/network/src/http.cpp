@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -11,6 +12,37 @@
 
 namespace neko::network {
 namespace {
+
+// Parses a decimal byte count, rejecting values that overflow size_t.
+// Returns nullopt for empty or non-numeric input.
+std::optional<std::size_t> ParseByteCount(std::string_view text) {
+  if (text.empty()) {
+    return std::nullopt;
+  }
+  std::size_t value = 0;
+  for (const char c : text) {
+    if (c < '0' || c > '9') {
+      return std::nullopt;
+    }
+    if (value > (SIZE_MAX - static_cast<std::size_t>(c - '0')) / 10) {
+      return std::nullopt;
+    }
+    value = value * 10 + static_cast<std::size_t>(c - '0');
+  }
+  return value;
+}
+
+// Returns the values of every header named |name| (case-insensitive).
+std::vector<std::string_view> GetAllHeaderValues(const HttpResponse& response,
+                                                 std::string_view name) {
+  std::vector<std::string_view> values;
+  for (const HttpHeader& header : response.headers) {
+    if (base::AsciiEqualsIgnoreCase(header.name, name)) {
+      values.push_back(header.value);
+    }
+  }
+  return values;
+}
 
 std::string_view TrimView(std::string_view text) {
   while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) {
@@ -141,33 +173,50 @@ base::Result<HttpResponse> ParseHttpResponse(std::string_view raw) {
   }
 
   const std::string_view body = raw.substr(pos);
-  const std::string transfer_encoding = response.GetHeader("transfer-encoding");
-  if (base::AsciiEqualsIgnoreCase(transfer_encoding, "chunked")) {
+  const std::vector<std::string_view> transfer_encodings =
+      GetAllHeaderValues(response, "transfer-encoding");
+  const std::vector<std::string_view> content_lengths =
+      GetAllHeaderValues(response, "content-length");
+
+  // Transfer-Encoding takes precedence over Content-Length; having both is
+  // ambiguous and is a request-smuggling / response-splitting vector, so
+  // reject it (RFC 7230 3.3.3).
+  if (!transfer_encodings.empty() && !content_lengths.empty()) {
+    return base::Err(base::Error::Parse("conflicting transfer-encoding and content-length"));
+  }
+
+  if (!transfer_encodings.empty()) {
+    // Only a final "chunked" encoding is understood; anything else is not
+    // implemented and must not be treated as a plain body.
+    const std::string_view last_te = transfer_encodings.back();
+    const std::size_t comma = last_te.rfind(',');
+    const std::string_view final_te =
+        comma == std::string_view::npos ? last_te : last_te.substr(comma + 1);
+    if (!base::AsciiEqualsIgnoreCase(TrimView(final_te), "chunked")) {
+      return base::Err(base::Error::Parse("unsupported transfer-encoding"));
+    }
     const base::Result<void> decoded = DecodeChunked(body, response);
     if (!decoded) {
       return base::Err(decoded.error());
     }
     return response;
   }
-  const std::string content_length = response.GetHeader("content-length");
-  if (!content_length.empty()) {
-    std::size_t length = 0;
-    bool valid = true;
-    for (const char c : content_length) {
-      if (c < '0' || c > '9') {
-        valid = false;
-        break;
+
+  if (!content_lengths.empty()) {
+    // All Content-Length values must agree; inconsistent values mean the
+    // body boundary is ambiguous and must be rejected (RFC 7230 3.3.3).
+    std::optional<std::size_t> length;
+    for (const std::string_view value : content_lengths) {
+      const std::optional<std::size_t> parsed = ParseByteCount(TrimView(value));
+      if (!parsed.has_value()) {
+        return base::Err(base::Error::Parse("invalid content-length"));
       }
-      // Guard against size_t wraparound, same as the chunk-size parser.
-      if (length > (SIZE_MAX - static_cast<std::size_t>(c - '0')) / 10) {
-        return base::Err(base::Error::Parse("content-length too large"));
+      if (length.has_value() && length.value() != parsed.value()) {
+        return base::Err(base::Error::Parse("conflicting content-length"));
       }
-      length = length * 10 + static_cast<std::size_t>(c - '0');
+      length = parsed;
     }
-    if (!valid) {
-      return base::Err(base::Error::Parse("invalid content-length"));
-    }
-    response.body = std::string(body.substr(0, length));
+    response.body = std::string(body.substr(0, length.value()));
   } else {
     response.body = std::string(body);
   }
