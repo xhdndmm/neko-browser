@@ -329,6 +329,9 @@ void StyleEngine::ComputeElement(dom::Element& element, const ComputedStyle& inh
     return it == winners.end() ? nullptr : it->second.declaration;
   };
 
+  const bool font_size_set = find("font-size") != nullptr;
+  const bool line_height_set = find("line-height") != nullptr;
+
   // font-size first (em/rem depend on it).
   if (const css::Declaration* d = find("font-size")) {
     const css::CssValue v = css::ParseCssValue(d->value);
@@ -385,6 +388,14 @@ void StyleEngine::ComputeElement(dom::Element& element, const ComputedStyle& inh
       out.line_height = v.is_percent ? out.font_size * v.value / 100.0f
                                      : (v.unit == "em" ? out.font_size * v.value : v.value);
     }
+  }
+
+  // `line-height: normal` scales with the font size. ComputedStyle stores
+  // line-height as absolute px, so an element that changes font-size without
+  // an explicit line-height must re-derive it from the inherited ratio
+  // (default 19.2/16 = 1.2) instead of keeping the parent's stale value.
+  if (font_size_set && !line_height_set) {
+    out.line_height = out.font_size * (inherited.line_height / inherited.font_size);
   }
 
   // color / text-align.

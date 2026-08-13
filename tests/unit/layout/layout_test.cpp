@@ -123,6 +123,20 @@ TEST(LayoutTest, TextWrapsAtWordBoundary) {
   EXPECT_LE(div->lines[0].runs.size(), 2u);
 }
 
+TEST(LayoutTest, WrappedHeadingLinesDoNotOverlap) {
+  // h1 is 2em = 32px; its line height must scale with the font size so that
+  // wrapped lines stack without overlapping. (Regression: line-height was a
+  // fixed 19.2px, so the 32px glyphs overlapped vertically.)
+  Page page = Build("<body><h1>one two three</h1></body>", 120.0f);
+  const LayoutBox* h1 = FindBox(*page.root, "h1", *page.doc);
+  ASSERT_NE(h1, nullptr);
+  ASSERT_GE(h1->lines.size(), 2u);
+  EXPECT_FLOAT_EQ(h1->lines[0].height, 38.4f);
+  const float first_bottom =
+      h1->lines[0].runs[0].y + h1->lines[0].runs[0].font_size;
+  EXPECT_GE(h1->lines[1].runs[0].y, first_bottom);
+}
+
 TEST(LayoutTest, DisplayNoneSkipped) {
   Page page = Build("<body><div>visible</div><div style=\"display:none\">hidden</div></body>");
   const LayoutBox* body = FindBox(*page.root, "body", *page.doc);

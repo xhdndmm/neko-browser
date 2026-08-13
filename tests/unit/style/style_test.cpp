@@ -108,6 +108,16 @@ TEST(StyleTest, EmFontSizeResolution) {
   EXPECT_FLOAT_EQ(p.font_size, 32.0f);
 }
 
+TEST(StyleTest, LineHeightScalesWithFontSize) {
+  auto doc = MakeDoc("<body><h1>x</h1></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& h1 = Style(engine, *doc, "h1");
+  EXPECT_FLOAT_EQ(h1.font_size, 32.0f);   // 2em
+  EXPECT_FLOAT_EQ(h1.line_height, 38.4f); // 32 * 1.2 (was stuck at 19.2)
+}
+
 TEST(StyleTest, WidthHeightAndBackground) {
   auto doc = MakeDoc(
       "<body><div style=\"width: 200px; height: 100px; background-color: #ff0000\">x</div></body>");
