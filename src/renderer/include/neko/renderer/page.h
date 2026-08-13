@@ -51,6 +51,10 @@ class Page {
   std::string DumpLayoutTree() const;
 
  private:
+  // Canvas background per CSS propagation: <html> background, else a <body>
+  // background, else white.  Paints the whole viewport.
+  css::Color CanvasBackgroundColor() const;
+
   std::unique_ptr<dom::Document> document_;
   style::StyleEngine styles_;
   std::unique_ptr<layout::LayoutBox> root_;

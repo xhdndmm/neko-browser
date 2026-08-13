@@ -51,6 +51,48 @@ TEST(PageTest, RasterizeProducesImage) {
   EXPECT_EQ(image.pixels()[offset + 2], 0);
 }
 
+TEST(PageTest, BodyBackgroundPropagatesToCanvas) {
+  // CSS canvas background: a <body> background paints the whole viewport when
+  // <html> has none (e.g. example.com's #f0f0f2 page background).
+  Page page;
+  ASSERT_TRUE(page.LoadHtml(
+                          "<html><body style=\"background-color:#ff0000\"><p>x</p></body></html>")
+                  .has_value());
+  page.Layout(400);
+  paint::Rasterizer image = page.Rasterize(400, 300);
+
+  // The bottom-right corner is outside the short body box; it must still be
+  // red via background propagation (was white before the fix).
+  const std::size_t offset = (static_cast<std::size_t>(290) * 400 + 390) * 4;
+  EXPECT_EQ(image.pixels()[offset], 255);
+  EXPECT_EQ(image.pixels()[offset + 1], 0);
+  EXPECT_EQ(image.pixels()[offset + 2], 0);
+}
+
+TEST(PageTest, HtmlBackgroundPaintsCanvas) {
+  Page page;
+  ASSERT_TRUE(page.LoadHtml(
+                          "<html style=\"background-color:#0000ff\"><body><p>x</p></body></html>")
+                  .has_value());
+  page.Layout(400);
+  paint::Rasterizer image = page.Rasterize(400, 300);
+  const std::size_t offset = (static_cast<std::size_t>(290) * 400 + 390) * 4;
+  EXPECT_EQ(image.pixels()[offset], 0);
+  EXPECT_EQ(image.pixels()[offset + 1], 0);
+  EXPECT_EQ(image.pixels()[offset + 2], 255);
+}
+
+TEST(PageTest, NoBackgroundStaysWhite) {
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<html><body><p>x</p></body></html>").has_value());
+  page.Layout(400);
+  paint::Rasterizer image = page.Rasterize(400, 300);
+  const std::size_t offset = (static_cast<std::size_t>(290) * 400 + 390) * 4;
+  EXPECT_EQ(image.pixels()[offset], 255);
+  EXPECT_EQ(image.pixels()[offset + 1], 255);
+  EXPECT_EQ(image.pixels()[offset + 2], 255);
+}
+
 TEST(PageTest, ContentHeight) {
   Page page;
   EXPECT_EQ(page.ContentHeight(), 0.0f);  // no layout yet

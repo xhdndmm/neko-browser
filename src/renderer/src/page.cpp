@@ -7,6 +7,7 @@
 
 #include "neko/base/logging.h"
 #include "neko/base/status.h"
+#include "neko/css/color.h"
 #include "neko/html/parser.h"
 #include "neko/paint/painter.h"
 
@@ -77,7 +78,7 @@ void Page::Layout(float viewport_width) {
 paint::Rasterizer Page::Rasterize(int width, int height, float y_offset) const {
   paint::Rasterizer image(width, height);
   image.SetFontRegistry(&fonts_);
-  image.Clear(css::Color{255, 255, 255, 255});
+  image.Clear(CanvasBackgroundColor());
   if (root_ == nullptr) {
     return image;
   }
@@ -85,6 +86,33 @@ paint::Rasterizer Page::Rasterize(int width, int height, float y_offset) const {
   const paint::Painter painter(root_.get());
   image.Rasterize(painter.Paint());
   return image;
+}
+
+css::Color Page::CanvasBackgroundColor() const {
+  const dom::Element* html = document_ != nullptr ? document_->document_element() : nullptr;
+  if (html != nullptr) {
+    const style::ComputedStyle& html_style = styles_.StyleFor(*html);
+    if (html_style.background_color.has_value()) {
+      return html_style.background_color.value();
+    }
+    // CSS background propagation (HTML spec, canvas background): when <html>
+    // has no background, a <body> background paints the whole canvas.
+    for (const dom::Node* child : html->ChildNodes()) {
+      if (child->node_type() != dom::NodeType::kElement) {
+        continue;
+      }
+      const auto* element = static_cast<const dom::Element*>(child);
+      if (element->tag_name() != "body") {
+        continue;
+      }
+      const style::ComputedStyle& body_style = styles_.StyleFor(*element);
+      if (body_style.background_color.has_value()) {
+        return body_style.background_color.value();
+      }
+      break;
+    }
+  }
+  return css::Color{255, 255, 255, 255};
 }
 
 float Page::ContentHeight() const {
