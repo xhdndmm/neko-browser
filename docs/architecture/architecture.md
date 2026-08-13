@@ -154,11 +154,24 @@ tests/unit/<module>/      单元测试
    未完成的功能必须明确标注 `NOT IMPLEMENTED` / `PARTIALLY IMPLEMENTED`。
 5. **依赖方向**：`UI → Browser → Engine → Rendering/Layout/DOM/Network → Core/Platform`。
 
-## 7. 当前已落地（Phase 0）
+## 7. 当前已落地（Phases 0–6）
 
 ```text
-src/base/       日志、Error/Result、字符串、版本、断言 —— Implemented + Tested
-src/browser/    CLI 参数解析、入口 —— Implemented + Tested
+src/base/       日志、Error/Result、字符串、UTF-8、版本、断言 —— Tested
+src/url/        URL 解析、相对解析、百分号编码、Origin —— Tested
+src/network/    TCP Socket（POSIX）、HTTP/1.1 GET、重定向、chunked —— Tested
+src/dom/        Node 树、Element/Text/Comment/Document、querySelector —— Tested
+src/html/       tokenizer + 树构建（插入模式子集）、字符引用 —— Tested
+src/css/        tokenizer/parser、选择器、级联输入、颜色/值 —— Tested
+src/style/      UA 表 + 级联 + 继承 + 计算样式 —— Tested
+src/layout/     盒模型、block/inline 布局、换行 —— Tested
+src/paint/      显示列表、软件光栅化、位图字体、PPM —— Tested
+src/renderer/   页面管线编排（headless）—— Tested
+src/browser/    CLI（--url/--dump-dom/--screenshot）—— Tested
 ```
 
-其余模块均为 **Not Started**，见[开发路线图](development/roadmap.md)。
+端到端验证：`neko_browser --url http://example.com/ --screenshot out.ppm`
+可抓取并渲染真实网页。
+
+未开始：JavaScript、Web APIs、Storage、Security 子系统、IPC/多进程、GUI、
+DevTools、Accessibility。见[开发路线图](development/roadmap.md)。

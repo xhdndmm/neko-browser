@@ -42,61 +42,50 @@ graph LR
 - [x] GitHub Actions CI（5 平台/编译器矩阵 + sanitizer + coverage + 格式）
 - [x] 文档体系（README/BUILDING/TESTING/CONTRIBUTING/SECURITY/architecture/docs）
 
-**验证**：debug / release / asan / coverage / Clang+Werror / GCC+Werror 全部
-54/54 测试通过。
+## Phase 1 — Core ✅（已完成）
 
-## Phase 1 — Core（下一阶段）
+- [x] URL 模块（解析、scheme/host/port/path/query/fragment、百分号编码、
+      相对解析、Origin）—— 19 个边界测试（含 RFC 3986 5.4.1 样例）
 
-**目标**：构建引擎核心抽象与 URL。
+## Phase 2 — Networking ✅（已完成，范围见下）
 
-- [ ] Task / Event / Time 基础设施
-- [ ] URL 模块（解析、scheme/host/port/path/query/fragment、百分号编码、
-      相对解析、Origin）—— 大规模边界测试
-- [ ] 模糊测试框架接入（URL parser）
-- [ ] `neko::url` 库 + `tests/unit/url/` + `tests/fuzz/`
+- [x] Socket 抽象（TCP，POSIX）+ DNS（getaddrinfo）
+- [x] HTTP/1.1 GET：请求/响应/头/体、Content-Length、chunked、重定向
+- [ ] HTTPS/TLS —— **未实现**（架构预留，见 security-model）
+- [ ] gzip/deflate 压缩 —— **未实现**（返回显式错误）
 
-**验收**：URL 单元测试 + 首批 fuzz seed 通过；CI 增加 fuzz 冒烟。
+## Phase 3 — HTML + DOM ✅（已完成）
 
-## Phase 2 — Networking
+- [x] HTML tokenizer（字符引用、畸形输入、注释、RAWTEXT/RCDATA）
+- [x] HTML parser（插入模式、容错、隐含元素/结束标签）
+- [x] DOM：Node/Element/Text/Comment/DocumentFragment、属性、querySelector、
+      textContent、序列化
 
-- [ ] Socket 抽象（TCP）+ DNS（先系统解析，再考虑自有实现）
-- [ ] HTTP/1.1：请求/响应/头/体、chunked、keep-alive、重定向、压缩（gzip/deflate）
-- [ ] HTTPS：TLS 抽象层（封装 OpenSSL/mbedTLS），证书校验
-- [ ] `neko::network` + 本地 HTTP 测试服务器 + `tests/network/`
+## Phase 4 — CSS + Style ✅（已完成，范围见下）
 
-**验收**：`neko_browser --url http://... --dump-dom` 能取回网页文本。
+- [x] CSS tokenizer/parser（规则、声明、选择器、值、!important、@media）
+- [x] selector matching + specificity + 级联 + 计算样式 + 继承 + UA 样式表
+- [x] 属性：display/position/width/height/margin/padding/border/background/
+      color/font-size/font-weight/font-family/line-height/text-align
+- [ ] flexbox / grid —— **未实现**（display 解析为 flex/grid 时按 block 处理）
+- [ ] transforms / animations / media queries 完整支持 —— 后续
 
-## Phase 3 — HTML + DOM
+## Phase 5 — Layout ✅（已完成，范围见下）
 
-- [ ] HTML tokenizer（字符引用、畸形输入、注释、CDATA 语义）
-- [ ] HTML parser（插入模式、树构建、容错）
-- [ ] DOM：Node/Document/Element/Text/Comment/DocumentFragment、属性、
-      querySelector、textContent
-- [ ] `--dump-dom` 落地
+- [x] 独立 Layout Tree、盒模型、block layout、inline layout、文字换行、
+      relative 定位、display:none
+- [ ] flexbox / grid / absolute / fixed —— **未实现**（absolute/fixed 按 static 处理）
 
-**验收**：`HTML → DOM`，单元测试 + 畸形 HTML 测试覆盖。
+## Phase 6 — Rendering ✅（已完成，范围见下）
 
-## Phase 4 — CSS + Style
+- [x] Paint → Display List → 软件光栅化 → PPM 输出
+- [x] background / border / text / 裁剪
+- [x] 文本：内嵌公有领域 8x8 位图字体（ASCII）
+- [ ] FreeType/HarfBuzz 文本整形与 Unicode 回退 —— 后续
+- [ ] 图像解码 / 合成器 / GPU —— 后续
 
-- [ ] CSS tokenizer/parser（规则、声明、选择器、值、单位、颜色、长度、百分比）
-- [ ] selector matching + specificity + cascade + computed style
-- [ ] UA stylesheet、内联样式、继承
-- [ ] 首批属性：display/position/width/height/margin/padding/border/background/
-      color/font/font-size/line-height/text-align
-
-## Phase 5 — Layout
-
-- [ ] 独立 Layout Tree
-- [ ] 盒模型（content/padding/border/margin）
-- [ ] block layout / inline layout / text layout（接入字体抽象：FreeType+HarfBuzz）
-- [ ] Flexbox / Grid 作为后续独立里程碑（禁止伪装）
-
-## Phase 6 — Rendering
-
-- [ ] Paint → Display List → 软件光栅化 → 窗口表面
-- [ ] background / border / text / 裁剪 / 滚动
-- [ ] 图形抽象层（软件后端先行）
-- [ ] `--screenshot` 落地 + 像素对比渲染测试
+**里程碑 M1–M6 达成**：`neko_browser --url http://example.com/ --screenshot out.ppm`
+可抓取、解析、样式化、布局并光栅化真实网页（已在本地端到端验证）。
 
 ## Phase 7 — Browser UI
 

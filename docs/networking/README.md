@@ -1,21 +1,24 @@
 # Networking 模块
 
-> 状态：**Not Started**（计划 Phase 2）
+> 状态：**Partial**（Phase 2）
 
-## 职责
+## 已实现
 
-网络栈分层：
+- TCP Socket 抽象（POSIX；getaddrinfo 解析、连接超时、完整收发）
+- HTTP/1.1 GET：请求构建、响应解析（状态行/头/体）、Content-Length、
+  chunked 传输、重定向跟随（301/302/303/307/308）
+- 显式错误：https（TLS 未实现）、未知 content-encoding
+
+## 未实现
+
+- HTTPS/TLS（架构已预留：Socket::Connect 为传输接缝）
+- keep-alive 连接复用、gzip/deflate 压缩、HTTP/2、HTTP/3
+- 超时/取消的完整生命周期管理
+
+## 分层
 
 ```text
-URL → HTTP → TLS → TCP → Socket
+URL → HTTP → TLS(计划) → TCP → Socket
 ```
 
-- Socket：TCP/UDP/DNS
-- HTTP/1.1：请求/响应/头/体、chunked、keep-alive、重定向、压缩
-- HTTPS：TLS 抽象层（封装 OpenSSL/mbedTLS/BoringSSL），证书校验
-- 后续：HTTP/2、HTTP/3/QUIC
-
-## 约束
-
-- 第三方网络库必须封装在项目自有接口之后，核心引擎不得直接依赖。
-- 所有响应数据视为不可信输入。
+第三方网络库必须封装在自有接口之后；响应数据视为不可信输入。

@@ -1,18 +1,22 @@
 # CSS 模块
 
-> 状态：**Not Started**（计划 Phase 4）
+> 状态：**Implemented**（Phase 4，子集）
 
-## 职责
+## 已实现
+
+- tokenizer（ident/at-keyword/hash/数字/尺寸/百分比/字符串/标点/注释）
+- parser：样式表（限定规则 + @media 嵌套）、声明块、!important
+- 选择器：type/id/class/属性（全部操作符）/伪类(:first-child 等) + 组合器
+  （后代/子/相邻/后续兄弟），特异性计算
+- 颜色（#hex、rgb()/rgba()、~150 命名色）与类型化值解析
+
+## 未实现
+
+- flex/grid/transform/动画/过渡、媒体查询完整求值
+- 完整伪类集（:hover 等按不匹配处理）
+
+## 架构
 
 ```text
 CSS Source → Tokenizer → Parser → Stylesheet → Selector Matching → Cascade → Computed Style
 ```
-
-- 选择器、声明、属性、值、单位、颜色、长度、百分比
-- 特异性、级联、继承、内联样式、UA 样式表
-- 后续：flexbox/grid/transforms/animations/media queries
-
-## 约束
-
-- 禁止把 CSS 解析折叠成字符串拆分/单个巨型函数
-- 参考：CSS 官方规范（各模块）
