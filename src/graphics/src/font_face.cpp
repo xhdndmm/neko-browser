@@ -124,10 +124,12 @@ const GlyphBitmap* FontFace::RenderGlyph(uint32_t code_point, float px_size) con
 }
 
 float FontFace::Ascent(float px_size) const {
-  if (!valid() || !SetPixelSize(impl_->face, px_size)) {
+  if (!valid() || !SetPixelSize(impl_->face, px_size) || impl_->face->size == nullptr) {
     return 0.0f;
   }
-  return static_cast<float>(impl_->face->ascender) / 64.0f;
+  // face->size->metrics are scaled to the current pixel size (26.6 fixed
+  // point); face->ascender alone is in unscaled font units.
+  return static_cast<float>(impl_->face->size->metrics.ascender) / 64.0f;
 }
 
 }  // namespace neko::graphics

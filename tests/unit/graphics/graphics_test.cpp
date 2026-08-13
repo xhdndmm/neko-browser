@@ -48,7 +48,11 @@ TEST(FontFaceTest, RendersAndCachesGlyphs) {
 
   // Metrics are real (proportional), not the monospace font_size assumption.
   EXPECT_GT(face->Advance('A', 16), 0.0f);
+  // The ascent is scaled to the pixel size and stays inside the em box
+  // (regression: it was read as unscaled font units, ~30px at 16px, which
+  // shifted glyphs a full line below their hit-test box).
   EXPECT_GT(face->Ascent(16), 0.0f);
+  EXPECT_LT(face->Ascent(16), 16.0f);
   EXPECT_GT(face->TextWidth("hello", 16), 0.0f);
   EXPECT_TRUE(face->HasGlyph('A'));
 
