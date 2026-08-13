@@ -11,7 +11,7 @@
 | HTTPS / TLS | Not Started | — | Socket 层已预留 |
 | gzip/deflate | Not Started | — | 返回显式 NOT IMPLEMENTED |
 | HTML tokenizer | Tested | HTML 套件 | 字符引用子集、RAWTEXT/RCDATA |
-| HTML parser | Tested | HTML 套件 | 插入模式子集（无 table 容错） |
+| HTML parser | Tested | HTML 套件 | 插入模式子集（无 table 容错）；隐含 p 闭合按 button 作用域判定 |
 | DOM | Tested | DOM 套件 | 树操作、querySelector 子集 |
 | CSS tokenizer/parser | Tested | CSS 套件 | 规则、声明、!important、@media |
 | 选择器匹配 | Tested | CSS 套件 | 属性/伪类/组合器子集 |

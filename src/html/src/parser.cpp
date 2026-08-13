@@ -202,16 +202,41 @@ void Parser::AppendText(std::string_view text) {
   current->AppendChild(std::make_unique<dom::Text>(std::move(clean)));
 }
 
+// Whether |tag| terminates scope searches.  These are the WHATWG 13.2.6 scope
+// boundaries for the default scope (applet, caption, html, table, td, th,
+// marquee, object, template) plus the MathML/SVG ones we do not create.  The
+// HTML parser never produces SVG/MathML elements, so those boundaries are
+// omitted.
+bool IsScopeBoundaryTag(std::string_view tag) {
+  return tag == "applet" || tag == "caption" || tag == "html" || tag == "table" ||
+         tag == "td" || tag == "th" || tag == "marquee" || tag == "object" ||
+         tag == "template";
+}
+
 bool Parser::InScope(std::string_view tag) const {
   for (auto it = stack_.rbegin(); it != stack_.rend(); ++it) {
     const std::string_view current = (*it)->tag_name();
     if (current == tag) {
       return true;
     }
-    // Scope boundaries (subset of WHATWG).
-    if (current == "html" || current == "table" || current == "td" || current == "th" ||
-        current == "caption" || current == "applet" || current == "marquee" ||
-        current == "object" || current == "template") {
+    if (IsScopeBoundaryTag(current)) {
+      return false;
+    }
+  }
+  return false;
+}
+
+// Button scope (WHATWG 13.2.6): the default scope boundaries plus `button`.
+// The "close a p element" step runs in button scope, so an open <p> nested
+// inside a <button> must NOT be closed by a following break-out start tag
+// (e.g. <div>), whereas a <p> inside an <ol>/<ul>/<li> still is.
+bool Parser::InButtonScope(std::string_view tag) const {
+  for (auto it = stack_.rbegin(); it != stack_.rend(); ++it) {
+    const std::string_view current = (*it)->tag_name();
+    if (current == tag) {
+      return true;
+    }
+    if (IsScopeBoundaryTag(current) || current == "button") {
       return false;
     }
   }
@@ -228,7 +253,8 @@ dom::Element* Parser::FindInStack(std::string_view tag) const {
 }
 
 void Parser::ClosePElement() {
-  if (InScope("p")) {
+  // "close a p element": only if the open <p> is in button scope.
+  if (InButtonScope("p")) {
     PopThrough("p");
   }
 }
@@ -302,9 +328,7 @@ bool Parser::ElementInScope(dom::Element* element) const {
     if (*it == element) {
       return true;
     }
-    const std::string_view tag = (*it)->tag_name();
-    if (tag == "html" || tag == "table" || tag == "td" || tag == "th" || tag == "caption" ||
-        tag == "applet" || tag == "marquee" || tag == "object" || tag == "template") {
+    if (IsScopeBoundaryTag((*it)->tag_name())) {
       return false;
     }
   }

@@ -10,6 +10,8 @@
 - 树构建：initial → before html → before head → in head → after head →
   in body → text → after body；隐含 html/head/body、隐含 p/li/标题闭合、
   void 元素、游离结束标签、EOF 骨架
+- 作用域判定：默认作用域 + button 作用域（「关闭 p 元素」步骤按 button 作用域
+  判定，<button> 内部的 <p> 不会被后续块级元素（如 <div>）强行闭合）
 - 活动格式化元素列表（含 Noah's Ark 条款）+ adoption agency 算法
   （错嵌套格式化元素的领养/重建）
 - 畸形 HTML 作为普通输入处理

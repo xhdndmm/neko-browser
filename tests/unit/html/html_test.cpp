@@ -51,6 +51,46 @@ TEST(HtmlTest, ImpliedPEndTag) {
   EXPECT_EQ(ps[1]->TextContent(), "b");
 }
 
+// WHATWG 13.2.6 "button scope": the "close a p element" step (run by a
+// break-out block start tag such as <div>) only closes an open <p> that is not
+// shielded by a <button>.  Here the <p> is still open when <div> starts, but a
+// <button> sits between it and the top of the stack, so per spec the <p> must
+// NOT be closed: <div> becomes a child of the <button> (still inside the <p>).
+TEST(HtmlTest, ButtonScopeShieldsPFromBreakoutDiv) {
+  auto doc = ParseDoc("<p>a<button>b<div>c");
+  dom::Element* p = dom::QuerySelector(*doc, "p");
+  ASSERT_NE(p, nullptr);
+  // Only one <p> was created; it was not split by the break-out <div>.
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "p").size(), 1u);
+  // The <p> still contains the <button>, which contains the <div>.  Were the
+  // <p> wrongly closed (default scope), <div> would be a sibling of <button>
+  // under <body> instead of a descendant of the <button>.
+  dom::Element* button = dom::QuerySelector(*p, "button");
+  ASSERT_NE(button, nullptr);
+  dom::Element* div = dom::QuerySelector(*button, "div");
+  ASSERT_NE(div, nullptr);
+  EXPECT_EQ(div->TextContent(), "c");
+  EXPECT_EQ(p->TextContent(), "abc");
+}
+
+// <ol>/<ul>/<li> are NOT button-scope boundaries, so an open <p> inside one is
+// still closed by a break-out <div> (the <p> is NOT shielded).  The <div>
+// becomes a sibling of the <p> inside that list item.
+TEST(HtmlTest, ListItemScopeDoesNotShieldP) {
+  auto doc = ParseDoc("<li><p>a<div>b");
+  const auto ps = dom::QuerySelectorAll(*doc, "p");
+  ASSERT_EQ(ps.size(), 1u);
+  EXPECT_EQ(ps[0]->TextContent(), "a");
+  dom::Element* li = dom::QuerySelector(*doc, "li");
+  ASSERT_NE(li, nullptr);
+  // <div> is a sibling of <p>, both directly inside <li>.
+  EXPECT_EQ(li->child_count(), 2u);
+  EXPECT_EQ(li->first_child(), static_cast<dom::Node*>(ps[0]));
+  dom::Element* div = dom::QuerySelector(*li, "div");
+  ASSERT_NE(div, nullptr);
+  EXPECT_EQ(div->TextContent(), "b");
+}
+
 TEST(HtmlTest, VoidElements) {
   auto doc = ParseDoc("<div>a<br><img src=\"x.png\">b</div>");
   dom::Element* div = dom::QuerySelector(*doc, "div");

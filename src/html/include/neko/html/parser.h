@@ -55,6 +55,7 @@ class Parser {
   Token NextToken();
 
   bool InScope(std::string_view tag) const;
+  bool InButtonScope(std::string_view tag) const;
   dom::Element* FindInStack(std::string_view tag) const;
   void ClosePElement();
   bool IsVoidElement(std::string_view tag) const;
