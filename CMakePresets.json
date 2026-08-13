@@ -1,0 +1,216 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "description": "Shared configuration for all presets",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "NEKO_BUILD_TESTS": "ON",
+        "NEKO_WARNINGS_AS_ERRORS": "OFF"
+      }
+    },
+    {
+      "name": "debug",
+      "inherits": "base",
+      "displayName": "Debug",
+      "description": "Debug build (fast, no optimization, full assertions)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "release",
+      "inherits": "base",
+      "displayName": "Release",
+      "description": "Release build with LTO enabled",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "NEKO_ENABLE_LTO": "ON"
+      }
+    },
+    {
+      "name": "relwithdebinfo",
+      "inherits": "base",
+      "displayName": "RelWithDebInfo",
+      "description": "Optimized build with debug information",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "asan",
+      "inherits": "base",
+      "displayName": "AddressSanitizer + UBSan",
+      "description": "AddressSanitizer + UndefinedBehaviorSanitizer (GCC/Clang)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "NEKO_SANITIZERS": "address;undefined"
+      }
+    },
+    {
+      "name": "ubsan",
+      "inherits": "base",
+      "displayName": "UndefinedBehaviorSanitizer",
+      "description": "UndefinedBehaviorSanitizer only (GCC/Clang)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "NEKO_SANITIZERS": "undefined"
+      }
+    },
+    {
+      "name": "tsan",
+      "inherits": "base",
+      "displayName": "ThreadSanitizer",
+      "description": "ThreadSanitizer (GCC/Clang)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "NEKO_SANITIZERS": "thread"
+      }
+    },
+    {
+      "name": "coverage",
+      "inherits": "base",
+      "displayName": "Coverage",
+      "description": "Debug build with gcov coverage instrumentation",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "NEKO_ENABLE_COVERAGE": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "description": "Build the debug configuration"
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "description": "Build the release configuration"
+    },
+    {
+      "name": "relwithdebinfo",
+      "configurePreset": "relwithdebinfo",
+      "description": "Build the RelWithDebInfo configuration"
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan",
+      "description": "Build the ASan+UBSan configuration"
+    },
+    {
+      "name": "ubsan",
+      "configurePreset": "ubsan",
+      "description": "Build the UBSan configuration"
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan",
+      "description": "Build the TSan configuration"
+    },
+    {
+      "name": "coverage",
+      "configurePreset": "coverage",
+      "description": "Build the coverage configuration"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    },
+    {
+      "name": "relwithdebinfo",
+      "configurePreset": "relwithdebinfo",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    },
+    {
+      "name": "ubsan",
+      "configurePreset": "ubsan",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    },
+    {
+      "name": "coverage",
+      "configurePreset": "coverage",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "debug",
+      "description": "Configure, build and test (debug)",
+      "steps": [
+        { "type": "configure", "name": "debug" },
+        { "type": "build", "name": "debug" },
+        { "type": "test", "name": "debug" }
+      ]
+    },
+    {
+      "name": "release",
+      "description": "Configure, build and test (release)",
+      "steps": [
+        { "type": "configure", "name": "release" },
+        { "type": "build", "name": "release" },
+        { "type": "test", "name": "release" }
+      ]
+    },
+    {
+      "name": "asan",
+      "description": "Configure, build and test (ASan+UBSan)",
+      "steps": [
+        { "type": "configure", "name": "asan" },
+        { "type": "build", "name": "asan" },
+        { "type": "test", "name": "asan" }
+      ]
+    },
+    {
+      "name": "ubsan",
+      "description": "Configure, build and test (UBSan)",
+      "steps": [
+        { "type": "configure", "name": "ubsan" },
+        { "type": "build", "name": "ubsan" },
+        { "type": "test", "name": "ubsan" }
+      ]
+    },
+    {
+      "name": "coverage",
+      "description": "Configure, build and test (coverage)",
+      "steps": [
+        { "type": "configure", "name": "coverage" },
+        { "type": "build", "name": "coverage" },
+        { "type": "test", "name": "coverage" }
+      ]
+    }
+  ]
+}

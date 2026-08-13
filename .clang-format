@@ -1,0 +1,57 @@
+---
+# neko-browser formatting rules.
+# See https://clang.llvm.org/docs/ClangFormatStyleOptions.html
+BasedOnStyle: LLVM
+IndentWidth: 2
+TabWidth: 2
+ColumnLimit: 100
+IndentCaseLabels: false
+
+# Short one-liners are only allowed for empty bodies (e.g. deleted ctors).
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+
+# Allman-style braces for types and functions, K&R for control flow.
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterCaseLabel: false
+  AfterClass: true
+  AfterControlStatement: Never
+  AfterEnum: true
+  AfterFunction: true
+  AfterNamespace: false
+  AfterObjCDeclaration: false
+  AfterStruct: true
+  AfterUnion: true
+  AfterExternBlock: false
+  BeforeCatch: false
+  BeforeElse: false
+  BeforeLambdaBody: false
+  BeforeWhile: false
+  IndentBraces: false
+  SplitEmptyFunction: false
+  SplitEmptyRecord: true
+  SplitEmptyNamespace: true
+
+NamespaceIndentation: None
+DerivePointerAlignment: false
+PointerAlignment: Left
+
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  # Project headers first, then everything else.
+  - Regex: '^"neko/'
+    Priority: 1
+  - Regex: '^"'
+    Priority: 2
+  - Regex: '^<'
+    Priority: 3
+
+# Keep lambda bodies compact by default but allow reasonable column usage.
+BinPackArguments: false
+BinPackParameters: false
+AllowAllArgumentsOnNextLine: true
+AllowAllParametersOfDeclarationOnNextLine: true
+...

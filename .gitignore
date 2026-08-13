@@ -67,3 +67,13 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# coverage artifacts
+coverage/
+*.gcda
+*.gcno
+*.gcov
+*.profraw
+*.profdata
+lcov.info
+coverage.info
