@@ -40,6 +40,15 @@ TEST(StyleTest, UaDefaults) {
   EXPECT_FLOAT_EQ(p.font_size, 16.0f);
 }
 
+TEST(StyleTest, HeadingIsBlock) {
+  auto doc = MakeDoc("<body><h1>x</h1><h2>y</h2></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  EXPECT_EQ(Style(engine, *doc, "h1").display, Display::kBlock);
+  EXPECT_EQ(Style(engine, *doc, "h2").display, Display::kBlock);
+}
+
 TEST(StyleTest, SpecificityCascade) {
   auto doc = MakeDoc(
       "<style>p { color: red; font-size: 20px; } .note { color: blue; }</style>"

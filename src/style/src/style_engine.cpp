@@ -25,6 +25,7 @@ html { display: block; }
 head, title, style, script, meta, link, base, template { display: none; }
 body { display: block; margin: 8px; }
 div, p, section, article, aside, header, footer, nav, main, hgroup,
+h1, h2, h3, h4, h5, h6,
 address, blockquote, pre, figure, figcaption, form, fieldset, details,
 summary, hr, dl, dt, dd, table, caption, thead, tbody, tfoot, tr, td, th,
 ul, ol, li { display: block; }
