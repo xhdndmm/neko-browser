@@ -60,6 +60,7 @@ struct ComputedStyle {
   // Text (inherited).
   TextAlign text_align = TextAlign::kLeft;
   std::optional<css::Color> color;
+  bool text_decoration_underline = false;
 
   // Offsets (used by position: relative).
   float left = 0;

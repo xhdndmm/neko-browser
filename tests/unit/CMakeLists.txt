@@ -179,6 +179,7 @@ gtest_discover_tests(neko_storage_tests DISCOVERY_MODE PRE_TEST)
 add_executable(neko_browser_tests
   browser/options_test.cpp
   browser/browser_controller_test.cpp
+  browser/hyperlink_test.cpp
 )
 target_link_libraries(neko_browser_tests PRIVATE neko::browser neko::browser_options gmock_main)
 apply_compiler_warnings(neko_browser_tests)

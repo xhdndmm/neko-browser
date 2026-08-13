@@ -3,8 +3,10 @@
 
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <string>
 
+#include "neko/dom/query.h"
 #include "neko/html/parser.h"
 #include <gtest/gtest.h>
 
@@ -96,6 +98,59 @@ TEST(PageTest, LoadMissingFile) {
   const auto result = page.LoadFile("/nonexistent/neko_missing_file.html");
   ASSERT_FALSE(result.has_value());
   EXPECT_EQ(result.error().category(), base::ErrorCategory::kIo);
+}
+
+TEST(PageTest, ElementAtHitTestsInlineContent) {
+  Page page;
+  ASSERT_TRUE(page.LoadHtml(
+      "<body><p>plain <a href=\"https://example.com/x\">link</a></p></body>")
+                  .has_value());
+  page.Layout(400);
+
+  dom::Element* link = dom::QuerySelector(*page.document(), "a");
+  dom::Element* p = dom::QuerySelector(*page.document(), "p");
+  ASSERT_NE(link, nullptr);
+  ASSERT_NE(p, nullptr);
+
+  // Click the center of each text run and check which element is hit.
+  const dom::Element* hit_link = nullptr;
+  const dom::Element* hit_plain = nullptr;
+  std::function<void(const layout::LayoutBox&)> walk = [&](const layout::LayoutBox& box) {
+    for (const layout::Line& line : box.lines) {
+      for (const layout::TextRun& run : line.runs) {
+        const float cx = run.x + static_cast<float>(run.text.size()) * run.font_size / 2.0f;
+        const float cy = run.y + run.font_size / 2.0f;
+        const dom::Element* hit = page.ElementAt(cx, cy);
+        if (run.element == link && run.text == "link") {
+          hit_link = hit;
+        } else if (run.element == p && run.text == "plain") {
+          hit_plain = hit;
+        }
+      }
+    }
+    for (const auto& child : box.children) {
+      walk(*child);
+    }
+  };
+  walk(*page.layout_root());
+
+  ASSERT_NE(hit_link, nullptr);
+  EXPECT_EQ(hit_link, static_cast<const dom::Element*>(link));
+  ASSERT_NE(hit_plain, nullptr);
+  EXPECT_EQ(hit_plain, static_cast<const dom::Element*>(p));
+}
+
+TEST(PageTest, ElementAtOutsideContentReturnsNull) {
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body><p>hi</p></body>").has_value());
+  page.Layout(400);
+  // Far below the laid-out content (and outside the root box) -> no element.
+  EXPECT_EQ(page.ElementAt(10.0f, 100000.0f), nullptr);
+
+  // No layout tree yet -> nullptr regardless of the point.
+  Page empty;
+  ASSERT_TRUE(empty.LoadHtml("<body><p>hi</p></body>").has_value());
+  EXPECT_EQ(empty.ElementAt(10.0f, 20.0f), nullptr);
 }
 
 TEST(PageTest, LoadFile) {

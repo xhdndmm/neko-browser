@@ -40,6 +40,7 @@ class WebView : public QAbstractScrollArea {
   void UpdateTextOverlay(browser::Tab* tab);
   void EnsureLayout(browser::Tab* tab, int width);
   void UpdateScrollRange(browser::Tab* tab);
+  void HandleLinkClick(const QPointF& viewport_pos);
   float ScrollY() const;
 
   BrowserWorker* worker_;

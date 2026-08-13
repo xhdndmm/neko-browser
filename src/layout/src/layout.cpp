@@ -15,6 +15,7 @@ namespace {
 struct InlineItem {
   std::string text;
   const style::ComputedStyle* style;
+  const dom::Element* element;  // source element (null for block-level text)
 };
 
 // True when |c| is an ASCII whitespace character used for word breaking.
@@ -28,26 +29,26 @@ float ResolveSize(const style::SizeSpec& spec, float containing) {
 }
 
 void CollectText(std::string_view text, const style::ComputedStyle& style,
-                 std::vector<InlineItem>& items) {
+                 const dom::Element* element, std::vector<InlineItem>& items) {
   if (!text.empty()) {
-    items.push_back(InlineItem{std::string(text), &style});
+    items.push_back(InlineItem{std::string(text), &style, element});
   }
 }
 
 // Collects inline content: text nodes and inline elements (recursively).
-void CollectInline(dom::Node& node, const style::ComputedStyle& style,
+void CollectInline(dom::Node& node, const style::ComputedStyle& style, const dom::Element* element,
                    const style::StyleEngine& styles, std::vector<InlineItem>& items) {
   if (node.node_type() == dom::NodeType::kText) {
-    CollectText(static_cast<const dom::Text&>(node).data(), style, items);
+    CollectText(static_cast<const dom::Text&>(node).data(), style, element, items);
     return;
   }
   if (node.node_type() != dom::NodeType::kElement) {
     return;
   }
-  const dom::Element& element = static_cast<const dom::Element&>(node);
-  const style::ComputedStyle& child_style = styles.StyleFor(element);
+  const dom::Element& child_element = static_cast<const dom::Element&>(node);
+  const style::ComputedStyle& child_style = styles.StyleFor(child_element);
   for (dom::Node* child : node.ChildNodes()) {
-    CollectInline(*child, child_style, styles, items);
+    CollectInline(*child, child_style, &child_element, styles, items);
   }
 }
 
@@ -79,7 +80,8 @@ void LayoutLines(const std::vector<InlineItem>& items, float available_width, fl
     x = 0;
   };
 
-  auto add_word = [&](std::string_view word, const style::ComputedStyle& style) {
+  auto add_word = [&](std::string_view word, const style::ComputedStyle& style,
+                      const dom::Element* element) {
     const float word_width = static_cast<float>(word.size()) * style.font_size;
     if (x + word_width > available_width && x > 0) {
       flush_line();
@@ -89,6 +91,8 @@ void LayoutLines(const std::vector<InlineItem>& items, float available_width, fl
     run.x = x;
     run.font_size = style.font_size;
     run.color = style.color.value_or(css::Color{0, 0, 0, 255});
+    run.underline = style.text_decoration_underline;
+    run.element = element;
     line.runs.push_back(std::move(run));
     line.height = std::max(line.height, style.line_height);
     x += word_width;
@@ -113,7 +117,7 @@ void LayoutLines(const std::vector<InlineItem>& items, float available_width, fl
       const std::size_t end = text.find_first_of(" \t\n\r", start);
       const std::string_view word = std::string_view(text).substr(
           start, end == std::string::npos ? text.size() - start : end - start);
-      add_word(word, style);
+      add_word(word, style, item.element);
       start = end == std::string::npos ? text.size() : end;
     }
   }
@@ -184,7 +188,7 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       std::vector<InlineItem> inline_items;
       for (dom::Node* child : element.ChildNodes()) {
         if (child->node_type() == dom::NodeType::kText) {
-          CollectText(static_cast<dom::Text*>(child)->data(), box->style, inline_items);
+          CollectText(static_cast<dom::Text*>(child)->data(), box->style, &element, inline_items);
           continue;
         }
         if (child->node_type() != dom::NodeType::kElement) {
@@ -202,7 +206,7 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
           box->children.push_back(std::move(child_box));
         } else {
           // Inline element: its text flows into this box's lines.
-          CollectInline(child_element, child_style, styles, inline_items);
+          CollectInline(child_element, child_style, &child_element, styles, inline_items);
         }
       }
 

@@ -31,6 +31,7 @@ struct DrawCommand {
   std::string text;
   float font_size = 16;
   css::Color text_color{0, 0, 0, 255};
+  bool underline = false;
 };
 
 // A sequence of retained paint commands, built from the layout tree.
@@ -39,7 +40,8 @@ class DisplayList {
   void FillRect(float x, float y, float width, float height, css::Color color);
   void BorderRect(float x, float y, float width, float height, float top, float right,
                   float bottom, float left, css::Color color);
-  void DrawText(float x, float y, std::string text, float font_size, css::Color color);
+  void DrawText(float x, float y, std::string text, float font_size, css::Color color,
+                bool underline = false);
 
   const std::vector<DrawCommand>& commands() const { return commands_; }
   std::size_t size() const { return commands_.size(); }

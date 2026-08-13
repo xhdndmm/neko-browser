@@ -36,6 +36,12 @@ class Page {
   // Total content height in px after Layout(); 0 before Layout().
   float ContentHeight() const;
 
+  // Returns the innermost element whose laid-out content (inline text run or
+  // border box) contains the point |x|,|y| in document coordinates (before
+  // scroll).  Returns nullptr before Layout() or when the point is outside the
+  // laid-out content.  Used for link hit-testing.
+  const dom::Element* ElementAt(float x, float y) const;
+
   dom::Document* document() { return document_.get(); }
   const layout::LayoutBox* layout_root() const { return root_.get(); }
   const style::StyleEngine& styles() const { return styles_; }

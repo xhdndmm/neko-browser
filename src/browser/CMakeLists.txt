@@ -21,6 +21,7 @@ apply_compiler_warnings(neko_browser_options)
 add_library(neko_browser_core
   src/browser_controller.cpp
   src/download_manager.cpp
+  src/hyperlink.cpp
 )
 add_library(neko::browser ALIAS neko_browser_core)
 target_compile_features(neko_browser_core PUBLIC cxx_std_20)

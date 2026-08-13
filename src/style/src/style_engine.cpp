@@ -43,6 +43,7 @@ li { display: block; }
 pre { font-family: monospace; }
 code { font-family: monospace; }
 b, strong { font-weight: bold; }
+a { color: blue; text-decoration: underline; }
 hr { border-top: 1px solid; border-top-color: #000; }
 )css";
 
@@ -323,6 +324,7 @@ void StyleEngine::ComputeElement(dom::Element& element, const ComputedStyle& inh
   out.font_family = inherited.font_family;
   out.line_height = inherited.line_height;
   out.text_align = inherited.text_align;
+  out.text_decoration_underline = inherited.text_decoration_underline;
 
   auto find = [&](std::string_view property) -> const css::Declaration* {
     const auto it = winners.find(std::string(property));
@@ -417,6 +419,12 @@ void StyleEngine::ComputeElement(dom::Element& element, const ComputedStyle& inh
       } else {
         out.text_align = TextAlign::kLeft;
       }
+    }
+  }
+  if (const css::Declaration* d = find("text-decoration")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kKeyword) {
+      out.text_decoration_underline = (v.text == "underline");
     }
   }
 

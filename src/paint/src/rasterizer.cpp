@@ -135,6 +135,14 @@ void Rasterizer::DrawText(const DrawCommand& command) {
       }
     }
   }
+
+  if (command.underline) {
+    const int text_width = step * static_cast<int>(command.text.size());
+    const int thickness = std::max(1, cell / 2);
+    FillRect(static_cast<float>(start_x),
+             static_cast<float>(start_y + 8 * cell - thickness),
+             static_cast<float>(text_width), static_cast<float>(thickness), command.text_color);
+  }
 }
 
 base::Result<void> WritePpm(std::string_view path, const Rasterizer& image) {

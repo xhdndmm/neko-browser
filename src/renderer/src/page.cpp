@@ -10,6 +10,34 @@
 #include "neko/paint/painter.h"
 
 namespace neko::renderer {
+namespace {
+
+// Depth-first hit-test over the layout tree.  Returns the innermost element
+// whose content contains (x, y): block children and inline runs are searched
+// before the box's own border box so deeper content wins.
+const dom::Element* ElementAt(const layout::LayoutBox& box, float x, float y) {
+  for (const auto& child : box.children) {
+    if (const dom::Element* hit = ElementAt(*child, x, y)) {
+      return hit;
+    }
+  }
+  for (const layout::Line& line : box.lines) {
+    for (const layout::TextRun& run : line.runs) {
+      const float width = static_cast<float>(run.text.size()) * run.font_size;
+      if (x >= run.x && x < run.x + width && y >= run.y && y < run.y + run.font_size) {
+        return run.element;
+      }
+    }
+  }
+  // A click on the box's own border box (padding/background, or an empty
+  // block-level element) resolves to the box itself.
+  if (x >= box.x && x < box.x + box.width && y >= box.y && y < box.y + box.height) {
+    return box.element;
+  }
+  return nullptr;
+}
+
+}  // namespace
 
 base::Result<void> Page::LoadHtml(std::string_view html) {
   document_ = html::Parser(html).Parse();
@@ -54,6 +82,13 @@ float Page::ContentHeight() const {
   }
   // The root box spans the full laid-out content.
   return root_->height;
+}
+
+const dom::Element* Page::ElementAt(float x, float y) const {
+  if (root_ == nullptr) {
+    return nullptr;
+  }
+  return renderer::ElementAt(*root_, x, y);
 }
 
 std::string Page::DumpDom() const {

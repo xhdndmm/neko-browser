@@ -18,6 +18,7 @@
 | 级联 / 计算样式 | Tested | Style 套件 | 特异性、继承、内联样式 |
 | Block layout | Tested | Layout 套件 | 盒模型、堆叠、宽度填充 |
 | Inline layout | Tested | Layout 套件 | 文字换行、行盒 |
+| 超链接（`<a>`） | Partial | Browser + Renderer 套件 | 蓝色+下划线样式、命中测试、相对 URL 解析、点击导航；无 fragment 滚动与 :visited/:hover/:active 伪类 |
 | Flexbox | Not Started | — | display:flex 按 block 处理 |
 | Grid | Not Started | — | display:grid 按 block 处理 |
 | position absolute/fixed | Not Started | — | 按 static 处理 |

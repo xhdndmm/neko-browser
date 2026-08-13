@@ -1,13 +1,18 @@
 #include "neko/ui/web_view.h"
 
+#include <optional>
+#include <string>
+
 #include <QEvent>
 #include <QImage>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPlainTextEdit>
 #include <QScrollBar>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 
+#include "neko/browser/hyperlink.h"
 #include "neko/paint/rasterizer.h"
 #include "neko/ui/browser_worker.h"
 
@@ -83,12 +88,30 @@ bool WebView::viewportEvent(QEvent* event) {
   // disappears, so re-sync the scroll range here in addition to resizeEvent().
   if (event->type() == QEvent::Resize) {
     UpdateScrollRange(CurrentTab());
+  } else if (event->type() == QEvent::MouseButtonPress) {
+    const auto* mouse = static_cast<QMouseEvent*>(event);
+    if (mouse->button() == Qt::LeftButton) {
+      HandleLinkClick(mouse->position());
+    }
   }
   return QAbstractScrollArea::viewportEvent(event);
 }
 
 float WebView::ScrollY() const {
   return static_cast<float>(verticalScrollBar()->value());
+}
+
+void WebView::HandleLinkClick(const QPointF& viewport_pos) {
+  browser::Tab* tab = CurrentTab();
+  if (tab == nullptr || tab->content_type != browser::ContentType::kHtml) return;
+  // The layout tree is in document coordinates; add the scroll offset.
+  const float doc_x = static_cast<float>(viewport_pos.x());
+  const float doc_y = static_cast<float>(viewport_pos.y()) + ScrollY();
+  const dom::Element* element = tab->page.ElementAt(doc_x, doc_y);
+  const std::optional<std::string> target = browser::HyperlinkTarget(element, tab->url);
+  if (target.has_value()) {
+    worker_->Navigate(tab_id_, QString::fromStdString(*target));
+  }
 }
 
 void WebView::EnsureLayout(browser::Tab* tab, int width) {

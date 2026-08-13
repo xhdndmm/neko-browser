@@ -18,6 +18,8 @@ struct TextRun {
   float y = 0;  // top of the run (glyph ascent area)
   float font_size = 16;
   css::Color color{0, 0, 0, 255};
+  bool underline = false;
+  const dom::Element* element = nullptr;  // source element (for hit-testing)
 };
 
 // A line of inline content.
