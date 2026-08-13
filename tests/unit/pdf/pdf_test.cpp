@@ -39,11 +39,11 @@ std::string Deflate(std::string_view data) {
 // a FlateDecode stream with /Predictor 12.
 std::string PngPredictRows(std::string_view data, int columns, int bpp) {
   std::string out;
-  const int height = static_cast<int>(data.size()) / (columns * bpp);
+  const size_t col_bytes = static_cast<size_t>(columns) * static_cast<size_t>(bpp);
+  const int height = static_cast<int>(data.size()) / static_cast<int>(col_bytes);
   for (int y = 0; y < height; ++y) {
     out.push_back(0);
-    out.append(data.data() + static_cast<size_t>(y) * columns * bpp,
-               static_cast<size_t>(columns) * bpp);
+    out.append(data.data() + static_cast<size_t>(y) * col_bytes, col_bytes);
   }
   return out;
 }
@@ -57,10 +57,11 @@ class PdfBuilder {
   PdfBuilder() { body_ = kHeader; }
 
   int Add(int num, const std::string& body) {
-    if (static_cast<size_t>(num) >= offsets_.size()) {
-      offsets_.resize(num + 1, ~size_t{0});  // ~0 = unset sentinel
+    const size_t unum = static_cast<size_t>(num);
+    if (unum >= offsets_.size()) {
+      offsets_.resize(unum + 1, ~size_t{0});  // ~0 = unset sentinel
     }
-    offsets_[num] = body_.size();
+    offsets_[unum] = body_.size();
     body_ += std::to_string(num) + " 0 obj\n" + body + "\nendobj\n";
     return num;
   }
@@ -89,12 +90,12 @@ class PdfBuilder {
     const size_t xref_offset = body_.size();
     std::string xref = "xref\n0 " + std::to_string(size) + "\n";
     for (int i = 0; i < size; ++i) {
-      if (i == 0 || static_cast<size_t>(i) >= offsets_.size() ||
-          offsets_[i] == ~size_t{0}) {
+      const size_t ui = static_cast<size_t>(i);
+      if (i == 0 || ui >= offsets_.size() || offsets_[ui] == ~size_t{0}) {
         xref += "0000000000 65535 f \n";
       } else {
         char buf[32];
-        std::snprintf(buf, sizeof(buf), "%010zu 00000 n \n", offsets_[i]);
+        std::snprintf(buf, sizeof(buf), "%010zu 00000 n \n", offsets_[ui]);
         xref += buf;
       }
     }
