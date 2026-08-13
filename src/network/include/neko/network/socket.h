@@ -1,0 +1,44 @@
+#pragma once
+
+#include <cstdint>
+#include <string>
+#include <string_view>
+
+#include "neko/base/status.h"
+
+namespace neko::network {
+
+// A blocking TCP socket.
+//
+// Phase 2 scope: POSIX (Linux/macOS) is fully supported.  The Windows (WSA)
+// implementation is stubbed to a NOT IMPLEMENTED error until it can be tested.
+// Socket is move-only; closing happens on destruction.
+class Socket {
+ public:
+  Socket();
+  ~Socket();
+
+  Socket(Socket&& other) noexcept;
+  Socket& operator=(Socket&& other) noexcept;
+  Socket(const Socket&) = delete;
+  Socket& operator=(const Socket&) = delete;
+
+  // Resolves |host| and connects.  |timeout_ms| bounds the connect and each
+  // read.
+  static base::Result<Socket> Connect(std::string_view host, uint16_t port,
+                                      int timeout_ms = 10000);
+
+  base::Result<std::size_t> Send(std::string_view data);
+  // Reads until EOF or timeout, returning everything received.
+  base::Result<std::string> ReceiveAll(int timeout_ms = 10000);
+
+  void Close();
+  bool IsOpen() const { return fd_ >= 0; }
+
+ private:
+  explicit Socket(int fd);
+
+  int fd_;
+};
+
+}  // namespace neko::network
