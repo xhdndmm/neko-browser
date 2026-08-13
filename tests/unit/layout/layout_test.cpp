@@ -172,6 +172,41 @@ TEST(LayoutTest, RelativePositionShift) {
   EXPECT_FLOAT_EQ(div->y, 8.0f + 10.0f);  // body content y (8) + offset
 }
 
+TEST(LayoutTest, BrForcesLineBreak) {
+  Page page = Build("<body><p>one<br>two</p></body>");
+  const LayoutBox* p = FindBox(*page.root, "p", *page.doc);
+  ASSERT_NE(p, nullptr);
+  ASSERT_GE(p->lines.size(), 2u);
+  EXPECT_EQ(p->lines[0].runs[0].text, "one");
+  EXPECT_EQ(p->lines[1].runs[0].text, "two");
+  // The second line sits below the first.
+  EXPECT_GT(p->lines[1].runs[0].y, p->lines[0].runs[0].y);
+}
+
+TEST(LayoutTest, ConsecutiveBrProduceEmptyLines) {
+  Page page = Build("<body><p>a<br><br>b</p></body>");
+  const LayoutBox* p = FindBox(*page.root, "p", *page.doc);
+  ASSERT_NE(p, nullptr);
+  // a | (empty) | b: three lines, the middle one has no runs.
+  ASSERT_GE(p->lines.size(), 3u);
+  EXPECT_EQ(p->lines[0].runs.size(), 1u);
+  EXPECT_EQ(p->lines[1].runs.size(), 0u);
+  EXPECT_GT(p->lines[1].height, 0.0f);
+  EXPECT_EQ(p->lines[2].runs[0].text, "b");
+  // Total height includes the empty line.
+  EXPECT_GT(p->height, p->lines[0].height + p->lines[1].height);
+}
+
+TEST(LayoutTest, BrInsideInlineElement) {
+  // <br> nested in an inline element still breaks the line.
+  Page page = Build("<body><p>a<span>b<br>c</span>d</p></body>");
+  const LayoutBox* p = FindBox(*page.root, "p", *page.doc);
+  ASSERT_NE(p, nullptr);
+  ASSERT_GE(p->lines.size(), 2u);
+  EXPECT_EQ(p->lines[0].runs.size(), 2u);  // "a" + "b"
+  EXPECT_EQ(p->lines[1].runs.size(), 2u);  // "c" + "d"
+}
+
 TEST(LayoutTest, NestedBlockHeightInherits) {
   Page page = Build("<body><div><div>text</div></div></body>");
   const LayoutBox* outer = FindBox(*page.root, "div", *page.doc);

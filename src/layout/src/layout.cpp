@@ -19,6 +19,7 @@ struct InlineItem {
   std::string text;
   const style::ComputedStyle* style;
   const dom::Element* element;  // source element (null for block-level text)
+  bool line_break = false;      // <br>: force a line break
 };
 
 // True when |c| is an ASCII whitespace character used for word breaking.
@@ -82,6 +83,12 @@ void CollectInline(dom::Node& node, const style::ComputedStyle& style, const dom
   }
   const dom::Element& child_element = static_cast<const dom::Element&>(node);
   const style::ComputedStyle& child_style = styles.StyleFor(child_element);
+  if (child_element.tag_name() == "br") {
+    // <br> is a void inline element: it forces a line break and carries the
+    // line-height of its style but no text.
+    items.push_back(InlineItem{{}, &child_style, &child_element, /*line_break=*/true});
+    return;
+  }
   for (dom::Node* child : node.ChildNodes()) {
     CollectInline(*child, child_style, &child_element, styles, items);
   }
@@ -99,18 +106,19 @@ void LayoutLines(const std::vector<InlineItem>& items, float available_width, fl
   float line_top = 0;
 
   auto flush_line = [&]() {
-    if (line.runs.empty() && out_lines.empty()) {
+    if (line.runs.empty() && line.height <= 0) {
+      // Nothing to emit: no content and no height (e.g. leading whitespace).
       return;
     }
-    if (line.runs.empty()) {
-      // Trailing whitespace-only line: ignore.
-      return;
+    if (!line.runs.empty()) {
+      // Position runs vertically within the line.
+      for (TextRun& run : line.runs) {
+        run.y = origin_y + line_top + (line.height - run.font_size) / 2.0f;
+        run.x = origin_x + run.x;
+      }
     }
-    // Position runs vertically within the line.
-    for (TextRun& run : line.runs) {
-      run.y = origin_y + line_top + (line.height - run.font_size) / 2.0f;
-      run.x = origin_x + run.x;
-    }
+    // Empty lines (line.height > 0, no runs) are emitted too: they are the
+    // lines produced by <br>.
     out_lines.push_back(std::move(line));
     line = Line{};
     total_height += out_lines.back().height;
@@ -142,6 +150,15 @@ void LayoutLines(const std::vector<InlineItem>& items, float available_width, fl
 
   for (const InlineItem& item : items) {
     const style::ComputedStyle& style = *item.style;
+    if (item.line_break) {
+      // <br>: end the current line (content or a previous empty break line),
+      // then start a new empty line that carries the break's line height.
+      if (!line.runs.empty() || line.height > 0) {
+        flush_line();
+      }
+      line.height = std::max(line.height, style.line_height);
+      continue;
+    }
     const graphics::FontSelector* selector =
         registry != nullptr ? registry->SelectorFor(style.font_family) : nullptr;
     std::size_t start = 0;
@@ -232,6 +249,11 @@ IntrinsicWidths MeasureContent(const dom::Element& element, const style::StyleEn
     const dom::Element& child_el = static_cast<const dom::Element&>(*child);
     const style::ComputedStyle& child_style = styles.StyleFor(child_el);
     if (child_style.display == style::Display::kNone) {
+      continue;
+    }
+    if (child_el.tag_name() == "br") {
+      // <br> ends the current line: max-content is the widest segment.
+      flush_line();
       continue;
     }
     const bool block_level = child_style.display == style::Display::kBlock ||
