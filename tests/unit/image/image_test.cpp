@@ -401,6 +401,18 @@ TEST(PngTest, RejectsBadDimensions) {
   EXPECT_FALSE(DecodePng(png).has_value());
 }
 
+TEST(PngTest, RejectsScanlineWidthOverflow) {
+  // A crafted IHDR declaring width = 2^26 at 16-bit RGBA makes
+  // width * bits_per_pixel = 2^32, overflowing the int scanline-size
+  // computation and causing an out-of-bounds read.  The decoder must reject
+  // it (and must not crash).
+  std::string ihdr = Be32(67108864) + Be32(1) + std::string("\x10\x06\x00\x00\x00", 5);
+  std::string png = "\x89PNG\r\n\x1a\n";
+  AppendChunk(png, "IHDR", ihdr);
+  AppendChunk(png, "IEND", "");
+  EXPECT_FALSE(DecodePng(png).has_value());
+}
+
 // ---------------------------------------------------------------------------
 // JPEG decoding (libjpeg round trip)
 // ---------------------------------------------------------------------------

@@ -134,6 +134,15 @@ base::Result<PngInfo> ParseIHDR(std::string_view data) {
   info.bits_per_pixel = info.channels * info.bit_depth;
   info.bytes_per_pixel = (info.bits_per_pixel + 7) / 8;
   if (info.bytes_per_pixel < 1) info.bytes_per_pixel = 1;
+
+  // A crafted IHDR may declare a width whose packed scanline width overflows
+  // 32-bit arithmetic (e.g. width = 2^26 with 16-bit RGBA makes
+  // width * bits_per_pixel = 2^32).  Downstream int-based scanline
+  // computations then wrap around and read out of bounds, so reject such
+  // images outright instead.
+  if (static_cast<int64_t>(info.width) * info.bits_per_pixel > INT32_MAX - 7) {
+    return base::Error::Parse("png: scanline width overflows");
+  }
   return info;
 }
 
