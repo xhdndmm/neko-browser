@@ -1,0 +1,41 @@
+name: static-analysis
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# NOTE: This job is experimental.  clang-tidy check availability varies across
+# toolchain versions, so the job is non-gating (continue-on-error) until the
+# check set is stabilized.  See docs/development/coding-style.md.
+concurrency:
+  group: static-analysis-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clang-tidy:
+    name: clang-tidy
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-tidy
+        run: sudo apt-get update && sudo apt-get install -y clang-tidy-18
+
+      - name: Configure (compile_commands)
+        run: |
+          cmake --preset debug \
+            -DNEKO_BUILD_TESTS=OFF \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DNEKO_WARNINGS_AS_ERRORS=OFF
+
+      - name: Run clang-tidy
+        run: |
+          sudo ln -sf "$(command -v clang-tidy-18)" /usr/local/bin/clang-tidy
+          set +e
+          find src -name '*.cpp' -print0 | xargs -0 -n1 -P2 \
+            clang-tidy -p build/debug -header-filter='neko/' 2>&1 | tee /tmp/clang-tidy.log
+          # Report regardless of exit status so the log is visible.
+          grep -c "warning:" /tmp/clang-tidy.log || true

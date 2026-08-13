@@ -1,0 +1,136 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Cross-platform build + test matrix
+  # ---------------------------------------------------------------------------
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu-gcc-debug
+            os: ubuntu-latest
+            preset: debug
+          - name: ubuntu-gcc-release
+            os: ubuntu-latest
+            preset: release
+          - name: ubuntu-clang-debug
+            os: ubuntu-latest
+            preset: debug
+            cc: clang
+            cxx: clang++
+          - name: windows-msvc-debug
+            os: windows-latest
+            preset: debug
+          - name: macos-clang-debug
+            os: macos-latest
+            preset: debug
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: cmake --preset ${{ matrix.preset }} -DNEKO_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+      - name: Upload ctest logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-logs-${{ matrix.name }}
+          path: build/${{ matrix.preset }}/Testing/
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # Sanitizers (AddressSanitizer + UndefinedBehaviorSanitizer)
+  # ---------------------------------------------------------------------------
+  sanitizers:
+    name: sanitizers (ASan+UBSan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake --preset asan -DNEKO_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build --preset asan
+
+      - name: Test
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ctest --preset asan
+
+  # ---------------------------------------------------------------------------
+  # Code coverage
+  # ---------------------------------------------------------------------------
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install lcov
+        run: sudo apt-get update && sudo apt-get install -y lcov
+
+      - name: Configure
+        run: cmake --preset coverage
+
+      - name: Build
+        run: cmake --build --preset coverage
+
+      - name: Test
+        run: ctest --preset coverage
+
+      - name: Collect coverage
+        run: |
+          cd build/coverage
+          lcov --capture --directory . --output-file coverage.info --ignore-errors mismatch
+          lcov --remove coverage.info --output-file coverage-filtered.info \
+            --ignore-errors unused \
+            '/usr/*' '*/_deps/*' '*/tests/*' '*/build/*'
+          lcov --list coverage-filtered.info
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: build/coverage/coverage-filtered.info
+
+  # ---------------------------------------------------------------------------
+  # Formatting gate (blocking)
+  # ---------------------------------------------------------------------------
+  format:
+    name: clang-format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format-18
+
+      - name: Check formatting
+        run: |
+          sudo ln -sf "$(command -v clang-format-18)" /usr/local/bin/clang-format
+          ./tools/check_format.sh
