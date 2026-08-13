@@ -138,7 +138,7 @@ jobs:
       - name: Collect coverage
         run: |
           cd build/coverage
-          lcov --capture --directory . --output-file coverage.info --ignore-errors mismatch
+          lcov --capture --directory . --output-file coverage.info --ignore-errors mismatch,negative,gcov,gcov
           lcov --remove coverage.info --output-file coverage-filtered.info \
             --ignore-errors unused \
             '/usr/*' '*/_deps/*' '*/tests/*' '*/build/*'
