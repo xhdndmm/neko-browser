@@ -134,6 +134,16 @@ apply_compiler_warnings(neko_renderer_tests)
 gtest_discover_tests(neko_renderer_tests DISCOVERY_MODE PRE_TEST)
 
 # -----------------------------------------------------------------------------
+# neko_image_tests
+# -----------------------------------------------------------------------------
+add_executable(neko_image_tests
+  image/image_test.cpp
+)
+target_link_libraries(neko_image_tests PRIVATE neko::image gtest_main)
+apply_compiler_warnings(neko_image_tests)
+gtest_discover_tests(neko_image_tests DISCOVERY_MODE PRE_TEST)
+
+# -----------------------------------------------------------------------------
 # neko_storage_tests
 # -----------------------------------------------------------------------------
 add_executable(neko_storage_tests

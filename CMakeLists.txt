@@ -55,6 +55,11 @@ if(NEKO_ENABLE_LTO)
 endif()
 
 find_package(Threads REQUIRED)
+# Image decoding infrastructure: zlib (inflate for PNG IDAT) and libjpeg
+# (baseline JPEG decode).  Both are wrapped behind neko::image's own
+# interface; see docs/development/dependency-policy.md.
+find_package(ZLIB REQUIRED)
+find_package(JPEG REQUIRED)
 
 # -----------------------------------------------------------------------------
 # Global tooling integration (warnings, sanitizers, coverage)
@@ -87,4 +92,6 @@ message(STATUS "  Warnings as errors  : ${NEKO_WARNINGS_AS_ERRORS}")
 message(STATUS "  Sanitizers          : '${NEKO_SANITIZERS}'")
 message(STATUS "  Coverage            : ${NEKO_ENABLE_COVERAGE}")
 message(STATUS "  LTO                 : ${NEKO_ENABLE_LTO}")
+message(STATUS "  ZLIB                : ${ZLIB_VERSION}")
+message(STATUS "  JPEG                : ${JPEG_VERSION}")
 message(STATUS "")
