@@ -16,4 +16,8 @@ target_include_directories(neko_network PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 target_link_libraries(neko_network PUBLIC neko::url neko::base)
+# Windows socket functions (closesocket/send/recv) live in Winsock2.
+if(WIN32)
+  target_link_libraries(neko_network PUBLIC ws2_32)
+endif()
 apply_compiler_warnings(neko_network)
