@@ -127,12 +127,13 @@ base::Result<std::size_t> Socket::Send(std::string_view data) {
 }
 
 base::Result<std::string> Socket::ReceiveAll(int timeout_ms) {
+#ifdef _WIN32
+  (void)timeout_ms;
+  return base::Err(base::Error::NotImplemented("Windows sockets are not implemented yet"));
+#else
   std::string out;
   char buffer[16384];
   for (;;) {
-#ifdef _WIN32
-    return base::Err(base::Error::NotImplemented("Windows sockets are not implemented yet"));
-#else
     struct pollfd pfd {fd_, static_cast<short>(POLLIN), 0};
     const int pr = ::poll(&pfd, 1, timeout_ms);
     if (pr == 0) {
@@ -155,8 +156,8 @@ base::Result<std::string> Socket::ReceiveAll(int timeout_ms) {
       return base::Err(base::Error::Network("recv failed"));
     }
     out.append(buffer, static_cast<std::size_t>(n));
-#endif
   }
+#endif
 }
 
 }  // namespace neko::network
