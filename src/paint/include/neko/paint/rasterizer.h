@@ -56,6 +56,7 @@ class Rasterizer {
   void DrawText(const DrawCommand& command);
   void DrawText8x8(const DrawCommand& command);
   void DrawTextFreetype(const DrawCommand& command);
+  void DrawImage(const DrawCommand& command);
   void BlendGlyph(int x, int y, const graphics::GlyphBitmap& glyph, css::Color color);
 
   int width_;

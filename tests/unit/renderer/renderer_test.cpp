@@ -1,13 +1,16 @@
 #include "neko/renderer/page.h"
 #include "neko/paint/rasterizer.h"
 
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <string>
+#include <thread>
 
 #include "neko/dom/query.h"
 #include "neko/html/parser.h"
+#include "neko/image/image.h"
 #include <gtest/gtest.h>
 
 namespace neko::renderer {
@@ -91,6 +94,117 @@ TEST(PageTest, NoBackgroundStaysWhite) {
   EXPECT_EQ(image.pixels()[offset], 255);
   EXPECT_EQ(image.pixels()[offset + 1], 255);
   EXPECT_EQ(image.pixels()[offset + 2], 255);
+}
+
+// A 2x2 solid-color image helper.
+image::Image SolidImage(int w, int h, uint8_t r, uint8_t g, uint8_t b) {
+  image::Image img;
+  img.width = w;
+  img.height = h;
+  img.rgba.assign(static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 4, 255);
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
+      const std::size_t o =
+          (static_cast<std::size_t>(y) * static_cast<std::size_t>(w) +
+           static_cast<std::size_t>(x)) *
+          4;
+      img.rgba[o] = r;
+      img.rgba[o + 1] = g;
+      img.rgba[o + 2] = b;
+    }
+  }
+  return img;
+}
+
+TEST(PageTest, RendersElementImageAtIntrinsicSize) {
+  Page page;
+  ASSERT_TRUE(page.LoadHtml(
+                          "<html><body style=\"background-color:#ffffff\"><img></body></html>")
+                  .has_value());
+  dom::Element* img_el = dom::QuerySelector(*page.document(), "img");
+  ASSERT_NE(img_el, nullptr);
+  page.SetElementImage(*img_el, SolidImage(2, 2, 255, 0, 0));
+  page.Layout(400);
+  paint::Rasterizer image = page.Rasterize(400, 100);
+
+  // The 2x2 image is placed at body content (8,8); its pixels are red.
+  const std::size_t o = (static_cast<std::size_t>(9) * 400 + 9) * 4;
+  EXPECT_EQ(image.pixels()[o], 255);
+  EXPECT_EQ(image.pixels()[o + 1], 0);
+  EXPECT_EQ(image.pixels()[o + 2], 0);
+}
+
+TEST(PageTest, ImageWithExplicitWidthScalesAndFills) {
+  Page page;
+  ASSERT_TRUE(page.LoadHtml(
+                          "<html><body style=\"background-color:#ffffff\">"
+                          "<img style=\"width: 100px\"></body></html>")
+                  .has_value());
+  dom::Element* img_el = dom::QuerySelector(*page.document(), "img");
+  ASSERT_NE(img_el, nullptr);
+  // 2x4 image: explicit width 100px -> height 200px (aspect ratio kept).
+  page.SetElementImage(*img_el, SolidImage(2, 4, 0, 0, 255));
+  page.Layout(400);
+  paint::Rasterizer image = page.Rasterize(400, 300);
+
+  // Content box spans (8,8)-(108,208); a pixel near its center is blue.
+  const std::size_t o = (static_cast<std::size_t>(100) * 400 + 60) * 4;
+  EXPECT_EQ(image.pixels()[o], 0);
+  EXPECT_EQ(image.pixels()[o + 1], 0);
+  EXPECT_EQ(image.pixels()[o + 2], 255);
+}
+
+TEST(PageTest, ConcurrentRasterizeAndImageInjection) {
+  // Regression: the GUI paints on the main thread while the worker thread
+  // injects decoded images (SetElementImage + Layout).  Page must serialize
+  // these; without the mutex the rasterizer reads a destroyed image entry and
+  // crashes in DrawImage.
+  Page page;
+  ASSERT_TRUE(page.LoadHtml(
+                          "<html><body style=\"background-color:#ffffff\">"
+                          "<img><img><img><p>text</p></body></html>")
+                  .has_value());
+  std::vector<dom::Element*> imgs;
+  std::vector<dom::Node*> stack;
+  for (dom::Node* child : page.document()->ChildNodes()) {
+    stack.push_back(child);
+  }
+  while (!stack.empty()) {
+    dom::Node* node = stack.back();
+    stack.pop_back();
+    if (node->node_type() == dom::NodeType::kElement) {
+      auto* el = static_cast<dom::Element*>(node);
+      if (el->tag_name() == "img") {
+        imgs.push_back(el);
+      }
+      for (dom::Node* child : node->ChildNodes()) {
+        stack.push_back(child);
+      }
+    }
+  }
+  ASSERT_GE(imgs.size(), 2u);
+  page.Layout(400);
+
+  std::atomic<bool> stop{false};
+  std::thread writer([&] {
+    int i = 0;
+    while (!stop) {
+      page.SetElementImage(*imgs[static_cast<std::size_t>(i) % imgs.size()],
+                           SolidImage(4, 4, 200, 100, 50));
+      page.Layout(400);
+      ++i;
+    }
+  });
+
+  for (int k = 0; k < 200; ++k) {
+    paint::Rasterizer raster = page.Rasterize(400, 200);
+    EXPECT_EQ(raster.width(), 400);
+    page.ContentHeight();
+    page.ElementAt(10.0f, 10.0f);
+  }
+
+  stop = true;
+  writer.join();
 }
 
 TEST(PageTest, ContentHeight) {

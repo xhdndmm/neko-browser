@@ -27,6 +27,9 @@ enum class Position { kStatic, kRelative, kAbsolute, kFixed };
 
 enum class TextAlign { kLeft, kCenter, kRight, kJustify };
 
+// object-fit (CSS Images 3 §4.5): how replaced content fits its box.
+enum class ObjectFit { kFill, kContain, kCover, kNone, kScaleDown };
+
 enum class BorderStyle { kNone, kSolid, kDashed, kDotted };
 
 // A length that may be a percentage (resolved against the containing block).
@@ -60,6 +63,9 @@ struct ComputedStyle {
   std::optional<css::Color> border_color;
 
   std::optional<css::Color> background_color;
+
+  // Replaced content fitting (img).
+  ObjectFit object_fit = ObjectFit::kFill;
 
   // Font (inherited).
   float font_size = 16;

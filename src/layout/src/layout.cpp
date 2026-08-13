@@ -10,6 +10,7 @@
 #include "neko/dom/element.h"
 #include "neko/graphics/font_registry.h"
 #include "neko/graphics/font_selector.h"
+#include "neko/image/image.h"
 
 namespace neko::layout {
 namespace {
@@ -452,6 +453,7 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
   struct Builder {
     const style::StyleEngine& styles;
     const graphics::FontRegistry* registry;  // may be null (monospace fallback)
+    const ImageProvider* images;             // may be null (no decoded images)
 
     // Resolves the box-model edges (margins, borders, padding) of |box|.
     void ResolveBoxEdges(LayoutBox& box, float containing_width) {
@@ -488,7 +490,15 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
         if (child_style.display == style::Display::kNone) {
           continue;
         }
-        if (child_style.display == style::Display::kBlock) {
+        if (child_element.tag_name() == "img") {
+          // Replaced element: an atomic block-level box sized from the decoded
+          // image (intrinsic) plus explicit width/height.  Inline <img> is not
+          // modeled yet; images are laid out on their own line.
+          std::unique_ptr<LayoutBox> child_box = BuildImage(
+              child_element, avail_width, box.content_x(), box.content_y() + cursor_y);
+          cursor_y += child_box->margin_top + child_box->height + child_box->margin_bottom;
+          box.children.push_back(std::move(child_box));
+        } else if (child_style.display == style::Display::kBlock) {
           std::unique_ptr<LayoutBox> child_box = BuildBlock(
               child_element, avail_width, box.content_x(), box.content_y() + cursor_y);
           cursor_y += child_box->margin_top + child_box->height + child_box->margin_bottom;
@@ -552,6 +562,68 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       }
       box->height = content_height + box->border_top + box->border_bottom + box->padding_top +
                     box->padding_bottom;
+      return box;
+    }
+
+    // Lays out an <img> as a replaced block box (CSS Images 3 §4.3 sizing):
+    // explicit CSS width/height (or the presentational width/height
+    // attributes) override the intrinsic dimensions; when only one dimension
+    // is given the aspect ratio is preserved.
+    std::unique_ptr<LayoutBox> BuildImage(dom::Element& element, float containing_width,
+                                          float origin_x, float origin_y) {
+      auto box = std::make_unique<LayoutBox>();
+      box->element = &element;
+      box->style = styles.StyleFor(element);
+      ResolveBoxEdges(*box, containing_width);
+
+      const image::Image* img = images != nullptr ? images->Find(element) : nullptr;
+      box->image = img;
+      const float intrinsic_w = img != nullptr ? static_cast<float>(img->width) : 0.0f;
+      const float intrinsic_h = img != nullptr ? static_cast<float>(img->height) : 0.0f;
+
+      // Specified size: CSS width/height win over the width/height attributes
+      // (presentational hints, HTML spec).
+      std::optional<float> spec_w;
+      std::optional<float> spec_h;
+      if (box->style.width.has_value()) {
+        spec_w = ResolveSize(box->style.width.value(), containing_width);
+      } else if (const std::optional<std::int64_t> attr = ParseNonNegativeInt(element, "width")) {
+        spec_w = static_cast<float>(attr.value());
+      }
+      if (box->style.height.has_value()) {
+        spec_h = ResolveSize(box->style.height.value(), containing_width);
+      } else if (const std::optional<std::int64_t> attr = ParseNonNegativeInt(element, "height")) {
+        spec_h = static_cast<float>(attr.value());
+      }
+
+      float content_w = 0;
+      float content_h = 0;
+      if (spec_w.has_value() && spec_h.has_value()) {
+        content_w = spec_w.value();
+        content_h = spec_h.value();
+      } else if (spec_w.has_value()) {
+        content_w = spec_w.value();
+        content_h = intrinsic_w > 0 ? content_w * intrinsic_h / intrinsic_w : 0.0f;
+      } else if (spec_h.has_value()) {
+        content_h = spec_h.value();
+        content_w = intrinsic_h > 0 ? content_h * intrinsic_w / intrinsic_h : 0.0f;
+      } else {
+        content_w = intrinsic_w;
+        content_h = intrinsic_h;
+      }
+
+      box->width = content_w + box->border_left + box->border_right + box->padding_left +
+                   box->padding_right;
+      box->height = content_h + box->border_top + box->border_bottom + box->padding_top +
+                    box->padding_bottom;
+      float rel_x = 0;
+      float rel_y = 0;
+      if (box->style.position == style::Position::kRelative) {
+        rel_x = box->style.left;
+        rel_y = box->style.top;
+      }
+      box->x = origin_x + box->margin_left - box->border_left - box->padding_left + rel_x;
+      box->y = origin_y + box->margin_top - box->border_top - box->padding_top + rel_y;
       return box;
     }
 
@@ -827,7 +899,7 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
   if (root == nullptr) {
     return nullptr;
   }
-  Builder builder{styles_, registry_};
+  Builder builder{styles_, registry_, images_};
   return builder.BuildBlock(*root, viewport_width, 0, 0);
 }
 

@@ -54,7 +54,17 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page, const std::strin
       }
       NEKO_LOG_INFO("HTTP " + std::to_string(response.value().status_code) + " (" +
                     std::to_string(response.value().body.size()) + " bytes)");
-      return page.LoadHtml(response.value().body);
+      const auto r = page.LoadHtml(response.value().body);
+      if (!r) {
+        return r;
+      }
+      // Fetch and decode the page's <img> subresources (headless path).
+      neko::browser::FetchPageImages(
+          page, url.Serialize(),
+          [](const neko::url::Url& u, std::string_view) {
+            return neko::network::HttpGet(u);
+          });
+      return neko::base::Ok();
     }
     if (url.scheme() == "https") {
       return neko::base::Err(neko::base::Error::NotImplemented(

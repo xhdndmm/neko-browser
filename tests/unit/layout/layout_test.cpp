@@ -9,6 +9,7 @@
 #include "neko/graphics/font_registry.h"
 #include "neko/graphics/system_fonts.h"
 #include "neko/html/parser.h"
+#include "neko/image/image.h"
 #include "neko/style/style_engine.h"
 #include <gtest/gtest.h>
 
@@ -232,6 +233,78 @@ TEST(LayoutTest, BoldAndItalicReachTextRuns) {
   EXPECT_TRUE(saw_bold);
   EXPECT_TRUE(saw_italic);
   EXPECT_TRUE(saw_plain);
+}
+
+TEST(LayoutTest, ImageBoxSizing) {
+  // Fake provider with a 100x50 intrinsic image.
+  struct FakeProvider : public layout::ImageProvider {
+    image::Image img;
+    FakeProvider() {
+      img.width = 100;
+      img.height = 50;
+    }
+    const image::Image* Find(const dom::Element&) const override { return &img; }
+  };
+
+  const auto build = [](const layout::ImageProvider* provider, std::string_view html) {
+    auto doc = html::Parser(html).Parse();
+    style::StyleEngine styles;
+    styles.ApplyStyles(*doc);
+    layout::LayoutEngine engine(styles, nullptr, provider);
+    std::unique_ptr<LayoutBox> root = engine.BuildLayoutTree(*doc, 800);
+    return std::make_pair(std::move(doc), std::move(root));
+  };
+  const auto img_box = [](const std::unique_ptr<dom::Document>& doc,
+                          const std::unique_ptr<LayoutBox>& root) -> const LayoutBox* {
+    return FindBox(*root, "img", *doc);
+  };
+
+  FakeProvider provider;
+
+  // Intrinsic size used when nothing is specified.
+  {
+    auto [doc, root] = build(&provider, "<body><img></body>");
+    const LayoutBox* box = img_box(doc, root);
+    ASSERT_NE(box, nullptr);
+    EXPECT_FLOAT_EQ(box->width, 100.0f);
+    EXPECT_FLOAT_EQ(box->height, 50.0f);
+  }
+
+  // Explicit width keeps the aspect ratio.
+  {
+    auto [doc, root] = build(&provider, "<body><img style=\"width: 200px\"></body>");
+    const LayoutBox* box = img_box(doc, root);
+    ASSERT_NE(box, nullptr);
+    EXPECT_FLOAT_EQ(box->width, 200.0f);
+    EXPECT_FLOAT_EQ(box->height, 100.0f);
+  }
+
+  // Both dimensions specified win.
+  {
+    auto [doc, root] = build(&provider, "<body><img style=\"width: 40px; height: 30px\"></body>");
+    const LayoutBox* box = img_box(doc, root);
+    ASSERT_NE(box, nullptr);
+    EXPECT_FLOAT_EQ(box->width, 40.0f);
+    EXPECT_FLOAT_EQ(box->height, 30.0f);
+  }
+
+  // Presentational width attribute acts as a fallback.
+  {
+    auto [doc, root] = build(&provider, "<body><img width=\"20\"></body>");
+    const LayoutBox* box = img_box(doc, root);
+    ASSERT_NE(box, nullptr);
+    EXPECT_FLOAT_EQ(box->width, 20.0f);
+    EXPECT_FLOAT_EQ(box->height, 10.0f);
+  }
+
+  // No provider: image boxes collapse to zero.
+  {
+    auto [doc, root] = build(nullptr, "<body><img></body>");
+    const LayoutBox* box = img_box(doc, root);
+    ASSERT_NE(box, nullptr);
+    EXPECT_FLOAT_EQ(box->width, 0.0f);
+    EXPECT_FLOAT_EQ(box->height, 0.0f);
+  }
 }
 
 TEST(LayoutTest, NestedBlockHeightInherits) {

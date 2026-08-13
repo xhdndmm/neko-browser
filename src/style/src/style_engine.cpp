@@ -395,6 +395,22 @@ void StyleEngine::ComputeElement(dom::Element& element, const ComputedStyle& inh
     }
   }
 
+  // object-fit.
+  if (const css::Declaration* d = find("object-fit")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kKeyword) {
+      if (v.text == "contain") {
+        out.object_fit = ObjectFit::kContain;
+      } else if (v.text == "cover") {
+        out.object_fit = ObjectFit::kCover;
+      } else if (v.text == "none") {
+        out.object_fit = ObjectFit::kNone;
+      } else if (v.text == "scale-down") {
+        out.object_fit = ObjectFit::kScaleDown;
+      }
+    }
+  }
+
   // line-height.
   if (const css::Declaration* d = find("line-height")) {
     const css::CssValue v = css::ParseCssValue(d->value);

@@ -12,8 +12,20 @@
 namespace neko::graphics {
 class FontRegistry;
 }
+namespace neko::image {
+struct Image;
+}
 
 namespace neko::layout {
+
+// Lookup of decoded images for replaced elements (implemented by the renderer
+// page; the layout engine is network/image-free).
+class ImageProvider {
+ public:
+  virtual ~ImageProvider() = default;
+  // Image for |element| (an <img>), or nullptr when not loaded yet.
+  virtual const image::Image* Find(const dom::Element& element) const = 0;
+};
 
 // A positioned text run within a line box.
 struct TextRun {
@@ -46,6 +58,9 @@ struct LayoutBox {
   // Owning element (null for anonymous/root handling).
   const dom::Element* element = nullptr;
   style::ComputedStyle style;
+
+  // Decoded image for a replaced <img> box (set by layout from ImageProvider).
+  const image::Image* image = nullptr;
 
   float x = 0;
   float y = 0;
@@ -93,16 +108,19 @@ class LayoutEngine {
   // |styles| must outlive the engine; it holds the computed styles for the
   // documents being laid out.  |registry| (optional) provides real glyph
   // advances (with per-character font fallback) for text measurement; when
-  // null a monospace fallback (font_size per character) is used.
+  // null a monospace fallback (font_size per character) is used.  |images|
+  // (optional) provides decoded images for <img> replaced boxes.
   explicit LayoutEngine(const style::StyleEngine& styles,
-                        const graphics::FontRegistry* registry = nullptr)
-      : styles_(styles), registry_(registry) {}
+                        const graphics::FontRegistry* registry = nullptr,
+                        const ImageProvider* images = nullptr)
+      : styles_(styles), registry_(registry), images_(images) {}
 
   std::unique_ptr<LayoutBox> BuildLayoutTree(dom::Document& document, float viewport_width);
 
  private:
   const style::StyleEngine& styles_;
   const graphics::FontRegistry* registry_ = nullptr;
+  const ImageProvider* images_ = nullptr;
 };
 
 }  // namespace neko::layout

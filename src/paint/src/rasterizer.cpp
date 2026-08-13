@@ -13,6 +13,7 @@
 #include "neko/graphics/font_registry.h"
 #include "neko/graphics/font_selector.h"
 #include "neko/graphics/utf8.h"
+#include "neko/image/image.h"
 #include "neko/paint/font8x8.h"
 
 namespace neko::paint {
@@ -80,6 +81,9 @@ void Rasterizer::Rasterize(const DisplayList& list) {
         break;
       case CommandType::kDrawText:
         DrawText(command);
+        break;
+      case CommandType::kDrawImage:
+        DrawImage(command);
         break;
     }
   }
@@ -185,6 +189,77 @@ void Rasterizer::DrawTextFreetype(const DrawCommand& command) {
   if (command.underline) {
     const float thickness = std::max(1.0f, command.font_size / 12.0f);
     FillRect(command.x, baseline + 1.0f, total_width, thickness, command.text_color);
+  }
+}
+
+void Rasterizer::DrawImage(const DrawCommand& command) {
+  const image::Image& img = *command.image;
+  if (img.empty()) {
+    return;
+  }
+  const float iw = static_cast<float>(img.width);
+  const float ih = static_cast<float>(img.height);
+  if (iw <= 0 || ih <= 0) {
+    return;
+  }
+  const float box_w = command.width;
+  const float box_h = command.height;
+  // Concrete object size per object-fit (CSS Images 3 §4.5).
+  float dst_w = 0;
+  float dst_h = 0;
+  switch (command.object_fit) {
+    case style::ObjectFit::kFill:
+      dst_w = box_w;
+      dst_h = box_h;
+      break;
+    case style::ObjectFit::kContain: {
+      const float scale = std::min(box_w / iw, box_h / ih);
+      dst_w = iw * scale;
+      dst_h = ih * scale;
+      break;
+    }
+    case style::ObjectFit::kCover: {
+      const float scale = std::max(box_w / iw, box_h / ih);
+      dst_w = iw * scale;
+      dst_h = ih * scale;
+      break;
+    }
+    case style::ObjectFit::kNone:
+      dst_w = iw;
+      dst_h = ih;
+      break;
+    case style::ObjectFit::kScaleDown: {
+      const float scale = std::min(1.0f, std::min(box_w / iw, box_h / ih));
+      dst_w = iw * scale;
+      dst_h = ih * scale;
+      break;
+    }
+  }
+  if (dst_w <= 0 || dst_h <= 0) {
+    return;
+  }
+  const float dst_x = command.x + (box_w - dst_w) / 2.0f;
+  const float dst_y = command.y + (box_h - dst_h) / 2.0f - scroll_offset_;
+  // ceil so the sampled source coordinate (px - dst_x)/dst_w never goes
+  // negative (fractional origins from layout otherwise index rgba at -1).
+  const int x0 = std::max(0, static_cast<int>(std::ceil(dst_x)));
+  const int y0 = std::max(0, static_cast<int>(std::ceil(dst_y)));
+  const int x1 = std::min(width_, static_cast<int>(std::ceil(dst_x + dst_w)));
+  const int y1 = std::min(height_, static_cast<int>(std::ceil(dst_y + dst_h)));
+  for (int py = y0; py < y1; ++py) {
+    const int src_y = std::min(
+        img.height - 1, static_cast<int>((static_cast<float>(py) - dst_y) / dst_h * ih));
+    const uint8_t* row = img.rgba.data() +
+                         static_cast<std::size_t>(src_y) * static_cast<std::size_t>(img.width) * 4;
+    for (int px = x0; px < x1; ++px) {
+      const int src_x = std::min(
+          img.width - 1, static_cast<int>((static_cast<float>(px) - dst_x) / dst_w * iw));
+      const std::size_t so = static_cast<std::size_t>(src_x) * 4;
+      const css::Color pixel{row[so], row[so + 1], row[so + 2], row[so + 3]};
+      const std::size_t offset = PixelOffset(px, py, width_);
+      BlendPixel(pixels_[offset], pixels_[offset + 1], pixels_[offset + 2],
+                 pixels_[offset + 3], pixel);
+    }
   }
 }
 

@@ -1,12 +1,15 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 
 #include "neko/base/status.h"
 #include "neko/dom/element.h"
 #include "neko/graphics/font_registry.h"
+#include "neko/image/image.h"
 #include "neko/layout/layout_tree.h"
 #include "neko/paint/rasterizer.h"
 #include "neko/style/style_engine.h"
@@ -16,8 +19,9 @@ namespace neko::renderer {
 // The minimal page pipeline: HTML -> DOM -> style -> layout -> paint.
 //
 // Lifecycle: LoadHtml() -> Layout(viewport) -> Rasterize(w, h).
-// Headless by design: network fetching happens in the browser application.
-class Page {
+// Headless by design: network fetching happens in the browser application
+// (which injects decoded <img> data via SetElementImage).
+class Page : public layout::ImageProvider {
  public:
   Page();
 
@@ -36,6 +40,13 @@ class Page {
 
   // Total content height in px after Layout(); 0 before Layout().
   float ContentHeight() const;
+
+  // Attaches a decoded image to an <img> element and invalidates the layout
+  // so the replaced box picks up its intrinsic size.
+  void SetElementImage(const dom::Element& element, image::Image image);
+
+  // layout::ImageProvider.
+  const image::Image* Find(const dom::Element& element) const override;
 
   // Returns the innermost element whose laid-out content (inline text run or
   // border box) contains the point |x|,|y| in document coordinates (before
@@ -61,6 +72,11 @@ class Page {
   float viewport_width_ = 800;
 
   graphics::FontRegistry fonts_;
+  std::unordered_map<const dom::Element*, image::Image> images_;
+
+  // Guards document_/styles_/root_/images_ across the GUI (paint, hit-test)
+  // and worker (navigation, image injection) threads.
+  mutable std::mutex mutex_;
 };
 
 }  // namespace neko::renderer

@@ -1,5 +1,6 @@
 #include "neko/paint/painter.h"
 
+#include "neko/image/image.h"
 #include "neko/paint/display_list.h"
 
 namespace neko::paint {
@@ -23,6 +24,13 @@ void Painter::PaintBox(const layout::LayoutBox& box, DisplayList& list) const {
     const css::Color border_color = box.style.border_color.value_or(css::Color{0, 0, 0, 255});
     list.BorderRect(box.x, box.y, box.width, box.height, box.border_top, box.border_right,
                     box.border_bottom, box.border_left, border_color);
+  }
+
+  // Replaced content: the decoded image drawn into the content box per
+  // object-fit.
+  if (box.image != nullptr && !box.image->empty()) {
+    list.DrawImage(box.content_x(), box.content_y(), box.content_width(), box.content_height(),
+                   *box.image, box.style.object_fit);
   }
 
   // Inline text.

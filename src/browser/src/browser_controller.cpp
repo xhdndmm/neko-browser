@@ -3,9 +3,13 @@
 #include <algorithm>
 #include <chrono>
 #include <ctime>
+#include <optional>
 #include <string>
+#include <vector>
 
 #include "neko/base/logging.h"
+#include "neko/dom/element.h"
+#include "neko/image/image.h"
 #include "neko/network/http.h"
 #include "neko/storage/file_util.h"
 
@@ -343,6 +347,8 @@ void BrowserController::LoadBytes(Tab& tab, std::string_view bytes,
       tab.title = "Parse error";
       return;
     }
+    // Fetch and decode the page's <img> subresources.
+    FetchPageImages(tab.page, final_url, fetch_);
     tab.title = tab.page.document()->Title();
     if (tab.title.empty()) tab.title = final_url;
     RecordVisit(final_url, tab.title);
@@ -490,6 +496,59 @@ std::string BrowserController::DumpNetworkLog() const {
     out += '\n';
   }
   return out;
+}
+
+void FetchPageImages(renderer::Page& page, const std::string& base_url,
+                     const BrowserController::FetchFn& fetch) {
+  dom::Document* doc = page.document();
+  if (doc == nullptr) {
+    return;
+  }
+  const base::Result<url::Url> base = url::Url::Parse(base_url);
+
+  // Depth-first walk collecting <img src> subresources.
+  std::vector<dom::Element*> images;
+  std::vector<dom::Node*> stack;
+  for (dom::Node* child : doc->ChildNodes()) {
+    stack.push_back(child);
+  }
+  while (!stack.empty()) {
+    dom::Node* node = stack.back();
+    stack.pop_back();
+    if (node->node_type() != dom::NodeType::kElement) {
+      continue;
+    }
+    dom::Element* element = static_cast<dom::Element*>(node);
+    if (element->tag_name() == "img") {
+      images.push_back(element);
+    }
+    for (dom::Node* child : node->ChildNodes()) {
+      stack.push_back(child);
+    }
+  }
+
+  for (dom::Element* element : images) {
+    const std::optional<std::string_view> src = element->GetAttribute("src");
+    if (!src.has_value() || src->empty()) {
+      continue;
+    }
+    base::Result<url::Url> target = url::Url::Parse(*src);
+    if (base.has_value()) {
+      target = url::Url::Parse(*src, base.value());
+    }
+    if (!target.has_value()) {
+      continue;
+    }
+    const auto response = fetch(target.value(), {});
+    if (!response) {
+      continue;
+    }
+    auto decoded = image::DecodeImage(response.value().body);
+    if (!decoded) {
+      continue;
+    }
+    page.SetElementImage(*element, std::move(decoded.value()));
+  }
 }
 
 }  // namespace neko::browser

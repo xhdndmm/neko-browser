@@ -51,6 +51,7 @@ Page::Page() {
 }
 
 base::Result<void> Page::LoadHtml(std::string_view html) {
+  std::lock_guard<std::mutex> lock(mutex_);
   document_ = html::Parser(html).Parse();
   styles_.ApplyStyles(*document_);
   root_.reset();
@@ -67,15 +68,30 @@ base::Result<void> Page::LoadFile(std::string_view path) {
 }
 
 void Page::Layout(float viewport_width) {
+  std::lock_guard<std::mutex> lock(mutex_);
   if (document_ == nullptr) {
     return;
   }
   viewport_width_ = viewport_width;
-  layout::LayoutEngine engine(styles_, &fonts_);
+  layout::LayoutEngine engine(styles_, &fonts_, this);
   root_ = engine.BuildLayoutTree(*document_, viewport_width);
 }
 
+void Page::SetElementImage(const dom::Element& element, image::Image image) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  images_[&element] = std::move(image);
+  root_.reset();  // the replaced box's intrinsic size may have changed
+}
+
+// NOTE: called only from LayoutEngine while Layout() holds the mutex, so this
+// must not lock again (would deadlock).
+const image::Image* Page::Find(const dom::Element& element) const {
+  const auto it = images_.find(&element);
+  return it != images_.end() ? &it->second : nullptr;
+}
+
 paint::Rasterizer Page::Rasterize(int width, int height, float y_offset) const {
+  std::lock_guard<std::mutex> lock(mutex_);
   paint::Rasterizer image(width, height);
   image.SetFontRegistry(&fonts_);
   image.Clear(CanvasBackgroundColor());
@@ -116,6 +132,7 @@ css::Color Page::CanvasBackgroundColor() const {
 }
 
 float Page::ContentHeight() const {
+  std::lock_guard<std::mutex> lock(mutex_);
   if (root_ == nullptr) {
     return 0;
   }
@@ -124,6 +141,7 @@ float Page::ContentHeight() const {
 }
 
 const dom::Element* Page::ElementAt(float x, float y) const {
+  std::lock_guard<std::mutex> lock(mutex_);
   if (root_ == nullptr) {
     return nullptr;
   }
@@ -131,10 +149,12 @@ const dom::Element* Page::ElementAt(float x, float y) const {
 }
 
 std::string Page::DumpDom() const {
+  std::lock_guard<std::mutex> lock(mutex_);
   return document_ != nullptr ? document_->ToString() : std::string();
 }
 
 std::string Page::DumpLayoutTree() const {
+  std::lock_guard<std::mutex> lock(mutex_);
   std::string out;
   struct Printer {
     std::string& out;

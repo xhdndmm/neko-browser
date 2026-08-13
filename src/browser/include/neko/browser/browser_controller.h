@@ -172,4 +172,11 @@ class BrowserController {
   std::vector<ConsoleEntry> console_log_;
 };
 
+// Fetches and decodes the images referenced by <img> elements in |page| and
+// attaches them via Page::SetElementImage.  |base_url| resolves relative src
+// attributes; failing subresources are skipped silently.  Used by both the
+// controller (GUI) and the headless CLI.
+void FetchPageImages(renderer::Page& page, const std::string& base_url,
+                     const BrowserController::FetchFn& fetch);
+
 }  // namespace neko::browser

@@ -11,6 +11,7 @@
 #include "neko/dom/query.h"
 #include "neko/graphics/font_registry.h"
 #include "neko/graphics/system_fonts.h"
+#include "neko/image/image.h"
 #include "neko/html/parser.h"
 #include "neko/layout/layout_tree.h"
 #include "neko/style/style_engine.h"
@@ -128,6 +129,32 @@ TEST(RasterizerTest, GlyphsAreNotMirrored) {
 TEST(RasterizerTest, TextMetrics) {
   EXPECT_FLOAT_EQ(Rasterizer::CharWidth(16), 16.0f);
   EXPECT_FLOAT_EQ(Rasterizer::TextWidth("hello", 16), 80.0f);
+}
+
+TEST(RasterizerTest, DrawImageFractionalOriginAndUpscale) {
+  // Regression: a fractional destination origin plus an upscaled image used to
+  // sample rgba at index -1 (floor of dst_y was below dst_y, so the first row
+  // mapped to a negative source row) and crash in DrawImage.
+  image::Image img;
+  img.width = 10;
+  img.height = 40;  // taller than the 10px box -> upscale (ih > dst_h)
+  img.rgba.assign(10u * 40u * 4u, 255);
+  for (std::size_t i = 0; i < img.rgba.size(); i += 4) {
+    img.rgba[i] = 255;      // R
+    img.rgba[i + 1] = 0;    // G
+    img.rgba[i + 2] = 0;    // B
+    img.rgba[i + 3] = 255;  // A
+  }
+
+  Rasterizer raster(64, 64);
+  raster.Clear(css::Color{255, 255, 255, 255});
+  DisplayList list;
+  list.DrawImage(0.0f, 10.4f, 20.0f, 10.0f, img, style::ObjectFit::kFill);
+  raster.Rasterize(list);
+
+  // A pixel inside the drawn box is red (the command ran without crashing).
+  EXPECT_EQ(Pixel(raster, 10, 15).r, 255);
+  EXPECT_EQ(Pixel(raster, 10, 15).g, 0);
 }
 
 TEST(RasterizerTest, FreeTypeTextRendering) {

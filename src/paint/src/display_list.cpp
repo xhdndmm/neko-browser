@@ -1,6 +1,9 @@
 #include "neko/paint/display_list.h"
 
 #include <string>
+#include <utility>
+
+#include "neko/image/image.h"
 
 namespace neko::paint {
 
@@ -45,6 +48,19 @@ void DisplayList::DrawText(float x, float y, std::string text, float font_size,
   command.font_size = font_size;
   command.text_color = color;
   command.underline = underline;
+  commands_.push_back(std::move(command));
+}
+
+void DisplayList::DrawImage(float x, float y, float width, float height,
+                            const image::Image& image, style::ObjectFit object_fit) {
+  DrawCommand command;
+  command.type = CommandType::kDrawImage;
+  command.x = x;
+  command.y = y;
+  command.width = width;
+  command.height = height;
+  command.image = &image;
+  command.object_fit = object_fit;
   commands_.push_back(std::move(command));
 }
 

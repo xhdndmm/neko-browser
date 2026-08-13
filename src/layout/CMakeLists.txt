@@ -16,5 +16,5 @@ target_compile_features(neko_layout PUBLIC cxx_std_20)
 target_include_directories(neko_layout PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
-target_link_libraries(neko_layout PUBLIC neko::style neko::dom neko::css neko::graphics neko::base)
+target_link_libraries(neko_layout PUBLIC neko::style neko::dom neko::css neko::graphics neko::image neko::base)
 apply_compiler_warnings(neko_layout)
