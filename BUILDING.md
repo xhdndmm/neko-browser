@@ -69,8 +69,12 @@ CC=clang CXX=clang++ cmake --preset debug
 - **QuickJS / quickjs-ng**（JavaScript runtime）：FetchContent 从 GitHub 拉取
   `v0.16.1` tarball，固定 SHA256；配置时自动下载。
 - **系统包**：zlib、libjpeg（图像/PDF 解码）、Qt6 Widgets（GUI，可选；
-  `NEKO_BUILD_UI=OFF` 可跳过）。Debian/Ubuntu：
-  `sudo apt install zlib1g-dev libjpeg-dev qt6-base-dev`
+  `NEKO_BUILD_UI=OFF` 可跳过）。
+  - Debian/Ubuntu：`sudo apt install zlib1g-dev libjpeg-dev qt6-base-dev`
+  - macOS（Homebrew）：`brew install jpeg qt`
+  - Windows（vcpkg）：`vcpkg install zlib libjpeg-turbo`，配置时传入
+    `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake`；
+    Qt6 GUI 在 Windows 上默认不构建（`NEKO_BUILD_UI=OFF`）。
 - 参见 [dependency-policy.md](docs/development/dependency-policy.md)。
 - 离线或受限网络环境：可预先下载 tarball 并设置
   `CMAKE_FETCHCONTENT_SOURCE_DIR_GOOGLETEST` / `CMAKE_FETCHCONTENT_SOURCE_DIR_QUICKJS`

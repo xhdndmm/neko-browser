@@ -24,6 +24,9 @@ jobs:
       - name: Install clang-tidy
         run: sudo apt-get update && sudo apt-get install -y clang-tidy-18
 
+      - name: Install system dependencies
+        run: sudo apt-get install -y zlib1g-dev libjpeg-dev qt6-base-dev
+
       - name: Configure (compile_commands)
         run: |
           cmake --preset debug \

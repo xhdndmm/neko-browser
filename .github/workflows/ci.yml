@@ -35,17 +35,46 @@ jobs:
           - name: windows-msvc-debug
             os: windows-latest
             preset: debug
+            # Windows 上通过 vcpkg 提供 zlib/libjpeg；Qt6 GUI 由 Linux/macOS
+            # 任务覆盖（vcpkg 从源码编译 Qt 对 CI 而言过慢），故此处 NEKO_BUILD_UI=OFF。
           - name: macos-clang-debug
             os: macos-latest
             preset: debug
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zlib1g-dev libjpeg-dev qt6-base-dev
+
+      - name: Install system dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install jpeg qt
+
+      # vcpkg 无官方 setup action，手动 clone + bootstrap（不依赖第三方 action）。
+      - name: Set up vcpkg (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git "$env:RUNNER_TEMP\vcpkg"
+          & "$env:RUNNER_TEMP\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+          "VCPKG_ROOT=$env:RUNNER_TEMP\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "$env:RUNNER_TEMP\vcpkg" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Install vcpkg dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: vcpkg install zlib libjpeg-turbo
+
       - name: Configure
+        shell: bash
         env:
           CC: ${{ matrix.cc }}
           CXX: ${{ matrix.cxx }}
-        run: cmake --preset ${{ matrix.preset }} -DNEKO_WARNINGS_AS_ERRORS=ON
+        run: |
+          EXTRA_ARGS=""
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            EXTRA_ARGS="-DCMAKE_TOOLCHAIN_FILE=${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake -DNEKO_BUILD_UI=OFF"
+          fi
+          cmake --preset "${{ matrix.preset }}" -DNEKO_WARNINGS_AS_ERRORS=ON ${EXTRA_ARGS}
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
@@ -70,6 +99,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y zlib1g-dev libjpeg-dev qt6-base-dev
+
       - name: Configure
         run: cmake --preset asan -DNEKO_WARNINGS_AS_ERRORS=ON
 
@@ -91,8 +123,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install lcov
-        run: sudo apt-get update && sudo apt-get install -y lcov
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y lcov zlib1g-dev libjpeg-dev qt6-base-dev
 
       - name: Configure
         run: cmake --preset coverage
