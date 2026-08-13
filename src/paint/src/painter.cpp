@@ -57,6 +57,11 @@ void Painter::PaintBox(const layout::LayoutBox& box, DisplayList& list) const {
   for (const auto& child : box.children) {
     PaintBox(*child, list);
   }
+
+  // Absolutely positioned descendants paint above in-flow content.
+  for (const auto& child : box.positioned_children) {
+    PaintBox(*child, list);
+  }
 }
 
 }  // namespace neko::paint

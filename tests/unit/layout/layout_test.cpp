@@ -373,6 +373,116 @@ TEST(LayoutTest, ImageInTableCellTranslatedToSlot) {
   EXPECT_FLOAT_EQ(img.y, td->content_y());
 }
 
+TEST(LayoutTest, AbsolutePositioningAgainstRelativeAncestor) {
+  // An absolutely positioned child is placed against its nearest positioned
+  // ancestor's padding box using bottom/right offsets.
+  auto doc = html::Parser("<body><div style=\"position:relative;width:200px;height:100px\">"
+                          "<div style=\"position:absolute;bottom:10px;right:15px\">x</div>"
+                          "</div></body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+
+  const LayoutBox* rel = FindBox(*root, "div", *doc);
+  ASSERT_NE(rel, nullptr);
+  ASSERT_EQ(rel->positioned_children.size(), 1u);
+  const LayoutBox* abs = rel->positioned_children[0].get();
+  EXPECT_FLOAT_EQ(abs->x, rel->content_x() + rel->content_width() - 15.0f - abs->width);
+  EXPECT_FLOAT_EQ(abs->y, rel->content_y() + rel->content_height() - 10.0f - abs->height);
+}
+
+TEST(LayoutTest, AbsoluteUsesNearestPositionedAncestor) {
+  // The containing block is the nearest positioned ancestor, skipping a
+  // static intermediate div.
+  auto doc = html::Parser("<body><div style=\"position:relative;width:300px\">"
+                          "<div><div style=\"position:absolute;left:20px;top:5px\">x</div></div>"
+                          "</div></body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+
+  const LayoutBox* rel = FindBox(*root, "div", *doc);
+  ASSERT_NE(rel, nullptr);
+  // The static intermediate div has one in-flow child which itself holds the
+  // absolutely positioned box.
+  ASSERT_EQ(rel->children.size(), 1u);
+  const LayoutBox* mid = rel->children[0].get();
+  ASSERT_EQ(mid->positioned_children.size(), 1u);
+  const LayoutBox* abs = mid->positioned_children[0].get();
+  EXPECT_FLOAT_EQ(abs->x, rel->content_x() + 20.0f);
+  EXPECT_FLOAT_EQ(abs->y, rel->content_y() + 5.0f);
+}
+
+TEST(LayoutTest, LeadingWhitespaceDoesNotShiftInlineImage) {
+  // HTML source indentation (newline + spaces) before an <img> must collapse
+  // to nothing, not become an inline space that shifts the image right.
+  struct FakeProvider : public layout::ImageProvider {
+    image::Image img;
+    FakeProvider() {
+      img.width = 20;
+      img.height = 20;
+    }
+    const image::Image* Find(const dom::Element&) const override { return &img; }
+  };
+  FakeProvider provider;
+  auto doc = html::Parser("<body><div>\n    <img>\n</div></body>").Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles, nullptr, &provider);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+
+  const LayoutBox* div = FindBox(*root, "div", *doc);
+  ASSERT_NE(div, nullptr);
+  ASSERT_GE(div->lines.size(), 1u);
+  ASSERT_GE(div->lines[0].boxes.size(), 1u);
+  const InlineBox& img = div->lines[0].boxes[0];
+  EXPECT_FLOAT_EQ(img.x, div->content_x());
+}
+
+TEST(LayoutTest, AbsoluteShrinkToFitExcludesInset) {
+  // A left inset constrains the shrink-to-fit available width (CSS2.2 §10.3.7
+  // case 3): the box must not overflow the containing block's right edge.
+  auto doc = html::Parser("<body><div style=\"position:relative;width:300px\">"
+                          "<div style=\"position:absolute;left:10px\">"
+                          "some quite long text that would otherwise overflow</div>"
+                          "</div></body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+
+  const LayoutBox* rel = FindBox(*root, "div", *doc);
+  ASSERT_NE(rel, nullptr);
+  ASSERT_EQ(rel->positioned_children.size(), 1u);
+  const LayoutBox* abs = rel->positioned_children[0].get();
+  // Right edge stays within the containing block's content box.
+  EXPECT_LE(abs->x + abs->width, rel->content_x() + rel->content_width() + 0.5f);
+}
+
+TEST(LayoutTest, AbsoluteShrinkToFitCollapsesWhitespace) {
+  // Source indentation inside the element must not inflate shrink-to-fit.
+  auto doc = html::Parser("<body><div style=\"position:relative;width:300px\">"
+                          "<div style=\"position:absolute;left:0px\">\n      abc\n    </div>"
+                          "</div></body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+
+  const LayoutBox* rel = FindBox(*root, "div", *doc);
+  ASSERT_NE(rel, nullptr);
+  ASSERT_EQ(rel->positioned_children.size(), 1u);
+  const LayoutBox* abs = rel->positioned_children[0].get();
+  // "abc" in the monospace fallback is 3 * 16 = 48px; indentation adds nothing.
+  EXPECT_FLOAT_EQ(abs->width, 48.0f);
+}
+
 TEST(LayoutTest, NestedBlockHeightInherits) {
   Page page = Build("<body><div><div>text</div></div></body>");
   const LayoutBox* outer = FindBox(*page.root, "div", *page.doc);

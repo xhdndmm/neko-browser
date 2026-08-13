@@ -83,9 +83,17 @@ struct ComputedStyle {
   std::optional<css::Color> color;
   bool text_decoration_underline = false;
 
-  // Offsets (used by position: relative).
+  // Offsets (used by position: relative / absolute).  *_auto records whether
+  // the offset was left at its initial value (auto), which absolute
+  // positioning must distinguish from an explicit 0.
   float left = 0;
   float top = 0;
+  float right = 0;
+  float bottom = 0;
+  bool left_auto = true;
+  bool top_auto = true;
+  bool right_auto = true;
+  bool bottom_auto = true;
 };
 
 }  // namespace neko::style

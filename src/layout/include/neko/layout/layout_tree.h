@@ -93,6 +93,7 @@ struct LayoutBox {
   float padding_left = 0;
 
   std::vector<std::unique_ptr<LayoutBox>> children;  // block-level children
+  std::vector<std::unique_ptr<LayoutBox>> positioned_children;  // position:absolute/fixed
   std::vector<Line> lines;                           // inline content
 
   float content_x() const {

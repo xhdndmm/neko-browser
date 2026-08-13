@@ -17,7 +17,10 @@ DOM 与布局树分离：布局树持有几何信息（盒模型、行盒、文�
 - 文本测量：`LayoutEngine` 接受可选 `graphics::FontFace`；提供时词宽/空格宽用
   FreeType 真实 advance（`TextRun.width` 记录），表格 max-content 测量与命中
   测试同样基于真实宽度；无字体时回退"每字符 = font_size"等宽模型。
-- `position: relative` 用 left/top 偏移；absolute/fixed 按 static 处理（未实现）。
+- `position: relative` 用 left/top 偏移；absolute 从正常流移除，相对最近
+  positioning 祖先的 padding box 定位（top/left/right/bottom，含 bottom/right
+  反向偏移），宽度按 CSS2.2 §10.3.7（shrink-to-fit 或 left+right 约束方程）。
+  fixed 暂按 absolute 处理。
 - 表格（`display: table`）走独立算法：先收集行/单元格（展平 thead/tbody/tfoot、
   支持匿名直接 `<tr>`），用 colspan/rowspan 建占用网格；列宽由显式单元格宽固定、
   auto 列按 max-content 测量分配剩余宽度；行高由单元格内容高决定；单元格先按

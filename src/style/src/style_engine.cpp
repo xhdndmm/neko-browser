@@ -643,17 +643,20 @@ void StyleEngine::ComputeElement(dom::Element& element, const ComputedStyle& inh
   }
 
   // offsets.
-  auto set_offset = [&](const char* name, float& target) {
+  auto set_offset = [&](const char* name, float& target, bool& auto_flag) {
     if (const css::Declaration* d = find(name)) {
       if (const std::optional<SizeSpec> spec = ParseSize(d->value, out.font_size, root_font_size)) {
         if (!spec.value().percent) {
           target = spec.value().value;
+          auto_flag = false;
         }
       }
     }
   };
-  set_offset("left", out.left);
-  set_offset("top", out.top);
+  set_offset("left", out.left, out.left_auto);
+  set_offset("top", out.top, out.top_auto);
+  set_offset("right", out.right, out.right_auto);
+  set_offset("bottom", out.bottom, out.bottom_auto);
 
   // Store and recurse.
   styles_[&element] = out;
