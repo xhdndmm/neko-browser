@@ -46,6 +46,8 @@ class Text : public Node {
   explicit Text(std::string data);
 
   const std::string& data() const { return data_; }
+  // Appends text (used by the HTML parser to merge adjacent character runs).
+  void AppendData(std::string_view text) { data_.append(text); }
   std::string_view node_name() const override { return "#text"; }
   std::string TextContent() const override { return data_; }
   std::string ToString() const override;

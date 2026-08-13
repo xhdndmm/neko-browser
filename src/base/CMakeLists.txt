@@ -10,6 +10,7 @@ add_library(neko_base
   src/logging.cpp
   src/status.cpp
   src/string_util.cpp
+  src/utf8.cpp
 )
 add_library(neko::base ALIAS neko_base)
 
