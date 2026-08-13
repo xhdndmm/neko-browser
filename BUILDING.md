@@ -16,11 +16,11 @@
 
 ```bash
 cmake --preset debug      # 配置（生成到 build/debug/）
-cmake --build --preset debug
+cmake --build --preset debug --parallel   # 多线程编译（默认使用全部核心）
 ctest --preset debug
 ```
 
-或者使用 workflow preset 一步完成：
+或者使用 workflow preset 一步完成（构建步骤同样并行）：
 
 ```bash
 cmake --workflow --preset debug
@@ -37,6 +37,21 @@ cmake --workflow --preset debug
 | `ubsan` | RelWithDebInfo | 仅 UBSan |
 | `tsan` | RelWithDebInfo | ThreadSanitizer |
 | `coverage` | Debug | gcov 覆盖率插桩 |
+
+## 多线程编译
+
+所有构建 preset 默认启用并行编译：`jobs` 设为 `0`（等价于命令行 `--parallel`，
+交给原生构建工具决定并行度）。Ninja 与 Makefiles 生成器会利用全部 CPU 核心，
+MSBuild（Windows）使用 `/m`；`cmake --workflow --preset ...` 的构建步骤同样并行。
+
+需要限制并发数时，追加 `-j <N>` 或 `--parallel <N>`（命令行优先于 preset）：
+
+```bash
+cmake --build --preset debug --parallel 4   # 最多 4 个并发编译任务
+```
+
+也可以设置环境变量 `CMAKE_BUILD_PARALLEL_LEVEL=<N>` 作为默认并行度；
+设为空字符串等价于“使用原生构建工具默认并行度”。
 
 ## 常用选项
 

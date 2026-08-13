@@ -84,10 +84,10 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
 ```bash
 # 配置 + 构建 + 测试（Debug）
 cmake --preset debug
-cmake --build --preset debug
+cmake --build --preset debug --parallel
 ctest --preset debug
 
-# 或一条命令
+# 或一条命令（构建步骤默认并行）
 cmake --workflow --preset debug
 
 # Release（含 LTO）

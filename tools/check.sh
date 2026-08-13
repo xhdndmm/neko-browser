@@ -20,7 +20,7 @@ echo "==> Configure ($PRESET)"
 cmake --preset "$PRESET"
 
 echo "==> Build ($PRESET)"
-cmake --build --preset "$PRESET"
+cmake --build --preset "$PRESET" --parallel
 
 echo "==> Test ($PRESET)"
 ctest --preset "$PRESET"

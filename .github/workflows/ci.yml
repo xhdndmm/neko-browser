@@ -41,7 +41,7 @@ jobs:
             os: macos-latest
             preset: debug
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
@@ -77,14 +77,14 @@ jobs:
           cmake --preset "${{ matrix.preset }}" -DNEKO_WARNINGS_AS_ERRORS=ON ${EXTRA_ARGS}
 
       - name: Build
-        run: cmake --build --preset ${{ matrix.preset }}
+        run: cmake --build --preset ${{ matrix.preset }} --parallel
 
       - name: Test
         run: ctest --preset ${{ matrix.preset }}
 
       - name: Upload ctest logs (on failure)
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ctest-logs-${{ matrix.name }}
           path: build/${{ matrix.preset }}/Testing/
@@ -97,7 +97,7 @@ jobs:
     name: sanitizers (ASan+UBSan)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y zlib1g-dev libjpeg-dev libfreetype-dev qt6-base-dev
@@ -106,7 +106,7 @@ jobs:
         run: cmake --preset asan -DNEKO_WARNINGS_AS_ERRORS=ON
 
       - name: Build
-        run: cmake --build --preset asan
+        run: cmake --build --preset asan --parallel
 
       - name: Test
         env:
@@ -130,7 +130,7 @@ jobs:
         run: cmake --preset coverage
 
       - name: Build
-        run: cmake --build --preset coverage
+        run: cmake --build --preset coverage --parallel
 
       - name: Test
         run: ctest --preset coverage
@@ -145,7 +145,7 @@ jobs:
           lcov --list coverage-filtered.info
 
       - name: Upload coverage report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-report
           path: build/coverage/coverage-filtered.info
@@ -157,7 +157,7 @@ jobs:
     name: clang-format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install clang-format
         run: sudo apt-get update && sudo apt-get install -y clang-format-18

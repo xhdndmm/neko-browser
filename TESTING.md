@@ -6,7 +6,7 @@ neko-browser 将测试视为实现的一部分。任何重要行为都必须有�
 
 ```bash
 cmake --preset debug
-cmake --build --preset debug
+cmake --build --preset debug --parallel
 ctest --preset debug
 ```
 

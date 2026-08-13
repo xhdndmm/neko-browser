@@ -87,37 +87,50 @@
   ],
   "buildPresets": [
     {
+      "name": "base",
+      "hidden": true,
+      "description": "Shared configuration for all build presets",
+      "jobs": 0
+    },
+    {
       "name": "debug",
+      "inherits": "base",
       "configurePreset": "debug",
       "description": "Build the debug configuration"
     },
     {
       "name": "release",
+      "inherits": "base",
       "configurePreset": "release",
       "description": "Build the release configuration"
     },
     {
       "name": "relwithdebinfo",
+      "inherits": "base",
       "configurePreset": "relwithdebinfo",
       "description": "Build the RelWithDebInfo configuration"
     },
     {
       "name": "asan",
+      "inherits": "base",
       "configurePreset": "asan",
       "description": "Build the ASan+UBSan configuration"
     },
     {
       "name": "ubsan",
+      "inherits": "base",
       "configurePreset": "ubsan",
       "description": "Build the UBSan configuration"
     },
     {
       "name": "tsan",
+      "inherits": "base",
       "configurePreset": "tsan",
       "description": "Build the TSan configuration"
     },
     {
       "name": "coverage",
+      "inherits": "base",
       "configurePreset": "coverage",
       "description": "Build the coverage configuration"
     }
