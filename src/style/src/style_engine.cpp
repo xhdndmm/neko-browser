@@ -347,8 +347,8 @@ void StyleEngine::ComputeElement(dom::Element& element, const ComputedStyle& inh
       }
     } else if (v.type == css::CssValue::Type::kKeyword) {
       static const std::map<std::string, float> kSizes = {
-          {"xx-small", 9},   {"x-small", 10},  {"small", 13},  {"medium", 16},
-          {"large", 18},     {"x-large", 24},  {"xx-large", 32}};
+          {"xx-small", 9.0f}, {"x-small", 10.0f}, {"small", 13.0f}, {"medium", 16.0f},
+          {"large", 18.0f},   {"x-large", 24.0f}, {"xx-large", 32.0f}};
       const auto it = kSizes.find(v.text);
       if (it != kSizes.end()) {
         out.font_size = it->second;
