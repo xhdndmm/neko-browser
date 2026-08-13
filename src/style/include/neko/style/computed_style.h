@@ -8,8 +8,18 @@
 namespace neko::style {
 
 // Display values.  flex/grid are parsed but NOT yet implemented: elements
-// declaring them are laid out as blocks (documented limitation).
-enum class Display { kBlock, kInline, kNone };
+// declaring them are laid out as blocks (documented limitation).  Table
+// display values are laid out by the table layout algorithm.
+enum class Display {
+  kBlock,
+  kInline,
+  kNone,
+  kTable,
+  kTableRowGroup,  // thead/tbody/tfoot
+  kTableRow,       // tr
+  kTableCell,      // td/th
+  kTableCaption,   // caption
+};
 
 // position.  Layout currently honors static and relative; absolute/fixed are
 // stored but treated as static (documented limitation).

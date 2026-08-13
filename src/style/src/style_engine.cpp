@@ -27,8 +27,12 @@ body { display: block; margin: 8px; }
 div, p, section, article, aside, header, footer, nav, main, hgroup,
 h1, h2, h3, h4, h5, h6,
 address, blockquote, pre, figure, figcaption, form, fieldset, details,
-summary, hr, dl, dt, dd, table, caption, thead, tbody, tfoot, tr, td, th,
-ul, ol, li { display: block; }
+summary, hr, dl, dt, dd, ul, ol, li { display: block; }
+table { display: table; }
+caption { display: table-caption; }
+thead, tbody, tfoot { display: table-row-group; }
+tr { display: table-row; }
+td, th { display: table-cell; }
 a, span, em, strong, b, i, u, s, small, sub, sup, code, label, button,
 select, textarea, input, q, cite, mark, time { display: inline; }
 p { margin-top: 1em; margin-bottom: 1em; }
@@ -438,6 +442,17 @@ void StyleEngine::ComputeElement(dom::Element& element, const ComputedStyle& inh
         out.display = Display::kInline;
       } else if (v.text == "none") {
         out.display = Display::kNone;
+      } else if (v.text == "table") {
+        out.display = Display::kTable;
+      } else if (v.text == "table-row-group" || v.text == "table-header-group" ||
+                 v.text == "table-footer-group") {
+        out.display = Display::kTableRowGroup;
+      } else if (v.text == "table-row") {
+        out.display = Display::kTableRow;
+      } else if (v.text == "table-cell") {
+        out.display = Display::kTableCell;
+      } else if (v.text == "table-caption") {
+        out.display = Display::kTableCaption;
       }
     }
   }

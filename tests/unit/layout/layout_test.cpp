@@ -179,5 +179,189 @@ TEST(LayoutTest, NestedBlockHeightInherits) {
   EXPECT_FLOAT_EQ(outer->height, inner->height);
 }
 
+TEST(LayoutTest, TableCellsAreSideBySide) {
+  Page page = Build(
+      "<body><table><tr><td>A</td><td>B</td></tr>"
+      "<tr><td>C</td><td>D</td></tr></table></body>");
+  const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
+  ASSERT_NE(table, nullptr);
+  ASSERT_EQ(table->children.size(), 2u);  // two rows
+
+  const LayoutBox* row0 = table->children[0].get();
+  const LayoutBox* row1 = table->children[1].get();
+  ASSERT_EQ(row0->children.size(), 2u);
+  ASSERT_EQ(row1->children.size(), 2u);
+
+  // Cells in a row share the same top and sit side by side.
+  EXPECT_FLOAT_EQ(row0->children[0]->y, row0->children[1]->y);
+  EXPECT_FLOAT_EQ(row0->children[0]->x, 8.0f);  // body content x
+  EXPECT_GT(row0->children[1]->x, row0->children[0]->x);
+  // The second row is below the first.
+  EXPECT_GT(row1->y, row0->y);
+}
+
+TEST(LayoutTest, TableExplicitCellWidthFixesColumn) {
+  Page page = Build(
+      "<body><table style=\"width: 400px\"><tr>"
+      "<td style=\"width: 100px\">A</td><td>B</td></tr></table></body>");
+  const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
+  ASSERT_NE(table, nullptr);
+  ASSERT_EQ(table->children.size(), 1u);
+
+  const LayoutBox* row = table->children[0].get();
+  ASSERT_EQ(row->children.size(), 2u);
+  // First column is fixed at 100px; the second takes the remaining 300px.
+  EXPECT_FLOAT_EQ(row->children[0]->width, 100.0f);
+  EXPECT_FLOAT_EQ(row->children[1]->width, 300.0f);
+}
+
+TEST(LayoutTest, TableColspanSpansColumns) {
+  Page page = Build(
+      "<body><table style=\"width: 400px\">"
+      "<tr><td colspan=\"2\">wide</td></tr>"
+      "<tr><td style=\"width: 100px\">A</td><td>B</td></tr></table></body>");
+  const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
+  ASSERT_NE(table, nullptr);
+  ASSERT_EQ(table->children.size(), 2u);
+
+  const LayoutBox* row0 = table->children[0].get();
+  const LayoutBox* row1 = table->children[1].get();
+  ASSERT_EQ(row0->children.size(), 1u);  // one spanning cell
+  ASSERT_EQ(row1->children.size(), 2u);
+  // The colspan cell spans the full table width (both columns).
+  EXPECT_FLOAT_EQ(row0->children[0]->width, 400.0f);
+  // Second row: fixed 100px column + 300px remainder.
+  EXPECT_FLOAT_EQ(row1->children[0]->width, 100.0f);
+  EXPECT_FLOAT_EQ(row1->children[1]->width, 300.0f);
+}
+
+TEST(LayoutTest, TableRowspanZeroSpansToEnd) {
+  // rowspan="0" means "span the remaining rows of the row group" (WHATWG HTML
+  // tables.html); with a single flattened group that is the rest of the table.
+  Page page = Build(
+      "<body><table style=\"width: 400px\">"
+      "<tr><td rowspan=\"0\">X</td><td>A</td></tr>"
+      "<tr><td>B</td></tr></table></body>");
+  const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
+  ASSERT_NE(table, nullptr);
+  ASSERT_EQ(table->children.size(), 2u);
+
+  const LayoutBox* row0 = table->children[0].get();
+  const LayoutBox* row1 = table->children[1].get();
+  ASSERT_EQ(row0->children.size(), 2u);  // X (rowspan to end) + A
+  ASSERT_EQ(row1->children.size(), 1u);  // B (X continues)
+  // X spans both rows.
+  EXPECT_FLOAT_EQ(row0->children[0]->height, row0->height + row1->height);
+}
+
+TEST(LayoutTest, TableRowspanZeroStopsAtRowGroupEnd) {
+  // rowspan="0" spans only to the end of its own row group.  The <thead> cell
+  // must NOT grow through the <tbody> rows.
+  Page page = Build(
+      "<body><table style=\"width: 400px\">"
+      "<thead><tr><td rowspan=\"0\">H</td></tr></thead>"
+      "<tbody><tr><td>A</td></tr><tr><td>B</td></tr></tbody>"
+      "</table></body>");
+  const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
+  ASSERT_NE(table, nullptr);
+  ASSERT_EQ(table->children.size(), 3u);  // thead row + 2 tbody rows
+
+  const LayoutBox* row0 = table->children[0].get();  // thead
+  const LayoutBox* row1 = table->children[1].get();  // tbody
+  const LayoutBox* row2 = table->children[2].get();  // tbody
+  ASSERT_EQ(row0->children.size(), 1u);  // H
+  ASSERT_EQ(row1->children.size(), 1u);  // A
+  ASSERT_EQ(row2->children.size(), 1u);  // B
+  // H spans only the thead row (its own group), not the whole table.
+  EXPECT_FLOAT_EQ(row0->children[0]->height, row0->height);
+}
+
+TEST(LayoutTest, TableRowspanZeroImplicitGroup) {
+  // Consecutive anonymous <tr> children form one implicit row group, so
+  // rowspan="0" spans all of them.
+  Page page = Build(
+      "<body><table style=\"width: 400px\">"
+      "<tr><td rowspan=\"0\">X</td></tr>"
+      "<tr><td>A</td></tr>"
+      "<tr><td>B</td></tr></table></body>");
+  const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
+  ASSERT_NE(table, nullptr);
+  ASSERT_EQ(table->children.size(), 3u);
+
+  const LayoutBox* row0 = table->children[0].get();
+  const LayoutBox* row1 = table->children[1].get();
+  const LayoutBox* row2 = table->children[2].get();
+  ASSERT_EQ(row0->children.size(), 1u);  // X
+  // X occupies the first column across all three rows; A/B land in column 1.
+  EXPECT_FLOAT_EQ(row0->children[0]->height, row0->height + row1->height + row2->height);
+  ASSERT_EQ(row1->children.size(), 1u);
+  ASSERT_EQ(row2->children.size(), 1u);
+}
+
+TEST(LayoutTest, TableColspanClampsAboveThousand) {
+  // colspan above 1000 clamps to 1000 (WHATWG tables.html); the single
+  // spanning cell then covers the whole 400px table.
+  Page page = Build(
+      "<body><table style=\"width: 400px\">"
+      "<tr><td colspan=\"1001\">wide</td></tr></table></body>");
+  const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
+  ASSERT_NE(table, nullptr);
+  const LayoutBox* row = table->children[0].get();
+  ASSERT_EQ(row->children.size(), 1u);
+  // 1000 columns of 0.4px accumulate float error, so allow a small tolerance.
+  EXPECT_NEAR(row->children[0]->width, 400.0f, 0.05f);
+}
+
+TEST(LayoutTest, TableColspanIgnoresTrailingText) {
+  // colspan="2abc" parses as 2 (trailing non-digits are ignored).
+  Page page = Build(
+      "<body><table style=\"width: 400px\">"
+      "<tr><td colspan=\"2abc\">wide</td></tr>"
+      "<tr><td style=\"width: 100px\">A</td><td>B</td></tr></table></body>");
+  const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
+  ASSERT_NE(table, nullptr);
+  const LayoutBox* row0 = table->children[0].get();
+  const LayoutBox* row1 = table->children[1].get();
+  ASSERT_EQ(row0->children.size(), 1u);
+  ASSERT_EQ(row1->children.size(), 2u);
+  // The spanning cell covers both columns.
+  EXPECT_FLOAT_EQ(row0->children[0]->width, 400.0f);
+  EXPECT_FLOAT_EQ(row1->children[0]->width, 100.0f);
+  EXPECT_FLOAT_EQ(row1->children[1]->width, 300.0f);
+}
+
+TEST(LayoutTest, TableInvalidSpanFallsBackToOne) {
+  // A leading non-digit (colspan="x2") is an invalid non-negative integer, so
+  // the span falls back to 1: the cell covers only the first column.
+  Page page = Build(
+      "<body><table style=\"width: 400px\">"
+      "<tr><td colspan=\"x2\">narrow</td></tr>"
+      "<tr><td style=\"width: 100px\">A</td><td>B</td></tr></table></body>");
+  const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
+  ASSERT_NE(table, nullptr);
+  const LayoutBox* row0 = table->children[0].get();
+  ASSERT_EQ(row0->children.size(), 1u);
+  EXPECT_FLOAT_EQ(row0->children[0]->width, 100.0f);
+}
+
+TEST(LayoutTest, TableRowspanSpansRows) {
+  Page page = Build(
+      "<body><table style=\"width: 400px\">"
+      "<tr><td rowspan=\"2\">tall</td><td>R</td></tr>"
+      "<tr><td>S</td></tr></table></body>");
+  const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
+  ASSERT_NE(table, nullptr);
+  ASSERT_EQ(table->children.size(), 2u);
+
+  const LayoutBox* row0 = table->children[0].get();
+  const LayoutBox* row1 = table->children[1].get();
+  ASSERT_EQ(row0->children.size(), 2u);  // rowspan cell + R
+  ASSERT_EQ(row1->children.size(), 1u);  // S (rowspan cell continues)
+  // The rowspan cell's height spans both rows.
+  EXPECT_FLOAT_EQ(row0->children[0]->height, row0->height + row1->height);
+  // S sits in the second row, below the first.
+  EXPECT_GT(row1->children[0]->y, row0->y);
+}
+
 }  // namespace
 }  // namespace neko::layout
