@@ -335,6 +335,22 @@ TEST(HttpTest, ExtraHeadersRecomputedPerRedirectHop) {
   EXPECT_NE(requests[1].find("cookie: host="), std::string::npos);
 }
 
+TEST(HttpTest, RequestTargetIsPercentEncoded) {
+  TestHttpServer server;
+  ASSERT_TRUE(server.IsValid());
+  // Spaces are legal in a parsed path but must be percent-encoded on the
+  // wire so they cannot smuggle bytes into the request line.
+  const std::string host =
+      "http://127.0.0.1:" + std::to_string(server.port()) + "/a b/c?q=x y";
+  const auto url = url::Url::Parse(host);
+  ASSERT_TRUE(url.has_value());
+  const auto result = HttpGet(url.value());
+  ASSERT_TRUE(result.has_value());
+  const auto requests = server.Requests();
+  ASSERT_EQ(requests.size(), 1u);
+  EXPECT_NE(requests[0].find("GET /a%20b/c?q=x%20y HTTP/1.1"), std::string::npos);
+}
+
 TEST(SocketTest, ConnectRefused) {
   // Find a port that is very likely closed by binding and releasing.
   const auto socket = Socket::Connect("127.0.0.1", 1, 500);

@@ -44,6 +44,43 @@ std::vector<std::string_view> GetAllHeaderValues(const HttpResponse& response,
   return values;
 }
 
+// Percent-encodes a URL path/query for use in an HTTP request target
+// (RFC 3986 3.3 / RFC 7230 5.3).  Only characters that are valid in a path
+// or query are left raw; anything else (spaces, control characters, quote
+// and angle brackets, non-ASCII bytes) is encoded so that untrusted URL
+// components cannot inject bytes into the request line.
+bool IsRequestTargetChar(unsigned char c) {
+  if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+    return true;
+  }
+  switch (c) {
+    case '-': case '.': case '_': case '~':     // unreserved
+    case '!': case '$': case '&': case '\'': case '(': case ')':  // sub-delims
+    case '*': case '+': case ',': case ';': case '=':
+    case ':': case '@': case '/': case '?': case '%':
+      return true;
+    default:
+      return false;
+  }
+}
+
+std::string EncodeRequestTarget(std::string_view text) {
+  constexpr char kHex[] = "0123456789ABCDEF";
+  std::string out;
+  out.reserve(text.size());
+  for (const char ch : text) {
+    const unsigned char c = static_cast<unsigned char>(ch);
+    if (IsRequestTargetChar(c)) {
+      out.push_back(static_cast<char>(c));
+    } else {
+      out.push_back('%');
+      out.push_back(kHex[c >> 4]);
+      out.push_back(kHex[c & 0x0F]);
+    }
+  }
+  return out;
+}
+
 std::string_view TrimView(std::string_view text) {
   while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) {
     text.remove_prefix(1);
@@ -231,10 +268,13 @@ base::Result<HttpResponse> HttpGet(const url::Url& url, int redirect_limit,
   }
 
   std::string request = "GET ";
-  request += url.path();
+  // The request target must be percent-encoded (RFC 3986): raw path/query
+  // bytes must not reach the request line (defense in depth against CRLF
+  // and header injection even if a caller constructs a malformed Url).
+  request += EncodeRequestTarget(url.path());
   if (url.has_query()) {
     request.push_back('?');
-    request += url.query();
+    request += EncodeRequestTarget(url.query());
   }
   request += " HTTP/1.1\r\n";
   request += "Host: ";
