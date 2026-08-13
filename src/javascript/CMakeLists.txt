@@ -18,4 +18,7 @@ target_include_directories(neko_javascript PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 target_link_libraries(neko_javascript PUBLIC neko::base PRIVATE qjs)
+# QuickJS is a third-party dependency; mark its headers SYSTEM so our strict
+# warnings (-Wold-style-cast / -Wdouble-promotion) don't fire inside quickjs.h.
+target_include_directories(neko_javascript SYSTEM PRIVATE ${quickjs_SOURCE_DIR})
 apply_compiler_warnings(neko_javascript)
