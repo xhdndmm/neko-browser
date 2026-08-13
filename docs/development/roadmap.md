@@ -1,6 +1,6 @@
 # 开发路线图
 
-> 最后更新：2026-08（Phase 0 完成）
+> 最后更新：2026-08（Phase 7 达成，含存储/图像/媒体/PDF/GUI）
 
 ## 总原则
 
@@ -87,11 +87,36 @@ graph LR
 **里程碑 M1–M6 达成**：`neko_browser --url http://example.com/ --screenshot out.ppm`
 可抓取、解析、样式化、布局并光栅化真实网页（已在本地端到端验证）。
 
-## Phase 7 — Browser UI
+## 内容解析扩展 ✅（已完成，范围见下）
 
-- [ ] 窗口、标签页、地址栏、后退/前进/刷新/停止、新标签、加载进度
-- [ ] 历史、书签、设置、下载
-- [ ] 键盘/鼠标、高 DPI、UI 与引擎解耦（Browser Controller 层）
+在 Phase 6 与 Phase 7 之间落地的内容解析与存储子系统：
+
+- [x] **storage**：CookieStore（RFC 6265 子集）、HistoryStore、BookmarkStore ——
+      行式文件 + 百分号编码 + 原子写入（临时文件 + rename），29 个单元测试
+- [x] **image**：自研 PNG 解码器（chunk/CRC/滤波/Adam7/全部颜色类型与位深，
+      zlib 仅用于 IDAT）+ libjpeg 封装 —— 16 个单元测试（含测试内编码器）
+- [x] **media**：自研 WAV 解码（RIFF/WAVE、PCM+float、8/16/24/32-bit、
+      extensible）—— 13 个单元测试
+- [x] **pdf**：文本提取器（xref 含 /Prev 链、对象、FlateDecode + 预测器、
+      页面树、内容流文本操作符 BT/ET/Td/TJ/Tj 等）—— 12 个单元测试
+      （**PARTIAL**：无 xref stream / 渲染 / CMap）
+- [ ] **视频解码**（H.264/VP9 等）—— **未实现**，`media::MediaSource::Open`
+      返回显式 NOT IMPLEMENTED，架构预留
+- [ ] GIF / WebP / AVIF —— **未实现**，返回显式 NOT IMPLEMENTED
+
+## Phase 7 — Browser UI ✅（已完成，范围见下）
+
+- [x] Qt6 窗口：标签页（QTabBar + QStackedWidget）、地址栏、后退/前进/刷新/
+      新标签/书签/下载工具栏按钮
+- [x] WebView：HTML 经自研引擎 Layout+Rasterize 渲染为 QImage；图像显示、
+      PDF/音频/文本/错误页文本覆盖层
+- [x] 引擎解耦：BrowserController（导航、内容类型路由、Cookie 消费/注入、
+      历史/书签记录）+ BrowserWorker（专用线程 + 队列，StateChanged 信号）
+- [x] DevTools 停靠面板：DOM 树 / 网络日志 / Console
+- [x] 历史 / 书签 / 下载 / 设置 停靠面板（连接存储与下载器）
+- [x] 无头模式可用：offscreen 平台 + 截图工具 `neko_gui_screenshot`
+- [ ] 键盘/鼠标完整交互、高 DPI 细节、加载进度条 —— 后续
+- [ ] 像素级渲染对比测试 —— 后续
 
 ## Phase 8–9 — JavaScript + Web APIs
 
@@ -129,4 +154,4 @@ graph LR
 | M4 | Phase 4（CSS+Style） | 计算样式测试 |
 | M5 | Phase 5（布局） | 布局树测试 |
 | M6 | Phase 6（渲染） | --screenshot、像素对比测试 |
-| M7 | Phase 7（UI） | 可交互浏览器窗口 |
+| M7 | Phase 7（UI + 内容解析） | 可交互浏览器窗口、offscreen 截图、247 测试全绿 |

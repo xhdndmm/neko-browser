@@ -2,7 +2,7 @@
 
 > 本文档诚实记录每个特性的支持状态。**禁止**把"接口存在"写成"已实现"。
 > 状态取值：Not Started / Planned / In Progress / Partial / Implemented / Tested。
-> 最后更新：2026-08（Phases 1–6 达成）。
+> 最后更新：2026-08（Phases 0–7 达成，含存储/图像/媒体/PDF/GUI）。
 
 | 特性 | 状态 | 测试证据 | 备注 |
 | --- | --- | --- | --- |
@@ -23,14 +23,24 @@
 | position absolute/fixed | Not Started | — | 按 static 处理 |
 | 文本（位图字体） | Partial | Paint 套件 | 仅 ASCII，无整形/回退 |
 | 文本（FreeType/HarfBuzz） | Not Started | — | 计划中 |
-| 图像解码 | Not Started | — | — |
+| 图像解码 PNG | Tested | 16 图像单元测试 | 自研解码器（chunk/CRC/滤波/Adam7/全部颜色类型） |
+| 图像解码 JPEG | Tested | 16 图像单元测试 | 封装 libjpeg，接口统一为 neko::image |
+| 图像解码 GIF/WebP/AVIF | Not Started | — | 返回显式 NOT IMPLEMENTED |
+| WAV 音频解码 | Tested | 13 媒体单元测试 | 自研 RIFF/WAVE，PCM+float，8/16/24/32-bit |
+| 视频解码（H.264/VP9 等） | Not Started | — | 显式 NOT IMPLEMENTED，架构预留 |
+| PDF 文本提取 | Partial | 12 PDF 单元测试 | xref（含 /Prev）、FlateDecode、内容流文本操作符；无 xref stream/渲染/CMap |
+| Cookie（RFC 6265 子集） | Tested | 29 存储单元测试 | Set-Cookie、域/路径匹配、Max-Age、Secure/HttpOnly/SameSite；PSL 与 SameSite 强制标注为限制 |
+| 历史记录 | Tested | 29 存储单元测试 | 去重访问、搜索、持久化 |
+| 书签 | Tested | 29 存储单元测试 | 增删改、文件夹、持久化 |
+| 下载器 | Tested | Browser 套件 | Content-Disposition/URL 文件名、原子写入 |
 | 绘制 / 光栅化 | Tested | Paint 套件 | 纯色、边框、文字、PPM |
 | 合成器 | Not Started | — | — |
 | JavaScript | Not Started | — | Phase 8 |
 | Fetch（浏览器 API） | Not Started | — | — |
-| Cookie | Not Started | — | — |
-| LocalStorage | Not Started | — | — |
+| LocalStorage / IndexedDB | Not Started | — | — |
 | 多进程 | Not Started | — | Phase 12 |
+| GUI（Qt6） | Partial | UI 冒烟测试（offscreen）+ 端到端截图 | 标签页/地址栏/工具栏/DevTools/历史/书签/下载/设置停靠面板；未做像素级渲染对比 |
+| DevTools | Partial | GUI 验证 | DOM 树 / 网络日志 / Console；无断点调试 |
 | 日志系统 | Tested | 单元测试 | — |
 | Error/Result 模型 | Tested | 单元测试 | — |
 | CLI 参数解析 | Tested | 单元测试 | — |

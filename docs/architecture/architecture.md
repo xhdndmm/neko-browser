@@ -1,6 +1,6 @@
 # 总体架构
 
-> 版本：Phase 0 快照 · 2026-08
+> 版本：Phases 0–7 快照 · 2026-08
 > 本文档描述 neko-browser 的长期架构目标与当前已落地的部分。
 
 ## 1. 项目目标
@@ -123,6 +123,52 @@ graph LR
 - 多进程：Browser / Renderer / Network / GPU / Utility 进程 + IPC。
   Phase 0–11 单进程，但代码架构必须允许平滑迁移到多进程。
 
+### storage（已落地，Phase 7 前）
+
+- `src/storage/`：CookieStore / HistoryStore / BookmarkStore。
+- 存储后端为**自研行式文件**（字段百分号编码），每次写入原子化
+  （临时文件 + rename）。无 SQLite，避免重依赖。
+- Cookie 为 RFC 6265 子集：Set-Cookie 解析、域/路径匹配、Max-Age/Expires、
+  Secure/HttpOnly/SameSite、会话 vs 持久化、删除、文件往返。
+  **限制**：未做 PSL 校验与 SameSite 强制实施（文档化）。
+- Profile 目录：`cookies.txt / history.txt / bookmarks.txt`。
+
+### image（已落地）
+
+- `src/image/`：统一 `Image{width,height,rgba}` 与 `DecodeImage` 接口。
+- **自研 PNG 解码器**：chunk 解析 + CRC 校验 + 滤波（全部 5 种）+ Adam7
+  （interlace）+ 全部颜色类型/位深（灰度/真彩/调色板 + alpha）。zlib 仅用于
+  IDAT 解压（基础设施）。
+- JPEG 封装 libjpeg（系统库），对外暴露同一 `neko::image` 接口。
+- GIF/WebP/AVIF 返回显式 NOT IMPLEMENTED。
+
+### media（已落地）
+
+- `src/media/`：`DecodeWav`（自研 RIFF/WAVE：PCM + IEEE float，
+  8/16/24/32-bit、extensible chunk）→ `AudioData`。
+- 视频：`MediaSource::Open` 返回显式 NOT IMPLEMENTED，架构预留。
+- GUI 中 WAV 可显示元数据，播放按钮显式提示未实现。
+
+### pdf（已落地，PARTIAL）
+
+- `src/pdf/`：`ExtractText` —— xref 表（含 /Prev 链，最新节优先）、对象、
+  流（FlateDecode + 预测器，zlib 解压）、页面树、内容流文本操作符
+  （BT/ET/Td/TJ/Tj 等）、UTF-16BE/ASCII/Latin-1 解码。
+- **限制**：无 xref stream、无渲染、无 CMap，明确标注 PARTIAL。
+
+### browser / ui（Phase 7 已落地）
+
+- `src/browser/`：BrowserController（标签页、导航、内容类型路由 HTML/Image/
+  PDF/Audio/Text/Other/Error、Cookie 消费与按主机注入、历史/书签记录、
+  DevTools 日志）+ DownloadManager（可注入 FetchFn、Content-Disposition/URL
+  文件名、原子写入）+ CLI（--url/--dump-dom/--screenshot/--dump-history/
+  --dump-bookmarks/--show-cookies/--download/--extract-pdf/--audio-info/
+  --image-info）。
+- `src/ui/`：Qt6（Widgets）GUI。BrowserWorker 在专用线程持有 BrowserController，
+  通过队列 + 条件变量通信，`StateChanged` 信号驱动 UI。WebView 按 tab_id 解析
+  控制器中的标签（避免指针悬垂）。DevTools 停靠面板（DOM 树/网络/Console）。
+- 依赖方向：`ui → browser → engine`，UI 不直接触碰引擎内部。
+
 ## 5. 目录结构约定
 
 每个模块采用统一的布局（自 Phase 0 起）：
@@ -154,7 +200,7 @@ tests/unit/<module>/      单元测试
    未完成的功能必须明确标注 `NOT IMPLEMENTED` / `PARTIALLY IMPLEMENTED`。
 5. **依赖方向**：`UI → Browser → Engine → Rendering/Layout/DOM/Network → Core/Platform`。
 
-## 7. 当前已落地（Phases 0–6）
+## 7. 当前已落地（Phases 0–7）
 
 ```text
 src/base/       日志、Error/Result、字符串、UTF-8、版本、断言 —— Tested
@@ -167,11 +213,21 @@ src/style/      UA 表 + 级联 + 继承 + 计算样式 —— Tested
 src/layout/     盒模型、block/inline 布局、换行 —— Tested
 src/paint/      显示列表、软件光栅化、位图字体、PPM —— Tested
 src/renderer/   页面管线编排（headless）—— Tested
-src/browser/    CLI（--url/--dump-dom/--screenshot）—— Tested
+src/storage/    CookieStore / HistoryStore / BookmarkStore（行式文件 + 原子写）—— Tested
+src/image/      PNG 自研解码 + JPEG(libjpeg) —— Tested
+src/media/      WAV 解码（自研）—— Tested；视频 NOT IMPLEMENTED
+src/pdf/        PDF 文本提取（FlateDecode、xref、文本操作符）—— Partial
+src/browser/    BrowserController + DownloadManager + CLI —— Tested
+src/ui/         Qt6 GUI（标签页/地址栏/DevTools/历史/书签/下载/设置）—— Partial
 ```
 
-端到端验证：`neko_browser --url http://example.com/ --screenshot out.ppm`
-可抓取并渲染真实网页。
+端到端验证：
 
-未开始：JavaScript、Web APIs、Storage、Security 子系统、IPC/多进程、GUI、
-DevTools、Accessibility。见[开发路线图](development/roadmap.md)。
+- `neko_browser --url http://example.com/ --screenshot out.ppm` 抓取并渲染真实网页
+- `neko_gui`（Qt6 GUI）加载网页/图像/PDF/WAV，DevTools 显示 DOM 树与网络日志
+- `neko_gui_screenshot <url> <png>` 无头截图
+- `--dump-history / --dump-bookmarks / --show-cookies / --download /
+  --extract-pdf / --audio-info / --image-info` 头less 访问存储与内容解析
+
+未开始：JavaScript、Web APIs、Security 子系统、IPC/多进程、视频解码、
+LocalStorage/IndexedDB、Accessibility。见[开发路线图](development/roadmap.md)。

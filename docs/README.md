@@ -11,6 +11,9 @@ neko-browser 的文档体系。文档是项目的一等公民 —— 改动架�
   - [0002：C++20 标准基线](architecture/adr/0002-cpp20-baseline.md)
   - [0003：GoogleTest 经 FetchContent 固定版本](architecture/adr/0003-googletest-fetchcontent.md)
   - [0004：自研日志与 Error/Result 模型](architecture/adr/0004-own-logging-and-result.md)
+  - [0005：位图字体文本渲染](architecture/adr/0005-bitmap-font-rendering.md)
+  - [0006：GUI 使用 Qt6](architecture/adr/0006-qt6-gui.md)
+  - [0007：PNG 自研解码 + JPEG 封装 libjpeg](architecture/adr/0007-png-decoder.md)
 
 ## 开发
 
@@ -34,6 +37,9 @@ neko-browser 的文档体系。文档是项目的一等公民 —— 改动架�
 | CSS | Implemented (子集) | [css](css/README.md) |
 | Layout | Implemented (子集) | [layout](layout/README.md) |
 | Rendering | Implemented (子集) | [rendering](rendering/README.md) |
+| Storage | Implemented (子集) | 见 [总体架构](architecture/architecture.md) |
+| Image / Media / PDF | Partial | 见 [总体架构](architecture/architecture.md) |
+| GUI (Qt6) | Partial | 见 [总体架构](architecture/architecture.md) |
 | JavaScript | Not Started | [javascript](javascript/README.md) |
 
 ## 发布
