@@ -115,11 +115,13 @@ class Logger {
   } while (false)
 
 // printf-style variant using std::format.
-#define NEKO_LOGF(level, format, ...)                                     \
+// NOTE: the format parameter is named |fmt| (not |format|) because the
+// preprocessor would otherwise substitute it inside ::std::format(...).
+#define NEKO_LOGF(level, fmt, ...)                                        \
   do {                                                                    \
     if (::neko::base::Logger::Instance().IsEnabled(level)) {              \
       ::neko::base::Logger::Instance().Log(                               \
-          level, __FILE__, __LINE__, ::std::format((format), __VA_ARGS__)); \
+          level, __FILE__, __LINE__, ::std::format((fmt), __VA_ARGS__));  \
     }                                                                     \
   } while (false)
 

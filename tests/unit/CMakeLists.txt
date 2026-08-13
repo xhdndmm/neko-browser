@@ -134,6 +134,16 @@ apply_compiler_warnings(neko_renderer_tests)
 gtest_discover_tests(neko_renderer_tests DISCOVERY_MODE PRE_TEST)
 
 # -----------------------------------------------------------------------------
+# neko_storage_tests
+# -----------------------------------------------------------------------------
+add_executable(neko_storage_tests
+  storage/storage_test.cpp
+)
+target_link_libraries(neko_storage_tests PRIVATE neko::storage gmock_main)
+apply_compiler_warnings(neko_storage_tests)
+gtest_discover_tests(neko_storage_tests DISCOVERY_MODE PRE_TEST)
+
+# -----------------------------------------------------------------------------
 # neko_browser_tests
 # -----------------------------------------------------------------------------
 add_executable(neko_browser_tests
