@@ -22,7 +22,7 @@ bool IsWhitespace(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\
 std::vector<CssToken> Tokenizer::Tokenize() {
   std::vector<CssToken> tokens;
   for (;;) {
-    SkipWhitespaceAndComments();
+    SkipComments();
     CssToken token = NextToken();
     tokens.push_back(std::move(token));
     if (tokens.back().type == CssTokenType::kEOF) {
@@ -32,22 +32,16 @@ std::vector<CssToken> Tokenizer::Tokenize() {
   return tokens;
 }
 
-void Tokenizer::SkipWhitespaceAndComments() {
-  for (;;) {
-    const std::size_t before = pos_;
-    while (pos_ < input_.size() && IsWhitespace(input_[pos_])) {
+// Skips /* */ comments.  Whitespace is NOT skipped here: NextToken emits it
+// as kWhitespace tokens so value components and descendant combinators stay
+// distinguishable.
+void Tokenizer::SkipComments() {
+  while (pos_ + 1 < input_.size() && input_[pos_] == '/' && input_[pos_ + 1] == '*') {
+    pos_ += 2;
+    while (pos_ + 1 < input_.size() && !(input_[pos_] == '*' && input_[pos_ + 1] == '/')) {
       ++pos_;
     }
-    if (pos_ + 1 < input_.size() && input_[pos_] == '/' && input_[pos_ + 1] == '*') {
-      pos_ += 2;
-      while (pos_ + 1 < input_.size() && !(input_[pos_] == '*' && input_[pos_ + 1] == '/')) {
-        ++pos_;
-      }
-      pos_ += 2;
-    }
-    if (pos_ == before) {
-      break;
-    }
+    pos_ += 2;
   }
 }
 

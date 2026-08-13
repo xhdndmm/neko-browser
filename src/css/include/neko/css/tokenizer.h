@@ -47,7 +47,9 @@ class Tokenizer {
   std::string_view input_;
   std::size_t pos_ = 0;
 
-  void SkipWhitespaceAndComments();
+  // Skips /* */ comments only; whitespace is emitted as kWhitespace tokens so
+  // the parser can distinguish value components and descendant combinators.
+  void SkipComments();
   CssToken NextToken();
 };
 

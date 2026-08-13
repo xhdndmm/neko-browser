@@ -1,0 +1,172 @@
+#include "neko/style/computed_style.h"
+#include "neko/style/style_engine.h"
+
+#include <memory>
+#include <string>
+#include <string_view>
+
+#include "neko/dom/query.h"
+#include "neko/html/parser.h"
+#include <gtest/gtest.h>
+
+namespace neko::style {
+namespace {
+
+std::unique_ptr<dom::Document> MakeDoc(std::string_view html) {
+  return html::Parser(html).Parse();
+}
+
+// Returns the computed style of the first element matching |selector|.
+const ComputedStyle& Style(StyleEngine& engine, dom::Document& doc,
+                           std::string_view selector) {
+  const dom::Element* element = dom::QuerySelector(doc, selector);
+  return engine.StyleFor(*element);
+}
+
+TEST(StyleTest, UaDefaults) {
+  auto doc = MakeDoc(
+      "<html><head><style>p{}</style></head><body><div>x</div><span>y</span><p>z</p></body></html>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  EXPECT_EQ(Style(engine, *doc, "body").display, Display::kBlock);
+  EXPECT_EQ(Style(engine, *doc, "div").display, Display::kBlock);
+  EXPECT_EQ(Style(engine, *doc, "span").display, Display::kInline);
+  EXPECT_EQ(Style(engine, *doc, "style").display, Display::kNone);
+  // p margin: 1em = 16px at default font size.
+  const ComputedStyle& p = Style(engine, *doc, "p");
+  EXPECT_FLOAT_EQ(p.margin_top.value, 16.0f);
+  EXPECT_FLOAT_EQ(p.margin_bottom.value, 16.0f);
+  EXPECT_FLOAT_EQ(p.font_size, 16.0f);
+}
+
+TEST(StyleTest, SpecificityCascade) {
+  auto doc = MakeDoc(
+      "<style>p { color: red; font-size: 20px; } .note { color: blue; }</style>"
+      "<body><p class=\"note\">x</p></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& style = Style(engine, *doc, "p");
+  // .note (0,1,0) beats p (0,0,1) for color; font-size comes from p.
+  ASSERT_TRUE(style.color.has_value());
+  EXPECT_EQ(style.color.value(), (css::Color{0, 0, 255, 255}));
+  EXPECT_FLOAT_EQ(style.font_size, 20.0f);
+}
+
+TEST(StyleTest, InlineStyleBeatsSelectors) {
+  auto doc = MakeDoc(
+      "<style>.note { color: blue; }</style>"
+      "<body><p class=\"note\" style=\"color: green\">x</p></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& style = Style(engine, *doc, "p");
+  ASSERT_TRUE(style.color.has_value());
+  EXPECT_EQ(style.color.value(), (css::Color{0, 128, 0, 255}));
+}
+
+TEST(StyleTest, ImportantBeatsInline) {
+  auto doc = MakeDoc(
+      "<style>.note { color: blue !important; }</style>"
+      "<body><p class=\"note\" style=\"color: green\">x</p></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& style = Style(engine, *doc, "p");
+  ASSERT_TRUE(style.color.has_value());
+  EXPECT_EQ(style.color.value(), (css::Color{0, 0, 255, 255}));
+}
+
+TEST(StyleTest, Inheritance) {
+  auto doc = MakeDoc(
+      "<body><div style=\"color: red; font-size: 24px\"><p>x</p></div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& p = Style(engine, *doc, "p");
+  ASSERT_TRUE(p.color.has_value());
+  EXPECT_EQ(p.color.value(), (css::Color{255, 0, 0, 255}));
+  EXPECT_FLOAT_EQ(p.font_size, 24.0f);
+}
+
+TEST(StyleTest, EmFontSizeResolution) {
+  auto doc = MakeDoc("<body><div style=\"font-size: 16px\"><p style=\"font-size: 2em\">x</p></div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& p = Style(engine, *doc, "p");
+  EXPECT_FLOAT_EQ(p.font_size, 32.0f);
+}
+
+TEST(StyleTest, WidthHeightAndBackground) {
+  auto doc = MakeDoc(
+      "<body><div style=\"width: 200px; height: 100px; background-color: #ff0000\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& style = Style(engine, *doc, "div");
+  ASSERT_TRUE(style.width.has_value());
+  EXPECT_FLOAT_EQ(style.width.value().value, 200.0f);
+  ASSERT_TRUE(style.height.has_value());
+  EXPECT_FLOAT_EQ(style.height.value().value, 100.0f);
+  ASSERT_TRUE(style.background_color.has_value());
+  EXPECT_EQ(style.background_color.value(), (css::Color{255, 0, 0, 255}));
+}
+
+TEST(StyleTest, MarginShorthand) {
+  auto doc = MakeDoc("<body><div style=\"margin: 1em 2em\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& style = Style(engine, *doc, "div");
+  EXPECT_FLOAT_EQ(style.margin_top.value, 16.0f);
+  EXPECT_FLOAT_EQ(style.margin_bottom.value, 16.0f);
+  EXPECT_FLOAT_EQ(style.margin_left.value, 32.0f);
+  EXPECT_FLOAT_EQ(style.margin_right.value, 32.0f);
+}
+
+TEST(StyleTest, PaddingAndBorder) {
+  auto doc = MakeDoc(
+      "<body><div style=\"padding: 10px; border: 2px solid #000\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& style = Style(engine, *doc, "div");
+  EXPECT_FLOAT_EQ(style.padding_top.value, 10.0f);
+  EXPECT_FLOAT_EQ(style.padding_left.value, 10.0f);
+  EXPECT_FLOAT_EQ(style.border_top.value, 2.0f);
+  EXPECT_EQ(style.border_style, BorderStyle::kSolid);
+  ASSERT_TRUE(style.border_color.has_value());
+  EXPECT_EQ(style.border_color.value(), (css::Color{0, 0, 0, 255}));
+}
+
+TEST(StyleTest, TextAlign) {
+  auto doc = MakeDoc("<body><p style=\"text-align: center\">x</p></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  EXPECT_EQ(Style(engine, *doc, "p").text_align, TextAlign::kCenter);
+}
+
+TEST(StyleTest, MediaQueryScreenApplies) {
+  auto doc = MakeDoc(
+      "<style>@media screen { p { color: rgb(1,2,3); } }</style>"
+      "<body><p>x</p></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& style = Style(engine, *doc, "p");
+  ASSERT_TRUE(style.color.has_value());
+  EXPECT_EQ(style.color.value(), (css::Color{1, 2, 3, 255}));
+}
+
+TEST(StyleTest, MediaQueryPrintSkipped) {
+  auto doc = MakeDoc(
+      "<style>@media print { p { color: red; } }</style>"
+      "<body><p>x</p></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  EXPECT_FALSE(Style(engine, *doc, "p").color.has_value());
+}
+
+}  // namespace
+}  // namespace neko::style
