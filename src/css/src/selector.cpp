@@ -357,6 +357,13 @@ bool AttributeMatches(const dom::Element& element, const AttributeSelector& attr
   }
   const std::string& value = attr.value.value();
   const std::string_view text = actual.value();
+  // With an empty value, only "=" can match (an attribute whose value is the
+  // empty string).  The other operators (^= $= *= |= ~=) treat "" as a
+  // substring/prefix/suffix of every string, which would make them match any
+  // element carrying the attribute; the spec requires them to never match.
+  if (value.empty() && attr.op != "=") {
+    return false;
+  }
   if (attr.op == "=") {
     return text == value;
   }

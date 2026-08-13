@@ -150,6 +150,31 @@ TEST(CssSelectorTest, AttributeSelectors) {
   EXPECT_FALSE(MatchesSelector(*main, ParseSelectorList("[lang=fr]")[0]));
 }
 
+TEST(CssSelectorTest, AttributeEmptyValueNeverMatchesSubstringOps) {
+  auto doc = MakeTree();
+  dom::Element* main = ById(*doc, "main");
+  ASSERT_NE(main, nullptr);
+  ASSERT_TRUE(main->GetAttribute("lang").has_value());
+
+  // An empty value with ^= $= *= |= ~= is a substring/prefix/suffix of every
+  // string; per CSS Selectors these must never match.
+  EXPECT_FALSE(MatchesSelector(*main, ParseSelectorList("[lang^=\"\"]")[0]));
+  EXPECT_FALSE(MatchesSelector(*main, ParseSelectorList("[lang$=\"\"]")[0]));
+  EXPECT_FALSE(MatchesSelector(*main, ParseSelectorList("[lang*=\"\"]")[0]));
+  EXPECT_FALSE(MatchesSelector(*main, ParseSelectorList("[lang|=\"\"]")[0]));
+  EXPECT_FALSE(MatchesSelector(*main, ParseSelectorList("[lang~=\"\"]")[0]));
+}
+
+TEST(CssSelectorTest, AttributeEqualsEmptyValueMatchesEmpty) {
+  auto doc = MakeTree();
+  dom::Element* div = ById(*doc, "main");
+  ASSERT_NE(div, nullptr);
+  div->SetAttribute("data-empty", "");
+
+  // "=" with an empty value matches an attribute whose value is empty.
+  EXPECT_TRUE(MatchesSelector(*div, ParseSelectorList("[data-empty=\"\"]")[0]));
+}
+
 TEST(CssSelectorTest, Combinators) {
   auto doc = MakeTree();
   dom::Element* span = dom::QuerySelector(*doc, "span");
