@@ -170,7 +170,6 @@ class BrowserController {
 
   std::vector<NetworkLogEntry> network_log_;
   std::vector<ConsoleEntry> console_log_;
-  int64_t console_seq_ = 0;
 };
 
 }  // namespace neko::browser
