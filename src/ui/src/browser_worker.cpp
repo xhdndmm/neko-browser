@@ -133,4 +133,38 @@ void BrowserWorker::ClearStorage() {
   });
 }
 
+namespace {
+// Formats a JavaScript completion value for the DevTools console (objects as
+// JSON).  Returns an empty string for undefined.
+QString FormatJsResult(const javascript::ScriptValue& value) {
+  if (value.Kind() == javascript::ValueKind::kUndefined) return {};
+  if (value.Kind() == javascript::ValueKind::kObject) {
+    const auto json = value.JsonStringify();
+    if (json.has_value()) return QString::fromStdString(json.value());
+  }
+  const auto str = value.ToString();
+  return str.has_value() ? QString::fromStdString(str.value()) : QString();
+}
+}  // namespace
+
+void BrowserWorker::EvaluateJavaScript(const QString& script) {
+  Post([this, script = script.toStdString()] {
+    if (js_engine_ == nullptr) {
+      js_engine_ = std::make_unique<javascript::ScriptEngine>();
+      js_engine_->SetConsoleSink([this](std::string_view /*level*/, std::string_view text) {
+        emit JavaScriptResult(QString(), QString::fromUtf8(text.data(),
+                                                           static_cast<int>(text.size())),
+                              false);
+      });
+    }
+    auto result = js_engine_->Evaluate(script);
+    if (!result.has_value()) {
+      emit JavaScriptResult(QString::fromStdString(script),
+                            QString::fromStdString(result.error().message()), true);
+      return;
+    }
+    emit JavaScriptResult(QString::fromStdString(script), FormatJsResult(result.value()), false);
+  });
+}
+
 }  // namespace neko::ui

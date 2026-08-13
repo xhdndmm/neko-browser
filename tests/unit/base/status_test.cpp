@@ -62,6 +62,7 @@ TEST(StatusTest, ErrorFactories) {
   EXPECT_EQ(Error::Security("x").category(), ErrorCategory::kSecurity);
   EXPECT_EQ(Error::Cancelled("x").category(), ErrorCategory::kCancelled);
   EXPECT_EQ(Error::Parse("x").category(), ErrorCategory::kParse);
+  EXPECT_EQ(Error::Javascript("x").category(), ErrorCategory::kJavascript);
   EXPECT_EQ(Error::Io("x").category(), ErrorCategory::kIo);
   EXPECT_EQ(Error::Network("x").category(), ErrorCategory::kNetwork);
   EXPECT_EQ(Error::Unknown("x").category(), ErrorCategory::kUnknown);
@@ -84,6 +85,7 @@ TEST(StatusTest, ErrorEquality) {
 TEST(StatusTest, ErrorCategoryToString) {
   EXPECT_EQ(ToString(ErrorCategory::kIo), "io");
   EXPECT_EQ(ToString(ErrorCategory::kNotImplemented), "not_implemented");
+  EXPECT_EQ(ToString(ErrorCategory::kJavascript), "javascript");
   EXPECT_EQ(ToString(ErrorCategory::kSecurity), "security");
 }
 

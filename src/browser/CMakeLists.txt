@@ -40,5 +40,5 @@ target_link_libraries(neko_browser_core PUBLIC
 apply_compiler_warnings(neko_browser_core)
 
 add_executable(neko_browser main.cpp)
-target_link_libraries(neko_browser PRIVATE neko::browser neko::browser_options)
+target_link_libraries(neko_browser PRIVATE neko::browser neko::browser_options neko::javascript)
 apply_compiler_warnings(neko_browser)

@@ -18,6 +18,7 @@
 #include "neko/browser/browser_controller.h"
 #include "neko/browser/browser_options.h"
 #include "neko/image/image.h"
+#include "neko/javascript/script_engine.h"
 #include "neko/media/audio.h"
 #include "neko/network/http.h"
 #include "neko/paint/rasterizer.h"
@@ -128,6 +129,19 @@ int RunStorageCommands(const neko::browser::BrowserOptions& options,
     }
   }
   return 0;
+}
+
+// Prints a JavaScript completion value (objects as JSON) to stdout.
+void PrintJsResult(const neko::javascript::ScriptValue& value) {
+  if (value.Kind() == neko::javascript::ValueKind::kObject) {
+    auto json = value.JsonStringify();
+    if (json.has_value()) {
+      std::cout << json.value() << "\n";
+      return;
+    }
+  }
+  auto str = value.ToString();
+  if (str.has_value()) std::cout << str.value() << "\n";
 }
 
 }  // namespace
@@ -255,6 +269,25 @@ int main(int argc, char** argv) {
     }
     std::cout << "downloaded: " << result.value().filename << " ("
               << result.value().received_bytes << " bytes)\n";
+    return 0;
+  }
+
+  // -------------------------------------------------------------------------
+  // JavaScript (--eval <script>).
+  // -------------------------------------------------------------------------
+  if (parsed.options.eval_script.has_value()) {
+    neko::javascript::ScriptEngine engine;
+    engine.SetConsoleSink([](std::string_view level, std::string_view text) {
+      std::cout << "[" << level << "] " << text << "\n";
+    });
+    const auto result = engine.Evaluate(parsed.options.eval_script.value());
+    if (!result.has_value()) {
+      std::cerr << "error: " << result.error().message() << "\n";
+      return 1;
+    }
+    if (result.value().Kind() != neko::javascript::ValueKind::kUndefined) {
+      PrintJsResult(result.value());
+    }
     return 0;
   }
 

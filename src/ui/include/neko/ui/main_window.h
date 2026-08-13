@@ -28,6 +28,8 @@ class MainWindow : public QMainWindow {
   // Test/automation accessors.
   QTabBar* TabBarWidget() const { return tab_bar_; }
   QLineEdit* AddressBar() const { return address_; }
+  QLineEdit* ConsoleInput() const { return console_input_; }
+  QPlainTextEdit* ConsoleView() const { return js_console_view_; }
   qsizetype viewCount() const { return views_.size(); }
 
  private slots:
@@ -40,6 +42,7 @@ class MainWindow : public QMainWindow {
   void OnDownloadActive();
   void OnHistoryActivated(QListWidgetItem* item);
   void OnBookmarkActivated(QListWidgetItem* item);
+  void OnConsoleCommand();
 
  private:
   void BuildUi();
@@ -64,7 +67,9 @@ class MainWindow : public QMainWindow {
   // Docks.
   QTreeWidget* dom_tree_ = nullptr;
   QListWidget* network_list_ = nullptr;
-  QPlainTextEdit* console_view_ = nullptr;
+  QPlainTextEdit* console_view_ = nullptr;   // engine DevTools console log
+  QPlainTextEdit* js_console_view_ = nullptr;  // JS REPL output (not cleared)
+  QLineEdit* console_input_ = nullptr;
   QListWidget* history_list_ = nullptr;
   QListWidget* bookmark_list_ = nullptr;
   QListWidget* download_list_ = nullptr;

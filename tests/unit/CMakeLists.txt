@@ -185,6 +185,16 @@ apply_compiler_warnings(neko_browser_tests)
 gtest_discover_tests(neko_browser_tests DISCOVERY_MODE PRE_TEST)
 
 # -----------------------------------------------------------------------------
+# neko_javascript_tests
+# -----------------------------------------------------------------------------
+add_executable(neko_javascript_tests
+  javascript/javascript_test.cpp
+)
+target_link_libraries(neko_javascript_tests PRIVATE neko::javascript gtest_main)
+apply_compiler_warnings(neko_javascript_tests)
+gtest_discover_tests(neko_javascript_tests DISCOVERY_MODE PRE_TEST)
+
+# -----------------------------------------------------------------------------
 # neko_ui_tests (Qt offscreen smoke tests)
 # -----------------------------------------------------------------------------
 if(NEKO_BUILD_UI)

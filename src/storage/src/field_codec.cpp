@@ -24,7 +24,8 @@ int HexValue(char c) {
 std::string EncodeField(std::string_view value) {
   std::string out;
   out.reserve(value.size());
-  for (unsigned char c : value) {
+  for (char raw : value) {
+    const unsigned char c = static_cast<unsigned char>(raw);
     if (IsUnreserved(static_cast<char>(c))) {
       out.push_back(static_cast<char>(c));
     } else {

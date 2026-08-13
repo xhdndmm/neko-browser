@@ -37,6 +37,8 @@ struct BrowserOptions {
   std::optional<std::string> audio_info_path;  // --audio-info <file>
   std::optional<std::string> image_info_path;  // --image-info <file>
   std::optional<std::string> image_out_ppm;    // --image-out <path>
+  // --eval <script>: evaluate a JavaScript expression (QuickJS runtime).
+  std::optional<std::string> eval_script;
 };
 
 struct ParseResult {

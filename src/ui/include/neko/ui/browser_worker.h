@@ -6,11 +6,13 @@
 #include <condition_variable>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
 
 #include "neko/browser/browser_controller.h"
+#include "neko/javascript/script_engine.h"
 
 namespace neko::ui {
 
@@ -43,11 +45,19 @@ class BrowserWorker : public QObject {
   void Download(const QString& url);
   void ClearStorage();
 
+  // Evaluates |script| in the DevTools console context (persistent global
+  // scope, runs on the worker thread so the UI never blocks).  Emits
+  // JavaScriptResult() with the formatted output.
+  void EvaluateJavaScript(const QString& script);
+
  signals:
   // Emitted (on the worker thread, connected queued) after any action that
   // may have changed state; the GUI should refresh everything.
   void StateChanged();
   void DownloadFinished(qint64 id, bool ok);
+  // Console evaluation completed: |script| echoed, |output| formatted
+  // result, |error| true when it was a JavaScript error.
+  void JavaScriptResult(const QString& script, const QString& output, bool error);
 
  private:
   void Run();
@@ -59,6 +69,8 @@ class BrowserWorker : public QObject {
   std::condition_variable cv_;
   std::deque<std::function<void()>> queue_;
   bool quit_ = false;
+  // DevTools console engine; only touched on the worker thread.
+  std::unique_ptr<javascript::ScriptEngine> js_engine_;
 };
 
 }  // namespace neko::ui

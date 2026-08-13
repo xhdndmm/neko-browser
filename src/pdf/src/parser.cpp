@@ -474,8 +474,8 @@ std::string DecodeTextBytes(std::string_view bytes) {
     // UTF-16BE.
     std::string out;
     for (size_t i = 2; i + 1 < bytes.size(); i += 2) {
-      const char32_t cp = (static_cast<uint8_t>(bytes[i]) << 8) |
-                          static_cast<uint8_t>(bytes[i + 1]);
+      const char32_t cp = static_cast<char32_t>(
+          (static_cast<uint32_t>(bytes[i]) << 8) | static_cast<uint32_t>(bytes[i + 1]));
       out += base::EncodeUtf8(cp);
     }
     return out;

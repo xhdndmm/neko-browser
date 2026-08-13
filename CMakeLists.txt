@@ -15,7 +15,7 @@ project(
   VERSION 0.1.0
   DESCRIPTION "A from-scratch, cross-platform browser engine and browser application"
   HOMEPAGE_URL "https://github.com/xhdndmm/neko-browser"
-  LANGUAGES CXX
+  LANGUAGES CXX C
 )
 
 # -----------------------------------------------------------------------------
@@ -61,6 +61,24 @@ find_package(Threads REQUIRED)
 # interface; see docs/development/dependency-policy.md.
 find_package(ZLIB REQUIRED)
 find_package(JPEG REQUIRED)
+
+# JavaScript runtime: QuickJS (quickjs-ng v0.16.1), pinned by content hash and
+# built from source as a static library.  It is wrapped behind neko::javascript's
+# own interface; the third-party headers never leak into our public API.
+# QJS_BUILD_LIBC stays OFF so the file/OS stdlib modules are not compiled in
+# (we provide our own sandboxed bindings, e.g. console).
+include(FetchContent)
+set(QJS_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+set(QJS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(QJS_BUILD_LIBC OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+  quickjs
+  URL https://github.com/quickjs-ng/quickjs/archive/refs/tags/v0.16.1.tar.gz
+  URL_HASH SHA256=4b3c11f37dab2c58bdeccbaeb23b923fa4a9798a45e50be6af55f3e75b616ea0
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(quickjs)
 
 # -----------------------------------------------------------------------------
 # Global tooling integration (warnings, sanitizers, coverage)

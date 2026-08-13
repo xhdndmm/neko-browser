@@ -51,6 +51,18 @@ MainWindow::MainWindow(BrowserWorker* worker, QWidget* parent)
             RefreshLists();
           },
           Qt::QueuedConnection);
+  connect(worker_, &BrowserWorker::JavaScriptResult, this,
+          [this](const QString& script, const QString& output, bool error) {
+            if (!script.isEmpty()) {
+              js_console_view_->appendPlainText(QStringLiteral("\u203a %1").arg(script));
+            }
+            if (!output.isEmpty()) {
+              js_console_view_->appendPlainText(
+                  error ? QStringLiteral("\u2717 %1").arg(output)
+                        : QStringLiteral("\u2190 %1").arg(output));
+            }
+          },
+          Qt::QueuedConnection);
   setWindowTitle("Neko Browser");
   resize(1100, 750);
   RefreshAll();
@@ -109,11 +121,29 @@ void MainWindow::BuildDocks() {
   dom_tree_ = new QTreeWidget(devtools);
   dom_tree_->setHeaderLabels({ tr("Node"), tr("Text/Attributes") });
   network_list_ = new QListWidget(devtools);
-  console_view_ = new QPlainTextEdit(devtools);
+
+  // Console tab: engine console log on top, then a JS REPL (read-only
+  // output + input line).  The REPL output is intentionally NOT touched by
+  // RefreshDevTools(), which only repopulates the engine log.
+  auto* console_widget = new QWidget(devtools);
+  auto* console_layout = new QVBoxLayout(console_widget);
+  console_layout->setContentsMargins(0, 0, 0, 0);
+  console_layout->setSpacing(0);
+  console_view_ = new QPlainTextEdit(console_widget);
   console_view_->setReadOnly(true);
+  js_console_view_ = new QPlainTextEdit(console_widget);
+  js_console_view_->setReadOnly(true);
+  js_console_view_->setMaximumHeight(160);
+  console_input_ = new QLineEdit(console_widget);
+  console_input_->setPlaceholderText(tr("Evaluate JavaScript (Enter to run)"));
+  connect(console_input_, &QLineEdit::returnPressed, this, &MainWindow::OnConsoleCommand);
+  console_layout->addWidget(console_view_, 1);
+  console_layout->addWidget(js_console_view_);
+  console_layout->addWidget(console_input_);
+
   devtools->addTab(dom_tree_, tr("DOM"));
   devtools->addTab(network_list_, tr("Network"));
-  devtools->addTab(console_view_, tr("Console"));
+  devtools->addTab(console_widget, tr("Console"));
 
   auto* devtools_dock = new QDockWidget(tr("DevTools"), this);
   devtools_dock->setWidget(devtools);
@@ -230,6 +260,14 @@ void MainWindow::OnHistoryActivated(QListWidgetItem* item) {
 
 void MainWindow::OnBookmarkActivated(QListWidgetItem* item) {
   Navigate(item->data(Qt::UserRole).toString());
+}
+
+void MainWindow::OnConsoleCommand() {
+  const QString script = console_input_->text().trimmed();
+  if (script.isEmpty()) return;
+  console_input_->clear();
+  js_console_view_->appendPlainText(QStringLiteral("\u203a %1").arg(script));
+  worker_->EvaluateJavaScript(script);
 }
 
 // ---------------------------------------------------------------------------

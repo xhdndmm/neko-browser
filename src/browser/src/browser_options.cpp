@@ -26,6 +26,7 @@ std::string UsageText() {
          "      --extract-pdf <file>   Extract text from a PDF.\n"
          "      --audio-info <file>    Print WAV metadata.\n"
          "      --image-info <file>    Decode an image; optionally write PPM via --image-out.\n"
+         "      --eval <script>         Evaluate a JavaScript expression.\n"
          "      --profile <dir>        Browser profile directory.\n"
          "      --disable-gpu          Force software rendering.\n"
          "      --verbose              Enable debug logging.\n"
@@ -148,6 +149,15 @@ ParseResult ParseCommandLine(int argc, char** argv) {
         return result;
       }
       result.options.image_out_ppm = std::string(args[++i]);
+      continue;
+    }
+    if (arg == "--eval") {
+      if (i + 1 >= args.size()) {
+        result.action = ParseResult::Action::kError;
+        result.error_message = "option '--eval' requires an argument";
+        return result;
+      }
+      result.options.eval_script = std::string(args[++i]);
       continue;
     }
     if (arg == "--profile") {

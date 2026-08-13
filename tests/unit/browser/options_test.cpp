@@ -151,5 +151,17 @@ TEST(OptionsTest, CombinedFlags) {
   EXPECT_EQ(r.options.log_level, neko::base::LogLevel::kDebug);
 }
 
+TEST(OptionsTest, EvalFlag) {
+  const ParseResult r = Parse({"--eval", "1 + 2"});
+  EXPECT_EQ(r.action, ParseResult::Action::kRun);
+  ASSERT_TRUE(r.options.eval_script.has_value());
+  EXPECT_EQ(r.options.eval_script.value(), "1 + 2");
+}
+
+TEST(OptionsTest, MissingEvalArgumentIsError) {
+  const ParseResult r = Parse({"--eval"});
+  EXPECT_EQ(r.action, ParseResult::Action::kError);
+}
+
 }  // namespace
 }  // namespace neko::browser

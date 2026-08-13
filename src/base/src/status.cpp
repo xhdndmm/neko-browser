@@ -20,6 +20,8 @@ std::string_view ToString(ErrorCategory category) {
       return "network";
     case ErrorCategory::kParse:
       return "parse";
+    case ErrorCategory::kJavascript:
+      return "javascript";
     case ErrorCategory::kSecurity:
       return "security";
     case ErrorCategory::kCancelled:
@@ -52,6 +54,10 @@ Error Error::Network(std::string message) {
 }
 
 Error Error::Parse(std::string message) { return Error(ErrorCategory::kParse, std::move(message)); }
+
+Error Error::Javascript(std::string message) {
+  return Error(ErrorCategory::kJavascript, std::move(message));
+}
 
 Error Error::Security(std::string message) {
   return Error(ErrorCategory::kSecurity, std::move(message));

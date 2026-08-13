@@ -7,6 +7,7 @@
 #include <QImage>
 #include <QLineEdit>
 #include <QPixmap>
+#include <QPlainTextEdit>
 #include <QTabBar>
 #include <QWidget>
 
@@ -133,6 +134,34 @@ TEST(UiSmokeTest, NavigationUpdatesAddressBarAndHistory) {
   ASSERT_EQ(worker.controller().history().size(), 1u);
   EXPECT_NE(window.AddressBar()->text().toStdString().find("nav.html"),
             std::string::npos);
+}
+
+TEST(UiSmokeTest, DevToolsConsoleEvaluatesJavaScript) {
+  TempProfile tp;
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.show();
+
+  // Type into the DevTools console input and "press Enter" (the real path
+  // the user takes: QLineEdit::returnPressed -> OnConsoleCommand -> worker).
+  QLineEdit* input = window.ConsoleInput();
+  ASSERT_NE(input, nullptr);
+  input->setText("21 * 2");
+  emit input->returnPressed();
+
+  // The worker evaluates on its thread and emits JavaScriptResult; the GUI
+  // echoes the input and appends the result to the console view.
+  ASSERT_TRUE(WaitFor([&] {
+    const QString text = window.ConsoleView()->toPlainText();
+    return text.contains("21 * 2") && text.contains("42");
+  }));
+
+  // Errors are echoed as errors.
+  input->setText("throw new Error('ui boom')");
+  emit input->returnPressed();
+  ASSERT_TRUE(WaitFor([&] {
+    return window.ConsoleView()->toPlainText().contains("Error: ui boom");
+  }));
 }
 
 }  // namespace

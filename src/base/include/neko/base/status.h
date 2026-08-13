@@ -19,6 +19,7 @@ enum class ErrorCategory : int {
   kIo,
   kNetwork,
   kParse,
+  kJavascript,
   kSecurity,
   kCancelled,
   kNotImplemented,
@@ -40,6 +41,7 @@ class Error {
   static Error Io(std::string message);
   static Error Network(std::string message);
   static Error Parse(std::string message);
+  static Error Javascript(std::string message);
   static Error Security(std::string message);
   static Error Cancelled(std::string message);
   static Error NotImplemented(std::string message);
