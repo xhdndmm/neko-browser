@@ -17,6 +17,15 @@
 #include "neko/base/status.h"
 #include "neko/image/image.h"
 
+// libjpeg's error handling relies on setjmp/longjmp, and its public structs
+// impose alignment padding. Both are the standard libjpeg idiom and trigger
+// benign MSVC warnings (C4324, C4611) at /W4.
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4324)
+#pragma warning(disable : 4611)
+#endif
+
 namespace neko::image {
 namespace {
 
@@ -99,3 +108,7 @@ base::Result<Image> DecodeJpeg(std::string_view data) {
 }
 
 }  // namespace neko::image
+
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
