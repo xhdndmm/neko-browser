@@ -12,7 +12,7 @@ namespace neko::paint {
 namespace detail {
 
 // Row-major 8x8 glyphs. Glyph for ASCII code `c` is
-// kFont8x8[c - 32]; bit 0x80 of a row is the leftmost pixel.
+// kFont8x8[c - 32]; bit 0x01 of a row is the leftmost pixel.
 inline constexpr uint8_t kFont8x8[95][8] = {
     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},  // U+0020 ' '
     {0x18, 0x3c, 0x3c, 0x18, 0x18, 0x00, 0x18, 0x00},  // U+0021 '!'

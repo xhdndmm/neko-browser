@@ -105,6 +105,23 @@ TEST(RasterizerTest, TextRendering) {
   EXPECT_GT(dark_pixels, 10);
 }
 
+TEST(RasterizerTest, GlyphsAreNotMirrored) {
+  Rasterizer image(16, 16);
+  image.Clear(css::Color{255, 255, 255, 255});
+  DisplayList list;
+  list.DrawText(0, 0, "/", 8, css::Color{0, 0, 0, 255});
+  image.Rasterize(list);
+
+  const auto dark = [&](int x, int y) { return Pixel(image, x, y).r < 128; };
+
+  // '/' slopes from top-right down to bottom-left. A horizontally mirrored
+  // glyph would instead put the top on the left and the bottom on the right.
+  EXPECT_TRUE(dark(6, 0));   // top of the stroke sits on the right
+  EXPECT_TRUE(dark(0, 6));   // bottom of the stroke sits on the left
+  EXPECT_FALSE(dark(0, 0));  // top-left corner stays clear
+  EXPECT_FALSE(dark(6, 6));  // bottom-right corner stays clear
+}
+
 TEST(RasterizerTest, TextMetrics) {
   EXPECT_FLOAT_EQ(Rasterizer::CharWidth(16), 16.0f);
   EXPECT_FLOAT_EQ(Rasterizer::TextWidth("hello", 16), 80.0f);

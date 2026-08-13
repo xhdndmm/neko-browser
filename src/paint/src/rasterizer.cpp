@@ -126,7 +126,7 @@ void Rasterizer::DrawText(const DrawCommand& command) {
     const int glyph_x = start_x + static_cast<int>(i) * step;
     for (int row = 0; row < 8; ++row) {
       for (int col = 0; col < 8; ++col) {
-        if ((glyph[row] & (0x80 >> col)) == 0) {
+        if ((glyph[row] & (0x01 << col)) == 0) {
           continue;
         }
         FillRect(static_cast<float>(glyph_x + col * cell),
