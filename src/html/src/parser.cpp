@@ -52,6 +52,33 @@ bool IsSpecialElement(std::string_view tag) {
          tag == "wbr" || tag == "xmp";
 }
 
+// True when two elements have the same set of parsed attributes (name + value,
+// order-independent).  The namespace is always HTML in this parser, so it is
+// not compared.
+bool SameAttributes(const dom::Element& a, const dom::Element& b) {
+  const auto& aa = a.attributes();
+  const auto& bb = b.attributes();
+  if (aa.size() != bb.size()) {
+    return false;
+  }
+  for (const dom::Attribute& attr : aa) {
+    bool found = false;
+    for (const dom::Attribute& other : bb) {
+      if (other.name == attr.name) {
+        if (other.value != attr.value) {
+          return false;
+        }
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // Builds an element from a start tag token, copying its attributes.
 std::unique_ptr<dom::Element> CreateElement(const Token& token) {
   auto element = std::make_unique<dom::Element>(token.name);
@@ -234,17 +261,23 @@ dom::Element* Parser::CloneElement(const dom::Element& source) {
 }
 
 void Parser::PushActiveFormatting(dom::Element* element) {
-  // Noah's Ark clause: at most three elements with the same tag name after
-  // the last marker.  Markers and attribute comparison are not implemented
-  // yet (tables are treated as blocks), so tag name alone is compared.
+  // Noah's Ark clause: at most three elements with the same tag name,
+  // namespace, and attributes after the last marker.  Markers are not
+  // implemented yet (tables are treated as blocks), so the whole list is
+  // searched.
   int same = 0;
+  dom::Element* earliest = nullptr;
   for (dom::Element* existing : active_formatting_) {
-    if (existing != nullptr && existing->tag_name() == element->tag_name()) {
-      if (++same >= 3) {
-        RemoveFromActiveFormatting(existing);
-        break;
+    if (existing != nullptr && existing->tag_name() == element->tag_name() &&
+        SameAttributes(*existing, *element)) {
+      ++same;
+      if (earliest == nullptr) {
+        earliest = existing;
       }
     }
+  }
+  if (same >= 3 && earliest != nullptr) {
+    RemoveFromActiveFormatting(earliest);
   }
   active_formatting_.push_back(element);
 }

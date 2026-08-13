@@ -187,5 +187,13 @@ TEST(HtmlTest, AdoptionAgencyWithFurthestBlock) {
             "<html><head></head><body><b>1</b><p><b>2</b>3</p></body></html>");
 }
 
+TEST(HtmlTest, NoahsArkBoundsFormattingElements) {
+  // Four nested <b> elements (same tag + attributes) trigger the Noah's Ark
+  // clause; the DOM must still nest correctly.
+  auto doc = ParseDoc("<b class=\"x\"><b><b class=\"x\"><b>y</b></b></b></b>");
+  EXPECT_EQ(doc->ToString(),
+            "<html><head></head><body><b class=\"x\"><b><b class=\"x\"><b>y</b></b></b></b></body></html>");
+}
+
 }  // namespace
 }  // namespace neko::html
