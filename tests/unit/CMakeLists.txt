@@ -154,6 +154,16 @@ apply_compiler_warnings(neko_media_tests)
 gtest_discover_tests(neko_media_tests DISCOVERY_MODE PRE_TEST)
 
 # -----------------------------------------------------------------------------
+# neko_pdf_tests
+# -----------------------------------------------------------------------------
+add_executable(neko_pdf_tests
+  pdf/pdf_test.cpp
+)
+target_link_libraries(neko_pdf_tests PRIVATE neko::pdf gmock_main)
+apply_compiler_warnings(neko_pdf_tests)
+gtest_discover_tests(neko_pdf_tests DISCOVERY_MODE PRE_TEST)
+
+# -----------------------------------------------------------------------------
 # neko_storage_tests
 # -----------------------------------------------------------------------------
 add_executable(neko_storage_tests
