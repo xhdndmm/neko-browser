@@ -95,12 +95,13 @@ class TestHttpServer {
     }
     const std::size_t path_start = request.find(' ');
     const std::size_t path_end = request.find(' ', path_start + 1);
-    const std::string_view path =
-        request.substr(path_start + 1, path_end - path_start - 1);
+    // Copy into an owned string: the view would point at the (potentially
+    // SSO) request buffer while crossing into SendResponse.
+    const std::string path(request.substr(path_start + 1, path_end - path_start - 1));
     SendResponse(fd, path);
   }
 
-  void SendResponse(int fd, std::string_view path) {
+  void SendResponse(int fd, const std::string& path) {
     std::string response;
     if (path == "/") {
       response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 20\r\n"

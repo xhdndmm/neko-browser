@@ -5,4 +5,12 @@
 
 add_subdirectory(base)
 add_subdirectory(url)
+add_subdirectory(network)
+add_subdirectory(dom)
+add_subdirectory(html)
+add_subdirectory(css)
+add_subdirectory(style)
+add_subdirectory(layout)
+add_subdirectory(paint)
+add_subdirectory(renderer)
 add_subdirectory(browser)

@@ -54,6 +54,86 @@ apply_compiler_warnings(neko_url_tests)
 gtest_discover_tests(neko_url_tests DISCOVERY_MODE PRE_TEST)
 
 # -----------------------------------------------------------------------------
+# neko_dom_tests
+# -----------------------------------------------------------------------------
+add_executable(neko_dom_tests
+  dom/dom_test.cpp
+)
+target_link_libraries(neko_dom_tests PRIVATE neko::dom gtest_main)
+apply_compiler_warnings(neko_dom_tests)
+gtest_discover_tests(neko_dom_tests DISCOVERY_MODE PRE_TEST)
+
+# -----------------------------------------------------------------------------
+# neko_html_tests
+# -----------------------------------------------------------------------------
+add_executable(neko_html_tests
+  html/html_test.cpp
+)
+target_link_libraries(neko_html_tests PRIVATE neko::html gtest_main)
+apply_compiler_warnings(neko_html_tests)
+gtest_discover_tests(neko_html_tests DISCOVERY_MODE PRE_TEST)
+
+# -----------------------------------------------------------------------------
+# neko_css_tests
+# -----------------------------------------------------------------------------
+add_executable(neko_css_tests
+  css/css_test.cpp
+)
+target_link_libraries(neko_css_tests PRIVATE neko::css gtest_main)
+apply_compiler_warnings(neko_css_tests)
+gtest_discover_tests(neko_css_tests DISCOVERY_MODE PRE_TEST)
+
+# -----------------------------------------------------------------------------
+# neko_style_tests
+# -----------------------------------------------------------------------------
+add_executable(neko_style_tests
+  style/style_test.cpp
+)
+target_link_libraries(neko_style_tests PRIVATE neko::style neko::html gtest_main)
+apply_compiler_warnings(neko_style_tests)
+gtest_discover_tests(neko_style_tests DISCOVERY_MODE PRE_TEST)
+
+# -----------------------------------------------------------------------------
+# neko_layout_tests
+# -----------------------------------------------------------------------------
+add_executable(neko_layout_tests
+  layout/layout_test.cpp
+)
+target_link_libraries(neko_layout_tests PRIVATE neko::layout neko::html gtest_main)
+apply_compiler_warnings(neko_layout_tests)
+gtest_discover_tests(neko_layout_tests DISCOVERY_MODE PRE_TEST)
+
+# -----------------------------------------------------------------------------
+# neko_paint_tests
+# -----------------------------------------------------------------------------
+add_executable(neko_paint_tests
+  paint/paint_test.cpp
+)
+target_link_libraries(neko_paint_tests PRIVATE neko::paint neko::html gtest_main)
+apply_compiler_warnings(neko_paint_tests)
+gtest_discover_tests(neko_paint_tests DISCOVERY_MODE PRE_TEST)
+
+# -----------------------------------------------------------------------------
+# neko_network_tests
+# -----------------------------------------------------------------------------
+add_executable(neko_network_tests
+  network/network_test.cpp
+)
+target_link_libraries(neko_network_tests PRIVATE neko::network gtest_main)
+apply_compiler_warnings(neko_network_tests)
+gtest_discover_tests(neko_network_tests DISCOVERY_MODE PRE_TEST)
+
+# -----------------------------------------------------------------------------
+# neko_renderer_tests
+# -----------------------------------------------------------------------------
+add_executable(neko_renderer_tests
+  renderer/renderer_test.cpp
+)
+target_link_libraries(neko_renderer_tests PRIVATE neko::renderer gtest_main)
+apply_compiler_warnings(neko_renderer_tests)
+gtest_discover_tests(neko_renderer_tests DISCOVERY_MODE PRE_TEST)
+
+# -----------------------------------------------------------------------------
 # neko_browser_tests
 # -----------------------------------------------------------------------------
 add_executable(neko_browser_tests
