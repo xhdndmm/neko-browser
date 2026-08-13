@@ -47,6 +47,7 @@ li { display: block; }
 pre { font-family: monospace; }
 code { font-family: monospace; }
 b, strong { font-weight: bold; }
+i, em { font-style: italic; }
 a { color: blue; text-decoration: underline; }
 hr { border-top: 1px solid; border-top-color: #000; }
 )css";
@@ -325,6 +326,7 @@ void StyleEngine::ComputeElement(dom::Element& element, const ComputedStyle& inh
   out.color = inherited.color;
   out.font_size = inherited.font_size;
   out.font_weight = inherited.font_weight;
+  out.font_italic = inherited.font_italic;
   out.font_family = inherited.font_family;
   out.line_height = inherited.line_height;
   out.text_align = inherited.text_align;
@@ -383,6 +385,14 @@ void StyleEngine::ComputeElement(dom::Element& element, const ComputedStyle& inh
   // font-family.
   if (const css::Declaration* d = find("font-family")) {
     out.font_family = d->value;
+  }
+
+  // font-style.
+  if (const css::Declaration* d = find("font-style")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kKeyword) {
+      out.font_italic = (v.text == "italic" || v.text == "oblique");
+    }
   }
 
   // line-height.

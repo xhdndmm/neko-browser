@@ -11,10 +11,12 @@
 - 布局文本宽度按真实 advance 测量（词宽/空格/命中测试），与绘制一致
 - `font-family` 解析与匹配（具体名 + sans-serif/serif/monospace 通用族）、
   逐字符字体回退，栈末尾自动附加 CJK 字体 → 中文可显示
+- 粗体/斜体变体匹配（font-weight/font-style → 相邻字体文件，如
+  LiberationSans-Bold/-Italic，缺失时回退常规字形）
 
 ## 未实现
 
-- HarfBuzz 文本整形、粗体/斜体变体匹配
+- HarfBuzz 文本整形
 - `text-align` 对齐、连字符断行、CJK 逐字断行
 - 完整系统字体目录扫描（当前内置候选路径表；具体名按文件名匹配）
 - 图像解码、渐变、变换、滤镜、分层合成、GPU 后端

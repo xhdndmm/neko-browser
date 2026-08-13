@@ -19,6 +19,8 @@ namespace neko::layout {
 struct TextRun {
   std::string text;
   std::string font_family;  // CSS font-family the run was measured with
+  int font_weight = 400;
+  bool font_italic = false;
   float x = 0;
   float y = 0;  // top of the run (glyph ascent area)
   float font_size = 16;

@@ -118,6 +118,19 @@ TEST(StyleTest, LineHeightScalesWithFontSize) {
   EXPECT_FLOAT_EQ(h1.line_height, 38.4f); // 32 * 1.2 (was stuck at 19.2)
 }
 
+TEST(StyleTest, FontStyleParsesItalic) {
+  auto doc = MakeDoc(
+      "<body><p>plain</p><div style=\"font-style: italic\">it</div><i>ua</i><b>bold</b></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  EXPECT_FALSE(Style(engine, *doc, "p").font_italic);
+  EXPECT_TRUE(Style(engine, *doc, "div").font_italic);  // inline style
+  EXPECT_TRUE(Style(engine, *doc, "i").font_italic);    // UA: i, em
+  EXPECT_EQ(Style(engine, *doc, "b").font_weight, 700);  // UA: b, strong
+  EXPECT_EQ(Style(engine, *doc, "p").font_weight, 400);
+}
+
 TEST(StyleTest, WidthHeightAndBackground) {
   auto doc = MakeDoc(
       "<body><div style=\"width: 200px; height: 100px; background-color: #ff0000\">x</div></body>");

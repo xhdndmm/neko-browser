@@ -17,9 +17,11 @@ class FontRegistry {
   FontRegistry();
   ~FontRegistry();  // defined in .cpp (needs FontSelector to be complete)
 
-  // Selector for |family| (a CSS font-family value); never null.  Const-safe:
-  // the selector cache is a mutable memo.
-  const FontSelector* SelectorFor(const std::string& family) const;
+  // Selector for |family| (a CSS font-family value) with the given weight /
+  // italic style; never null.  Const-safe: the selector cache is a mutable
+  // memo.
+  const FontSelector* SelectorFor(const std::string& family, int weight = 400,
+                                  bool italic = false) const;
 
   FontLibrary& library() { return library_; }
   const FontLibrary& library() const { return library_; }

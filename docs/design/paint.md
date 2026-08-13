@@ -25,10 +25,11 @@ Layout Tree → Painter → DisplayList → Rasterizer → RGBA 缓冲 → PPM
 
 Phase 6 先用内嵌 8x8 位图字体渲染 ASCII（ADR 0005）；随后迁移到 FreeType
 （ADR 0009）：真实字形与抗锯齿，布局按真实 advance 测量，`font-family` 解析
-匹配（具体名 + 通用族），字体栈自动附加 CJK 回退 → 中文可显示。剩余：
-HarfBuzz 整形、粗体/斜体变体匹配、完整字体目录扫描。
+匹配（具体名 + 通用族），字体栈自动附加 CJK 回退 → 中文可显示；粗体/斜体按
+`font-weight`/`font-style` 匹配相邻字体文件。剩余：HarfBuzz 整形、完整字体
+目录扫描。
 
 ## 未实现
 
 - 图像、渐变、变换、滤镜、分层合成、GPU 后端。
-- 文本：HarfBuzz 整形、粗体/斜体变体匹配、`text-align` 对齐。
+- 文本：HarfBuzz 整形、`text-align` 对齐。

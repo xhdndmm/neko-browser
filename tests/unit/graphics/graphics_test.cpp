@@ -5,6 +5,7 @@
 // desktop has one).  When no candidate font file exists the font-dependent
 // tests skip rather than fail, keeping CI green on minimal images.
 
+#include <cstdio>
 #include <optional>
 #include <string>
 
@@ -118,6 +119,44 @@ TEST(FontFaceTest, UnknownCodePointStillAdvances) {
   ASSERT_NE(face, nullptr);
   // A code point with no glyph falls back to the .notdef advance (nonzero).
   EXPECT_GE(face->Advance(0x10FFFF, 16), 0.0f);
+}
+
+TEST(FontVariantTest, BoldSelectsBoldVariant) {
+  const std::vector<std::string> fonts = FindSystemFonts(GenericFamily::kSansSerif);
+  if (fonts.empty()) {
+    GTEST_SKIP() << "no system sans-serif font available";
+  }
+  const std::string bold = FindFontVariant(fonts[0], 700, false);
+  // If the family ships a bold face, the path must differ and exist.
+  if (bold != fonts[0]) {
+    EXPECT_FALSE(bold.empty());
+    std::FILE* f = std::fopen(bold.c_str(), "rb");
+    ASSERT_NE(f, nullptr);
+    std::fclose(f);
+  }
+  // Regular weight keeps the base path.
+  EXPECT_EQ(FindFontVariant(fonts[0], 400, false), fonts[0]);
+}
+
+TEST(FontSelectorTest, BoldUsesDifferentFace) {
+  if (FindSystemFonts(GenericFamily::kSansSerif).empty()) {
+    GTEST_SKIP() << "no system sans-serif font available";
+  }
+  FontRegistry registry;
+  const FontSelector* regular = registry.SelectorFor("sans-serif", 400, false);
+  const FontSelector* bold = registry.SelectorFor("sans-serif", 700, false);
+  ASSERT_NE(regular, nullptr);
+  ASSERT_NE(bold, nullptr);
+  // The bold selector's primary face is a different file when a bold variant
+  // exists (e.g. LiberationSans-Bold.ttf).
+  const FontFace* regular_face = regular->PrimaryFace();
+  const FontFace* bold_face = bold->PrimaryFace();
+  ASSERT_NE(regular_face, nullptr);
+  ASSERT_NE(bold_face, nullptr);
+  if (regular_face->path() != bold_face->path()) {
+    // Bold faces are typically wider: 'W' should measure at least as wide.
+    EXPECT_GE(bold->Advance('W', 16), regular->Advance('W', 16));
+  }
 }
 
 }  // namespace

@@ -29,16 +29,16 @@ bool IsWordBreak(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r
 // for |family| when a registry is available; falls back to the monospace model
 // (font_size per character).
 float MeasureTextWidth(const graphics::FontRegistry* registry, std::string_view family,
-                       std::string_view text, float font_size) {
+                       int weight, bool italic, std::string_view text, float font_size) {
   if (registry == nullptr) {
     return static_cast<float>(text.size()) * font_size;
   }
-  return registry->SelectorFor(std::string(family))->TextWidth(text, font_size);
+  return registry->SelectorFor(std::string(family), weight, italic)->TextWidth(text, font_size);
 }
 
 // Width of the widest space-separated word in |text| (the min-content width).
 float WidestWordWidth(const graphics::FontRegistry* registry, std::string_view family,
-                      std::string_view text, float font_size) {
+                      int weight, bool italic, std::string_view text, float font_size) {
   float widest = 0;
   std::size_t start = 0;
   while (start < text.size()) {
@@ -51,7 +51,7 @@ float WidestWordWidth(const graphics::FontRegistry* registry, std::string_view f
     const std::size_t end = text.find_first_of(" \t\n\r", start);
     const std::string_view word = text.substr(
         start, end == std::string_view::npos ? text.size() - start : end - start);
-    widest = std::max(widest, MeasureTextWidth(registry, family, word, font_size));
+    widest = std::max(widest, MeasureTextWidth(registry, family, weight, italic, word, font_size));
     start = end == std::string_view::npos ? text.size() : end;
   }
   return widest;
@@ -137,6 +137,8 @@ void LayoutLines(const std::vector<InlineItem>& items, float available_width, fl
     TextRun run;
     run.text = std::string(word);
     run.font_family = style.font_family;
+    run.font_weight = style.font_weight;
+    run.font_italic = style.font_italic;
     run.x = x;
     run.font_size = style.font_size;
     run.width = word_width;
@@ -160,7 +162,9 @@ void LayoutLines(const std::vector<InlineItem>& items, float available_width, fl
       continue;
     }
     const graphics::FontSelector* selector =
-        registry != nullptr ? registry->SelectorFor(style.font_family) : nullptr;
+        registry != nullptr
+            ? registry->SelectorFor(style.font_family, style.font_weight, style.font_italic)
+            : nullptr;
     std::size_t start = 0;
     const std::string& text = item.text;
     while (start < text.size()) {
@@ -238,9 +242,11 @@ IntrinsicWidths MeasureContent(const dom::Element& element, const style::StyleEn
   for (const dom::Node* child : element.ChildNodes()) {
     if (child->node_type() == dom::NodeType::kText) {
       const std::string& text = static_cast<const dom::Text&>(*child).data();
-      line_min = std::max(line_min, WidestWordWidth(registry, style.font_family, text,
+      line_min = std::max(line_min, WidestWordWidth(registry, style.font_family,
+                                                    style.font_weight, style.font_italic, text,
                                                     style.font_size));
-      line_max += MeasureTextWidth(registry, style.font_family, text, style.font_size);
+      line_max += MeasureTextWidth(registry, style.font_family, style.font_weight,
+                                   style.font_italic, text, style.font_size);
       continue;
     }
     if (child->node_type() != dom::NodeType::kElement) {

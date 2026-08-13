@@ -46,8 +46,9 @@ std::string Unquote(std::string_view s) {
 
 }  // namespace
 
-FontSelector::FontSelector(const FontLibrary& library, std::string_view family)
-    : library_(library) {
+FontSelector::FontSelector(const FontLibrary& library, std::string_view family, int weight,
+                           bool italic)
+    : library_(library), weight_(weight), italic_(italic) {
   // Split the CSS family list on commas.
   std::size_t start = 0;
   while (start <= family.size()) {
@@ -104,7 +105,10 @@ void FontSelector::AddFamily(const FontLibrary& library, std::string_view family
     }
   }
   for (const std::string& path : paths) {
-    if (const FontFace* face = library.LoadFace(path)) {
+    // Pick the bold/italic variant when requested and available.
+    const std::string selected =
+        (weight_ >= 600 || italic_) ? FindFontVariant(path, weight_, italic_) : path;
+    if (const FontFace* face = library.LoadFace(selected)) {
       faces_.push_back(face);
     }
   }

@@ -106,7 +106,6 @@ std::vector<std::string> FindSystemFonts(GenericFamily family) {
 }
 
 std::string ResolveFamilyName(std::string_view name) {
-  // CJK families first: this is what makes Chinese render.
   if (NameMatches(name, "noto sans cjk") || NameMatches(name, "source han sans") ||
       NameMatches(name, "wqy") || NameMatches(name, "wenquanyi")) {
     for (const std::string& path : FindSystemFonts(GenericFamily::kCjkSans)) {
@@ -140,6 +139,53 @@ std::string ResolveFamilyName(std::string_view name) {
     }
   }
   return {};
+}
+
+std::string FindFontVariant(const std::string& base_path, int weight, bool italic) {
+  if (weight < 600 && !italic) {
+    return base_path;  // regular requested
+  }
+  const std::size_t slash = base_path.find_last_of("/\\");
+  const std::size_t dot = base_path.find_last_of('.');
+  if (slash == std::string::npos || dot == std::string::npos || dot <= slash + 1) {
+    return base_path;
+  }
+  const std::string dir = base_path.substr(0, slash + 1);
+  const std::string ext = base_path.substr(dot);
+  std::string name = base_path.substr(slash + 1, dot - slash - 1);
+
+  // Drop a trailing style marker so "LiberationSans-Regular.ttf" becomes
+  // "LiberationSans" and "DejaVuSans.ttf" stays as-is.  DejaVu names its
+  // italic faces "Oblique".
+  for (const char* marker :
+       {"-BoldItalic", "-BoldOblique", "-Italic", "-Oblique", "-Bold", "-Regular", "-Medium"}) {
+    const std::string m = marker;
+    if (name.size() > m.size() &&
+        name.compare(name.size() - m.size(), m.size(), m) == 0) {
+      name = name.substr(0, name.size() - m.size());
+      break;
+    }
+  }
+
+  // Preferred variants in order of specificity (both "Italic" and DejaVu's
+  // "Oblique" naming are tried).
+  std::vector<std::string> candidates;
+  const bool bold = weight >= 600;
+  if (bold && italic) {
+    candidates = {name + "-BoldItalic", name + "BoldItalic", name + "-BoldOblique",
+                  name + "BoldOblique"};
+  } else if (bold) {
+    candidates = {name + "-Bold", name + "Bold"};
+  } else {
+    candidates = {name + "-Italic", name + "Italic", name + "-Oblique", name + "Oblique"};
+  }
+  for (const std::string& candidate : candidates) {
+    const std::string path = dir + candidate + ext;
+    if (FileExists(path)) {
+      return path;
+    }
+  }
+  return base_path;
 }
 
 }  // namespace neko::graphics

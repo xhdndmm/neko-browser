@@ -19,4 +19,9 @@ std::vector<std::string> FindSystemFonts(GenericFamily family);
 // table plus filename matching; full font-name scanning is future work.
 std::string ResolveFamilyName(std::string_view name);
 
+// Returns a bold/italic variant of |base_path| when such a file exists next to
+// it (e.g. .../LiberationSans-Regular.ttf -> .../LiberationSans-BoldItalic.ttf),
+// otherwise returns |base_path| unchanged.  |weight| >= 600 requests bold.
+std::string FindFontVariant(const std::string& base_path, int weight, bool italic);
+
 }  // namespace neko::graphics

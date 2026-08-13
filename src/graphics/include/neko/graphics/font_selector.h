@@ -24,8 +24,11 @@ struct GlyphBitmap;
 class FontSelector {
  public:
   // |family| is a CSS font-family value (comma-separated, quoted names ok).
+  // |weight| >= 600 requests a bold variant; |italic| an italic variant
+  // (falling back to the regular face when the variant file is missing).
   // |library| must outlive this selector.
-  FontSelector(const FontLibrary& library, std::string_view family);
+  FontSelector(const FontLibrary& library, std::string_view family, int weight = 400,
+               bool italic = false);
 
   // First face in the stack that has a glyph for |code_point|, or nullptr.
   const FontFace* FaceForCodePoint(uint32_t code_point) const;
@@ -51,6 +54,8 @@ class FontSelector {
   void AddFamily(const FontLibrary& library, std::string_view family_name);
 
   const FontLibrary& library_;
+  int weight_ = 400;
+  bool italic_ = false;
   std::vector<const FontFace*> faces_;
 };
 

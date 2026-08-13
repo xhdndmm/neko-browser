@@ -207,6 +207,33 @@ TEST(LayoutTest, BrInsideInlineElement) {
   EXPECT_EQ(p->lines[1].runs.size(), 2u);  // "c" + "d"
 }
 
+TEST(LayoutTest, BoldAndItalicReachTextRuns) {
+  Page page = Build("<body><p><b>bold</b> <i>italic</i> <em>em</em> plain</p></body>");
+  const LayoutBox* p = FindBox(*page.root, "p", *page.doc);
+  ASSERT_NE(p, nullptr);
+  ASSERT_GE(p->lines.size(), 1u);
+  // Runs: "bold" (700), "italic" (italic), "em" (italic), "plain" (400).
+  bool saw_bold = false;
+  bool saw_italic = false;
+  bool saw_plain = false;
+  for (const TextRun& run : p->lines[0].runs) {
+    if (run.text == "bold") {
+      EXPECT_EQ(run.font_weight, 700);
+      saw_bold = true;
+    } else if (run.text == "italic" || run.text == "em") {
+      EXPECT_TRUE(run.font_italic);
+      saw_italic = true;
+    } else if (run.text == "plain") {
+      EXPECT_EQ(run.font_weight, 400);
+      EXPECT_FALSE(run.font_italic);
+      saw_plain = true;
+    }
+  }
+  EXPECT_TRUE(saw_bold);
+  EXPECT_TRUE(saw_italic);
+  EXPECT_TRUE(saw_plain);
+}
+
 TEST(LayoutTest, NestedBlockHeightInherits) {
   Page page = Build("<body><div><div>text</div></div></body>");
   const LayoutBox* outer = FindBox(*page.root, "div", *page.doc);

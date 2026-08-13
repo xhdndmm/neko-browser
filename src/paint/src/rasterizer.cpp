@@ -158,7 +158,8 @@ void Rasterizer::DrawText8x8(const DrawCommand& command) {
 }
 
 void Rasterizer::DrawTextFreetype(const DrawCommand& command) {
-  const graphics::FontSelector* selector = registry_->SelectorFor(command.font_family);
+  const graphics::FontSelector* selector =
+      registry_->SelectorFor(command.font_family, command.font_weight, command.font_italic);
   if (selector == nullptr) {
     return;
   }

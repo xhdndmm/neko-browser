@@ -66,6 +66,7 @@ struct ComputedStyle {
   float line_height = 19.2f;  // 1.2 * default font-size
   std::string font_family = "sans-serif";
   int font_weight = 400;
+  bool font_italic = false;
 
   // Text (inherited).
   TextAlign text_align = TextAlign::kLeft;
