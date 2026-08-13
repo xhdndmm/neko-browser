@@ -220,8 +220,9 @@ src/dom/        Node 树、Element/Text/Comment/Document、querySelector —— 
 src/html/       tokenizer + 树构建（插入模式子集）、字符引用 —— Tested
 src/css/        tokenizer/parser、选择器、级联输入、颜色/值 —— Tested
 src/style/      UA 表 + 级联 + 继承 + 计算样式 —— Tested
-src/layout/     盒模型、block/inline 布局、换行 —— Tested
-src/paint/      显示列表、软件光栅化、位图字体、PPM —— Tested
+src/layout/     盒模型、block/inline 布局、表格、换行 —— Tested
+src/graphics/   FreeType 封装：FontLibrary/FontFace/GlyphCache/系统字体发现 —— Tested
+src/paint/      显示列表、软件光栅化、FreeType 文本 + 8x8 回退、PPM —— Tested
 src/renderer/   页面管线编排（headless）—— Tested
 src/storage/    CookieStore / HistoryStore / BookmarkStore（行式文件 + 原子写）—— Tested
 src/image/      PNG 自研解码 + JPEG(libjpeg) —— Tested

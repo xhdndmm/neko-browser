@@ -23,8 +23,8 @@
 | Flexbox | Not Started | — | display:flex 按 block 处理 |
 | Grid | Not Started | — | display:grid 按 block 处理 |
 | position absolute/fixed | Not Started | — | 按 static 处理 |
-| 文本（位图字体） | Partial | Paint 套件 | 仅 ASCII，无整形/回退 |
-| 文本（FreeType/HarfBuzz） | Not Started | — | 计划中 |
+| 文本（位图字体回退） | Tested | Paint 套件 | 无系统字体时的 8x8 ASCII 回退 |
+| 文本（FreeType） | Partial | Graphics + Paint 套件 | 系统字体、抗锯齿、任意字号、UTF-8、glyph 缓存；布局仍按等宽测量，无 font-family 匹配/CJK 回退（M2/M3） |
 | 图像解码 PNG | Tested | 16 图像单元测试 | 自研解码器（chunk/CRC/滤波/Adam7/全部颜色类型） |
 | 图像解码 JPEG | Tested | 16 图像单元测试 | 封装 libjpeg，接口统一为 neko::image |
 | 图像解码 GIF/WebP/AVIF | Not Started | — | 返回显式 NOT IMPLEMENTED |

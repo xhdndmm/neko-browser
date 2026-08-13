@@ -114,6 +114,16 @@ apply_compiler_warnings(neko_paint_tests)
 gtest_discover_tests(neko_paint_tests DISCOVERY_MODE PRE_TEST)
 
 # -----------------------------------------------------------------------------
+# neko_graphics_tests
+# -----------------------------------------------------------------------------
+add_executable(neko_graphics_tests
+  graphics/graphics_test.cpp
+)
+target_link_libraries(neko_graphics_tests PRIVATE neko::graphics gtest_main)
+apply_compiler_warnings(neko_graphics_tests)
+gtest_discover_tests(neko_graphics_tests DISCOVERY_MODE PRE_TEST)
+
+# -----------------------------------------------------------------------------
 # neko_network_tests
 # -----------------------------------------------------------------------------
 add_executable(neko_network_tests

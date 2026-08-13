@@ -6,6 +6,7 @@
 
 #include "neko/base/status.h"
 #include "neko/dom/element.h"
+#include "neko/graphics/font_library.h"
 #include "neko/layout/layout_tree.h"
 #include "neko/paint/rasterizer.h"
 #include "neko/style/style_engine.h"
@@ -18,7 +19,7 @@ namespace neko::renderer {
 // Headless by design: network fetching happens in the browser application.
 class Page {
  public:
-  Page() = default;
+  Page();
 
   // Parses |html| into a DOM document and computes styles.
   base::Result<void> LoadHtml(std::string_view html);
@@ -54,6 +55,9 @@ class Page {
   style::StyleEngine styles_;
   std::unique_ptr<layout::LayoutBox> root_;
   float viewport_width_ = 800;
+
+  graphics::FontLibrary fonts_;
+  const graphics::FontFace* default_font_ = nullptr;  // system sans, may be null
 };
 
 }  // namespace neko::renderer

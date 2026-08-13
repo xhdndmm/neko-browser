@@ -9,18 +9,29 @@
 #include "neko/css/color.h"
 #include "neko/paint/display_list.h"
 
+namespace neko::graphics {
+class FontFace;
+struct GlyphBitmap;
+}
+
 namespace neko::paint {
 
 // Software rasterizer for DisplayList commands.  Produces an RGBA8888 buffer.
 //
-// Phase 6 scope: axis-aligned fills, borders and text with the embedded 8x8
-// bitmap font.  No transforms, gradients, images or alpha compositing layers.
+// Phase 6 scope: axis-aligned fills, borders and text.  Text is drawn with a
+// FreeType-backed face (set via SetFont) when available; otherwise the
+// embedded 8x8 bitmap font is used as a fallback so pages never lose text.
+// No transforms, gradients, images or alpha compositing layers.
 class Rasterizer {
  public:
   Rasterizer(int width, int height);
 
   void Clear(css::Color color);
   void Rasterize(const DisplayList& list);
+
+  // Uses |font| (owned by the caller, must outlive this rasterizer) for text;
+  // pass nullptr to fall back to the embedded 8x8 bitmap font.
+  void SetFont(const graphics::FontFace* font) { font_ = font; }
 
   // Scrolls the visible region: all draw commands are shifted up by |offset|
   // pixels, so content below the viewport can be panned into view.  Content
@@ -34,6 +45,7 @@ class Rasterizer {
   const std::vector<uint8_t>& pixels() const { return pixels_; }
 
   // Text metrics for the embedded font: every glyph advances by |font_size|.
+  // (Layout still uses the monospace model; real advances arrive in M2.)
   static float CharWidth(float font_size) { return font_size; }
   static float TextWidth(std::string_view text, float font_size);
 
@@ -41,11 +53,15 @@ class Rasterizer {
   void FillRect(float x, float y, float width, float height, css::Color color);
   void DrawBorder(const DrawCommand& command);
   void DrawText(const DrawCommand& command);
+  void DrawText8x8(const DrawCommand& command);
+  void DrawTextFreetype(const DrawCommand& command);
+  void BlendGlyph(int x, int y, const graphics::GlyphBitmap& glyph, css::Color color);
 
   int width_;
   int height_;
   float scroll_offset_ = 0;
   std::vector<uint8_t> pixels_;
+  const graphics::FontFace* font_ = nullptr;
 };
 
 // Writes an RGBA buffer as a binary PPM (P6) file.  Alpha is composited over

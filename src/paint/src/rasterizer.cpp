@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "neko/base/status.h"
+#include "neko/graphics/font_face.h"
 #include "neko/paint/font8x8.h"
 
 namespace neko::paint {
@@ -41,6 +42,53 @@ void BlendPixel(uint8_t& dr, uint8_t& dg, uint8_t& db, uint8_t& da, css::Color s
   dg = blend(dg, src.g);
   db = blend(db, src.b);
   da = static_cast<uint8_t>(out_a * 255.0f + 0.5f);
+}
+
+// Decodes |text| (UTF-8) into code points; invalid sequences become U+FFFD.
+void DecodeUtf8(std::string_view text, std::vector<uint32_t>& out) {
+  std::size_t i = 0;
+  while (i < text.size()) {
+    const unsigned char lead = static_cast<unsigned char>(text[i]);
+    uint32_t code_point = 0;
+    std::size_t len = 0;
+    if (lead < 0x80) {
+      code_point = lead;
+      len = 1;
+    } else if ((lead & 0xE0) == 0xC0) {
+      code_point = lead & 0x1F;
+      len = 2;
+    } else if ((lead & 0xF0) == 0xE0) {
+      code_point = lead & 0x0F;
+      len = 3;
+    } else if ((lead & 0xF8) == 0xF0) {
+      code_point = lead & 0x07;
+      len = 4;
+    } else {
+      out.push_back(0xFFFDU);
+      ++i;
+      continue;
+    }
+    if (i + len > text.size()) {
+      out.push_back(0xFFFDU);
+      break;
+    }
+    bool valid = true;
+    for (std::size_t k = 1; k < len; ++k) {
+      const unsigned char cc = static_cast<unsigned char>(text[i + k]);
+      if ((cc & 0xC0) != 0x80) {
+        valid = false;
+        break;
+      }
+      code_point = (code_point << 6) | (cc & 0x3F);
+    }
+    if (!valid) {
+      out.push_back(0xFFFDU);
+      ++i;
+      continue;
+    }
+    out.push_back(code_point);
+    i += len;
+  }
 }
 
 }  // namespace
@@ -111,6 +159,14 @@ void Rasterizer::DrawBorder(const DrawCommand& command) {
 }
 
 void Rasterizer::DrawText(const DrawCommand& command) {
+  if (font_ == nullptr) {
+    DrawText8x8(command);
+    return;
+  }
+  DrawTextFreetype(command);
+}
+
+void Rasterizer::DrawText8x8(const DrawCommand& command) {
   const float scale = command.font_size / 8.0f;
   const int start_x = static_cast<int>(std::round(command.x));
   const int start_y = static_cast<int>(std::round(command.y));
@@ -120,7 +176,7 @@ void Rasterizer::DrawText(const DrawCommand& command) {
   for (std::size_t i = 0; i < command.text.size(); ++i) {
     const unsigned char ch = static_cast<unsigned char>(command.text[i]);
     if (ch < 32 || ch > 126) {
-      continue;  // non-ASCII / control: not in the embedded font yet
+      continue;  // non-ASCII / control: not in the embedded font
     }
     const uint8_t* glyph = detail::kFont8x8[ch - 32];
     const int glyph_x = start_x + static_cast<int>(i) * step;
@@ -142,6 +198,60 @@ void Rasterizer::DrawText(const DrawCommand& command) {
     FillRect(static_cast<float>(start_x),
              static_cast<float>(start_y + 8 * cell - thickness),
              static_cast<float>(text_width), static_cast<float>(thickness), command.text_color);
+  }
+}
+
+void Rasterizer::DrawTextFreetype(const DrawCommand& command) {
+  std::vector<uint32_t> code_points;
+  DecodeUtf8(command.text, code_points);
+
+  const float baseline = command.y + font_->Ascent(command.font_size);
+  float pen_x = command.x;
+  float total_width = 0;
+  for (const uint32_t code_point : code_points) {
+    const graphics::GlyphBitmap* glyph = font_->RenderGlyph(code_point, command.font_size);
+    if (glyph == nullptr) {
+      pen_x += command.font_size * 0.5f;
+      continue;
+    }
+    BlendGlyph(static_cast<int>(std::round(pen_x)) + glyph->left,
+               static_cast<int>(std::round(baseline)) - glyph->top, *glyph,
+               command.text_color);
+    pen_x += glyph->advance;
+    total_width += glyph->advance;
+  }
+
+  if (command.underline) {
+    const float thickness = std::max(1.0f, command.font_size / 12.0f);
+    FillRect(command.x, baseline + 1.0f, total_width, thickness, command.text_color);
+  }
+}
+
+void Rasterizer::BlendGlyph(int x, int y, const graphics::GlyphBitmap& glyph,
+                            css::Color color) {
+  const int scroll = static_cast<int>(std::round(scroll_offset_));
+  for (int row = 0; row < glyph.height; ++row) {
+    const int py = y + row - scroll;
+    if (py < 0 || py >= height_) {
+      continue;
+    }
+    const uint8_t* src =
+        glyph.data + static_cast<std::size_t>(row) * static_cast<std::size_t>(glyph.pitch);
+    for (int col = 0; col < glyph.width; ++col) {
+      const int px = x + col;
+      if (px < 0 || px >= width_) {
+        continue;
+      }
+      const uint8_t alpha = src[col];
+      if (alpha == 0) {
+        continue;
+      }
+      const css::Color shaded{color.r, color.g, color.b,
+                              static_cast<uint8_t>((color.a * alpha) / 255)};
+      const std::size_t offset = PixelOffset(px, py, width_);
+      BlendPixel(pixels_[offset], pixels_[offset + 1], pixels_[offset + 2],
+                 pixels_[offset + 3], shaded);
+    }
   }
 }
 

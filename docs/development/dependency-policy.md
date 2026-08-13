@@ -32,12 +32,13 @@
 | libjpeg | 系统包 | JPEG 解码（封装在 neko::image 后） | find_package | BSD-like |
 | QuickJS (quickjs-ng) | v0.16.1 | JavaScript runtime（封装在 neko::javascript 后） | FetchContent（固定 SHA256） | MIT |
 | Qt6 Widgets | 系统包 | GUI 基础设施（窗口/事件/控件，见 ADR 0006） | find_package | LGPL |
+| FreeType | 系统包 | 字体光栅化（封装在 neko::graphics 后，见 ADR 0009） | find_package | FTL（双许可选 FTL） |
 
 ## 未来候选依赖（引入时逐个评估）
 
 - OpenSSL / mbedTLS / BoringSSL（TLS）
 - ICU（Unicode）
-- FreeType + HarfBuzz（字体与文本整形）
+- HarfBuzz（文本整形）
 - brotli（HTTP 压缩）
 - SQLite（存储）
 - fmt / spdlog（仅当性能分析证明需要时，见 ADR 0004）

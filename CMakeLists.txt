@@ -61,6 +61,9 @@ find_package(Threads REQUIRED)
 # interface; see docs/development/dependency-policy.md.
 find_package(ZLIB REQUIRED)
 find_package(JPEG REQUIRED)
+# Font rasterization: FreeType (FTL license).  Wrapped behind neko::graphics;
+# see ADR 0009.
+find_package(Freetype REQUIRED)
 
 # JavaScript runtime: QuickJS (quickjs-ng v0.16.1), pinned by content hash and
 # built from source as a static library.  It is wrapped behind neko::javascript's

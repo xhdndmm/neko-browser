@@ -4,10 +4,14 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <string_view>
 
 #include "neko/dom/query.h"
+#include "neko/graphics/font_face.h"
+#include "neko/graphics/font_library.h"
+#include "neko/graphics/system_fonts.h"
 #include "neko/html/parser.h"
 #include "neko/layout/layout_tree.h"
 #include "neko/style/style_engine.h"
@@ -125,6 +129,44 @@ TEST(RasterizerTest, GlyphsAreNotMirrored) {
 TEST(RasterizerTest, TextMetrics) {
   EXPECT_FLOAT_EQ(Rasterizer::CharWidth(16), 16.0f);
   EXPECT_FLOAT_EQ(Rasterizer::TextWidth("hello", 16), 80.0f);
+}
+
+TEST(RasterizerTest, FreeTypeTextRendering) {
+  const std::optional<std::string> path =
+      graphics::FindSystemFont(graphics::GenericFamily::kSansSerif);
+  if (!path.has_value()) {
+    GTEST_SKIP() << "no system sans-serif font available";
+  }
+  graphics::FontLibrary library;
+  const graphics::FontFace* face = library.LoadFace(*path);
+  ASSERT_NE(face, nullptr);
+  ASSERT_TRUE(face->valid());
+
+  Rasterizer image(64, 32);
+  image.Clear(css::Color{255, 255, 255, 255});
+  image.SetFont(face);
+  DisplayList list;
+  list.DrawText(0, 0, "A", 16, css::Color{0, 0, 0, 255});
+  image.Rasterize(list);
+
+  // FreeType output is antialiased: some pixels must be strictly between the
+  // background (255) and the text color (0), which the 8x8 fallback never
+  // produces.  Also require actual dark pixels.
+  bool saw_gray = false;
+  int dark_pixels = 0;
+  for (int y = 0; y < 32; ++y) {
+    for (int x = 0; x < 64; ++x) {
+      const uint8_t r = Pixel(image, x, y).r;
+      if (r > 0 && r < 255) {
+        saw_gray = true;
+      }
+      if (r < 128) {
+        ++dark_pixels;
+      }
+    }
+  }
+  EXPECT_TRUE(saw_gray);
+  EXPECT_GT(dark_pixels, 5);
 }
 
 TEST(RasterizerTest, WritePpm) {

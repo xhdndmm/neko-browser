@@ -1,11 +1,13 @@
 #include "neko/renderer/page.h"
 
 #include <fstream>
+#include <optional>
 #include <string>
 #include <string_view>
 
 #include "neko/base/logging.h"
 #include "neko/base/status.h"
+#include "neko/graphics/system_fonts.h"
 #include "neko/html/parser.h"
 #include "neko/paint/painter.h"
 
@@ -39,6 +41,13 @@ const dom::Element* ElementAt(const layout::LayoutBox& box, float x, float y) {
 
 }  // namespace
 
+Page::Page() {
+  const std::optional<std::string> path = graphics::FindSystemFont(graphics::GenericFamily::kSansSerif);
+  if (path.has_value()) {
+    default_font_ = fonts_.LoadFace(path.value());
+  }
+}
+
 base::Result<void> Page::LoadHtml(std::string_view html) {
   document_ = html::Parser(html).Parse();
   styles_.ApplyStyles(*document_);
@@ -66,6 +75,7 @@ void Page::Layout(float viewport_width) {
 
 paint::Rasterizer Page::Rasterize(int width, int height, float y_offset) const {
   paint::Rasterizer image(width, height);
+  image.SetFont(default_font_);
   image.Clear(css::Color{255, 255, 255, 255});
   if (root_ == nullptr) {
     return image;
