@@ -14,9 +14,10 @@ namespace neko::html {
 // HTML tree construction (WHATWG 13.2.6-inspired).
 //
 // Implements the common insertion modes: initial, before html, before head,
-// in head, after head, in body, text, after body, after after body.  Tables
-// are treated as ordinary blocks (no foster parenting).  Active formatting
-// element reconstruction is not implemented; see docs/html/README.md.
+// in head, after head, in body, text, after body, after after body.  Active
+// formatting elements and the adoption agency algorithm are implemented.
+// Tables are treated as ordinary blocks (no foster parenting), and markers in
+// the active formatting element list are not yet used; see docs/html/README.md.
 class Parser {
  public:
   explicit Parser(std::string_view html);
@@ -59,11 +60,24 @@ class Parser {
   bool IsVoidElement(std::string_view tag) const;
   bool IsBlockElement(std::string_view tag) const;
 
+  // Active formatting elements (WHATWG 13.2.4.3) and the adoption agency
+  // algorithm (13.2.6.4.7).  Markers are not implemented yet (tables are
+  // treated as blocks), so the list holds only element pointers.
+  void PushActiveFormatting(dom::Element* element);
+  void RemoveFromActiveFormatting(dom::Element* element);
+  bool InActiveFormatting(dom::Element* element) const;
+  bool InStack(dom::Element* element) const;
+  bool ElementInScope(dom::Element* element) const;
+  void ReconstructActiveFormatting();
+  void RunAdoptionAgency(std::string_view subject);
+  dom::Element* CloneElement(const dom::Element& source);
+
   std::string_view html_;
   Tokenizer tokenizer_;
   std::optional<Token> pending_;
   std::unique_ptr<dom::Document> document_;
   std::vector<dom::Element*> stack_;
+  std::vector<dom::Element*> active_formatting_;
   Mode mode_ = Mode::kInitial;
   Mode mode_before_text_ = Mode::kInBody;
 };

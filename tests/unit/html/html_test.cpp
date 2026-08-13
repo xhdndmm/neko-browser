@@ -168,5 +168,24 @@ TEST(HtmlTest, WhitespacePreserved) {
   EXPECT_EQ(p->TextContent(), "  spaced  ");
 }
 
+TEST(HtmlTest, AdoptionAgencyReconstructsFormatting) {
+  auto doc = ParseDoc("<b>1<i>2</b>3</i>");
+  EXPECT_EQ(doc->ToString(),
+            "<html><head></head><body><b>1<i>2</i></b><i>3</i></body></html>");
+}
+
+TEST(HtmlTest, AdoptionAgencyCanonical) {
+  auto doc = ParseDoc("<p>1<b>2<i>3</b>4</i>5</p>");
+  EXPECT_EQ(doc->ToString(),
+            "<html><head></head><body><p>1<b>2<i>3</i></b><i>4</i>5</p></body></html>");
+}
+
+TEST(HtmlTest, AdoptionAgencyWithFurthestBlock) {
+  // WHATWG 13.2.10.2: a special element (p) inside the formatting element.
+  auto doc = ParseDoc("<b>1<p>2</b>3</p>");
+  EXPECT_EQ(doc->ToString(),
+            "<html><head></head><body><b>1</b><p><b>2</b>3</p></body></html>");
+}
+
 }  // namespace
 }  // namespace neko::html
