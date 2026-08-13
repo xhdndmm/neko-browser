@@ -36,9 +36,11 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
 ./build/debug/bin/neko_browser --extract-pdf doc.pdf
 ./build/debug/bin/neko_browser --audio-info clip.wav
 ./build/debug/bin/neko_browser --image-info pic.png --image-out pic.ppm
+./build/debug/bin/neko_browser --eval "Math.max(1, 5, 3)"
+./build/debug/bin/neko_browser --eval "console.log('hi'); JSON.stringify({a:1})"
 ```
 
-已实现（均有单元测试，247 个测试全绿，含 ASan）：
+已实现（均有单元测试，277 个测试全绿，含 ASan）：
 
 - **URL**：解析、相对解析（RFC 3986 5.4.1 样例）、百分号编码、Origin
 - **网络**：TCP Socket（POSIX）、HTTP/1.1 GET、重定向、chunked、Content-Length
@@ -52,18 +54,20 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
 - **图像**：自研 PNG 解码器（chunk/CRC/滤波/Adam7/全部颜色类型）+ libjpeg 封装
 - **媒体**：自研 WAV 解码（PCM+float，8/16/24/32-bit）
 - **PDF**：文本提取（xref/FlateDecode/文本操作符）—— **PARTIAL**
+- **JavaScript**：QuickJS（quickjs-ng）runtime 封装 —— 核心语言 + console
+  + 执行时限/内存上限；**无 DOM 绑定**（Phase 8 里程碑 1）
 - **GUI（Qt6）**：标签页、地址栏、后退/前进/刷新/新标签/书签/下载、DevTools
-  （DOM 树/网络日志/Console）、历史/书签/下载/设置面板
+  （DOM 树/网络日志/**JS Console REPL**）、历史/书签/下载/设置面板
 - **下载器**：Content-Disposition/URL 文件名、原子写入
 - **CLI**：`--url` / `--dump-dom` / `--screenshot` / `--dump-history` /
   `--dump-bookmarks` / `--show-cookies` / `--download` / `--extract-pdf` /
   `--audio-info` / `--image-info` 等
 
-> **诚实声明**：JavaScript、TLS/HTTPS、flexbox/grid、**视频解码**、GIF/WebP/
-> GPU 合成、多进程、LocalStorage/IndexedDB 均 **尚未实现**
+> **诚实声明**：TLS/HTTPS、flexbox/grid、**视频解码**、GIF/WebP/GPU 合成、
+> 多进程、LocalStorage/IndexedDB 均 **尚未实现**
 > （见[兼容性矩阵](docs/compatibility/compatibility-matrix.md)）。
-> PDF 仅文本提取（无渲染）；文本渲染当前使用内嵌公有领域 8x8 位图字体
-> （仅 ASCII，无整形/Unicode 回退）。
+> JavaScript 仅接入 runtime（QuickJS），**无 DOM 绑定**；PDF 仅文本提取（无渲染）；
+> 文本渲染当前使用内嵌公有领域 8x8 位图字体（仅 ASCII，无整形/Unicode 回退）。
 
 ---
 
@@ -156,6 +160,7 @@ src/
   image/                PNG 自研解码 + JPEG(libjpeg)
   media/                WAV 解码
   pdf/                  PDF 文本提取
+  javascript/           QuickJS runtime 封装
   browser/              BrowserController + 下载器 + CLI
   ui/                   Qt6 GUI（neko_gui / neko_gui_screenshot）
 tests/

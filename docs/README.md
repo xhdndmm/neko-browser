@@ -14,6 +14,7 @@ neko-browser 的文档体系。文档是项目的一等公民 —— 改动架�
   - [0005：位图字体文本渲染](architecture/adr/0005-bitmap-font-rendering.md)
   - [0006：GUI 使用 Qt6](architecture/adr/0006-qt6-gui.md)
   - [0007：PNG 自研解码 + JPEG 封装 libjpeg](architecture/adr/0007-png-decoder.md)
+  - [0008：JS runtime 接入 QuickJS](architecture/adr/0008-quickjs-runtime.md)
 
 ## 开发
 
@@ -40,7 +41,7 @@ neko-browser 的文档体系。文档是项目的一等公民 —— 改动架�
 | Storage | Implemented (子集) | 见 [总体架构](architecture/architecture.md) |
 | Image / Media / PDF | Partial | 见 [总体架构](architecture/architecture.md) |
 | GUI (Qt6) | Partial | 见 [总体架构](architecture/architecture.md) |
-| JavaScript | Not Started | [javascript](javascript/README.md) |
+| JavaScript | Partial (runtime) | [javascript](javascript/README.md) |
 
 ## 发布
 

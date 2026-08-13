@@ -1,6 +1,6 @@
 # 开发路线图
 
-> 最后更新：2026-08（Phase 7 达成，含存储/图像/媒体/PDF/GUI）
+> 最后更新：2026-08（Phase 8 里程碑 1 完成 —— JS runtime 接入）
 
 ## 总原则
 
@@ -118,11 +118,16 @@ graph LR
 - [ ] 键盘/鼠标完整交互、高 DPI 细节、加载进度条 —— 后续
 - [ ] 像素级渲染对比测试 —— 后续
 
-## Phase 8–9 — JavaScript + Web APIs
+## Phase 8–9 — JavaScript + Web APIs ✅（里程碑 1 已完成，范围见下）
 
-- [ ] 接入 JS runtime（候选：QuickJS）—— 仅作 runtime，文档化
-- [ ] Web IDL / binding 层概念落地
-- [ ] Window/Document/Navigator/Location/History/Console/Timer/Fetch/Storage/Events
+- [x] **JS runtime 接入（QuickJS / quickjs-ng v0.16.1）**：FetchContent 固定版本，
+      封装为 `neko::javascript`（ScriptEngine/ScriptValue），仅编译核心语言 +
+      自有 console 绑定（QJS_BUILD_LIBC=OFF），执行时限中断 + 内存上限
+- [x] CLI `--eval <script>`；GUI DevTools Console 持久 REPL
+- [ ] Web IDL / binding 层 —— **未开始**（里程碑 2：window/document/navigator/
+      location/history/console/timer/fetch/storage/events）
+- [ ] 页面 `<script>` 标签执行 —— **未开始**
+- [ ] 事件循环对接（microtask/Promise）—— **未开始**
 
 ## Phase 10 — Security
 
@@ -155,3 +160,4 @@ graph LR
 | M5 | Phase 5（布局） | 布局树测试 |
 | M6 | Phase 6（渲染） | --screenshot、像素对比测试 |
 | M7 | Phase 7（UI + 内容解析） | 可交互浏览器窗口、offscreen 截图、247 测试全绿 |
+| M8 | Phase 8 M1（JS runtime） | `--eval`、GUI DevTools Console REPL、277 测试全绿 |

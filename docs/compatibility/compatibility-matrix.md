@@ -2,7 +2,7 @@
 
 > 本文档诚实记录每个特性的支持状态。**禁止**把"接口存在"写成"已实现"。
 > 状态取值：Not Started / Planned / In Progress / Partial / Implemented / Tested。
-> 最后更新：2026-08（Phases 0–7 达成，含存储/图像/媒体/PDF/GUI）。
+> 最后更新：2026-08（Phases 0–8 M1，含存储/图像/媒体/PDF/GUI/JS runtime）。
 
 | 特性 | 状态 | 测试证据 | 备注 |
 | --- | --- | --- | --- |
@@ -35,7 +35,7 @@
 | 下载器 | Tested | Browser 套件 | Content-Disposition/URL 文件名、原子写入 |
 | 绘制 / 光栅化 | Tested | Paint 套件 | 纯色、边框、文字、PPM |
 | 合成器 | Not Started | — | — |
-| JavaScript | Not Started | — | Phase 8 |
+| JavaScript（runtime，QuickJS） | Partial | 27 JS 单元测试 + CLI/GUI 集成 | ES2025 核心语言、console、执行时限/内存上限；**无 DOM 绑定**（里程碑 2） |
 | Fetch（浏览器 API） | Not Started | — | — |
 | LocalStorage / IndexedDB | Not Started | — | — |
 | 多进程 | Not Started | — | Phase 12 |

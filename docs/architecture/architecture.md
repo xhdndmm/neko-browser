@@ -156,6 +156,16 @@ graph LR
   （BT/ET/Td/TJ/Tj 等）、UTF-16BE/ASCII/Latin-1 解码。
 - **限制**：无 xref stream、无渲染、无 CMap，明确标注 PARTIAL。
 
+### javascript（Phase 8 已落地，里程碑 1）
+
+- `src/javascript/`：`ScriptEngine` / `ScriptValue`，封装 QuickJS
+  （quickjs-ng v0.16.1）自有接口，第三方头文件不泄漏。
+- 仅编译核心语言 + 项目自有 `console` 绑定；QuickJS 的 `std`/`os` 模块
+  （文件/进程/网络）不编译（`QJS_BUILD_LIBC=OFF`）。
+- 安全：默认内存上限 128 MiB、默认执行时限 10 秒（中断处理器防死循环）。
+- 集成：CLI `--eval`、GUI DevTools Console REPL（worker 线程求值）。
+- **未开始**：Web IDL / DOM 绑定、页面 `<script>` 执行、事件循环对接。
+
 ### browser / ui（Phase 7 已落地）
 
 - `src/browser/`：BrowserController（标签页、导航、内容类型路由 HTML/Image/
@@ -217,6 +227,7 @@ src/storage/    CookieStore / HistoryStore / BookmarkStore（行式文件 + 原�
 src/image/      PNG 自研解码 + JPEG(libjpeg) —— Tested
 src/media/      WAV 解码（自研）—— Tested；视频 NOT IMPLEMENTED
 src/pdf/        PDF 文本提取（FlateDecode、xref、文本操作符）—— Partial
+src/javascript/ QuickJS runtime 封装（ScriptEngine/ScriptValue）—— Tested
 src/browser/    BrowserController + DownloadManager + CLI —— Tested
 src/ui/         Qt6 GUI（标签页/地址栏/DevTools/历史/书签/下载/设置）—— Partial
 ```
@@ -225,9 +236,10 @@ src/ui/         Qt6 GUI（标签页/地址栏/DevTools/历史/书签/下载/设�
 
 - `neko_browser --url http://example.com/ --screenshot out.ppm` 抓取并渲染真实网页
 - `neko_gui`（Qt6 GUI）加载网页/图像/PDF/WAV，DevTools 显示 DOM 树与网络日志
+- `neko_browser --eval <script>` 头less 执行 JavaScript；GUI DevTools Console REPL
 - `neko_gui_screenshot <url> <png>` 无头截图
 - `--dump-history / --dump-bookmarks / --show-cookies / --download /
   --extract-pdf / --audio-info / --image-info` 头less 访问存储与内容解析
 
-未开始：JavaScript、Web APIs、Security 子系统、IPC/多进程、视频解码、
+未开始：Web IDL / DOM 绑定、Security 子系统、IPC/多进程、视频解码、
 LocalStorage/IndexedDB、Accessibility。见[开发路线图](development/roadmap.md)。

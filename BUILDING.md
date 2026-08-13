@@ -65,11 +65,16 @@ CC=clang CXX=clang++ cmake --preset debug
 
 ## 依赖获取
 
-- 唯一的第三方构建期依赖是 **GoogleTest**（单元测试），通过 FetchContent 从 GitHub
-  拉取并**固定版本与 SHA256**，构建可复现。参见 [dependency-policy.md](docs/development/dependency-policy.md)。
-- 离线或受限网络环境：可预先下载
-  `https://github.com/google/googletest/archive/refs/tags/v1.15.2.tar.gz`
-  放入 `$CMAKE_FETCHCONTENT_SOURCE_DIR_GOOGLETEST` 指向的目录。
+- **GoogleTest**（单元测试）：FetchContent 从 GitHub 拉取，固定版本与 SHA256。
+- **QuickJS / quickjs-ng**（JavaScript runtime）：FetchContent 从 GitHub 拉取
+  `v0.16.1` tarball，固定 SHA256；配置时自动下载。
+- **系统包**：zlib、libjpeg（图像/PDF 解码）、Qt6 Widgets（GUI，可选；
+  `NEKO_BUILD_UI=OFF` 可跳过）。Debian/Ubuntu：
+  `sudo apt install zlib1g-dev libjpeg-dev qt6-base-dev`
+- 参见 [dependency-policy.md](docs/development/dependency-policy.md)。
+- 离线或受限网络环境：可预先下载 tarball 并设置
+  `CMAKE_FETCHCONTENT_SOURCE_DIR_GOOGLETEST` / `CMAKE_FETCHCONTENT_SOURCE_DIR_QUICKJS`
+  指向解压目录。
 
 ## 产物位置
 

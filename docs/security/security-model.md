@@ -16,6 +16,7 @@
 | PNG/JPEG | 已落地 | 长度/溢出/超大尺寸边界检查（有测试） |
 | PDF | 已落地 (Partial) | 畸形 xref/对象/流（长度与溢出检查） |
 | Cookie 存储 | 已落地 | 域/路径匹配、注入转义（百分号编码） |
+| JavaScript runtime | 已落地 (Partial) | QuickJS 沙箱：无 std/os 模块、执行时限中断、内存上限（均有测试） |
 | JavaScript | Phase 8+ | 沙箱逃逸、原型污染 |
 | IPC | Phase 12 | 消息伪造、越权 |
 
@@ -44,7 +45,7 @@
 - 安全修复不得以"早期阶段"为由推迟。
 - 代码评审中，安全是硬性检查项。
 
-## 当前状态（Phases 0–7）
+## 当前状态（Phases 0–8）
 
 - Phase 0–6：URL/HTTP/HTML/CSS 等 parser 已按基线实现边界检查。
 - 内容解析：PNG 解码器（chunk 长度/CRC/尺寸上限/位深组合校验）、
@@ -52,4 +53,8 @@
 - Cookie 存储（RFC 6265 子集）：字段经百分号编码转义，防止注入；
   域/路径匹配已实现。**已知限制**：未做 PSL 校验与 SameSite 强制实施，
   跨域 Cookie 语义可能过宽 —— 已标注为限制，后续里程碑收紧。
+- JavaScript runtime（Phase 8 M1）：QuickJS 沙箱化 —— 不编译 `std`/`os`
+  模块（无文件/进程/网络能力），仅自有 `console` 绑定；默认执行时限
+  10 秒 + 内存上限 128 MiB（有中断与内存限制测试）。**已知限制**：
+  尚无 DOM 绑定、无 Origin 隔离（每个 engine 独立全局域）。
 - 未开始：Origin/SOP/CORS/CSP、TLS、沙箱、权限、进程隔离。
