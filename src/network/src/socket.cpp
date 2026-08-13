@@ -13,6 +13,8 @@
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#else
+#include <winsock2.h>
 #endif
 
 namespace neko::network {
@@ -105,13 +107,13 @@ base::Result<Socket> Socket::Connect(std::string_view host, uint16_t port, int t
 }
 
 base::Result<std::size_t> Socket::Send(std::string_view data) {
+#ifdef _WIN32
+  (void)data;
+  return base::Err(base::Error::NotImplemented("Windows sockets are not implemented yet"));
+#else
   std::size_t sent = 0;
   while (sent < data.size()) {
-#ifdef _WIN32
-    const int n = ::send(fd_, data.data() + sent, static_cast<int>(data.size() - sent), 0);
-#else
     const ssize_t n = ::send(fd_, data.data() + sent, data.size() - sent, 0);
-#endif
     if (n < 0) {
       if (errno == EINTR) {
         continue;
@@ -121,6 +123,7 @@ base::Result<std::size_t> Socket::Send(std::string_view data) {
     sent += static_cast<std::size_t>(n);
   }
   return sent;
+#endif
 }
 
 base::Result<std::string> Socket::ReceiveAll(int timeout_ms) {
