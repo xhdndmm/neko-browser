@@ -186,6 +186,15 @@ TEST(HttpTest, RejectsChunkSizeWrapsToSmallValue) {
   EXPECT_FALSE(result.has_value());
 }
 
+TEST(HttpTest, RejectsContentLengthOverflow) {
+  // A 30-digit Content-Length overflows size_t and wraps to a small value;
+  // the decoder must reject it instead of slicing the body at a bogus
+  // offset.
+  const auto result = ParseHttpResponse(
+      "HTTP/1.1 200 OK\r\nContent-Length: 999999999999999999999999999999\r\n\r\nhello");
+  EXPECT_FALSE(result.has_value());
+}
+
 TEST(HttpTest, HttpsNotImplemented) {
   const auto url = url::Url::Parse("https://example.com/");
   ASSERT_TRUE(url.has_value());

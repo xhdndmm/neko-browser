@@ -158,6 +158,10 @@ base::Result<HttpResponse> ParseHttpResponse(std::string_view raw) {
         valid = false;
         break;
       }
+      // Guard against size_t wraparound, same as the chunk-size parser.
+      if (length > (SIZE_MAX - static_cast<std::size_t>(c - '0')) / 10) {
+        return base::Err(base::Error::Parse("content-length too large"));
+      }
       length = length * 10 + static_cast<std::size_t>(c - '0');
     }
     if (!valid) {
