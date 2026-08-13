@@ -144,6 +144,16 @@ apply_compiler_warnings(neko_image_tests)
 gtest_discover_tests(neko_image_tests DISCOVERY_MODE PRE_TEST)
 
 # -----------------------------------------------------------------------------
+# neko_media_tests
+# -----------------------------------------------------------------------------
+add_executable(neko_media_tests
+  media/media_test.cpp
+)
+target_link_libraries(neko_media_tests PRIVATE neko::media gtest_main)
+apply_compiler_warnings(neko_media_tests)
+gtest_discover_tests(neko_media_tests DISCOVERY_MODE PRE_TEST)
+
+# -----------------------------------------------------------------------------
 # neko_storage_tests
 # -----------------------------------------------------------------------------
 add_executable(neko_storage_tests
