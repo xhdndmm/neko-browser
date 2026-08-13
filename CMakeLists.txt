@@ -25,6 +25,7 @@ option(NEKO_BUILD_TESTS        "Build the unit / integration test suite" ON)
 option(NEKO_WARNINGS_AS_ERRORS "Treat compiler warnings as errors"        OFF)
 option(NEKO_ENABLE_LTO         "Enable link-time optimization"            OFF)
 option(NEKO_ENABLE_COVERAGE    "Enable code coverage instrumentation"     OFF)
+option(NEKO_BUILD_UI           "Build the Qt6 GUI browser"                 ON)
 
 # Semicolon-separated list of sanitizers, e.g. "address;undefined".
 # Supported values depend on the compiler (GCC/Clang: address, undefined,
@@ -75,6 +76,10 @@ enable_testing()
 # -----------------------------------------------------------------------------
 add_subdirectory(src)
 
+if(NEKO_BUILD_UI)
+  add_subdirectory(src/ui)
+endif()
+
 if(NEKO_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
@@ -88,6 +93,7 @@ message(STATUS "  C++ standard        : C++${CMAKE_CXX_STANDARD}")
 message(STATUS "  Compiler            : ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
 message(STATUS "  Generator           : ${CMAKE_GENERATOR}")
 message(STATUS "  Tests               : ${NEKO_BUILD_TESTS}")
+message(STATUS "  GUI (Qt6)           : ${NEKO_BUILD_UI}")
 message(STATUS "  Warnings as errors  : ${NEKO_WARNINGS_AS_ERRORS}")
 message(STATUS "  Sanitizers          : '${NEKO_SANITIZERS}'")
 message(STATUS "  Coverage            : ${NEKO_ENABLE_COVERAGE}")

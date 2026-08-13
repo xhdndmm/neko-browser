@@ -178,10 +178,26 @@ gtest_discover_tests(neko_storage_tests DISCOVERY_MODE PRE_TEST)
 # -----------------------------------------------------------------------------
 add_executable(neko_browser_tests
   browser/options_test.cpp
+  browser/browser_controller_test.cpp
 )
-target_link_libraries(neko_browser_tests PRIVATE neko::browser_options gtest_main)
+target_link_libraries(neko_browser_tests PRIVATE neko::browser neko::browser_options gmock_main)
 apply_compiler_warnings(neko_browser_tests)
 gtest_discover_tests(neko_browser_tests DISCOVERY_MODE PRE_TEST)
+
+# -----------------------------------------------------------------------------
+# neko_ui_tests (Qt offscreen smoke tests)
+# -----------------------------------------------------------------------------
+if(NEKO_BUILD_UI)
+  add_executable(neko_ui_tests
+    ui/ui_smoke_test.cpp
+  )
+  target_link_libraries(neko_ui_tests PRIVATE neko::ui neko::storage gtest)
+  apply_compiler_warnings(neko_ui_tests)
+  # The Qt offscreen platform plugin lets the tests run without a display.
+  gtest_discover_tests(neko_ui_tests DISCOVERY_MODE PRE_TEST
+    PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+  )
+endif()
 
 # -----------------------------------------------------------------------------
 # Executable smoke tests (integration-style, exercise the real binary).

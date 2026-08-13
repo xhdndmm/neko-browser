@@ -1,0 +1,138 @@
+// GUI smoke tests.  They run under the Qt "offscreen" platform plugin
+// (QT_QPA_PLATFORM=offscreen, set as a ctest property) so no display is
+// needed.  The tests exercise the real BrowserWorker + MainWindow + WebView
+// stack end to end.
+
+#include <QApplication>
+#include <QImage>
+#include <QLineEdit>
+#include <QPixmap>
+#include <QTabBar>
+#include <QWidget>
+
+#include <atomic>
+#include <chrono>
+#include <thread>
+#include <cstdio>
+#include <filesystem>
+#include <string>
+
+#include <gtest/gtest.h>
+
+#include "neko/browser/browser_controller.h"
+#include "neko/storage/file_util.h"
+#include "neko/ui/browser_worker.h"
+#include "neko/ui/main_window.h"
+
+int main(int argc, char** argv) {
+  // These tests must run without a display; force the offscreen platform
+  // unless the caller already chose one (ctest discovery also runs this
+  // binary, so the variable must be set here rather than only as a test
+  // property).
+  if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
+    qputenv("QT_QPA_PLATFORM", "offscreen");
+  }
+  ::testing::InitGoogleTest(&argc, argv);
+  QApplication app(argc, argv);
+  return RUN_ALL_TESTS();
+}
+
+namespace {
+
+class TempProfile {
+ public:
+  TempProfile() {
+    dir_ = std::filesystem::temp_directory_path() /
+           ("neko-ui-test-" + std::to_string(::getpid()) + "-" +
+            std::to_string(++seq_));
+    std::filesystem::create_directories(dir_);
+  }
+  ~TempProfile() { std::filesystem::remove_all(dir_); }
+  const std::string path() const { return dir_.string(); }
+
+ private:
+  static int seq_;
+  std::filesystem::path dir_;
+};
+int TempProfile::seq_ = 0;
+
+// Pumps the event loop while polling a GUI-thread predicate (safe because
+// the predicate only reads widgets, which are owned by the GUI thread).
+template <typename Predicate>
+bool WaitFor(Predicate predicate, int timeout_ms = 5000) {
+  const int step = 20;
+  int elapsed = 0;
+  while (elapsed < timeout_ms) {
+    QCoreApplication::processEvents();
+    if (predicate()) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(step));
+    elapsed += step;
+  }
+  return predicate();
+}
+
+TEST(UiSmokeTest, RendersLocalHtmlPage) {
+  TempProfile tp;
+  const std::string html_file = tp.path() + "/page.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(
+      html_file, "<html><head><title>UI Test</title></head>"
+                 "<body><h1>Hello UI</h1><p>body text</p></body></html>")
+                    .has_value());
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.resize(800, 600);
+  window.show();
+
+  // Navigate through the worker (same path the address bar uses).
+  worker.NavigateActive(QString::fromStdString(html_file));
+
+  // Wait until the GUI has refreshed and shows the page title in the tab
+  // bar (which implies the controller finished routing/parsing it).
+  ASSERT_TRUE(WaitFor([&] {
+    for (int i = 0; i < window.TabBarWidget()->count(); ++i) {
+      if (window.TabBarWidget()->tabText(i).contains("UI Test")) return true;
+    }
+    return false;
+  }));
+
+  // The controller routed and parsed the page.
+  EXPECT_EQ(worker.controller().ActiveTab()->title, "UI Test");
+  EXPECT_EQ(worker.controller().ActiveTab()->content_type,
+            neko::browser::ContentType::kHtml);
+
+  // The address bar shows the file path and history has one entry.
+  EXPECT_GE(window.TabBarWidget()->count(), 1);
+  EXPECT_FALSE(window.AddressBar()->text().isEmpty());
+  EXPECT_EQ(worker.controller().history().size(), 1u);
+
+  // Render the view to an image and verify it is non-blank.
+  const QPixmap shot = window.grab();
+  EXPECT_FALSE(shot.isNull());
+  EXPECT_GT(shot.width(), 0);
+}
+
+TEST(UiSmokeTest, NavigationUpdatesAddressBarAndHistory) {
+  TempProfile tp;
+  const std::string html_file = tp.path() + "/nav.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(
+      html_file, "<html><head><title>Nav</title></head><body>ok</body></html>")
+                    .has_value());
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.show();
+
+  worker.NavigateActive(QString::fromStdString(html_file));
+
+  // The address bar is updated on the GUI thread after navigation; waiting
+  // on it also gives a happens-before for reading the controller.
+  ASSERT_TRUE(WaitFor([&] {
+    return window.AddressBar()->text().contains("nav.html");
+  }));
+  ASSERT_EQ(worker.controller().history().size(), 1u);
+  EXPECT_NE(window.AddressBar()->text().toStdString().find("nav.html"),
+            std::string::npos);
+}
+
+}  // namespace
