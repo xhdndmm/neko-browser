@@ -1,5 +1,6 @@
 #include "neko/network/http.h"
 
+#include <cstdint>
 #include <cstdlib>
 #include <string>
 #include <string_view>
@@ -47,6 +48,12 @@ base::Result<void> DecodeChunked(std::string_view data, HttpResponse& out) {
         valid = false;
         break;
       }
+      // Guard against size_t wraparound: chunk_size * 16 + digit must not
+      // overflow, otherwise a crafted chunk size could wrap to 0 or a small
+      // value and silently truncate / misparse the response body.
+      if (chunk_size > (SIZE_MAX - static_cast<std::size_t>(digit)) / 16) {
+        return base::Err(base::Error::Parse("chunk size too large"));
+      }
       chunk_size = chunk_size * 16 + static_cast<std::size_t>(digit);
     }
     if (!valid) {
@@ -57,7 +64,9 @@ base::Result<void> DecodeChunked(std::string_view data, HttpResponse& out) {
       out.body = std::move(body);
       return base::Ok();
     }
-    if (pos + chunk_size > data.size()) {
+    // |pos + chunk_size| could itself wrap; compare against the remaining
+    // byte count instead of adding first.
+    if (chunk_size > data.size() - pos) {
       return base::Err(base::Error::Parse("truncated chunk data"));
     }
     body.append(data.substr(pos, chunk_size));

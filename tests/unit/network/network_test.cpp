@@ -167,6 +167,25 @@ TEST(HttpTest, ParseMalformed) {
   EXPECT_FALSE(ParseHttpResponse("HTTP/1.1 200 OK\r\nContent-Length: abc\r\n\r\nx").has_value());
 }
 
+TEST(HttpTest, RejectsChunkSizeOverflow) {
+  // A chunk size of 2^64 wraps to 0 in size_t arithmetic; the decoder must
+  // reject it instead of silently truncating the body.
+  const auto result = ParseHttpResponse(
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+      "10000000000000000\r\nhello\r\n0\r\n\r\n");
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST(HttpTest, RejectsChunkSizeWrapsToSmallValue) {
+  // 1 followed by many zeros wraps to a small nonzero value that passes the
+  // "chunk fits in remaining data" check; the decoder must still reject it.
+  const auto result = ParseHttpResponse(
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+      "100000000000000000000000000000000000000000000000000\r\n"
+      "hello\r\n0\r\n\r\n");
+  EXPECT_FALSE(result.has_value());
+}
+
 TEST(HttpTest, HttpsNotImplemented) {
   const auto url = url::Url::Parse("https://example.com/");
   ASSERT_TRUE(url.has_value());
