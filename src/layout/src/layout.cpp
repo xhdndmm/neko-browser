@@ -1742,7 +1742,12 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
           leading = align_extra / 2.0f;
           break;
         case style::AlignContent::kSpaceBetween:
-          gap = cross_gap + align_extra / static_cast<float>(lines.size() - 1);
+          // Single-line containers fall back to flex-start (CSS Flexbox 1
+          // §8.4); dividing by (lines-1) with fewer than two lines would
+          // yield infinity / underflow.
+          if (lines.size() >= 2) {
+            gap = cross_gap + align_extra / static_cast<float>(lines.size() - 1);
+          }
           break;
         case style::AlignContent::kSpaceAround:
           gap = cross_gap + align_extra / static_cast<float>(lines.size());
