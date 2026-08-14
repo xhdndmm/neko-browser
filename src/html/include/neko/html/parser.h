@@ -61,6 +61,15 @@ class Parser {
   bool IsVoidElement(std::string_view tag) const;
   bool IsBlockElement(std::string_view tag) const;
 
+  // Maximum element nesting depth while building the DOM.  Over-deep
+  // subtrees are dropped so that pathological HTML (e.g. hundreds of
+  // thousands of nested <div>s) cannot overflow the stack in the style,
+  // layout or paint stages that recursively walk the tree.
+  static constexpr std::size_t kMaxDepth = 512;
+  // While > 0, an over-deep subtree is being discarded: start tags
+  // increment it, end tags decrement it, and no DOM nodes are created.
+  std::size_t skip_depth_ = 0;
+
   // Active formatting elements (WHATWG 13.2.4.3) and the adoption agency
   // algorithm (13.2.6.4.7).  Markers are not implemented yet (tables are
   // treated as blocks), so the list holds only element pointers.

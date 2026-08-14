@@ -280,5 +280,39 @@ TEST(HtmlTest, ScriptDataDoubleEscape) {
   EXPECT_EQ(p->TextContent(), "x");
 }
 
+// Returns the nesting depth of the deepest element under |node|.
+int MaxDepth(const dom::Node* node) {
+  int deepest = 1;
+  for (dom::Node* child : node->ChildNodes()) {
+    if (child->node_type() == dom::NodeType::kElement) {
+      deepest = std::max(deepest, 1 + MaxDepth(child));
+    }
+  }
+  return deepest;
+}
+
+TEST(HtmlTest, ShallowNestingIsPreserved) {
+  // Normal pages well under the depth cap must be kept intact.  The count
+  // includes the implied html/body skeleton, so it exceeds 100.
+  std::string html;
+  for (int i = 0; i < 100; ++i) html += "<div>";
+  for (int i = 0; i < 100; ++i) html += "</div>";
+  auto doc = ParseDoc(html);
+  EXPECT_GE(MaxDepth(doc.get()), 100);
+}
+
+TEST(HtmlTest, OverDeepNestingIsCapped) {
+  // Pathological nesting must not produce a DOM deep enough to overflow the
+  // stack in the recursive style/layout walks; the parser drops the
+  // over-deep subtree.
+  std::string html;
+  for (int i = 0; i < 10000; ++i) html += "<div>";
+  for (int i = 0; i < 10000; ++i) html += "</div>";
+  auto doc = ParseDoc(html);
+  // The depth cap is internal; assert the result stays far below the input
+  // nesting so the recursive downstream walks cannot overflow.
+  EXPECT_LT(MaxDepth(doc.get()), 1000);
+}
+
 }  // namespace
 }  // namespace neko::html

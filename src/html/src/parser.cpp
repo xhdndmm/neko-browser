@@ -161,6 +161,13 @@ void Parser::AppendNode(std::unique_ptr<dom::Node> node) {
 }
 
 void Parser::InsertElement(dom::Element* element) {
+  // Depth guard: drop over-deep subtrees instead of building a DOM so deep
+  // that the recursive style/layout walks overflow the stack.
+  if (stack_.size() >= kMaxDepth) {
+    delete element;
+    skip_depth_ = 1;
+    return;
+  }
   if (stack_.empty()) {
     document_->AppendChild(std::unique_ptr<dom::Node>(element));
   } else {
@@ -169,7 +176,13 @@ void Parser::InsertElement(dom::Element* element) {
   stack_.push_back(element);
 }
 
-void Parser::PopElement() { stack_.pop_back(); }
+void Parser::PopElement() {
+  if (skip_depth_ > 0) {
+    --skip_depth_;  // keep the real stack balanced while discarding
+    return;
+  }
+  stack_.pop_back();
+}
 
 void Parser::PopThrough(std::string_view tag) {
   while (!stack_.empty()) {
@@ -540,6 +553,20 @@ void Parser::RunAdoptionAgency(std::string_view subject) {
 }
 
 void Parser::ProcessToken(Token token) {
+  // While an over-deep subtree is being discarded, only track the nesting
+  // balance; no DOM nodes are created (see InsertElement).
+  if (skip_depth_ > 0) {
+    switch (token.type) {
+      case TokenType::kStartTag:
+        ++skip_depth_;
+        return;
+      case TokenType::kEndTag:
+        --skip_depth_;
+        return;
+      default:
+        return;  // characters, comments, doctype, EOF: all dropped
+    }
+  }
   switch (token.type) {
     case TokenType::kDoctype:
       // The doctype is not represented in the DOM yet (Phase 3 scope); only
