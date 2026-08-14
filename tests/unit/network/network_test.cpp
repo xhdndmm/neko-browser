@@ -1,14 +1,22 @@
+#include "neko/network/compression.h"
 #include "neko/network/http.h"
 #include "neko/network/socket.h"
+#include "neko/network/tls_socket.h"
 #include "neko/url/url.h"
 
 #include <atomic>
+#include <gtest/gtest.h>
 #include <mutex>
+#include <openssl/err.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/ssl.h>
+#include <openssl/x509.h>
+#include <openssl/x509v3.h>
 #include <string>
 #include <string_view>
 #include <thread>
-
-#include <gtest/gtest.h>
+#include <zlib.h>
 
 #ifndef _WIN32
 #include <arpa/inet.h>
@@ -20,21 +28,94 @@
 namespace neko::network {
 namespace {
 
+// Compresses |data| with a gzip wrapper (RFC 1952), for building test bodies.
+std::string GzipCompress(std::string_view data)
+{
+  z_stream strm{};
+  if (deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) !=
+      Z_OK) {
+    return {};
+  }
+  std::string out;
+  out.resize(deflateBound(&strm, data.size()));
+  strm.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data.data()));
+  strm.avail_in = static_cast<uInt>(data.size());
+  strm.next_out = reinterpret_cast<Bytef*>(out.data());
+  strm.avail_out = static_cast<uInt>(out.size());
+  const int ret = deflate(&strm, Z_FINISH);
+  deflateEnd(&strm);
+  if (ret != Z_STREAM_END) {
+    return {};
+  }
+  out.resize(out.size() - strm.avail_out);
+  return out;
+}
+
+// Compresses |data| with a zlib (RFC 1950) wrapper.
+std::string ZlibCompress(std::string_view data)
+{
+  z_stream strm{};
+  if (deflateInit(&strm, Z_DEFAULT_COMPRESSION) != Z_OK) {
+    return {};
+  }
+  std::string out;
+  out.resize(deflateBound(&strm, data.size()));
+  strm.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data.data()));
+  strm.avail_in = static_cast<uInt>(data.size());
+  strm.next_out = reinterpret_cast<Bytef*>(out.data());
+  strm.avail_out = static_cast<uInt>(out.size());
+  const int ret = deflate(&strm, Z_FINISH);
+  deflateEnd(&strm);
+  if (ret != Z_STREAM_END) {
+    return {};
+  }
+  out.resize(out.size() - strm.avail_out);
+  return out;
+}
+
+// Compresses |data| with a raw deflate stream (no wrapper), which some
+// servers emit for "Content-Encoding: deflate".
+std::string RawDeflateCompress(std::string_view data)
+{
+  z_stream strm{};
+  if (deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+    return {};
+  }
+  std::string out;
+  out.resize(deflateBound(&strm, data.size()));
+  strm.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data.data()));
+  strm.avail_in = static_cast<uInt>(data.size());
+  strm.next_out = reinterpret_cast<Bytef*>(out.data());
+  strm.avail_out = static_cast<uInt>(out.size());
+  const int ret = deflate(&strm, Z_FINISH);
+  deflateEnd(&strm);
+  if (ret != Z_STREAM_END) {
+    return {};
+  }
+  out.resize(out.size() - strm.avail_out);
+  return out;
+}
+
 #ifndef _WIN32
 // A tiny single-purpose HTTP server for tests (POSIX only).
-class TestHttpServer {
- public:
-  explicit TestHttpServer(int max_connections = 8) {
+class TestHttpServer
+{
+public:
+  explicit TestHttpServer(int max_connections = 8)
+  {
+    gzip_body_ = GzipCompress("Hello World");
+    deflate_body_ = ZlibCompress("Hello World");
+    raw_deflate_body_ = RawDeflateCompress("Hello World");
     listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd_ < 0) {
       return;
     }
     int yes = 1;
     ::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-    sockaddr_in addr {};
+    sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    addr.sin_port = 0;  // ephemeral
+    addr.sin_port = 0; // ephemeral
     if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 ||
         ::listen(listen_fd_, 8) != 0) {
       ::close(listen_fd_);
@@ -51,7 +132,8 @@ class TestHttpServer {
     thread_ = std::thread([this, max_connections] { Run(max_connections); });
   }
 
-  ~TestHttpServer() {
+  ~TestHttpServer()
+  {
     if (listen_fd_ >= 0) {
       // shutdown() unblocks a thread blocked in accept() on the same socket.
       ::shutdown(listen_fd_, SHUT_RDWR);
@@ -62,20 +144,28 @@ class TestHttpServer {
     }
   }
 
-  bool IsValid() const { return listen_fd_ >= 0; }
-  uint16_t port() const { return port_; }
+  bool IsValid() const
+  {
+    return listen_fd_ >= 0;
+  }
+  uint16_t port() const
+  {
+    return port_;
+  }
 
   // The raw request headers of every handled request, in order.
-  std::vector<std::string> Requests() {
+  std::vector<std::string> Requests()
+  {
     std::lock_guard<std::mutex> lock(mutex_);
     return requests_;
   }
 
- private:
-  void Run(int max_connections) {
+private:
+  void Run(int max_connections)
+  {
     int handled = 0;
     while (handled < max_connections) {
-      sockaddr_in client {};
+      sockaddr_in client{};
       socklen_t client_len = sizeof(client);
       const int fd = ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&client), &client_len);
       if (fd < 0) {
@@ -87,7 +177,8 @@ class TestHttpServer {
     }
   }
 
-  void Handle(int fd) {
+  void Handle(int fd)
+  {
     std::string request;
     char buffer[4096];
     for (;;) {
@@ -112,7 +203,8 @@ class TestHttpServer {
     SendResponse(fd, path);
   }
 
-  void SendResponse(int fd, const std::string& path) {
+  void SendResponse(int fd, const std::string& path)
+  {
     std::string response;
     if (path == "/") {
       response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 20\r\n"
@@ -125,6 +217,21 @@ class TestHttpServer {
     } else if (path == "/empty") {
       response = "HTTP/1.1 204 No Content\r\n\r\n";
     } else if (path == "/gzip") {
+      response = "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: " +
+                 std::to_string(gzip_body_.size()) + "\r\n\r\n" + gzip_body_;
+    } else if (path == "/deflate") {
+      response = "HTTP/1.1 200 OK\r\nContent-Encoding: deflate\r\nContent-Length: " +
+                 std::to_string(deflate_body_.size()) + "\r\n\r\n" + deflate_body_;
+    } else if (path == "/raw-deflate") {
+      response = "HTTP/1.1 200 OK\r\nContent-Encoding: deflate\r\nContent-Length: " +
+                 std::to_string(raw_deflate_body_.size()) + "\r\n\r\n" + raw_deflate_body_;
+    } else if (path == "/double-encoded") {
+      // Codings are listed in application order (RFC 7231 §3.1.2.1): gzip
+      // applied first, then deflate; the decoder undoes them in reverse.
+      const std::string body = ZlibCompress(gzip_body_);
+      response = "HTTP/1.1 200 OK\r\nContent-Encoding: gzip, deflate\r\nContent-Length: " +
+                 std::to_string(body.size()) + "\r\n\r\n" + body;
+    } else if (path == "/bad-gzip") {
       response = "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 4\r\n"
                  "\r\n\x1f\x8b\x08\x00";
     } else {
@@ -138,10 +245,175 @@ class TestHttpServer {
   std::thread thread_;
   std::mutex mutex_;
   std::vector<std::string> requests_;
+  std::string gzip_body_;
+  std::string deflate_body_;
+  std::string raw_deflate_body_;
 };
 #endif
 
-TEST(HttpTest, ParseBasicResponse) {
+// ---------------------------------------------------------------------------
+// Local TLS test server (POSIX only)
+// ---------------------------------------------------------------------------
+
+#ifndef _WIN32
+// Generates a self-signed certificate for CN=localhost with a SAN, returning
+// its PEM form plus the OpenSSL objects (owned by the caller).
+struct TestCert
+{
+  std::string cert_pem;
+  X509* cert = nullptr;
+  EVP_PKEY* key = nullptr;
+};
+
+TestCert GenerateLocalhostCert()
+{
+  TestCert out;
+  out.key = EVP_PKEY_Q_keygen(nullptr, nullptr, "RSA", 2048);
+  out.cert = X509_new();
+  X509_set_version(out.cert, 2);
+  ASN1_INTEGER_set(X509_get_serialNumber(out.cert), 1);
+  X509_gmtime_adj(X509_getm_notBefore(out.cert), -60);
+  X509_gmtime_adj(X509_getm_notAfter(out.cert), 60L * 60 * 24 * 365);
+  X509_set_pubkey(out.cert, out.key);
+  X509_NAME* name = X509_get_subject_name(out.cert);
+  X509_NAME_add_entry_by_txt(
+      name, "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>("localhost"), -1, -1, 0);
+  X509_set_issuer_name(out.cert, name);
+  X509V3_CTX ctx;
+  X509V3_set_ctx_nodb(&ctx);
+  X509V3_set_ctx(&ctx, out.cert, out.cert, nullptr, nullptr, 0);
+  X509_EXTENSION* ext = X509V3_EXT_conf_nid(nullptr, &ctx, NID_subject_alt_name, "DNS:localhost");
+  if (ext != nullptr) {
+    X509_add_ext(out.cert, ext, -1);
+    X509_EXTENSION_free(ext);
+  }
+  X509_sign(out.cert, out.key, EVP_sha256());
+
+  BIO* bio = BIO_new(BIO_s_mem());
+  PEM_write_bio_X509(bio, out.cert);
+  char* data = nullptr;
+  const long len = BIO_get_mem_data(bio, &data);
+  out.cert_pem.assign(data, static_cast<std::size_t>(len));
+  BIO_free(bio);
+  return out;
+}
+
+// A minimal single-page TLS server (self-signed certificate) for tests.
+class TestTlsServer
+{
+public:
+  TestTlsServer() : cert_(GenerateLocalhostCert())
+  {
+    listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (listen_fd_ < 0) {
+      return;
+    }
+    int yes = 1;
+    ::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+    if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 ||
+        ::listen(listen_fd_, 8) != 0) {
+      ::close(listen_fd_);
+      listen_fd_ = -1;
+      return;
+    }
+    socklen_t len = sizeof(addr);
+    if (::getsockname(listen_fd_, reinterpret_cast<sockaddr*>(&addr), &len) != 0) {
+      ::close(listen_fd_);
+      listen_fd_ = -1;
+      return;
+    }
+    port_ = ntohs(addr.sin_port);
+
+    ctx_ = SSL_CTX_new(TLS_server_method());
+    if (ctx_ == nullptr || SSL_CTX_use_certificate(ctx_, cert_.cert) != 1 ||
+        SSL_CTX_use_PrivateKey(ctx_, cert_.key) != 1) {
+      SSL_CTX_free(ctx_);
+      ctx_ = nullptr;
+      ::close(listen_fd_);
+      listen_fd_ = -1;
+      return;
+    }
+    thread_ = std::thread([this] { Run(); });
+  }
+
+  ~TestTlsServer()
+  {
+    if (listen_fd_ >= 0) {
+      ::shutdown(listen_fd_, SHUT_RDWR);
+      ::close(listen_fd_);
+    }
+    if (thread_.joinable()) {
+      thread_.join();
+    }
+    if (ctx_ != nullptr) {
+      SSL_CTX_free(ctx_);
+    }
+    X509_free(cert_.cert);
+    EVP_PKEY_free(cert_.key);
+  }
+
+  bool IsValid() const
+  {
+    return listen_fd_ >= 0 && ctx_ != nullptr;
+  }
+  uint16_t port() const
+  {
+    return port_;
+  }
+  const std::string& cert_pem() const
+  {
+    return cert_.cert_pem;
+  }
+
+private:
+  void Run()
+  {
+    for (;;) {
+      sockaddr_in client{};
+      socklen_t client_len = sizeof(client);
+      const int cfd = ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&client), &client_len);
+      if (cfd < 0) {
+        return;
+      }
+      SSL* ssl = SSL_new(ctx_);
+      if (ssl != nullptr) {
+        SSL_set_fd(ssl, cfd);
+        if (SSL_accept(ssl) == 1) {
+          char buffer[4096];
+          std::string request;
+          while (request.find("\r\n\r\n") == std::string::npos) {
+            const int n = SSL_read(ssl, buffer, sizeof(buffer));
+            if (n <= 0) {
+              break;
+            }
+            request.append(buffer, static_cast<std::size_t>(n));
+          }
+          const std::string response =
+              "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 20\r\n"
+              "\r\n<h1>Hello TLS</h1>";
+          SSL_write(ssl, response.data(), static_cast<int>(response.size()));
+        }
+        SSL_shutdown(ssl);
+        SSL_free(ssl);
+      }
+      ::close(cfd);
+    }
+  }
+
+  int listen_fd_ = -1;
+  uint16_t port_ = 0;
+  std::thread thread_;
+  SSL_CTX* ctx_ = nullptr;
+  TestCert cert_;
+};
+#endif
+
+TEST(HttpTest, ParseBasicResponse)
+{
   const auto result =
       ParseHttpResponse("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 5\r\n"
                         "\r\nhello");
@@ -153,40 +425,42 @@ TEST(HttpTest, ParseBasicResponse) {
   EXPECT_EQ(r.body, "hello");
 }
 
-TEST(HttpTest, ParseChunkedResponse) {
-  const auto result = ParseHttpResponse(
-      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
-      "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n");
+TEST(HttpTest, ParseChunkedResponse)
+{
+  const auto result = ParseHttpResponse("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+                                        "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n");
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result.value().status_code, 200);
   EXPECT_EQ(result.value().body, "hello world");
 }
 
-TEST(HttpTest, ParseMalformed) {
+TEST(HttpTest, ParseMalformed)
+{
   EXPECT_FALSE(ParseHttpResponse("not http").has_value());
   EXPECT_FALSE(ParseHttpResponse("HTTP/1.1 200 OK\r\nContent-Length: abc\r\n\r\nx").has_value());
 }
 
-TEST(HttpTest, RejectsChunkSizeOverflow) {
+TEST(HttpTest, RejectsChunkSizeOverflow)
+{
   // A chunk size of 2^64 wraps to 0 in size_t arithmetic; the decoder must
   // reject it instead of silently truncating the body.
-  const auto result = ParseHttpResponse(
-      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
-      "10000000000000000\r\nhello\r\n0\r\n\r\n");
+  const auto result = ParseHttpResponse("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+                                        "10000000000000000\r\nhello\r\n0\r\n\r\n");
   EXPECT_FALSE(result.has_value());
 }
 
-TEST(HttpTest, RejectsChunkSizeWrapsToSmallValue) {
+TEST(HttpTest, RejectsChunkSizeWrapsToSmallValue)
+{
   // 1 followed by many zeros wraps to a small nonzero value that passes the
   // "chunk fits in remaining data" check; the decoder must still reject it.
-  const auto result = ParseHttpResponse(
-      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
-      "100000000000000000000000000000000000000000000000000\r\n"
-      "hello\r\n0\r\n\r\n");
+  const auto result = ParseHttpResponse("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+                                        "100000000000000000000000000000000000000000000000000\r\n"
+                                        "hello\r\n0\r\n\r\n");
   EXPECT_FALSE(result.has_value());
 }
 
-TEST(HttpTest, RejectsContentLengthOverflow) {
+TEST(HttpTest, RejectsContentLengthOverflow)
+{
   // A 30-digit Content-Length overflows size_t and wraps to a small value;
   // the decoder must reject it instead of slicing the body at a bogus
   // offset.
@@ -195,42 +469,47 @@ TEST(HttpTest, RejectsContentLengthOverflow) {
   EXPECT_FALSE(result.has_value());
 }
 
-TEST(HttpTest, RejectsConflictingContentLength) {
+TEST(HttpTest, RejectsConflictingContentLength)
+{
   // Two different Content-Length values make the body boundary ambiguous
   // (a request-smuggling / response-splitting vector); reject (RFC 7230
   // 3.3.3).
-  const auto result = ParseHttpResponse(
-      "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 100\r\n\r\nhello");
+  const auto result =
+      ParseHttpResponse("HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 100\r\n\r\nhello");
   EXPECT_FALSE(result.has_value());
 }
 
-TEST(HttpTest, AcceptsIdenticalContentLength) {
+TEST(HttpTest, AcceptsIdenticalContentLength)
+{
   // Duplicate but identical Content-Length values are permitted.
-  const auto result = ParseHttpResponse(
-      "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 5\r\n\r\nhello");
+  const auto result =
+      ParseHttpResponse("HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 5\r\n\r\nhello");
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result.value().body, "hello");
 }
 
-TEST(HttpTest, RejectsTransferEncodingWithContentLength) {
+TEST(HttpTest, RejectsTransferEncodingWithContentLength)
+{
   // Content-Length alongside Transfer-Encoding is ambiguous and must be
   // rejected (RFC 7230 3.3.3).
-  const auto result = ParseHttpResponse(
-      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n"
-      "5\r\nhello\r\n0\r\n\r\n");
+  const auto result =
+      ParseHttpResponse("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n"
+                        "5\r\nhello\r\n0\r\n\r\n");
   EXPECT_FALSE(result.has_value());
 }
 
-TEST(HttpTest, RejectsUnsupportedTransferEncoding) {
+TEST(HttpTest, RejectsUnsupportedTransferEncoding)
+{
   // A non-chunked Transfer-Encoding must not be silently treated as a plain
   // body.
-  const auto result = ParseHttpResponse(
-      "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\n\x1f\x8b\x08\x00");
+  const auto result =
+      ParseHttpResponse("HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\n\x1f\x8b\x08\x00");
   EXPECT_FALSE(result.has_value());
 }
 
-TEST(HttpTest, HttpsNotImplemented) {
-  const auto url = url::Url::Parse("https://example.com/");
+TEST(HttpTest, UnsupportedSchemeIsNotImplemented)
+{
+  const auto url = url::Url::Parse("ftp://example.com/file");
   ASSERT_TRUE(url.has_value());
   const auto result = HttpGet(url.value());
   ASSERT_FALSE(result.has_value());
@@ -238,7 +517,55 @@ TEST(HttpTest, HttpsNotImplemented) {
 }
 
 #ifndef _WIN32
-TEST(HttpTest, GetFromLocalServer) {
+TEST(TlsTest, GetFromLocalTlsServer)
+{
+  TestTlsServer server;
+  ASSERT_TRUE(server.IsValid());
+  TlsOptions options;
+  options.extra_ca_cert_pem = server.cert_pem();
+  const std::string host = "https://localhost:" + std::to_string(server.port()) + "/";
+  const auto url = url::Url::Parse(host);
+  ASSERT_TRUE(url.has_value());
+  const auto result = HttpGet(url.value(), 5, {}, options);
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  EXPECT_EQ(result.value().status_code, 200);
+  EXPECT_EQ(result.value().body, "<h1>Hello TLS</h1>");
+}
+
+TEST(TlsTest, UntrustedCertificateIsRejected)
+{
+  // Without passing the server's self-signed certificate as a trust anchor,
+  // verification must fail: the default is to reject untrusted peers.
+  TestTlsServer server;
+  ASSERT_TRUE(server.IsValid());
+  const std::string host = "https://localhost:" + std::to_string(server.port()) + "/";
+  const auto url = url::Url::Parse(host);
+  ASSERT_TRUE(url.has_value());
+  const auto result = HttpGet(url.value());
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error().category(), base::ErrorCategory::kNetwork);
+}
+
+TEST(TlsTest, HostnameMismatchIsRejected)
+{
+  // The certificate is valid for "localhost" only; connecting by IP must fail
+  // hostname verification even with the trust anchor supplied.
+  TestTlsServer server;
+  ASSERT_TRUE(server.IsValid());
+  TlsOptions options;
+  options.extra_ca_cert_pem = server.cert_pem();
+  const std::string host = "https://127.0.0.1:" + std::to_string(server.port()) + "/";
+  const auto url = url::Url::Parse(host);
+  ASSERT_TRUE(url.has_value());
+  const auto result = HttpGet(url.value(), 5, {}, options);
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error().category(), base::ErrorCategory::kNetwork);
+}
+#endif
+
+#ifndef _WIN32
+TEST(HttpTest, GetFromLocalServer)
+{
   TestHttpServer server;
   ASSERT_TRUE(server.IsValid());
   const std::string host = "http://127.0.0.1:" + std::to_string(server.port()) + "/";
@@ -251,7 +578,8 @@ TEST(HttpTest, GetFromLocalServer) {
   EXPECT_EQ(result.value().body, "<h1>Hello World</h1>");
 }
 
-TEST(HttpTest, RedirectFollowed) {
+TEST(HttpTest, RedirectFollowed)
+{
   TestHttpServer server;
   ASSERT_TRUE(server.IsValid());
   const std::string host = "http://127.0.0.1:" + std::to_string(server.port()) + "/redirect";
@@ -263,7 +591,8 @@ TEST(HttpTest, RedirectFollowed) {
   EXPECT_EQ(result.value().body, "<h1>Hello World</h1>");
 }
 
-TEST(HttpTest, ChunkedFromServer) {
+TEST(HttpTest, ChunkedFromServer)
+{
   TestHttpServer server;
   ASSERT_TRUE(server.IsValid());
   const std::string host = "http://127.0.0.1:" + std::to_string(server.port()) + "/chunked";
@@ -275,7 +604,8 @@ TEST(HttpTest, ChunkedFromServer) {
   EXPECT_EQ(result.value().body, "hello world");
 }
 
-TEST(HttpTest, NotFound) {
+TEST(HttpTest, NotFound)
+{
   TestHttpServer server;
   ASSERT_TRUE(server.IsValid());
   const std::string host = "http://127.0.0.1:" + std::to_string(server.port()) + "/missing";
@@ -286,25 +616,153 @@ TEST(HttpTest, NotFound) {
   EXPECT_EQ(result.value().status_code, 404);
 }
 
-TEST(HttpTest, CompressionNotImplemented) {
+TEST(HttpTest, GzipDecodedFromServer)
+{
   TestHttpServer server;
   ASSERT_TRUE(server.IsValid());
   const std::string host = "http://127.0.0.1:" + std::to_string(server.port()) + "/gzip";
   const auto url = url::Url::Parse(host);
   ASSERT_TRUE(url.has_value());
   const auto result = HttpGet(url.value());
-  ASSERT_FALSE(result.has_value());
-  EXPECT_EQ(result.error().category(), base::ErrorCategory::kNotImplemented);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result.value().status_code, 200);
+  EXPECT_EQ(result.value().body, "Hello World");
 }
 
-TEST(HttpTest, ExtraHeadersSent) {
+TEST(HttpTest, DeflateDecodedFromServer)
+{
+  TestHttpServer server;
+  ASSERT_TRUE(server.IsValid());
+  const std::string host = "http://127.0.0.1:" + std::to_string(server.port()) + "/deflate";
+  const auto url = url::Url::Parse(host);
+  ASSERT_TRUE(url.has_value());
+  const auto result = HttpGet(url.value());
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result.value().status_code, 200);
+  EXPECT_EQ(result.value().body, "Hello World");
+}
+
+TEST(HttpTest, RawDeflateDecodedFromServer)
+{
+  // Some servers emit a raw (wrapper-less) deflate stream for
+  // "Content-Encoding: deflate"; the client must still decode it.
+  TestHttpServer server;
+  ASSERT_TRUE(server.IsValid());
+  const std::string host = "http://127.0.0.1:" + std::to_string(server.port()) + "/raw-deflate";
+  const auto url = url::Url::Parse(host);
+  ASSERT_TRUE(url.has_value());
+  const auto result = HttpGet(url.value());
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result.value().body, "Hello World");
+}
+
+TEST(HttpTest, DoubleEncodedDecodedFromServer)
+{
+  // Content-Encoding: gzip, deflate — encodings applied in order, decoded in
+  // reverse (RFC 7231 §3.1.2.1).
+  TestHttpServer server;
+  ASSERT_TRUE(server.IsValid());
+  const std::string host = "http://127.0.0.1:" + std::to_string(server.port()) + "/double-encoded";
+  const auto url = url::Url::Parse(host);
+  ASSERT_TRUE(url.has_value());
+  const auto result = HttpGet(url.value());
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result.value().body, "Hello World");
+}
+
+TEST(HttpTest, BadGzipIsParseError)
+{
+  // A gzip Content-Encoding whose body is not a valid gzip stream must be an
+  // explicit error, never corrupted content.
+  TestHttpServer server;
+  ASSERT_TRUE(server.IsValid());
+  const std::string host = "http://127.0.0.1:" + std::to_string(server.port()) + "/bad-gzip";
+  const auto url = url::Url::Parse(host);
+  ASSERT_TRUE(url.has_value());
+  const auto result = HttpGet(url.value());
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error().category(), base::ErrorCategory::kParse);
+}
+
+TEST(CompressionTest, GzipRoundTrip)
+{
+  const std::string body = "the quick brown fox jumps over the lazy dog";
+  const std::string compressed = GzipCompress(body);
+  ASSERT_FALSE(compressed.empty());
+  const auto result = InflateGzip(compressed);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result.value(), body);
+}
+
+TEST(CompressionTest, DeflateZlibRoundTrip)
+{
+  const std::string body = std::string(1000, 'x');
+  const std::string compressed = ZlibCompress(body);
+  ASSERT_FALSE(compressed.empty());
+  const auto result = InflateDeflate(compressed);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result.value(), body);
+}
+
+TEST(CompressionTest, DeflateRawRoundTrip)
+{
+  const std::string body = std::string(1000, 'y');
+  const std::string compressed = RawDeflateCompress(body);
+  ASSERT_FALSE(compressed.empty());
+  const auto result = InflateDeflate(compressed);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result.value(), body);
+}
+
+TEST(CompressionTest, GzipRejectsGarbage)
+{
+  const auto result = InflateGzip("\x1f\x8b\x08\x00garbage");
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error().category(), base::ErrorCategory::kParse);
+}
+
+TEST(CompressionTest, DecodeIdentityNoop)
+{
+  const auto result = DecodeContentEncodings("identity", "plain body");
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result.value(), "plain body");
+}
+
+TEST(CompressionTest, DecodeEmptyNoop)
+{
+  const auto result = DecodeContentEncodings("", "plain body");
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result.value(), "plain body");
+}
+
+TEST(CompressionTest, DecodeChain)
+{
+  // Header lists codings in application order: gzip first, then deflate.
+  // The decoder must undo deflate first, then gzip.
+  const std::string body = "nested encoding payload";
+  const std::string gzipped = GzipCompress(body);
+  const std::string deflated = ZlibCompress(gzipped);
+  const auto result = DecodeContentEncodings("gzip, deflate", deflated);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result.value(), body);
+}
+
+TEST(CompressionTest, DecodeRejectsUnknownCoding)
+{
+  const auto result = DecodeContentEncodings("br", "something");
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error().category(), base::ErrorCategory::kParse);
+}
+
+TEST(HttpTest, ExtraHeadersSent)
+{
   TestHttpServer server;
   ASSERT_TRUE(server.IsValid());
   const std::string host = "http://127.0.0.1:" + std::to_string(server.port()) + "/";
   const auto url = url::Url::Parse(host);
   ASSERT_TRUE(url.has_value());
   const auto result = HttpGet(url.value(), 5, [](const url::Url&) {
-    return std::vector<HttpHeader>{{ "cookie", "session=abc123" }};
+    return std::vector<HttpHeader>{{"cookie", "session=abc123"}};
   });
   ASSERT_TRUE(result.has_value());
   const auto requests = server.Requests();
@@ -314,7 +772,8 @@ TEST(HttpTest, ExtraHeadersSent) {
   EXPECT_NE(requests[0].find("cookie: session=abc123"), std::string::npos);
 }
 
-TEST(HttpTest, ExtraHeadersRecomputedPerRedirectHop) {
+TEST(HttpTest, ExtraHeadersRecomputedPerRedirectHop)
+{
   TestHttpServer server;
   ASSERT_TRUE(server.IsValid());
   const std::string host = "http://127.0.0.1:" + std::to_string(server.port()) + "/redirect";
@@ -324,24 +783,24 @@ TEST(HttpTest, ExtraHeadersRecomputedPerRedirectHop) {
   const auto result = HttpGet(url.value(), 5, [&calls](const url::Url& target) {
     ++calls;
     // Cookie scoped to the redirect target host.
-    return std::vector<HttpHeader>{ { "cookie", "host=" + target.host() } };
+    return std::vector<HttpHeader>{{"cookie", "host=" + target.host()}};
   });
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result.value().status_code, 200);
-  EXPECT_GE(calls, 2);  // initial request + redirect hop
+  EXPECT_GE(calls, 2); // initial request + redirect hop
   const auto requests = server.Requests();
   ASSERT_EQ(requests.size(), 2u);
   // The cookie header on the redirected request targets the final host.
   EXPECT_NE(requests[1].find("cookie: host="), std::string::npos);
 }
 
-TEST(HttpTest, RequestTargetIsPercentEncoded) {
+TEST(HttpTest, RequestTargetIsPercentEncoded)
+{
   TestHttpServer server;
   ASSERT_TRUE(server.IsValid());
   // Spaces are legal in a parsed path but must be percent-encoded on the
   // wire so they cannot smuggle bytes into the request line.
-  const std::string host =
-      "http://127.0.0.1:" + std::to_string(server.port()) + "/a b/c?q=x y";
+  const std::string host = "http://127.0.0.1:" + std::to_string(server.port()) + "/a b/c?q=x y";
   const auto url = url::Url::Parse(host);
   ASSERT_TRUE(url.has_value());
   const auto result = HttpGet(url.value());
@@ -351,12 +810,13 @@ TEST(HttpTest, RequestTargetIsPercentEncoded) {
   EXPECT_NE(requests[0].find("GET /a%20b/c?q=x%20y HTTP/1.1"), std::string::npos);
 }
 
-TEST(SocketTest, ConnectRefused) {
+TEST(SocketTest, ConnectRefused)
+{
   // Find a port that is very likely closed by binding and releasing.
   const auto socket = Socket::Connect("127.0.0.1", 1, 500);
   EXPECT_FALSE(socket.has_value());
 }
 #endif
 
-}  // namespace
-}  // namespace neko::network
+} // namespace
+} // namespace neko::network

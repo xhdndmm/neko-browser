@@ -64,6 +64,10 @@ find_package(JPEG REQUIRED)
 # Font rasterization: FreeType (FTL license).  Wrapped behind neko::graphics;
 # see ADR 0009.
 find_package(Freetype REQUIRED)
+# Transport security: OpenSSL provides TLS/HTTPS, wrapped behind
+# neko::network::TlsSocket.  See docs/development/dependency-policy.md and
+# docs/architecture/adr/0010-tls-openssl.md.
+find_package(OpenSSL REQUIRED)
 
 # JavaScript runtime: QuickJS (quickjs-ng v0.16.1), pinned by content hash and
 # built from source as a static library.  It is wrapped behind neko::javascript's
@@ -121,4 +125,5 @@ message(STATUS "  Coverage            : ${NEKO_ENABLE_COVERAGE}")
 message(STATUS "  LTO                 : ${NEKO_ENABLE_LTO}")
 message(STATUS "  ZLIB                : ${ZLIB_VERSION}")
 message(STATUS "  JPEG                : ${JPEG_VERSION}")
+message(STATUS "  OpenSSL             : ${OPENSSL_VERSION}")
 message(STATUS "")

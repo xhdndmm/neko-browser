@@ -1,22 +1,25 @@
 #pragma once
 
+#include "neko/base/status.h"
+#include "neko/network/tls_socket.h"
+#include "neko/url/url.h"
+
 #include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include "neko/base/status.h"
-#include "neko/url/url.h"
-
 namespace neko::network {
 
-struct HttpHeader {
-  std::string name;  // lowercased
+struct HttpHeader
+{
+  std::string name; // lowercased
   std::string value;
 };
 
 // A parsed HTTP/1.1 response.
-struct HttpResponse {
+struct HttpResponse
+{
   int status_code = 0;
   std::string reason;
   std::vector<HttpHeader> headers;
@@ -37,9 +40,14 @@ using HeaderProvider = std::function<std::vector<HttpHeader>(const url::Url&)>;
 
 // Sends a GET request and returns the final response, following redirects
 // (301/302/303/307/308) up to |redirect_limit| times.  |extra_headers| is
-// consulted for each hop.  Only http:// is supported; https:// returns a
-// NOT IMPLEMENTED error (TLS is future work).
-base::Result<HttpResponse> HttpGet(const url::Url& url, int redirect_limit = 5,
-                                   const HeaderProvider& extra_headers = {});
+// consulted for each hop.  http:// and https:// are supported; https://
+// verifies the server certificate (see TlsSocket), using |tls_options|
+// (e.g. an extra trust anchor for tests).  Response bodies are decoded per
+// Content-Encoding (gzip / deflate).  Any other scheme returns a NOT
+// IMPLEMENTED error.
+base::Result<HttpResponse> HttpGet(const url::Url& url,
+                                   int redirect_limit = 5,
+                                   const HeaderProvider& extra_headers = {},
+                                   const TlsOptions& tls_options = {});
 
-}  // namespace neko::network
+} // namespace neko::network

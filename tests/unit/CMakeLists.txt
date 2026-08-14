@@ -129,7 +129,8 @@ gtest_discover_tests(neko_graphics_tests DISCOVERY_MODE PRE_TEST)
 add_executable(neko_network_tests
   network/network_test.cpp
 )
-target_link_libraries(neko_network_tests PRIVATE neko::network gtest_main)
+target_link_libraries(neko_network_tests PRIVATE neko::network ZLIB::ZLIB
+  OpenSSL::SSL OpenSSL::Crypto gtest_main)
 apply_compiler_warnings(neko_network_tests)
 gtest_discover_tests(neko_network_tests DISCOVERY_MODE PRE_TEST)
 

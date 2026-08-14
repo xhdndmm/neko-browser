@@ -1,5 +1,10 @@
 #include "neko/network/http.h"
 
+#include "neko/base/string_util.h"
+#include "neko/network/compression.h"
+#include "neko/network/socket.h"
+#include "neko/network/tls_socket.h"
+
 #include <cstdint>
 #include <cstdlib>
 #include <optional>
@@ -7,15 +12,13 @@
 #include <string_view>
 #include <utility>
 
-#include "neko/base/string_util.h"
-#include "neko/network/socket.h"
-
 namespace neko::network {
 namespace {
 
 // Parses a decimal byte count, rejecting values that overflow size_t.
 // Returns nullopt for empty or non-numeric input.
-std::optional<std::size_t> ParseByteCount(std::string_view text) {
+std::optional<std::size_t> ParseByteCount(std::string_view text)
+{
   if (text.empty()) {
     return std::nullopt;
   }
@@ -34,7 +37,8 @@ std::optional<std::size_t> ParseByteCount(std::string_view text) {
 
 // Returns the values of every header named |name| (case-insensitive).
 std::vector<std::string_view> GetAllHeaderValues(const HttpResponse& response,
-                                                 std::string_view name) {
+                                                 std::string_view name)
+{
   std::vector<std::string_view> values;
   for (const HttpHeader& header : response.headers) {
     if (base::AsciiEqualsIgnoreCase(header.name, name)) {
@@ -49,22 +53,40 @@ std::vector<std::string_view> GetAllHeaderValues(const HttpResponse& response,
 // or query are left raw; anything else (spaces, control characters, quote
 // and angle brackets, non-ASCII bytes) is encoded so that untrusted URL
 // components cannot inject bytes into the request line.
-bool IsRequestTargetChar(unsigned char c) {
+bool IsRequestTargetChar(unsigned char c)
+{
   if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
     return true;
   }
   switch (c) {
-    case '-': case '.': case '_': case '~':     // unreserved
-    case '!': case '$': case '&': case '\'': case '(': case ')':  // sub-delims
-    case '*': case '+': case ',': case ';': case '=':
-    case ':': case '@': case '/': case '?': case '%':
-      return true;
-    default:
-      return false;
+  case '-':
+  case '.':
+  case '_':
+  case '~': // unreserved
+  case '!':
+  case '$':
+  case '&':
+  case '\'':
+  case '(':
+  case ')': // sub-delims
+  case '*':
+  case '+':
+  case ',':
+  case ';':
+  case '=':
+  case ':':
+  case '@':
+  case '/':
+  case '?':
+  case '%':
+    return true;
+  default:
+    return false;
   }
 }
 
-std::string EncodeRequestTarget(std::string_view text) {
+std::string EncodeRequestTarget(std::string_view text)
+{
   constexpr char kHex[] = "0123456789ABCDEF";
   std::string out;
   out.reserve(text.size());
@@ -81,7 +103,8 @@ std::string EncodeRequestTarget(std::string_view text) {
   return out;
 }
 
-std::string_view TrimView(std::string_view text) {
+std::string_view TrimView(std::string_view text)
+{
   while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) {
     text.remove_prefix(1);
   }
@@ -92,7 +115,8 @@ std::string_view TrimView(std::string_view text) {
 }
 
 // Decodes a chunked transfer body into |out.body|.
-base::Result<void> DecodeChunked(std::string_view data, HttpResponse& out) {
+base::Result<void> DecodeChunked(std::string_view data, HttpResponse& out)
+{
   std::string body;
   std::size_t pos = 0;
   for (;;) {
@@ -146,9 +170,10 @@ base::Result<void> DecodeChunked(std::string_view data, HttpResponse& out) {
   }
 }
 
-}  // namespace
+} // namespace
 
-std::string HttpResponse::GetHeader(std::string_view name) const {
+std::string HttpResponse::GetHeader(std::string_view name) const
+{
   for (const HttpHeader& header : headers) {
     if (base::AsciiEqualsIgnoreCase(header.name, name)) {
       return header.value;
@@ -157,7 +182,8 @@ std::string HttpResponse::GetHeader(std::string_view name) const {
   return {};
 }
 
-base::Result<HttpResponse> ParseHttpResponse(std::string_view raw) {
+base::Result<HttpResponse> ParseHttpResponse(std::string_view raw)
+{
   HttpResponse response;
 
   const std::size_t line_end = raw.find("\r\n");
@@ -170,9 +196,8 @@ base::Result<HttpResponse> ParseHttpResponse(std::string_view raw) {
     return base::Err(base::Error::Parse("malformed status line"));
   }
   const std::size_t sp2 = status_line.find(' ', sp1 + 1);
-  const std::string_view code_str =
-      status_line.substr(sp1 + 1, sp2 == std::string_view::npos ? std::string_view::npos
-                                                                : sp2 - sp1 - 1);
+  const std::string_view code_str = status_line.substr(
+      sp1 + 1, sp2 == std::string_view::npos ? std::string_view::npos : sp2 - sp1 - 1);
   if (code_str.empty()) {
     return base::Err(base::Error::Parse("missing status code"));
   }
@@ -260,11 +285,30 @@ base::Result<HttpResponse> ParseHttpResponse(std::string_view raw) {
   return response;
 }
 
-base::Result<HttpResponse> HttpGet(const url::Url& url, int redirect_limit,
-                                  const HeaderProvider& extra_headers) {
-  if (url.scheme() != "http") {
-    return base::Err(base::Error::NotImplemented(
-        "only http:// is supported; https:// requires TLS (planned)"));
+// Sends |request| over a transport (Socket or TlsSocket) and parses the raw
+// response.  The two transports expose the same Send/ReceiveAll interface.
+template <typename Transport>
+base::Result<HttpResponse> PerformRequest(Transport& transport, const std::string& request)
+{
+  const base::Result<std::size_t> sent = transport.Send(request);
+  if (!sent) {
+    return base::Err(sent.error());
+  }
+  const base::Result<std::string> raw = transport.ReceiveAll();
+  if (!raw) {
+    return base::Err(raw.error());
+  }
+  return ParseHttpResponse(raw.value());
+}
+
+base::Result<HttpResponse> HttpGet(const url::Url& url,
+                                   int redirect_limit,
+                                   const HeaderProvider& extra_headers,
+                                   const TlsOptions& tls_options)
+{
+  if (url.scheme() != "http" && url.scheme() != "https") {
+    return base::Err(base::Error::NotImplemented("unsupported URL scheme '" + url.scheme() +
+                                                 "' (only http/https)"));
   }
 
   std::string request = "GET ";
@@ -287,6 +331,7 @@ base::Result<HttpResponse> HttpGet(const url::Url& url, int redirect_limit,
   request += "Connection: close\r\n";
   request += "User-Agent: neko-browser/0.1.0\r\n";
   request += "Accept: text/html,application/xhtml+xml\r\n";
+  request += "Accept-Encoding: gzip, deflate\r\n";
   if (extra_headers) {
     for (const HttpHeader& header : extra_headers(url)) {
       request += header.name;
@@ -297,19 +342,23 @@ base::Result<HttpResponse> HttpGet(const url::Url& url, int redirect_limit,
   }
   request += "\r\n";
 
-  base::Result<Socket> socket = Socket::Connect(url.host(), url.effective_port());
-  if (!socket) {
-    return base::Err(socket.error());
-  }
-  const base::Result<std::size_t> sent = socket.value().Send(request);
-  if (!sent) {
-    return base::Err(sent.error());
-  }
-  const base::Result<std::string> raw = socket.value().ReceiveAll();
-  if (!raw) {
-    return base::Err(raw.error());
-  }
-  base::Result<HttpResponse> response = ParseHttpResponse(raw.value());
+  // Fetch over the scheme-appropriate transport (plain TCP for http, TLS
+  // for https) and parse the response.
+  base::Result<HttpResponse> response = [&]() -> base::Result<HttpResponse> {
+    if (url.scheme() == "https") {
+      base::Result<TlsSocket> tls =
+          TlsSocket::Connect(url.host(), url.effective_port(), tls_options);
+      if (!tls) {
+        return base::Err(tls.error());
+      }
+      return PerformRequest(tls.value(), request);
+    }
+    base::Result<Socket> socket = Socket::Connect(url.host(), url.effective_port());
+    if (!socket) {
+      return base::Err(socket.error());
+    }
+    return PerformRequest(socket.value(), request);
+  }();
   if (!response) {
     return base::Err(response.error());
   }
@@ -322,19 +371,23 @@ base::Result<HttpResponse> HttpGet(const url::Url& url, int redirect_limit,
     if (!location.empty()) {
       const base::Result<url::Url> next = url::Url::Parse(location, url);
       if (next) {
-        return HttpGet(next.value(), redirect_limit - 1, extra_headers);
+        return HttpGet(next.value(), redirect_limit - 1, extra_headers, tls_options);
       }
     }
   }
 
-  // Compression is not supported yet; be explicit rather than returning
-  // corrupted content.
+  // Decode the body per Content-Encoding (RFC 7231 §3.1.2).  An unsupported
+  // coding is an explicit error rather than returning corrupted content.
   const std::string content_encoding = response.value().GetHeader("content-encoding");
   if (!content_encoding.empty() && !base::AsciiEqualsIgnoreCase(content_encoding, "identity")) {
-    return base::Err(base::Error::NotImplemented(
-        "content-encoding '" + content_encoding + "' is not supported yet"));
+    const base::Result<std::string> decoded =
+        DecodeContentEncodings(content_encoding, response.value().body);
+    if (!decoded) {
+      return base::Err(decoded.error());
+    }
+    response.value().body = std::move(decoded.value());
   }
   return response;
 }
 
-}  // namespace neko::network
+} // namespace neko::network

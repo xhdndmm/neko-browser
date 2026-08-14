@@ -6,12 +6,6 @@
 //                    --audio-info <file> | --image-info <file> [--image-out <path>]
 //  - GUI:            run the separate neko_browser_gui executable.
 
-#include <algorithm>
-#include <cstdlib>
-#include <ctime>
-#include <iostream>
-#include <string>
-
 #include "neko/base/logging.h"
 #include "neko/base/status.h"
 #include "neko/base/version.h"
@@ -27,14 +21,21 @@
 #include "neko/storage/file_util.h"
 #include "neko/url/url.h"
 
+#include <algorithm>
+#include <cstdlib>
+#include <ctime>
+#include <iostream>
+#include <string>
+
 namespace {
 
-std::string DefaultProfileDir() {
+std::string DefaultProfileDir()
+{
   const char* env = std::getenv("NEKO_PROFILE");
-  if (env != nullptr && *env != '\0') return env;
+  if (env != nullptr && *env != '\0')
+    return env;
 #if defined(_WIN32)
-  return std::string(std::getenv("APPDATA") ? std::getenv("APPDATA") : "") +
-         "/neko-browser";
+  return std::string(std::getenv("APPDATA") ? std::getenv("APPDATA") : "") + "/neko-browser";
 #else
   const char* home = std::getenv("HOME");
   return std::string(home ? home : "/tmp") + "/.local/share/neko-browser";
@@ -42,11 +43,12 @@ std::string DefaultProfileDir() {
 }
 
 // Loads a URL (http via the network stack) or a local file into the page.
-neko::base::Result<void> LoadTarget(neko::renderer::Page& page, const std::string& target) {
+neko::base::Result<void> LoadTarget(neko::renderer::Page& page, const std::string& target)
+{
   const auto parsed = neko::url::Url::Parse(target);
   if (parsed.has_value()) {
     const neko::url::Url& url = parsed.value();
-    if (url.scheme() == "http") {
+    if (url.scheme() == "http" || url.scheme() == "https") {
       NEKO_LOG_INFO("fetching " + url.Serialize());
       const auto response = neko::network::HttpGet(url);
       if (!response) {
@@ -60,15 +62,10 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page, const std::strin
       }
       // Fetch and decode the page's <img> subresources (headless path).
       neko::browser::FetchPageImages(
-          page, url.Serialize(),
-          [](const neko::url::Url& u, std::string_view) {
+          page, url.Serialize(), [](const neko::url::Url& u, std::string_view) {
             return neko::network::HttpGet(u);
           });
       return neko::base::Ok();
-    }
-    if (url.scheme() == "https") {
-      return neko::base::Err(neko::base::Error::NotImplemented(
-          "https:// requires TLS (planned for a later phase)"));
     }
     if (url.scheme() == "file") {
       const auto r = page.LoadFile(url.path());
@@ -77,8 +74,7 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page, const std::strin
       }
       // Local pages may still reference absolute http(s) images; fetch those.
       neko::browser::FetchPageImages(
-          page, /*base_url=*/"",
-          [](const neko::url::Url& u, std::string_view) {
+          page, /*base_url=*/"", [](const neko::url::Url& u, std::string_view) {
             return neko::network::HttpGet(u);
           });
       return neko::base::Ok();
@@ -90,16 +86,16 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page, const std::strin
 }
 
 // Writes an image::Image as a binary PPM (P6), compositing alpha over white.
-neko::base::Result<void> WriteImagePpm(std::string_view path, const neko::image::Image& img) {
+neko::base::Result<void> WriteImagePpm(std::string_view path, const neko::image::Image& img)
+{
   if (img.empty()) {
     return neko::base::Err(neko::base::Error::InvalidArgument("empty image"));
   }
-  std::string out = "P6\n" + std::to_string(img.width) + " " + std::to_string(img.height) +
-                    "\n255\n";
+  std::string out =
+      "P6\n" + std::to_string(img.width) + " " + std::to_string(img.height) + "\n255\n";
   out.reserve(out.size() + static_cast<size_t>(img.width) * static_cast<size_t>(img.height) * 3);
   for (size_t i = 0; i + 3 < img.rgba.size(); i += 4) {
-    const uint8_t r = img.rgba[i], g = img.rgba[i + 1], b = img.rgba[i + 2],
-                  a = img.rgba[i + 3];
+    const uint8_t r = img.rgba[i], g = img.rgba[i + 1], b = img.rgba[i + 2], a = img.rgba[i + 3];
     // Composite over white.
     const uint8_t cr = static_cast<uint8_t>((r * a + 255 * (255 - a)) / 255);
     const uint8_t cg = static_cast<uint8_t>((g * a + 255 * (255 - a)) / 255);
@@ -111,14 +107,13 @@ neko::base::Result<void> WriteImagePpm(std::string_view path, const neko::image:
   return neko::storage::WriteFileAtomic(path, out);
 }
 
-int RunStorageCommands(const neko::browser::BrowserOptions& options,
-                       const std::string& profile_dir) {
-  neko::browser::BrowserController controller(profile_dir,
-                                              [](const neko::url::Url&, std::string_view) {
-                                                return neko::base::Err(neko::base::Error::
-                                                                           NotImplemented(
-                                                                               "network disabled in storage mode"));
-                                              });
+int RunStorageCommands(const neko::browser::BrowserOptions& options, const std::string& profile_dir)
+{
+  neko::browser::BrowserController controller(
+      profile_dir, [](const neko::url::Url&, std::string_view) {
+        return neko::base::Err(
+            neko::base::Error::NotImplemented("network disabled in storage mode"));
+      });
   const auto loaded = controller.Load();
   if (!loaded) {
     std::cerr << "error: " << loaded.error().message() << "\n";
@@ -135,16 +130,16 @@ int RunStorageCommands(const neko::browser::BrowserOptions& options,
   if (options.dump_bookmarks) {
     std::cout << "# bookmarks (" << controller.bookmarks().size() << ")\n";
     for (const auto& b : controller.bookmarks().All()) {
-      std::cout << (b.folder.empty() ? "-" : b.folder) << "\t"
-                << (b.title.empty() ? "-" : b.title) << "\t" << b.url << "\n";
+      std::cout << (b.folder.empty() ? "-" : b.folder) << "\t" << (b.title.empty() ? "-" : b.title)
+                << "\t" << b.url << "\n";
     }
   }
   if (options.show_cookies) {
     std::cout << "# cookies (" << controller.cookies().size() << ")\n";
     for (const auto& c : controller.cookies().All()) {
-      std::cout << (c.host_only ? c.domain : "." + c.domain) << "\t" << c.path << "\t"
-                << c.name << "\t" << c.value << "\t"
-                << (c.secure ? "Secure " : "") << (c.http_only ? "HttpOnly " : "")
+      std::cout << (c.host_only ? c.domain : "." + c.domain) << "\t" << c.path << "\t" << c.name
+                << "\t" << c.value << "\t" << (c.secure ? "Secure " : "")
+                << (c.http_only ? "HttpOnly " : "")
                 << (c.same_site.empty() ? "" : "SameSite=" + c.same_site) << "\n";
     }
   }
@@ -152,7 +147,8 @@ int RunStorageCommands(const neko::browser::BrowserOptions& options,
 }
 
 // Prints a JavaScript completion value (objects as JSON) to stdout.
-void PrintJsResult(const neko::javascript::ScriptValue& value) {
+void PrintJsResult(const neko::javascript::ScriptValue& value)
+{
   if (value.Kind() == neko::javascript::ValueKind::kObject) {
     auto json = value.JsonStringify();
     if (json.has_value()) {
@@ -161,40 +157,41 @@ void PrintJsResult(const neko::javascript::ScriptValue& value) {
     }
   }
   auto str = value.ToString();
-  if (str.has_value()) std::cout << str.value() << "\n";
+  if (str.has_value())
+    std::cout << str.value() << "\n";
 }
 
-}  // namespace
+} // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv)
+{
   const neko::browser::ParseResult parsed = neko::browser::ParseCommandLine(argc, argv);
 
   switch (parsed.action) {
-    case neko::browser::ParseResult::Action::kHelp:
-      std::cout << neko::browser::UsageText();
-      return 0;
-    case neko::browser::ParseResult::Action::kVersion:
-      std::cout << neko::base::GetProjectName() << ' ' << neko::base::GetVersionString() << '\n';
-      return 0;
-    case neko::browser::ParseResult::Action::kError:
-      std::cerr << "error: " << parsed.error_message << "\n\n" << neko::browser::UsageText();
-      return 2;
-    case neko::browser::ParseResult::Action::kRun:
-      break;
+  case neko::browser::ParseResult::Action::kHelp:
+    std::cout << neko::browser::UsageText();
+    return 0;
+  case neko::browser::ParseResult::Action::kVersion:
+    std::cout << neko::base::GetProjectName() << ' ' << neko::base::GetVersionString() << '\n';
+    return 0;
+  case neko::browser::ParseResult::Action::kError:
+    std::cerr << "error: " << parsed.error_message << "\n\n" << neko::browser::UsageText();
+    return 2;
+  case neko::browser::ParseResult::Action::kRun:
+    break;
   }
 
   neko::base::Logger::Instance().SetLevel(parsed.options.log_level);
   NEKO_LOG_INFO("neko-browser " + std::string(neko::base::GetVersionString()));
 
-  const std::string profile_dir =
-      parsed.options.profile_name.has_value() ? parsed.options.profile_name.value()
-                                              : DefaultProfileDir();
+  const std::string profile_dir = parsed.options.profile_name.has_value()
+                                      ? parsed.options.profile_name.value()
+                                      : DefaultProfileDir();
 
   // -------------------------------------------------------------------------
   // Storage commands (history / bookmarks / cookies).
   // -------------------------------------------------------------------------
-  if (parsed.options.dump_history || parsed.options.dump_bookmarks ||
-      parsed.options.show_cookies) {
+  if (parsed.options.dump_history || parsed.options.dump_bookmarks || parsed.options.show_cookies) {
     return RunStorageCommands(parsed.options, profile_dir);
   }
 
@@ -250,10 +247,8 @@ int main(int argc, char** argv) {
       std::cerr << "error: " << image.error().message() << "\n";
       return 1;
     }
-    std::cout << "format      : "
-              << (neko::image::IsPng(bytes.value()) ? "PNG" : "JPEG") << "\n"
-              << "size        : " << image.value().width << " x " << image.value().height
-              << "\n";
+    std::cout << "format      : " << (neko::image::IsPng(bytes.value()) ? "PNG" : "JPEG") << "\n"
+              << "size        : " << image.value().width << " x " << image.value().height << "\n";
     if (parsed.options.image_out_ppm.has_value()) {
       const auto written = WriteImagePpm(parsed.options.image_out_ppm.value(), image.value());
       if (!written) {
@@ -282,13 +277,14 @@ int main(int argc, char** argv) {
                                 : profile_dir + "/downloads";
     neko::browser::DownloadManager manager(dir);
     const int64_t now = static_cast<int64_t>(std::time(nullptr));
-    auto result = manager.Start(url.value(), controller.cookies().CookieHeaderFor(url.value(), now));
+    auto result =
+        manager.Start(url.value(), controller.cookies().CookieHeaderFor(url.value(), now));
     if (!result) {
       std::cerr << "error: " << result.error().message() << "\n";
       return 1;
     }
-    std::cout << "downloaded: " << result.value().filename << " ("
-              << result.value().received_bytes << " bytes)\n";
+    std::cout << "downloaded: " << result.value().filename << " (" << result.value().received_bytes
+              << " bytes)\n";
     return 0;
   }
 
