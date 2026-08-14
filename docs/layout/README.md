@@ -24,10 +24,16 @@
 - span 解析按 WHATWG tables.html：非负整数解析（尾随文本忽略）、colspan>1000 截断
   到 1000、rowspan>65534 截断到 65534、rowspan=0 表示跨到**所在行组**末尾（保留
   thead/tbody/tfoot 与连续匿名 `<tr>` 的隐式行组边界）
+- **flexbox（M1–M5）**：display:flex/inline-flex；flex-direction
+  （row/column+reverse）、flex-wrap（含 wrap-reverse）、flex-grow/shrink/basis
+  （含 flex 简写）、justify-content（6 值）、align-items
+  （stretch/flex-start/flex-end/center/baseline）、align-content（确定 cross
+  尺寸时）、row/column gap；嵌套 flex 可用；内联 flex 为行内原子盒
 
 ## 未实现
 
-- flexbox/grid、fixed/sticky、margin 折叠、z-index、百分比 offset
+- flexbox：auto 外边距、min/max-width、order、align-self、百分比高度精确解析
+- grid、fixed/sticky、margin 折叠、z-index、百分比 offset
   （fixed 暂按 absolute 处理）
 - float：`clear`、多个浮动盒相交的 BFC 排布
 - 表格：border-collapse/border-spacing、`vertical-align`、`<caption>` 定位、

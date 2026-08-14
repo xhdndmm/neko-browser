@@ -14,8 +14,11 @@
 | TLS | Phase 2 | 证书校验失败 |
 | 图片/字体 | Phase 5–6 | 解码器漏洞 |
 | PNG/JPEG | 已落地 | 长度/溢出/超大尺寸边界检查（有测试） |
+| GIF | 已落地 | LZW 码宽/码表/输出长度/色表索引边界检查（有测试） |
 | PDF | 已落地 (Partial) | 畸形 xref/对象/流（长度与溢出检查） |
 | Cookie 存储 | 已落地 | 域/路径匹配、注入转义（百分号编码） |
+| HTTP 压缩 | 已落地 | 64 MiB 解压输出上限（zip-bomb 防护） |
+| TLS | 已落地 | 证书+主机名校验（默认全量，测试含不受信/主机名不匹配拒绝） |
 | JavaScript runtime | 已落地 (Partial) | QuickJS 沙箱：无 std/os 模块、执行时限中断、内存上限（均有测试） |
 | JavaScript | Phase 8+ | 沙箱逃逸、原型污染 |
 | IPC | Phase 12 | 消息伪造、越权 |
@@ -53,8 +56,12 @@
 - Cookie 存储（RFC 6265 子集）：字段经百分号编码转义，防止注入；
   域/路径匹配已实现。**已知限制**：未做 PSL 校验与 SameSite 强制实施，
   跨域 Cookie 语义可能过宽 —— 已标注为限制，后续里程碑收紧。
+- HTTP 内容编码（gzip/deflate）：解压输出设 64 MiB 上限，防解压炸弹；
+  截断/损坏流返回解析错误而非损坏内容。
+- TLS（Phase 2）：OpenSSL 封装（ADR 0010），默认全量证书校验 + 主机名校验，
+  拒绝不受信/主机名不匹配的服务器（有测试），不提供静默降级路径。
 - JavaScript runtime（Phase 8 M1）：QuickJS 沙箱化 —— 不编译 `std`/`os`
   模块（无文件/进程/网络能力），仅自有 `console` 绑定；默认执行时限
   10 秒 + 内存上限 128 MiB（有中断与内存限制测试）。**已知限制**：
   尚无 DOM 绑定、无 Origin 隔离（每个 engine 独立全局域）。
-- 未开始：Origin/SOP/CORS/CSP、TLS、沙箱、权限、进程隔离。
+- 未开始：Origin/SOP/CORS/CSP、沙箱、权限、进程隔离。

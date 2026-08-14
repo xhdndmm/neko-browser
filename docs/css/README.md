@@ -9,10 +9,13 @@
 - 选择器：type/id/class/属性（全部操作符）/伪类(:first-child 等) + 组合器
   （后代/子/相邻/后续兄弟），特异性计算
 - 颜色（#hex、rgb()/rgba()、~150 命名色）与类型化值解析
+- flex 属性解析：display:flex/inline-flex、flex-direction/flex-wrap/
+  justify-content/align-items/align-content、flex-grow/flex-shrink/flex-basis、
+  flex 简写、gap/row-gap/column-gap
 
 ## 未实现
 
-- flex/grid/transform/动画/过渡、媒体查询完整求值
+- grid/transform/动画/过渡、媒体查询完整求值
 - 完整伪类集（:hover 等按不匹配处理）
 
 ## 架构

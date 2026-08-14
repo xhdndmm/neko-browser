@@ -63,11 +63,11 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
   `--dump-bookmarks` / `--show-cookies` / `--download` / `--extract-pdf` /
   `--audio-info` / `--image-info` 等
 
-> **诚实声明**：TLS/HTTPS、flexbox/grid、**视频解码**、GIF/WebP/GPU 合成、
-> 多进程、LocalStorage/IndexedDB 均 **尚未实现**
+> **诚实声明**：grid、**视频解码**、WebP/AVIF/GPU 合成、多进程、IndexedDB
+> 均 **尚未实现**
 > （见[兼容性矩阵](docs/compatibility/compatibility-matrix.md)）。
 > JavaScript 仅接入 runtime（QuickJS），**无 DOM 绑定**；PDF 仅文本提取（无渲染）；
-> 文本渲染当前使用内嵌公有领域 8x8 位图字体（仅 ASCII，无整形/Unicode 回退）。
+> GIF 仅渲染首帧（无动画）；flexbox 为基础布局（无 auto 外边距/min-max/order）。
 
 ---
 

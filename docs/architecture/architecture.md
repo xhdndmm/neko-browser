@@ -81,8 +81,10 @@ graph LR
 ### network（Phase 2）
 
 - 分层：`URL → HTTP → TLS → TCP → Socket`。
-- 职责：Socket、DNS、HTTP/1.1（请求/响应/头/分块传输/keep-alive/重定向/压缩）、
-  HTTPS（TLS 抽象层，可封装 OpenSSL/mbedTLS/BoringSSL）。
+- 职责：Socket、DNS、HTTP/1.1（请求/响应/头/分块传输/重定向）、
+  HTTPS（`neko::network::TlsSocket` 封装 OpenSSL，ADR 0010：证书+主机名校验、
+  SNI、TLS≥1.2）、内容编码解码（`neko::network::compression` 封装 zlib，
+  gzip/deflate，RFC 7231 链式编码）。
 
 ### html / dom（Phase 3）
 
@@ -100,8 +102,12 @@ graph LR
 ### layout（Phase 5）
 
 - 独立 Layout Tree：`DOM → Style → Layout Tree → Layout → Paint Tree`。
-- 先实现 block / inline / text layout 与盒模型（content/padding/border/margin）。
-- Flexbox/Grid 单独里程碑实现，禁止伪装成 block layout。
+- block / inline / text layout 与盒模型（content/padding/border/margin）。
+- **Flexbox（M1–M5）**：flex-direction（row/column+reverse）、flex-wrap、
+  flex-grow/shrink/basis、justify-content、align-items（含 baseline）、
+  align-content（确定 cross 尺寸）、gap。剩余：auto 外边距、min/max、order、
+  align-self、百分比高度精确解析。
+- Grid 单独里程碑实现，禁止伪装成 block layout。
 
 ### rendering / paint / graphics（Phase 6）
 
@@ -125,13 +131,16 @@ graph LR
 
 ### storage（已落地，Phase 7 前）
 
-- `src/storage/`：CookieStore / HistoryStore / BookmarkStore。
+- `src/storage/`：CookieStore / HistoryStore / BookmarkStore / **LocalStorage**。
 - 存储后端为**自研行式文件**（字段百分号编码），每次写入原子化
   （临时文件 + rename）。无 SQLite，避免重依赖。
 - Cookie 为 RFC 6265 子集：Set-Cookie 解析、域/路径匹配、Max-Age/Expires、
   Secure/HttpOnly/SameSite、会话 vs 持久化、删除、文件往返。
   **限制**：未做 PSL 校验与 SameSite 强制实施（文档化）。
-- Profile 目录：`cookies.txt / history.txt / bookmarks.txt`。
+- **LocalStorage**：按 origin 分区的键值存储（WHATWG HTML），已接入
+  Profile 的 Load/Save/ClearAll；等待 Phase 8 M2 Web IDL 绑定后才可被页面访问。
+  **限制**：无配额、无 storage 事件。
+- Profile 目录：`cookies.txt / history.txt / bookmarks.txt / local_storage.txt`。
 
 ### image（已落地）
 
@@ -139,8 +148,11 @@ graph LR
 - **自研 PNG 解码器**：chunk 解析 + CRC 校验 + 滤波（全部 5 种）+ Adam7
   （interlace）+ 全部颜色类型/位深（灰度/真彩/调色板 + alpha）。zlib 仅用于
   IDAT 解压（基础设施）。
+- **自研 GIF 解码器**（GIF87a/89a）：全局/局部色表、LZW 变长码宽解压、
+  交错、Graphic Control Extension 透明与 disposal。**仅渲染首帧**（无动画，
+  文档化限制）。
 - JPEG 封装 libjpeg（系统库），对外暴露同一 `neko::image` 接口。
-- GIF/WebP/AVIF 返回显式 NOT IMPLEMENTED。
+- WebP/AVIF 返回显式 NOT IMPLEMENTED。
 
 ### media（已落地）
 

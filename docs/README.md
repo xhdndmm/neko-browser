@@ -15,6 +15,8 @@ neko-browser 的文档体系。文档是项目的一等公民 —— 改动架�
   - [0006：GUI 使用 Qt6](architecture/adr/0006-qt6-gui.md)
   - [0007：PNG 自研解码 + JPEG 封装 libjpeg](architecture/adr/0007-png-decoder.md)
   - [0008：JS runtime 接入 QuickJS](architecture/adr/0008-quickjs-runtime.md)
+  - [0009：文本渲染迁移到 FreeType](architecture/adr/0009-freetype-font-rendering.md)
+  - [0010：HTTPS/TLS 采用 OpenSSL](architecture/adr/0010-tls-openssl.md)
 
 ## 开发
 
@@ -33,13 +35,13 @@ neko-browser 的文档体系。文档是项目的一等公民 —— 改动架�
 
 | 模块 | 状态 | 文档 |
 | --- | --- | --- |
-| Network | Partial | [networking](networking/README.md) |
+| Network | Implemented (Phase 2 核心 + HTTPS + 压缩) | [networking](networking/README.md) |
 | HTML | Implemented (子集) | [html](html/README.md) |
 | CSS | Implemented (子集) | [css](css/README.md) |
-| Layout | Implemented (子集) | [layout](layout/README.md) |
+| Layout | Implemented (子集，含 Flexbox M1–M5) | [layout](layout/README.md) |
 | Rendering | Implemented (子集) | [rendering](rendering/README.md) |
-| Storage | Implemented (子集) | 见 [总体架构](architecture/architecture.md) |
-| Image / Media / PDF | Partial | 见 [总体架构](architecture/architecture.md) |
+| Storage | Implemented (子集，含 LocalStorage) | 见 [总体架构](architecture/architecture.md) |
+| Image / Media / PDF | Partial（Image 含 PNG/JPEG/GIF） | 见 [总体架构](architecture/architecture.md) |
 | GUI (Qt6) | Partial | 见 [总体架构](architecture/architecture.md) |
 | JavaScript | Partial (runtime) | [javascript](javascript/README.md) |
 

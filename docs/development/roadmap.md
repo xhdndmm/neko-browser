@@ -51,8 +51,10 @@ graph LR
 
 - [x] Socket 抽象（TCP，POSIX）+ DNS（getaddrinfo）
 - [x] HTTP/1.1 GET：请求/响应/头/体、Content-Length、chunked、重定向
-- [ ] HTTPS/TLS —— **未实现**（架构预留，见 security-model）
-- [ ] gzip/deflate 压缩 —— **未实现**（返回显式错误）
+- [x] HTTPS/TLS —— **已实现**（OpenSSL 封装为 `neko::network::TlsSocket`，
+      证书+主机名校验、SNI、TLS≥1.2；ADR 0010）
+- [x] gzip/deflate 压缩 —— **已实现**（zlib 封装为
+      `neko::network::compression`，RFC 7231 内容编码解码，链式编码）
 
 ## Phase 3 — HTML + DOM ✅（已完成）
 
@@ -67,14 +69,23 @@ graph LR
 - [x] selector matching + specificity + 级联 + 计算样式 + 继承 + UA 样式表
 - [x] 属性：display/position/width/height/margin/padding/border/background/
       color/font-size/font-weight/font-family/line-height/text-align
-- [ ] flexbox / grid —— **未实现**（display 解析为 flex/grid 时按 block 处理）
+- [x] flex 属性：display:flex/inline-flex、flex-direction/flex-wrap/
+      justify-content/align-items/align-content/flex-grow/flex-shrink/
+      flex-basis/flex 简写/gap
+- [ ] grid —— **未实现**（display 解析为 grid 时按 block 处理）
 - [ ] transforms / animations / media queries 完整支持 —— 后续
 
 ## Phase 5 — Layout ✅（已完成，范围见下）
 
 - [x] 独立 Layout Tree、盒模型、block layout、inline layout、文字换行、
       relative 定位、display:none
-- [ ] flexbox / grid / absolute / fixed —— **未实现**（absolute/fixed 按 static 处理）
+- [x] **flexbox 基础布局**（M1–M5）：flex-direction row/column(+reverse)、
+      flex-wrap、flex-grow/shrink/basis、justify-content（6 值）、
+      align-items（stretch/flex-start/flex-end/center/baseline）、
+      align-content（确定 cross 尺寸）、gap；14 个布局单元测试
+- [ ] grid —— **未实现**
+- [ ] flexbox 后续：auto 外边距、min/max-width、order、align-self、
+      百分比高度精确解析 —— 后续
 
 ## Phase 6 — Rendering ✅（已完成，范围见下）
 
@@ -91,10 +102,12 @@ graph LR
 
 在 Phase 6 与 Phase 7 之间落地的内容解析与存储子系统：
 
-- [x] **storage**：CookieStore（RFC 6265 子集）、HistoryStore、BookmarkStore ——
-      行式文件 + 百分号编码 + 原子写入（临时文件 + rename），29 个单元测试
+- [x] **storage**：CookieStore（RFC 6265 子集）、HistoryStore、BookmarkStore、
+      **LocalStorage**（按 origin 分区，已接入 Profile）——
+      行式文件 + 百分号编码 + 原子写入，35 个单元测试
 - [x] **image**：自研 PNG 解码器（chunk/CRC/滤波/Adam7/全部颜色类型与位深，
-      zlib 仅用于 IDAT）+ libjpeg 封装 —— 16 个单元测试（含测试内编码器）
+      zlib 仅用于 IDAT）+ libjpeg 封装 + **自研 GIF 解码器**（LZW 变长码宽、
+      交错、GCE 透明；仅首帧）—— 26 个单元测试（含测试内编码器）
 - [x] **media**：自研 WAV 解码（RIFF/WAVE、PCM+float、8/16/24/32-bit、
       extensible）—— 13 个单元测试
 - [x] **pdf**：文本提取器（xref 含 /Prev 链、对象、FlateDecode + 预测器、
@@ -102,7 +115,7 @@ graph LR
       （**PARTIAL**：无 xref stream / 渲染 / CMap）
 - [ ] **视频解码**（H.264/VP9 等）—— **未实现**，`media::MediaSource::Open`
       返回显式 NOT IMPLEMENTED，架构预留
-- [ ] GIF / WebP / AVIF —— **未实现**，返回显式 NOT IMPLEMENTED
+- [ ] WebP / AVIF —— **未实现**，返回显式 NOT IMPLEMENTED
 
 ## Phase 7 — Browser UI ✅（已完成，范围见下）
 
@@ -128,6 +141,7 @@ graph LR
       location/history/console/timer/fetch/storage/events）
 - [ ] 页面 `<script>` 标签执行 —— **未开始**
 - [ ] 事件循环对接（microtask/Promise）—— **未开始**
+- [ ] LocalStorage 存储已就绪（`storage::LocalStorage`），等待 Web IDL 绑定
 
 ## Phase 10 — Security
 

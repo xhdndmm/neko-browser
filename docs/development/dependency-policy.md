@@ -28,15 +28,15 @@
 | 依赖 | 版本 | 用途 | 引入方式 | 许可证 |
 | --- | --- | --- | --- | --- |
 | GoogleTest | v1.15.2 | 单元测试框架 | FetchContent（固定 SHA256） | BSD-3-Clause |
-| zlib | 系统包 | PNG IDAT / PDF FlateDecode 解压 | find_package | zlib |
+| zlib | 系统包 | PNG IDAT / PDF FlateDecode / HTTP gzip-deflate 解压 | find_package | zlib |
 | libjpeg | 系统包 | JPEG 解码（封装在 neko::image 后） | find_package | BSD-like |
 | QuickJS (quickjs-ng) | v0.16.1 | JavaScript runtime（封装在 neko::javascript 后） | FetchContent（固定 SHA256） | MIT |
 | Qt6 Widgets | 系统包 | GUI 基础设施（窗口/事件/控件，见 ADR 0006） | find_package | LGPL |
 | FreeType | 系统包 | 字体光栅化（封装在 neko::graphics 后，见 ADR 0009） | find_package | FTL（双许可选 FTL） |
+| OpenSSL | 系统包 | TLS/HTTPS（封装在 neko::network::TlsSocket 后，见 ADR 0010） | find_package | Apache-2.0 |
 
 ## 未来候选依赖（引入时逐个评估）
 
-- OpenSSL / mbedTLS / BoringSSL（TLS）
 - ICU（Unicode）
 - HarfBuzz（文本整形）
 - brotli（HTTP 压缩）

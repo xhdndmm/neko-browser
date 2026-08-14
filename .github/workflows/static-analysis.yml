@@ -25,7 +25,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y clang-tidy-18
 
       - name: Install system dependencies
-        run: sudo apt-get install -y zlib1g-dev libjpeg-dev qt6-base-dev
+        run: sudo apt-get install -y zlib1g-dev libjpeg-dev libssl-dev qt6-base-dev
 
       - name: Configure (compile_commands)
         run: |
