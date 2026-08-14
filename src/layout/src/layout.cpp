@@ -772,6 +772,9 @@ void TranslateBox(LayoutBox& box, float dx, float dy)
   for (auto& child : box.positioned_children) {
     TranslateBox(*child, dx, dy);
   }
+  for (auto& child : box.floats) {
+    TranslateBox(*child, dx, dy);
+  }
 }
 
 // Resolves per-column content widths for a table.  Columns carrying a cell

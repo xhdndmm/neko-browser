@@ -1017,6 +1017,39 @@ TEST(LayoutTest, FloatRightHugsContainingBlockRightEdge)
   EXPECT_FLOAT_EQ(f->width, 80.0f);
 }
 
+TEST(LayoutTest, FloatInsideTranslatedInlineBlockKeepsPosition) {
+  // A float inside an inline-block is laid out at a local origin and then the
+  // whole inline-block (including its floats) is translated to its final
+  // position.  The float must move with its container.
+  auto doc = html::Parser(
+                  "<body><div style=\"width:400px;padding-top:100px\">"
+                  "<span style=\"display:inline-block\">"
+                  "<span style=\"float:left;width:50px;height:30px\">L</span>"
+                  "</span></div></body>")
+                  .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+
+  // Find the inline-block span and the div.
+  dom::Element* inline_span = dom::QuerySelector(*doc, "body div span");
+  ASSERT_NE(inline_span, nullptr);
+  const LayoutBox* div = FindBox(*root, "div", *doc);
+  ASSERT_NE(div, nullptr);
+  const InlineBox* holder = nullptr;
+  const LayoutBox* ib = FindInlineBlock(*root, inline_span, holder);
+  ASSERT_NE(ib, nullptr);
+  ASSERT_EQ(ib->floats.size(), 1u);
+  const LayoutBox* f = ib->floats[0].get();
+
+  // The float's absolute position = inline-block's translated position + the
+  // float's offset within it (the float hugs the inline-block's left edge).
+  EXPECT_FLOAT_EQ(f->x, ib->x);
+  // y must reflect the outer padding-top translation, not a local origin.
+  EXPECT_FLOAT_EQ(f->y, ib->y);
+}
+
 TEST(LayoutTest, FloatShiftsFollowingLineStart)
 {
   // A left float pushes the line box right so the text wraps around it.
