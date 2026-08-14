@@ -52,6 +52,8 @@ bool IsCjkCodePoint(char32_t cp)
          (cp >= 0x3400 && cp <= 0x4DBF) || // CJK ext A
          (cp >= 0x4E00 && cp <= 0x9FFF) || // CJK unified
          (cp >= 0xF900 && cp <= 0xFAFF) || // CJK compat
+         (cp >= 0xFE30 && cp <= 0xFE4F) || // CJK compat forms
+         (cp >= 0xFF00 && cp <= 0xFFEF) || // fullwidth forms (，！？：；etc.)
          (cp >= 0x20000 && cp <= 0x2FA1F); // CJK ext B..F
 }
 

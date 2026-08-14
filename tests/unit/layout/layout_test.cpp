@@ -1073,6 +1073,31 @@ TEST(LayoutTest, CjkTextWrapsInsideFloatHeight)
   }
 }
 
+TEST(LayoutTest, FullwidthPunctuationBreaksCjkLines) {
+  // A paragraph that starts with a fullwidth comma (U+FF0C) — which used to be
+  // treated as a non-CJK character — was measured as one unbreakable word and
+  // overflowed its narrow container.  Fullwidth punctuation must break like
+  // CJK so the text wraps inside the container.
+  Page page = Build("<body><div style=\"width:120px\">"
+                    "\xEF\xBC\x8C"  // ，fullwidth comma
+                    "\xE4\xB8\xAD\xE6\x96\x87\xE6\x96\x87\xE5\xAD\x97"  // 中文文字
+                    "\xE4\xB8\xAD\xE6\x96\x87\xE6\x96\x87\xE5\xAD\x97"  // 中文文字
+                    "\xE4\xB8\xAD\xE6\x96\x87\xE6\x96\x87\xE5\xAD\x97"  // 中文文字
+                    "\xE4\xB8\xAD\xE6\x96\x87\xE6\x96\x87\xE5\xAD\x97"  // 中文文字
+                    "\xE4\xB8\xAD\xE6\x96\x87\xE6\x96\x87\xE5\xAD\x97"  // 中文文字
+                    "</div></body>");
+  const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(div, nullptr);
+  ASSERT_GT(div->lines.size(), 1u);
+  const float right_edge = div->x + div->width;
+  for (const Line& line : div->lines) {
+    for (const TextRun& run : line.runs) {
+      EXPECT_LE(run.x + run.width, right_edge + 0.01f)
+          << "CJK run must not overflow its container";
+    }
+  }
+}
+
 TEST(LayoutTest, BlockChildTextAvoidsParentFloat)
 {
   // A float belongs to the enclosing block formatting context: the text of a
