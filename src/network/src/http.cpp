@@ -376,6 +376,13 @@ base::Result<HttpResponse> HttpGet(const url::Url& url,
     if (!location.empty()) {
       const base::Result<url::Url> next = url::Url::Parse(location, url);
       if (next) {
+        // Refuse to downgrade an https request to plaintext http: silently
+        // following such a redirect is SSL stripping.  The caller can retry
+        // the Location explicitly if it wants to.
+        if (url.scheme() == "https" && next.value().scheme() == "http") {
+          return base::Err(base::Error::NotImplemented(
+              "refusing https->http redirect downgrade"));
+        }
         return HttpGet(next.value(), redirect_limit - 1, extra_headers, tls_options);
       }
     }

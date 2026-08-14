@@ -392,9 +392,20 @@ private:
             }
             request.append(buffer, static_cast<std::size_t>(n));
           }
-          const std::string response =
-              "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 20\r\n"
-              "\r\n<h1>Hello TLS</h1>";
+          const std::size_t ps = request.find(' ');
+          const std::size_t pe = request.find(' ', ps + 1);
+          const std::string path = ps != std::string::npos && pe != std::string::npos
+                                       ? request.substr(ps + 1, pe - ps - 1)
+                                       : "/";
+          std::string response;
+          if (path == "/downgrade") {
+            // A https server redirecting to plaintext http (SSL stripping).
+            response = "HTTP/1.1 302 Found\r\nLocation: http://example.invalid/\r\n"
+                       "Content-Length: 0\r\n\r\n";
+          } else {
+            response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 20\r\n"
+                       "\r\n<h1>Hello TLS</h1>";
+          }
           SSL_write(ssl, response.data(), static_cast<int>(response.size()));
         }
         SSL_shutdown(ssl);
@@ -540,6 +551,23 @@ TEST(TlsTest, GetFromLocalTlsServer)
   ASSERT_TRUE(result.has_value()) << result.error().message();
   EXPECT_EQ(result.value().status_code, 200);
   EXPECT_EQ(result.value().body, "<h1>Hello TLS</h1>");
+}
+
+TEST(TlsTest, HttpsToHttpRedirectIsRefused)
+{
+  // A https server must not silently follow a redirect to plaintext http
+  // (SSL stripping); the request is refused with an error instead.
+  TestTlsServer server;
+  ASSERT_TRUE(server.IsValid());
+  TlsOptions options;
+  options.extra_ca_cert_pem = server.cert_pem();
+  const std::string host = "https://localhost:" + std::to_string(server.port()) + "/downgrade";
+  const auto url = url::Url::Parse(host);
+  ASSERT_TRUE(url.has_value());
+  const auto result = HttpGet(url.value(), 5, {}, options);
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error().category(), base::ErrorCategory::kNotImplemented);
+  EXPECT_NE(result.error().message().find("downgrade"), std::string::npos);
 }
 
 TEST(TlsTest, UntrustedCertificateIsRejected)
