@@ -183,8 +183,11 @@ private:
 };
 
 // Decompresses a GIF LZW stream (|min_code_size| byte already read).
+// Stops with false once |max_output| bytes would be emitted, so a crafted
+// stream cannot balloon memory before the caller validates the length.
 // Returns false on any malformed input.
-bool LzwDecompress(const std::vector<uint8_t>& data, int min_code_size, std::vector<uint8_t>& out)
+bool LzwDecompress(const std::vector<uint8_t>& data, int min_code_size, std::size_t max_output,
+                   std::vector<uint8_t>& out)
 {
   if (min_code_size < 2 || min_code_size > 8) {
     return false;
@@ -213,6 +216,17 @@ bool LzwDecompress(const std::vector<uint8_t>& data, int min_code_size, std::vec
       return false;
     }
     if (code == clear_code) {
+      // Reset the dictionary: a clear code starts a fresh LZW dictionary.
+      // Keeping the old entries would make subsequent codes hit stale
+      // strings from the previous generation and corrupt the output (and
+      // allow unbounded dictionary growth from clear-code bombing).
+      dict.clear();
+      dict.reserve(4096u);
+      for (int i = 0; i < clear_code; ++i) {
+        dict.push_back({static_cast<uint8_t>(i)});
+      }
+      dict.push_back({}); // clear_code (unused as an entry)
+      dict.push_back({}); // end_code (unused as an entry)
       code_size = min_code_size + 1;
       next_code = end_code + 1;
       prev = -1;
@@ -224,6 +238,9 @@ bool LzwDecompress(const std::vector<uint8_t>& data, int min_code_size, std::vec
     if (prev < 0) {
       // First data code after (re)set: must be a root color.
       if (code >= clear_code) {
+        return false;
+      }
+      if (out.size() >= max_output) {
         return false;
       }
       out.push_back(static_cast<uint8_t>(code));
@@ -244,6 +261,9 @@ bool LzwDecompress(const std::vector<uint8_t>& data, int min_code_size, std::vec
     }
     if (entry.empty()) {
       return false;
+    }
+    if (entry.size() > max_output - out.size()) {
+      return false; // would exceed the output bound
     }
     out.insert(out.end(), entry.begin(), entry.end());
     // Add prev + first(entry) to the dictionary.
@@ -435,10 +455,13 @@ base::Result<Image> DecodeGif(std::string_view data)
       return base::Err(base::Error::Parse("gif: malformed image data"));
     }
     std::vector<uint8_t> pixels;
-    if (!LzwDecompress(lzw_data, min_code_size, pixels)) {
+    const std::size_t expected = static_cast<std::size_t>(width) * height;
+    // Cap decompression at the expected size plus a small slack so a crafted
+    // stream cannot allocate unbounded memory before the length check below.
+    const std::size_t max_output = expected > (1u << 20) ? expected * 2 : expected + (1u << 20);
+    if (!LzwDecompress(lzw_data, min_code_size, max_output, pixels)) {
       return base::Err(base::Error::Parse("gif: invalid LZW stream"));
     }
-    const std::size_t expected = static_cast<std::size_t>(width) * height;
     if (pixels.size() < expected) {
       return base::Err(base::Error::Parse("gif: LZW output too short"));
     }

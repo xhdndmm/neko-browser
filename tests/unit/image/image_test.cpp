@@ -428,6 +428,52 @@ TEST(GifTest, DecodesMultiColor)
   ExpectPixels(result.value(), {255, 0, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 255, 0, 0, 255});
 }
 
+TEST(GifTest, DecodesAfterMidStreamClearCode)
+{
+  // A stream with a mid-stream clear code followed by a code that equals the
+  // new dictionary's next slot (the KwKwK case).  Before the fix the decoder
+  // kept the old dictionary across clear codes, so the code hit a stale entry
+  // and emitted the previous generation's bytes.
+  // min_code_size = 2: clear=4, end=5.  Codes: clear,0,1,2,3,clear,0,6,end.
+  // Packed with code widths following dictionary growth: 3,3,3,3,4,4,3,3,3.
+  constexpr std::string_view kLzw("D4", 4);
+  std::string gif = "GIF89a";
+  gif += Le16(1);
+  gif += Le16(7);
+  gif.push_back(static_cast<char>(0x80 | (7 << 4) | 1)); // GCT present, 4 colors
+  gif.push_back(0);
+  gif.push_back('\0');
+  // 4-color palette: black, red, green, blue.
+  gif += std::string("\x00\x00\x00\xFF\x00\x00\x00\xFF\x00\x00\x00\xFF", 12);
+  gif.push_back(0x2C); // image descriptor
+  gif += Le16(0);
+  gif += Le16(0);
+  gif += Le16(1);
+  gif += Le16(7);
+  gif.push_back(0x00);
+  gif.push_back(2); // min_code_size
+  gif += GifSubBlocks(kLzw);
+  gif.push_back(0x3B);
+
+  const auto result = DecodeGif(gif);
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  const image::Image& img = result.value();
+  EXPECT_EQ(img.width, 1);
+  EXPECT_EQ(img.height, 7);
+  // Expected indices: 0,1,2,3 (black,red,green,blue) then 0,0,0 -- the code 6
+  // after the second clear is KwKwK (prev + first(prev)), not a stale entry.
+  // Palette: idx 0 = (0,0,0), 1 = (255,0,0), 2 = (0,255,0), 3 = (0,0,255).
+  const uint8_t expected_r[7] = {0, 255, 0, 0, 0, 0, 0};
+  const uint8_t expected_g[7] = {0, 0, 255, 0, 0, 0, 0};
+  const uint8_t expected_b[7] = {0, 0, 0, 255, 0, 0, 0};
+  for (int i = 0; i < 7; ++i) {
+    const std::size_t o = static_cast<std::size_t>(i) * 4;
+    EXPECT_EQ(img.rgba[o], expected_r[i]) << "pixel " << i;
+    EXPECT_EQ(img.rgba[o + 1], expected_g[i]) << "pixel " << i;
+    EXPECT_EQ(img.rgba[o + 2], expected_b[i]) << "pixel " << i;
+  }
+}
+
 TEST(GifTest, TransparencyShowsBackground)
 {
   // Frame pixel 0 = index 0 (red, opaque); pixel 1 = index 1 which is the
