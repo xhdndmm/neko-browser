@@ -158,12 +158,8 @@ void ApplyMarginShorthand(const std::string& value,
     }
   };
   auto set1 = [&](SizeSpec& s, bool& a) { parse(parts[0], s, a); };
-  auto set2 = [&](SizeSpec& s, bool& a) {
-    parse(parts.size() >= 2 ? parts[1] : parts[0], s, a);
-  };
-  auto set3 = [&](SizeSpec& s, bool& a) {
-    parse(parts.size() >= 3 ? parts[2] : parts[0], s, a);
-  };
+  auto set2 = [&](SizeSpec& s, bool& a) { parse(parts.size() >= 2 ? parts[1] : parts[0], s, a); };
+  auto set3 = [&](SizeSpec& s, bool& a) { parse(parts.size() >= 3 ? parts[2] : parts[0], s, a); };
   auto set4 = [&](SizeSpec& s, bool& a) {
     parse(parts.size() >= 4 ? parts[3] : (parts.size() == 2 ? parts[1] : parts[0]), s, a);
   };
@@ -230,6 +226,183 @@ void ParseBorderValue(const std::string& value,
       }
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Grid track / placement parsing (CSS Grid Layout 1).
+// ---------------------------------------------------------------------------
+
+// Splits a track list into comma- or whitespace-separated tokens while
+// keeping "repeat(...)" intact (commas inside repeat must not split).
+std::vector<std::string> SplitGridList(std::string_view text)
+{
+  std::vector<std::string> parts;
+  std::size_t i = 0;
+  int depth = 0;
+  std::string current;
+  while (i < text.size()) {
+    const char c = text[i];
+    if (c == '(') {
+      ++depth;
+      current.push_back(c);
+    } else if (c == ')') {
+      if (depth > 0) {
+        --depth;
+      }
+      current.push_back(c);
+    } else if (depth == 0 && (c == ',' || c == ' ' || c == '\t')) {
+      if (!current.empty()) {
+        parts.push_back(current);
+        current.clear();
+      }
+    } else {
+      current.push_back(c);
+    }
+    ++i;
+  }
+  if (!current.empty()) {
+    parts.push_back(current);
+  }
+  return parts;
+}
+
+// Parses a single grid track token ("100px", "25%", "1fr", "auto",
+// "min-content", "max-content", "repeat(2, 40px 1fr)").
+void ParseGridTrackToken(const std::string& token,
+                         float font_size,
+                         float root_font_size,
+                         std::vector<GridTrack>& out)
+{
+  const std::string lower = neko::base::ToLower(token);
+  if (lower == "auto") {
+    out.push_back(GridTrack{GridTrack::Kind::kAuto, 0, 0, 0});
+    return;
+  }
+  if (lower == "min-content") {
+    out.push_back(GridTrack{GridTrack::Kind::kMinContent, 0, 0, 0});
+    return;
+  }
+  if (lower == "max-content") {
+    out.push_back(GridTrack{GridTrack::Kind::kMaxContent, 0, 0, 0});
+    return;
+  }
+  // repeat(N, <track-list>)
+  const std::size_t repeat_pos = lower.find("repeat(");
+  if (repeat_pos == 0 && lower.back() == ')') {
+    const std::string inner = lower.substr(7, lower.size() - 8);
+    const std::size_t comma = inner.find(',');
+    if (comma != std::string::npos) {
+      const std::string count_text = std::string(neko::base::Trim(inner.substr(0, comma)));
+      const css::CssValue count_value = css::ParseCssValue(count_text);
+      int count = 0;
+      if (count_value.type == css::CssValue::Type::kNumber) {
+        count = static_cast<int>(count_value.number);
+      }
+      if (count > 0) {
+        const std::vector<std::string> inner_tracks = SplitGridList(inner.substr(comma + 1));
+        for (int r = 0; r < count; ++r) {
+          for (const std::string& track : inner_tracks) {
+            ParseGridTrackToken(track, font_size, root_font_size, out);
+          }
+        }
+      }
+    }
+    return;
+  }
+  // Nfr
+  if (lower.size() > 2 && lower.compare(lower.size() - 2, 2, "fr") == 0) {
+    const css::CssValue v = css::ParseCssValue(lower.substr(0, lower.size() - 2));
+    if (v.type == css::CssValue::Type::kNumber && v.number > 0) {
+      out.push_back(GridTrack{GridTrack::Kind::kFr, 0, 0, v.number});
+      return;
+    }
+    return;
+  }
+  // Length / percentage.
+  if (const std::optional<SizeSpec> spec = ParseSize(token, font_size, root_font_size)) {
+    GridTrack track;
+    track.kind = GridTrack::Kind::kFixed;
+    if (spec.value().percent) {
+      track.percent = spec.value().value;
+    } else {
+      track.length = spec.value().value;
+    }
+    out.push_back(track);
+    return;
+  }
+  // Unknown token: treat as auto (permissive parsing).
+  out.push_back(GridTrack{GridTrack::Kind::kAuto, 0, 0, 0});
+}
+
+std::vector<GridTrack>
+ParseGridTrackList(const std::string& value, float font_size, float root_font_size)
+{
+  std::vector<GridTrack> tracks;
+  for (const std::string& token : SplitGridList(value)) {
+    ParseGridTrackToken(token, font_size, root_font_size, tracks);
+  }
+  return tracks;
+}
+
+// Parses one grid line value: "auto", "<number>", "span <number>".
+void ParseGridLine(const std::string& text, GridPlacement& out)
+{
+  const std::string lower = neko::base::ToLower(text);
+  if (lower == "auto" || lower.empty()) {
+    out = GridPlacement{};
+    return;
+  }
+  if (lower.compare(0, 5, "span ") == 0) {
+    const css::CssValue v = css::ParseCssValue(std::string(neko::base::Trim(lower.substr(5))));
+    if (v.type == css::CssValue::Type::kNumber && v.number >= 1) {
+      out.kind = GridPlacement::Kind::kSpan;
+      out.span = static_cast<int>(v.number);
+    }
+    return;
+  }
+  const css::CssValue v = css::ParseCssValue(lower);
+  if (v.type == css::CssValue::Type::kNumber && v.number >= 1) {
+    out.kind = GridPlacement::Kind::kLine;
+    out.line = static_cast<int>(v.number);
+  }
+}
+
+// Parses the grid-column / grid-row shorthand:
+//   auto | <line> | span <n> | <line> / <line> | <line> / span <n> | span <n> / <line>
+void ParseGridPlacementShorthand(const std::string& value, GridPlacement& start, GridPlacement& end)
+{
+  const std::vector<std::string> parts = SplitWhitespace(value);
+  if (parts.empty()) {
+    return;
+  }
+  // "span N" is a two-token unit.
+  std::vector<std::string> units;
+  for (std::size_t i = 0; i < parts.size(); ++i) {
+    if (parts[i] == "/") {
+      continue; // separators are implicit
+    }
+    if (parts[i] == "span" && i + 1 < parts.size()) {
+      units.push_back("span " + parts[i + 1]);
+      ++i;
+    } else {
+      units.push_back(parts[i]);
+    }
+  }
+  if (units.empty()) {
+    return;
+  }
+  if (units.size() == 1) {
+    // A single "span N" means "auto / span N" (the span belongs on the end
+    // line); anything else sets the start line.
+    if (units[0].compare(0, 5, "span ") == 0) {
+      ParseGridLine(units[0], end);
+    } else {
+      ParseGridLine(units[0], start);
+    }
+    return;
+  }
+  ParseGridLine(units[0], start);
+  ParseGridLine(units[1], end);
 }
 
 bool MediaQueryMatches(std::string_view prelude)
@@ -563,10 +736,10 @@ void StyleEngine::ComputeElement(dom::Element& element,
   if (const css::Declaration* d = find("display")) {
     const css::CssValue v = css::ParseCssValue(d->value);
     if (v.type == css::CssValue::Type::kKeyword) {
-      if (v.text == "block" || v.text == "grid") {
-        // grid is parsed but not implemented: laid out as a block (see
-        // computed_style.h).
+      if (v.text == "block") {
         out.display = Display::kBlock;
+      } else if (v.text == "grid") {
+        out.display = Display::kGrid;
       } else if (v.text == "flex") {
         out.display = Display::kFlex;
       } else if (v.text == "inline-flex") {
@@ -803,6 +976,32 @@ void StyleEngine::ComputeElement(dom::Element& element,
     out.column_gap = parse_gap(d->value);
   }
 
+  // Grid (CSS Grid Layout 1).  Track templates and item placement.
+  if (const css::Declaration* d = find("grid-template-columns")) {
+    out.grid_template_columns = ParseGridTrackList(d->value, out.font_size, root_font_size);
+  }
+  if (const css::Declaration* d = find("grid-template-rows")) {
+    out.grid_template_rows = ParseGridTrackList(d->value, out.font_size, root_font_size);
+  }
+  if (const css::Declaration* d = find("grid-column")) {
+    ParseGridPlacementShorthand(d->value, out.grid_column_start, out.grid_column_end);
+  }
+  if (const css::Declaration* d = find("grid-row")) {
+    ParseGridPlacementShorthand(d->value, out.grid_row_start, out.grid_row_end);
+  }
+  if (const css::Declaration* d = find("grid-column-start")) {
+    ParseGridLine(d->value, out.grid_column_start);
+  }
+  if (const css::Declaration* d = find("grid-column-end")) {
+    ParseGridLine(d->value, out.grid_column_end);
+  }
+  if (const css::Declaration* d = find("grid-row-start")) {
+    ParseGridLine(d->value, out.grid_row_start);
+  }
+  if (const css::Declaration* d = find("grid-row-end")) {
+    ParseGridLine(d->value, out.grid_row_end);
+  }
+
   // position.
   if (const css::Declaration* d = find("position")) {
     const css::CssValue v = css::ParseCssValue(d->value);
@@ -891,8 +1090,8 @@ void StyleEngine::ComputeElement(dom::Element& element,
   if (const css::Declaration* d = find("margin")) {
     std::array<SizeSpec, 4> sides = {
         out.margin_top, out.margin_right, out.margin_bottom, out.margin_left};
-    std::array<bool, 4> auto_flags = {out.margin_top_auto, out.margin_right_auto,
-                                      out.margin_bottom_auto, out.margin_left_auto};
+    std::array<bool, 4> auto_flags = {
+        out.margin_top_auto, out.margin_right_auto, out.margin_bottom_auto, out.margin_left_auto};
     ApplyMarginShorthand(d->value, out.font_size, root_font_size, sides, auto_flags);
     out.margin_top = sides[0];
     out.margin_right = sides[1];

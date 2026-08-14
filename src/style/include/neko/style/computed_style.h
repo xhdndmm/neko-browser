@@ -4,12 +4,12 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace neko::style {
 
 // Display values.  flex/inline-flex are laid out by the flex layout
-// algorithm; grid is parsed but NOT yet implemented (declaring elements are
-// laid out as blocks, a documented limitation).  Table display values are
+// algorithm; grid by the grid layout algorithm.  Table display values are
 // laid out by the table layout algorithm.
 enum class Display
 {
@@ -19,6 +19,7 @@ enum class Display
   kNone,
   kFlex,       // block-level flex container (CSS Flexbox 1)
   kInlineFlex, // inline-level flex container
+  kGrid,       // block-level grid container (CSS Grid Layout 1)
   kTable,
   kTableRowGroup, // thead/tbody/tfoot
   kTableRow,      // tr
@@ -130,6 +131,37 @@ struct SizeSpec
   bool percent = false;
 };
 
+// Grid layout (CSS Grid Layout 1).  One grid track definition.
+struct GridTrack
+{
+  enum class Kind
+  {
+    kFixed,      // length (px) or percentage
+    kFr,         // "1fr" — shares the leftover space
+    kAuto,       // sizes to the content of the items in the track
+    kMinContent, // sizes to the min-content of the items in the track
+    kMaxContent, // sizes to the max-content of the items in the track
+  };
+  Kind kind = Kind::kAuto;
+  float length = 0;  // kFixed: px length
+  float percent = 0; // kFixed: percentage (0 = not a percentage)
+  float fr = 0;      // kFr: the flex factor
+};
+
+// A grid item's placement on one axis (grid-column / grid-row).
+struct GridPlacement
+{
+  enum class Kind
+  {
+    kAuto, // auto-placement
+    kLine, // explicit 1-based line
+    kSpan, // spans |span| tracks (end only)
+  };
+  Kind kind = Kind::kAuto;
+  int line = 0; // kLine: 1-based line number
+  int span = 1; // kSpan: number of tracks spanned
+};
+
 // Fully resolved style for one element (px values unless noted).
 struct ComputedStyle
 {
@@ -218,6 +250,16 @@ struct ComputedStyle
   // and §8.3).  align_self overrides the container's align-items when set.
   int order = 0;
   std::optional<AlignItems> align_self;
+
+  // Grid layout (CSS Grid Layout 1).  Track templates and row/column gaps
+  // live on the container; the item's placement lives on the item.  Only the
+  // row-major auto flow is supported (grid-auto-flow: row).
+  std::vector<GridTrack> grid_template_columns;
+  std::vector<GridTrack> grid_template_rows;
+  GridPlacement grid_column_start;
+  GridPlacement grid_column_end;
+  GridPlacement grid_row_start;
+  GridPlacement grid_row_end;
 };
 
 } // namespace neko::style

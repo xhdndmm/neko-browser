@@ -1462,5 +1462,119 @@ TEST(FlexLayoutTest, AlignSelfOnColumnCrossAxis)
   EXPECT_FLOAT_EQ(flex->children[1]->x, 8.0f + 200.0f - 60.0f);
 }
 
+// Grid layout (monospace fallback: each character is font_size px wide)
+// ---------------------------------------------------------------------------
+
+TEST(GridLayoutTest, FrColumnsShareContainerWidth)
+{
+  Page page = Build("<body><div style=\"display:grid; grid-template-columns:1fr 1fr\">"
+                    "<div>a</div><div>b</div></div></body>");
+  const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_EQ(grid->children.size(), 2u);
+  // Container content width 784 split equally between the two 1fr columns.
+  EXPECT_NEAR(grid->children[0]->x, 8.0f, 0.01f);
+  EXPECT_NEAR(grid->children[0]->width, 392.0f, 0.01f);
+  EXPECT_NEAR(grid->children[1]->x, 8.0f + 392.0f, 0.01f);
+  EXPECT_NEAR(grid->children[1]->width, 392.0f, 0.01f);
+}
+
+TEST(GridLayoutTest, FixedColumnsKeepTheirSize)
+{
+  Page page = Build("<body><div style=\"display:grid; grid-template-columns:100px 200px\">"
+                    "<div>a</div><div>b</div></div></body>");
+  const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_EQ(grid->children.size(), 2u);
+  EXPECT_FLOAT_EQ(grid->children[0]->x, 8.0f);
+  EXPECT_FLOAT_EQ(grid->children[0]->width, 100.0f);
+  EXPECT_FLOAT_EQ(grid->children[1]->x, 8.0f + 100.0f);
+  EXPECT_FLOAT_EQ(grid->children[1]->width, 200.0f);
+}
+
+TEST(GridLayoutTest, AutoPlacementWrapsRows)
+{
+  // Three items in a two-column grid: two on the first row, one on the second.
+  Page page = Build("<body><div style=\"display:grid; grid-template-columns:100px 100px\">"
+                    "<div>a</div><div>b</div><div>c</div></div></body>");
+  const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_EQ(grid->children.size(), 3u);
+  EXPECT_FLOAT_EQ(grid->children[0]->x, 8.0f);
+  EXPECT_FLOAT_EQ(grid->children[0]->y, 8.0f);
+  EXPECT_FLOAT_EQ(grid->children[1]->x, 8.0f + 100.0f);
+  EXPECT_FLOAT_EQ(grid->children[1]->y, 8.0f);
+  // c wraps to the second row; the first row is ~line-height tall.
+  EXPECT_FLOAT_EQ(grid->children[2]->x, 8.0f);
+  EXPECT_NEAR(grid->children[2]->y, 8.0f + 19.2f, 0.01f);
+}
+
+TEST(GridLayoutTest, SpanAcrossColumns)
+{
+  Page page = Build("<body><div style=\"display:grid; grid-template-columns:100px 100px 100px\">"
+                    "<div style=\"grid-column: span 2\">a</div>"
+                    "<div>b</div></div></body>");
+  const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_EQ(grid->children.size(), 2u);
+  // a spans columns 0-1 (200px); b flows into column 2.
+  EXPECT_FLOAT_EQ(grid->children[0]->x, 8.0f);
+  EXPECT_FLOAT_EQ(grid->children[0]->width, 200.0f);
+  EXPECT_FLOAT_EQ(grid->children[1]->x, 8.0f + 200.0f);
+  EXPECT_FLOAT_EQ(grid->children[1]->width, 100.0f);
+}
+
+TEST(GridLayoutTest, ColumnAndRowGap)
+{
+  Page page = Build("<body><div style=\"display:grid; grid-template-columns:100px 100px; "
+                    "grid-template-rows:40px 40px; gap:10px\">"
+                    "<div>a</div><div>b</div><div>c</div><div>d</div></div></body>");
+  const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_EQ(grid->children.size(), 4u);
+  // b is shifted by column 1 + gap; c starts the second row + gap.
+  EXPECT_FLOAT_EQ(grid->children[1]->x, 8.0f + 100.0f + 10.0f);
+  EXPECT_FLOAT_EQ(grid->children[2]->y, 8.0f + 40.0f + 10.0f);
+}
+
+TEST(GridLayoutTest, ExplicitLinePlacement)
+{
+  Page page = Build("<body><div style=\"display:grid; grid-template-columns:100px 100px 100px\">"
+                    "<div style=\"grid-column: 2\">a</div>"
+                    "<div style=\"grid-column: 3\">b</div></div></body>");
+  const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_EQ(grid->children.size(), 2u);
+  // 1-based lines: column 2 => 0-based index 1.
+  EXPECT_FLOAT_EQ(grid->children[0]->x, 8.0f + 100.0f);
+  EXPECT_FLOAT_EQ(grid->children[1]->x, 8.0f + 200.0f);
+}
+
+TEST(GridLayoutTest, AutoRowsSizeToContent)
+{
+  Page page = Build("<body><div style=\"display:grid; grid-template-columns:100px\">"
+                    "<div>a</div>"
+                    "<div style=\"height:50px\">b</div></div></body>");
+  const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_EQ(grid->children.size(), 2u);
+  // Row 0 (auto) sizes to item a's ~line-height; b starts below it.
+  EXPECT_NEAR(grid->children[1]->y, 8.0f + 19.2f, 0.01f);
+  EXPECT_FLOAT_EQ(grid->children[1]->height, 50.0f);
+}
+
+TEST(GridLayoutTest, MixedFrAndFixedColumns)
+{
+  Page page = Build("<body><div style=\"display:grid; grid-template-columns:100px 1fr\">"
+                    "<div>a</div><div>b</div></div></body>");
+  const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_EQ(grid->children.size(), 2u);
+  // The fr column takes the leftover: 784 - 100.
+  EXPECT_FLOAT_EQ(grid->children[0]->width, 100.0f);
+  EXPECT_NEAR(grid->children[1]->width, 684.0f, 0.01f);
+  EXPECT_FLOAT_EQ(grid->children[1]->x, 8.0f + 100.0f);
+}
+
 } // namespace
 } // namespace neko::layout
