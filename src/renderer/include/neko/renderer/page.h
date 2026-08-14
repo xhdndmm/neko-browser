@@ -28,6 +28,11 @@ class Page : public layout::ImageProvider {
   // Parses |html| into a DOM document and computes styles.
   base::Result<void> LoadHtml(std::string_view html);
 
+  // Re-runs the style cascade over the document.  Needed after page scripts
+  // mutate the DOM (attribute/style changes, node insertion) so the layout
+  // reflects the new state.
+  void ReapplyStyles();
+
   // Reads a UTF-8 file and loads it as HTML.
   base::Result<void> LoadFile(std::string_view path);
 

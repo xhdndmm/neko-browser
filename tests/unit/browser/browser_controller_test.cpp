@@ -8,6 +8,7 @@
 #include <map>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include <zlib.h>
@@ -17,6 +18,8 @@
 
 #include "neko/browser/browser_controller.h"
 #include "neko/browser/download_manager.h"
+#include "neko/dom/query.h"
+#include "neko/image/image.h"
 #include "neko/network/http.h"
 #include "neko/storage/file_util.h"
 #include "neko/url/url.h"
@@ -203,6 +206,176 @@ TEST(BrowserControllerTest, NavigatesToHtmlAndRecordsHistory) {
   EXPECT_EQ(controller.history().size(), 1u);
   EXPECT_EQ(controller.history().All()[0].url, "http://example.com/");
   EXPECT_EQ(fetch.requests_.size(), 1u);
+}
+
+// Page <script> execution (Phase 8 M2): inline scripts run on load and can
+// mutate the DOM.
+TEST(BrowserControllerTest, RunsInlineScriptsOnHtmlLoad) {
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add(
+      "http://example.com/",
+      FakeFetcher::Route{200, {{"content-type", "text/html"}},
+                         "<html><head><title>Before</title>"
+                         "<script>document.title = 'After';"
+                         "var d = document.createElement('div'); d.id = 'made';"
+                         "d.textContent = 'from script';"
+                         "document.body.appendChild(d);</script>"
+                         "</head><body><p>Hi</p></body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  // The script changed the title and inserted a node.
+  EXPECT_EQ(tab->title, "After");
+  const std::string dom = tab->page->DumpDom();
+  EXPECT_NE(dom.find("id=\"made\""), std::string::npos);
+  EXPECT_NE(dom.find("from script"), std::string::npos);
+  // The live runtime handle is kept on the tab.
+  EXPECT_NE(tab->script_runtime, nullptr);
+}
+
+TEST(BrowserControllerTest, PageScriptConsoleGoesToDevToolsLog) {
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<script>console.log('hello from page');"
+                               "console.error('page problem');</script>"
+                               "</body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  const auto console = controller.SnapshotConsoleLog();
+  ASSERT_EQ(console.size(), 2u);
+  EXPECT_EQ(console[0].level, "log");
+  EXPECT_EQ(console[0].message, "hello from page");
+  EXPECT_EQ(console[1].level, "error");
+  EXPECT_EQ(console[1].message, "page problem");
+}
+
+TEST(BrowserControllerTest, PageScriptErrorIsLoggedAndDoesNotStopPage) {
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<script>document.getElementById('nope').x = 1;</script>"
+                               "<p>still here</p>"
+                               "</body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  EXPECT_NE(tab->page->DumpDom().find("still here"), std::string::npos);
+  const auto console = controller.SnapshotConsoleLog();
+  ASSERT_EQ(console.size(), 1u);
+  EXPECT_EQ(console[0].level, "error");
+  EXPECT_NE(console[0].message.find("Uncaught"), std::string::npos);
+}
+
+TEST(BrowserControllerTest, PumpScriptTimersRunsSetTimeout) {
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<script>"
+                               "window._runs = 0;"
+                               "setTimeout(function(){ window._runs++; }, 1);"
+                               "</script>"
+                               "</body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  ASSERT_NE(tab->script_runtime, nullptr);
+  // No timers run before the deadline.
+  controller.PumpScriptTimers();
+  auto runs = tab->script_runtime->Evaluate("window._runs");
+  ASSERT_TRUE(runs.has_value());
+  auto num = runs.value().ToNumber();
+  ASSERT_TRUE(num.has_value());
+  EXPECT_DOUBLE_EQ(num.value(), 0.0);
+
+  // After the deadline, pumping runs the timer.
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  controller.PumpScriptTimers();
+  runs = tab->script_runtime->Evaluate("window._runs");
+  ASSERT_TRUE(runs.has_value());
+  num = runs.value().ToNumber();
+  ASSERT_TRUE(num.has_value());
+  EXPECT_DOUBLE_EQ(num.value(), 1.0);
+}
+
+TEST(BrowserControllerTest, ExternalScriptsAreNotFetchedYet) {
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<script src=\"/app.js\"></script>"
+                               "<p>x</p>"
+                               "</body></html>"});
+  fetch.Add("http://example.com/app.js",
+            FakeFetcher::Route{200, {{"content-type", "text/javascript"}},
+                               "document.title = 'should not run';"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  // External scripts are not executed yet; only the HTML document was fetched.
+  EXPECT_EQ(fetch.requests_.size(), 1u);
+  EXPECT_EQ(controller.ActiveTab()->page->document()->Title(), "");
+}
+
+// In-page <img> subresources are decoded in parallel on a thread pool and
+// injected into the page.
+TEST(BrowserControllerTest, InjectsMultiplePageImages) {
+  TempProfile tp;
+  FakeFetcher fetch;
+  const std::string png = MakePng();
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<img src=\"/a.png\"><img src=\"/b.png\"><img src=\"/c.png\">"
+                               "</body></html>"});
+  fetch.Add("http://example.com/a.png",
+            FakeFetcher::Route{200, {{"content-type", "image/png"}}, png});
+  fetch.Add("http://example.com/b.png",
+            FakeFetcher::Route{200, {{"content-type", "image/png"}}, png});
+  fetch.Add("http://example.com/c.png",
+            FakeFetcher::Route{200, {{"content-type", "image/png"}}, png});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  // All three image requests went out and every <img> got a decoded 2x2 image.
+  EXPECT_EQ(fetch.requests_.size(), 4u);  // page + 3 images
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  const std::vector<dom::Element*> imgs = dom::QuerySelectorAll(*tab->page->document(), "img");
+  ASSERT_EQ(imgs.size(), 3u);
+  for (const dom::Element* element : imgs) {
+    const image::Image* decoded = tab->page->Find(*element);
+    ASSERT_NE(decoded, nullptr);
+    EXPECT_EQ(decoded->width, 2);
+    EXPECT_EQ(decoded->height, 2);
+  }
 }
 
 TEST(BrowserControllerTest, ExtractsCookiesAndSendsThemNextRequest) {

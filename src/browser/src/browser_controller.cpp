@@ -1,6 +1,8 @@
 #include "neko/browser/browser_controller.h"
 
 #include "neko/base/logging.h"
+#include "neko/base/thread_pool.h"
+#include "neko/browser/page_scripts.h"
 #include "neko/dom/element.h"
 #include "neko/image/image.h"
 #include "neko/network/http.h"
@@ -9,6 +11,7 @@
 #include <algorithm>
 #include <chrono>
 #include <ctime>
+#include <future>
 #include <optional>
 #include <string>
 #include <vector>
@@ -421,6 +424,21 @@ void BrowserController::Reload()
   NavigateToUrl(*tab, tab->url);
 }
 
+void BrowserController::PumpScriptTimers()
+{
+  Tab* tab = ActiveTab();
+  if (tab == nullptr || tab->script_runtime == nullptr) {
+    return;
+  }
+  if (tab->script_runtime->RunPendingTimers() > 0) {
+    // Timers may have mutated the DOM; re-run the cascade so the next
+    // Layout/Rasterize reflects the new state.
+    if (tab->page != nullptr) {
+      tab->page->ReapplyStyles();
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Fetch + content routing
 // ---------------------------------------------------------------------------
@@ -511,6 +529,13 @@ void BrowserController::LoadBytes(Tab& tab,
       tab.title = "Parse error";
       return;
     }
+    // Phase 8 M2: execute the page's inline <script> elements with DOM
+    // bindings (mutating the DOM), then re-apply styles inside RunPageScripts.
+    // Console output from scripts goes to DevTools' console log.
+    tab.script_runtime = RunPageScripts(
+        *new_page, [this](std::string_view level, std::string_view text) {
+          LogConsole(level, text);
+        });
     // Fetch and decode the page's <img> subresources before publishing.
     FetchPageImages(*new_page, final_url, fetch_);
     std::string title = new_page->document()->Title();
@@ -781,6 +806,18 @@ void FetchPageImages(renderer::Page& page,
     }
   }
 
+  // Phase: fetch every subresource on the calling thread (the FetchFn may be
+  // stateful and is not guaranteed thread-safe), then decode the bodies in
+  // parallel on a thread pool, then inject the decoded images back on the
+  // calling thread (SetElementImage locks internally).
+  struct PendingImage
+  {
+    dom::Element* element = nullptr;
+    std::string url;
+    std::string bytes;
+  };
+  std::vector<PendingImage> pending;
+  pending.reserve(images.size());
   for (dom::Element* element : images) {
     const std::optional<std::string_view> src = element->GetAttribute("src");
     if (!src.has_value() || src->empty()) {
@@ -799,13 +836,40 @@ void FetchPageImages(renderer::Page& page,
       NEKO_LOG_WARNING("img: fetch failed for " + target.value().Serialize());
       continue;
     }
-    auto decoded = image::DecodeImage(response.value().body);
+    pending.push_back(PendingImage{element, target.value().Serialize(), response.value().body});
+  }
+  if (pending.empty()) {
+    return;
+  }
+
+  if (pending.size() == 1) {
+    // A single image: decode inline (no thread-pool overhead).
+    auto decoded = image::DecodeImage(pending[0].bytes);
     if (!decoded) {
-      NEKO_LOG_WARNING("img: decode failed for " + target.value().Serialize());
+      NEKO_LOG_WARNING("img: decode failed for " + pending[0].url);
+      return;
+    }
+    page.SetElementImage(*pending[0].element, std::move(decoded.value()));
+    NEKO_LOG_INFO("img: injected " + pending[0].url);
+    return;
+  }
+
+  base::ThreadPool pool;
+  std::vector<std::future<base::Result<image::Image>>> futures;
+  futures.reserve(pending.size());
+  for (PendingImage& item : pending) {
+    futures.push_back(pool.Submit([bytes = std::move(item.bytes)]() {
+      return image::DecodeImage(bytes);
+    }));
+  }
+  for (std::size_t i = 0; i < pending.size(); ++i) {
+    auto decoded = futures[i].get();
+    if (!decoded) {
+      NEKO_LOG_WARNING("img: decode failed for " + pending[i].url);
       continue;
     }
-    page.SetElementImage(*element, std::move(decoded.value()));
-    NEKO_LOG_INFO("img: injected " + target.value().Serialize());
+    page.SetElementImage(*pending[i].element, std::move(decoded.value()));
+    NEKO_LOG_INFO("img: injected " + pending[i].url);
   }
 }
 

@@ -131,17 +131,29 @@ graph LR
 - [ ] 键盘/鼠标完整交互、高 DPI 细节、加载进度条 —— 后续
 - [ ] 像素级渲染对比测试 —— 后续
 
-## Phase 8–9 — JavaScript + Web APIs ✅（里程碑 1 已完成，范围见下）
+## Phase 8–9 — JavaScript + Web APIs ✅（里程碑 1 + 里程碑 2 子集已完成，范围见下）
 
 - [x] **JS runtime 接入（QuickJS / quickjs-ng v0.16.1）**：FetchContent 固定版本，
       封装为 `neko::javascript`（ScriptEngine/ScriptValue），仅编译核心语言 +
       自有 console 绑定（QJS_BUILD_LIBC=OFF），执行时限中断 + 内存上限
 - [x] CLI `--eval <script>`；GUI DevTools Console 持久 REPL
-- [ ] Web IDL / binding 层 —— **未开始**（里程碑 2：window/document/navigator/
-      location/history/console/timer/fetch/storage/events）
-- [ ] 页面 `<script>` 标签执行 —— **未开始**
-- [ ] 事件循环对接（microtask/Promise）—— **未开始**
-- [ ] LocalStorage 存储已就绪（`storage::LocalStorage`），等待 Web IDL 绑定
+- [x] **DOM 绑定子集**（里程碑 2 部分）：`DomBinder` 把 document 绑定进每页一个
+      runtime —— document/Node/Element/CSSStyleDeclaration、事件监听器、
+      setTimeout/setInterval
+- [x] **页内 `<script>` 执行**：`browser::RunPageScripts` 按文档顺序执行，
+      脚本可改 DOM（随后重跑样式级联）；控制器/GUI/CLI 均已接入
+- [x] **最小事件循环**：定时器同步泵（`RunPendingTimers`）+ 同步事件派发
+- [ ] 完整 Web IDL / binding 层（navigator/location/history/fetch/storage/events
+      完整化、活 NodeList、事件冒泡/捕获）—— **后续**
+- [ ] microtask/Promise 与浏览器事件循环完整对接 —— **后续**
+- [ ] async/defer/module 与外部 `src=` 脚本执行 —— **后续**
+- [ ] LocalStorage 已就绪（`storage::LocalStorage`），等待 Web IDL 绑定
+
+## Phase 8 附注 — 多线程基础设施（已起步）
+
+- [x] `base::ThreadPool`（固定 worker、Post/Submit、WaitIdle、析构排空），TSan 通过
+- [x] 页内多 `<img>` 并行解码（抓取串行、解码并行、主线程注入）
+- [ ] 多进程架构 —— Phase 12（未开始）
 
 ## Phase 10 — Security
 

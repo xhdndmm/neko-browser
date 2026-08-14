@@ -16,6 +16,7 @@
 #include <QStatusBar>
 #include <QTabBar>
 #include <QTabWidget>
+#include <QTimer>
 #include <QToolBar>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -65,6 +66,16 @@ MainWindow::MainWindow(BrowserWorker* worker, QWidget* parent)
           Qt::QueuedConnection);
   setWindowTitle("Neko Browser");
   resize(1100, 750);
+
+  // Pump page-script timers (setTimeout/setInterval) every 50 ms; the worker
+  // emits StateChanged after each pumped action so the UI refreshes when a
+  // timer callback mutates the DOM.
+  script_timer_ = new QTimer(this);
+  script_timer_->setInterval(50);
+  connect(script_timer_, &QTimer::timeout, this,
+          [this] { worker_->PumpScriptTimers(); });
+  script_timer_->start();
+
   RefreshAll();
 }
 

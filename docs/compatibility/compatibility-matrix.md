@@ -2,7 +2,9 @@
 
 > 本文档诚实记录每个特性的支持状态。**禁止**把"接口存在"写成"已实现"。
 > 状态取值：Not Started / Planned / In Progress / Partial / Implemented / Tested。
-> 最后更新：2026-08（Phases 0–8 M1，含存储/图像/媒体/PDF/GUI/JS runtime、压缩/TLS/GIF/LocalStorage/Flexbox）。
+> 最后更新：2026-08（Phases 0–8 M1 + M2 子集：存储/图像/媒体/PDF/GUI/JS runtime +
+> DOM 绑定/脚本执行/事件循环、压缩/TLS/GIF/LocalStorage/Flexbox M1–M6、
+> ThreadPool 并行解码）。
 
 | 特性 | 状态 | 测试证据 | 备注 |
 | --- | --- | --- | --- |
@@ -19,7 +21,7 @@
 | Block layout | Tested | Layout 套件 | 盒模型、堆叠、宽度填充 |
 | Inline layout | Tested | Layout 套件 | 文字换行、行盒 |
 | inline-block | Partial | Layout + Style + Paint 套件 | 行内原子块盒：显式/shrink-to-fit 宽度、内部块格式化上下文、background/border/padding、vertical-align 与行高参与行盒；精确基线对齐（多行内块按自身最后一行盒基线）未做 |
-| Flexbox | Partial | 14 布局单元测试 + 4 样式解析测试 + 端到端截图 | display:flex/inline-flex、flex-direction row/column(+reverse)、flex-wrap、flex-grow/shrink/basis（含 flex 简写）、justify-content（6 值）、align-items（含 baseline）、align-content（确定 cross 尺寸时）、gap；无 auto 外边距、min/max-width、order、align-self、百分比高度精确解析、负自由空间时按 start 对齐 |
+| Flexbox | Partial | 25 布局单元测试 + 9 样式解析测试 + 端到端截图 | display:flex/inline-flex、flex-direction row/column(+reverse)、flex-wrap、flex-grow/shrink/basis（含 flex 简写）、justify-content（6 值）、align-items（含 baseline）、align-content（确定 cross 尺寸时）、gap、order、align-self、min/max-width/height、auto margin（主轴/交叉轴）；无 flex-basis 百分比精确高度、flex 容器自身 min/max、grow 后剩余空间再分配（max-width 截断不回流） |
 | Table layout | Partial | Layout 套件 | 行列网格、colspan/rowspan（含 rowspan=0 跨行组末尾、WHATWG 截断）、显式列宽、auto 列分配；无 border-collapse/vertical-align/caption |
 | 超链接（`<a>`） | Partial | Browser + Renderer 套件 | 蓝色+下划线样式、命中测试、相对 URL 解析、点击导航；无 fragment 滚动与 :visited/:hover/:active 伪类 |
 | Grid | Not Started | — | display:grid 按 block 处理 |
@@ -42,10 +44,10 @@
 | 下载器 | Tested | Browser 套件 | Content-Disposition/URL 文件名、原子写入 |
 | 绘制 / 光栅化 | Tested | Paint 套件 | 纯色、边框、文字、PPM |
 | 合成器 | Not Started | — | — |
-| JavaScript（runtime，QuickJS） | Partial | 27 JS 单元测试 + CLI/GUI 集成 | ES2025 核心语言、console、执行时限/内存上限；**无 DOM 绑定**（里程碑 2） |
+| JavaScript（runtime，QuickJS） | Partial | 48 JS 单元测试 + 浏览器集成测试 + CLI/GUI 集成 | ES2025 核心语言、console、执行时限/内存上限、**DOM 绑定子集**（document/Node/Element/style/timers/events）、**页内 `<script>` 执行**、**最小事件循环**（setTimeout/setInterval 同步泵）；无完整 Web IDL、无 fetch/XHR、无 microtask 完整对接、async/defer/module/外部脚本不执行 |
 | Fetch（浏览器 API） | Not Started | — | — |
 | IndexedDB | Not Started | — | — |
-| 多进程 | Not Started | — | Phase 12 |
+| 多线程 | Partial | 7 base 单元测试 + TSan 通过 | `base::ThreadPool`（固定 worker、Post/Submit、WaitIdle、析构排空）、页内多 `<img>` 并行解码（抓取串行、解码并行）；无多进程（Phase 12） |
 | GUI（Qt6） | Partial | UI 冒烟测试（offscreen）+ 端到端截图 | 标签页/地址栏/工具栏/DevTools/历史/书签/下载/设置停靠面板；未做像素级渲染对比 |
 | DevTools | Partial | GUI 验证 | DOM 树 / 网络日志 / Console；无断点调试 |
 | 日志系统 | Tested | 单元测试 | — |

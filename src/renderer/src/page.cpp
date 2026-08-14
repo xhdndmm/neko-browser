@@ -58,6 +58,15 @@ base::Result<void> Page::LoadHtml(std::string_view html) {
   return base::Ok();
 }
 
+void Page::ReapplyStyles() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (document_ == nullptr) {
+    return;
+  }
+  styles_.ApplyStyles(*document_);
+  root_.reset();
+}
+
 base::Result<void> Page::LoadFile(std::string_view path) {
   std::ifstream in(std::string(path), std::ios::binary);
   if (!in.is_open()) {

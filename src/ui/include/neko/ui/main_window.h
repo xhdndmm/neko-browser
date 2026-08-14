@@ -11,6 +11,7 @@ class QTabBar;
 class QTreeWidget;
 class QPlainTextEdit;
 class QLabel;
+class QTimer;
 
 namespace neko::ui {
 
@@ -58,6 +59,9 @@ class MainWindow : public QMainWindow {
   void PopulateDomTree(QTreeWidget* tree);
 
   BrowserWorker* worker_;
+  // Periodically pumps the active page's script timers on the worker thread
+  // so setTimeout/setInterval callbacks progress while the GUI idles.
+  QTimer* script_timer_ = nullptr;
   QTabBar* tab_bar_ = nullptr;
   QStackedWidget* pages_ = nullptr;
   QVector<WebView*> views_;
