@@ -517,6 +517,18 @@ void StyleEngine::ComputeElement(dom::Element& element, const ComputedStyle& inh
     }
   }
 
+  // float (CSS 2.2 §9.5): left / right / none.
+  if (const css::Declaration* d = find("float")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kKeyword) {
+      if (v.text == "left") {
+        out.floating = Float::kLeft;
+      } else if (v.text == "right") {
+        out.floating = Float::kRight;
+      }
+    }
+  }
+
   // width / height.
   if (const css::Declaration* d = find("width")) {
     out.width = ParseSize(d->value, out.font_size, root_font_size);

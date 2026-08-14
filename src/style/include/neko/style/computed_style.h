@@ -26,6 +26,10 @@ enum class Display {
 // stored but treated as static (documented limitation).
 enum class Position { kStatic, kRelative, kAbsolute, kFixed };
 
+// float (CSS 2.2 §9.5): drops the box out of normal flow and floats it to one
+// side of its containing block; following line boxes wrap around it.
+enum class Float { kNone, kLeft, kRight };
+
 enum class TextAlign { kLeft, kCenter, kRight, kJustify };
 
 // object-fit (CSS Images 3 §4.5): how replaced content fits its box.
@@ -46,6 +50,7 @@ struct SizeSpec {
 struct ComputedStyle {
   Display display = Display::kInline;  // CSS initial value
   Position position = Position::kStatic;
+  Float floating = Float::kNone;  // float: left/right/none
 
   std::optional<SizeSpec> width;
   std::optional<SizeSpec> height;

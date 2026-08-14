@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head><title>inline-block 全功能测试</title></head>
+<body>
+
+<h1>inline-block 全功能测试</h1>
+
+<h2>1. 显式宽高</h2>
+<p>文字 <span style="display:inline-block;background-color:#ffcc00;width:80px;height:40px">box</span> 之后的文字。</p>
+
+<h2>2. shrink-to-fit 自然宽度</h2>
+<div style="width:600px">
+  <span style="display:inline-block;background-color:#cc99ff">自然宽度文本内容，不填满容器</span>
+</div>
+
+<h2>3. padding + border + 边框背景</h2>
+<div>
+  左
+  <span style="display:inline-block;background-color:#66ccff;padding:10px;border:3px solid #003366">内边距和边框</span>
+  右
+</div>
+
+<h2>4. 内部块级子元素垂直堆叠</h2>
+<div>
+  <span style="display:inline-block;background-color:#99ff99;width:140px;padding:6px">
+    <div>块子元素 A</div>
+    <div>块子元素 B</div>
+    <div>块子元素 C</div>
+  </span>
+  旁边的兄弟文字
+</div>
+
+<h2>5. 嵌套在行内元素中</h2>
+<p>外层<span>前 <span style="display:inline-block;background-color:#ff9;width:60px;height:30px">中</span> 后</span>。</p>
+
+<h2>6. 多个 inline-block 在同一行</h2>
+<p>
+  <span style="display:inline-block;background-color:#f99;width:50px;height:30px">A</span>
+  <span style="display:inline-block;background-color:#9f9;width:50px;height:30px">B</span>
+  <span style="display:inline-block;background-color:#99f;width:50px;height:30px">C</span>
+</p>
+
+<h2>7. vertical-align</h2>
+<div>
+  <span style="display:inline-block;background-color:#f9f;vertical-align:top;width:40px;height:60px">top</span>
+  middle
+  <span style="display:inline-block;background-color:#0cf;vertical-align:middle;width:40px;height:60px">mid</span>
+  文字基线
+  <span style="display:inline-block;background-color:#fc9;vertical-align:bottom;width:40px;height:60px">bot</span>
+</div>
+
+<h2>8. inline-block 之间换行</h2>
+<div style="width:200px">
+  <span style="display:inline-block;background-color:#aaf;width:110px;height:20px">w110</span>
+  <span style="display:inline-block;background-color:#faa;width:110px;height:20px">w110</span>
+  <span style="display:inline-block;background-color:#afa;width:110px;height:20px">w110</span>
+</div>
+
+<h2>9. margin 生效</h2>
+<p>文<span style="display:inline-block;background-color:#fea;width:60px;height:30px;margin:0 12px">盒</span>文</p>
+
+<h2>10. 高度限制 + 内容高度</h2>
+<p>内容驱动高度：<span style="display:inline-block;background-color:#ddf;width:100px">这是两行<br>内容</span> 结束。</p>
+
+</body>
+</html>

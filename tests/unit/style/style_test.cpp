@@ -53,6 +53,24 @@ TEST(StyleTest, DisplayInlineBlock) {
   EXPECT_EQ(Style(engine, *doc, "span").display, Display::kInlineBlock);
 }
 
+TEST(StyleTest, FloatParsesLeftRightNone) {
+  auto doc = MakeDoc(
+      "<body><div style=\"float:left\">a</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  EXPECT_EQ(Style(engine, *doc, "div").floating, Float::kLeft);
+
+  auto doc2 = MakeDoc("<body><div style=\"float:right\">b</div></body>");
+  StyleEngine engine2;
+  engine2.ApplyStyles(*doc2);
+  EXPECT_EQ(Style(engine2, *doc2, "div").floating, Float::kRight);
+
+  auto doc3 = MakeDoc("<body><div>c</div></body>");
+  StyleEngine engine3;
+  engine3.ApplyStyles(*doc3);
+  EXPECT_EQ(Style(engine3, *doc3, "div").floating, Float::kNone);
+}
+
 TEST(StyleTest, HeadingIsBlock) {
   auto doc = MakeDoc("<body><h1>x</h1><h2>y</h2></body>");
   StyleEngine engine;

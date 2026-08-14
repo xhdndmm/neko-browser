@@ -23,6 +23,7 @@
 | 超链接（`<a>`） | Partial | Browser + Renderer 套件 | 蓝色+下划线样式、命中测试、相对 URL 解析、点击导航；无 fragment 滚动与 :visited/:hover/:active 伪类 |
 | Flexbox | Not Started | — | display:flex 按 block 处理 |
 | Grid | Not Started | — | display:grid 按 block 处理 |
+| float | Partial | Layout + Style 套件 | 行外锚定 block 一侧（left/right）、行盒环绕让位、shrink-to-fit/显式宽高；无 clear、多 float 相交、跨 BFC 布局 |
 | position absolute | Partial | Layout 套件 | 包含块判定（最近 positioning 祖先 padding box）、top/left/right/bottom、shrink-to-fit 与 left+right 约束方程；fixed 暂按 absolute 处理，无 z-index/百分比 offset |
 | 文本（位图字体回退） | Tested | Paint 套件 | 无系统字体时的 8x8 ASCII 回退 |
 | 文本（FreeType） | Partial | Graphics + Paint 套件 | 系统字体、抗锯齿、任意字号、UTF-8、glyph 缓存、布局真实 advance、font-family 匹配、逐字符回退 + CJK 回退链（中文可显示）、粗体/斜体变体匹配；无 HarfBuzz 整形 |

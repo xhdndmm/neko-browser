@@ -929,5 +929,133 @@ TEST(LayoutTest, WrappedInlineBlockRowsKeepLeadingGap) {
   EXPECT_LT(gap12, 20.0f + 4.0f);
 }
 
+TEST(LayoutTest, FloatLeftHugsContainingBlockLeftEdge) {
+  // A float:left box is out of flow, placed at the block's left edge with its
+  // specified size.
+  auto doc = html::Parser(
+                  "<body><div style=\"width:400px\">"
+                  "<span style=\"float:left;width:100px;height:60px\">L</span>"
+                  "text</div></body>")
+                  .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+  const LayoutBox* div = FindBox(*root, "div", *doc);
+  ASSERT_NE(div, nullptr);
+  ASSERT_EQ(div->floats.size(), 1u);
+  const LayoutBox* f = div->floats[0].get();
+  EXPECT_FLOAT_EQ(f->x, div->content_x());  // hugs the left edge
+  EXPECT_FLOAT_EQ(f->width, 100.0f);
+  EXPECT_FLOAT_EQ(f->height, 60.0f);
+}
+
+TEST(LayoutTest, FloatRightHugsContainingBlockRightEdge) {
+  auto doc = html::Parser(
+                  "<body><div style=\"width:400px\">"
+                  "<span style=\"float:right;width:80px;height:50px\">R</span>"
+                  "text</div></body>")
+                  .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+  const LayoutBox* div = FindBox(*root, "div", *doc);
+  ASSERT_NE(div, nullptr);
+  ASSERT_EQ(div->floats.size(), 1u);
+  const LayoutBox* f = div->floats[0].get();
+  // Right edge of the float aligns with the containing block's content right.
+  EXPECT_FLOAT_EQ(f->x + f->width, div->content_x() + div->content_width());
+  EXPECT_FLOAT_EQ(f->width, 80.0f);
+}
+
+TEST(LayoutTest, FloatShiftsFollowingLineStart) {
+  // A left float pushes the line box right so the text wraps around it.
+  auto doc = html::Parser(
+                  "<body><div style=\"width:400px\">"
+                  "<span style=\"float:left;width:100px;height:60px\">L</span>"
+                  "aaabbb cccddd eeefff</div></body>")
+                  .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+  const LayoutBox* div = FindBox(*root, "div", *doc);
+  ASSERT_NE(div, nullptr);
+  ASSERT_EQ(div->floats.size(), 1u);
+  const LayoutBox* f = div->floats[0].get();
+  ASSERT_FALSE(div->lines.empty());
+  // The first line's first run starts to the right of the left float's edge.
+  const float float_right = f->x + f->width;
+  EXPECT_GE(div->lines[0].runs[0].x, float_right - 0.01f);
+}
+
+TEST(LayoutTest, CjkTextWrapsInsideFloatHeight) {
+  // CJK text may break anywhere, so a long run keeps wrapping on indented
+  // lines (still inside the left float's height) rather than jumping back to
+  // the left edge or overlapping the float.
+  auto doc = html::Parser(
+                  "<body><div style=\"width:300px\">"
+                  "<span style=\"float:left;width:100px;height:80px\">L</span>"
+                  "\xE5\x8F\xB3\xE4\xBE\xA7\xE6\x96\x87\xE5\xAD\x97"
+                  "\xE5\x8F\xB3\xE4\xBE\xA7\xE6\x96\x87\xE5\xAD\x97"
+                  "\xE5\x8F\xB3\xE4\xBE\xA7\xE6\x96\x87\xE5\xAD\x97"
+                  "\xE5\x8F\xB3\xE4\xBE\xA7\xE6\x96\x87\xE5\xAD\x97"
+                  "\xE5\x8F\xB3\xE4\xBE\xA7\xE6\x96\x87\xE5\xAD\x97"
+                  "</div></body>")
+                  .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+  const LayoutBox* div = FindBox(*root, "div", *doc);
+  ASSERT_NE(div, nullptr);
+  ASSERT_EQ(div->floats.size(), 1u);
+  const float float_bottom = div->floats[0]->y + div->floats[0]->height;
+  const float float_right = div->floats[0]->x + div->floats[0]->width;
+  ASSERT_GE(div->lines.size(), 2u);
+  // Lines whose Y extent still overlaps the float stay indented to its right;
+  // the first line does, and so does a later line still inside its height.
+  for (const Line& l : div->lines) {
+    for (const TextRun& r : l.runs) {
+      if (r.y < float_bottom) {
+        EXPECT_GE(r.x, float_right - 0.01f) << "run inside float height must indent";
+      }
+    }
+  }
+}
+
+TEST(LayoutTest, BlockChildTextAvoidsParentFloat) {
+  // A float belongs to the enclosing block formatting context: the text of a
+  // block-level child (e.g. <h3>) that vertically overlaps the float must
+  // indent past it, not render underneath it.
+  auto doc = html::Parser(
+                  "<body><div style=\"width:500px\">"
+                  "<span style=\"float:left;width:120px;height:80px\">L</span>"
+                  "<h3>\xE6\xA0\x87\xE9\xA2\x98\xE6\x96\x87\xE6\x9C\xAC</h3>"
+                  "</div></body>")
+                  .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+  const LayoutBox* div = FindBox(*root, "div", *doc);
+  ASSERT_NE(div, nullptr);
+  ASSERT_EQ(div->floats.size(), 1u);
+  const float float_right = div->floats[0]->x + div->floats[0]->width;
+  const float float_bottom = div->floats[0]->y + div->floats[0]->height;
+  const LayoutBox* h3 = FindBox(*root, "h3", *doc);
+  ASSERT_NE(h3, nullptr);
+  ASSERT_FALSE(h3->lines.empty());
+  // The h3 text overlaps the float vertically and must start to its right.
+  for (const Line& l : h3->lines) {
+    for (const TextRun& r : l.runs) {
+      if (r.y < float_bottom) {
+        EXPECT_GE(r.x, float_right - 0.01f);
+      }
+    }
+  }
+}
+
 }  // namespace
 }  // namespace neko::layout

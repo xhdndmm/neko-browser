@@ -109,6 +109,7 @@ struct LayoutBox {
 
   std::vector<std::unique_ptr<LayoutBox>> children;  // block-level children
   std::vector<std::unique_ptr<LayoutBox>> positioned_children;  // position:absolute/fixed
+  std::vector<std::unique_ptr<LayoutBox>> floats;       // floats (out of flow)
   std::vector<Line> lines;                           // inline content
 
   float content_x() const {

@@ -33,6 +33,11 @@ void Painter::PaintBox(const layout::LayoutBox& box, DisplayList& list) const {
                    *box.image, box.style.object_fit);
   }
 
+  // Floats (out of flow) paint below the block's in-flow line content.
+  for (const auto& f : box.floats) {
+    PaintBox(*f, list);
+  }
+
   // Atomic inline boxes within lines.
   for (const layout::Line& line : box.lines) {
     for (const layout::InlineBox& inline_box : line.boxes) {

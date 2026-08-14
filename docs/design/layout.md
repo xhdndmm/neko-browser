@@ -19,6 +19,12 @@ DOM 与布局树分离：布局树持有几何信息（盒模型、行盒、文�
   `min(max(min-content, available), preferred)`（CSS2.1 10.3.9）。行盒里原子盒
   通过 `InlineBox.x/y` 定位后，`block_box` 再 `TranslateBox` 平移到行盒坐标；
   内部是独立块格式化上下文（块子元素垂直堆叠）。
+- `float:left/right`（CSS2.2 9.5）：`LayoutBlockContent` 检测并收集到
+  `LayoutBox::floats`（脱离块流，不占 `cursor_y`）；`BuildFloat` 用 shrink-to-fit
+  或显式宽 / 显式高构建，左浮动贴包含块左缘、右浮动贴右缘（均含 margin 盒对齐）。
+  随后 `LayoutLines` 传入本块的浮列表，在每行起始时按行垂直区间
+  `[line_top, line_top+strut]` 判断与浮动盒的重叠：左浮推行左缘右移、右浮推行右缘
+  左移，从而行盒环绕浮动盒；行与浮动不重叠时可用宽度恢复为整块宽。
 - 宽度：显式 px/% 或填满包含块内容宽；高度：内容驱动或显式值。
 - 文本测量：`LayoutEngine` 接受可选 `graphics::FontFace`；提供时词宽/空格宽用
   FreeType 真实 advance（`TextRun.width` 记录），表格 max-content 测量与命中
@@ -44,8 +50,9 @@ DOM 与布局树分离：布局树持有几何信息（盒模型、行盒、文�
 
 ## 未实现
 
-- flexbox / grid、absolute/fixed/sticky、浮动、垂直 margin 折叠
+- flexbox / grid、absolute/fixed/sticky、垂直 margin 折叠
   （margin 折叠未实现：子盒 margin 不穿透父盒）。
+- float：`clear`、多浮动盒相交的 BFC 排布、跨浮动盒的行内原子盒精确定位。
 - 表格：border-collapse/border-spacing、`vertical-align`、`<caption>` 定位、
   auto 表格宽度的 shrink-to-fit（当前填满包含块）、跨行单元格的完整行高分配。
 - 文本对齐（CSS Text 3 §7 `text-align`）解析了但未应用；换行仅在词边界

@@ -17,6 +17,8 @@
 - display:none 跳过、position:relative 偏移、position:absolute 定位（从流移除、
   相对最近 positioning 祖先 padding box、top/left/right/bottom、shrink-to-fit 与
   left+right 约束方程）
+- float（`float:left/right`）：行外锚定包含块一侧，后续行盒按浮动盒占用的垂直
+  区间收缩可用宽度以环绕；宽 shrink-to-fit 或显式、显式高支持
 - table layout（table/tr/td/th 网格、colspan/rowspan、显式列宽 px/%、auto 列按
   max-content 比例分配剩余宽度、行高按内容）
 - span 解析按 WHATWG tables.html：非负整数解析（尾随文本忽略）、colspan>1000 截断
@@ -25,8 +27,9 @@
 
 ## 未实现
 
-- flexbox/grid、fixed/sticky、浮动、margin 折叠、z-index、百分比 offset
+- flexbox/grid、fixed/sticky、margin 折叠、z-index、百分比 offset
   （fixed 暂按 absolute 处理）
+- float：`clear`、多个浮动盒相交的 BFC 排布
 - 表格：border-collapse/border-spacing、`vertical-align`、`<caption>` 定位、
   显式 `height`/`rowspan` 的完全行高分配（overflow 只加到最后一个跨行行）、
   auto 表格宽度按 shrink-to-fit（当前按 100% 填满包含块）
