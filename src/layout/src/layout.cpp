@@ -1283,6 +1283,19 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
           content_width = 0;
         }
       }
+      // min/max-width clamp (CSS 2.2 §10.4); min wins over max.
+      if (box->style.min_width.has_value()) {
+        content_width =
+            std::max(content_width, ResolveSize(box->style.min_width.value(), containing_width));
+      }
+      if (box->style.max_width.has_value()) {
+        content_width =
+            std::min(content_width, ResolveSize(box->style.max_width.value(), containing_width));
+      }
+      if (box->style.min_width.has_value()) {
+        content_width =
+            std::max(content_width, ResolveSize(box->style.min_width.value(), containing_width));
+      }
       box->width = content_width + box->border_left + box->border_right + box->padding_left +
                    box->padding_right;
       // Margin-box origin at (0,0); content is placed at +border+padding.
@@ -1301,6 +1314,19 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
         if (!height.percent) {
           content_height = std::max(content_height, height.value);
         }
+      }
+      // min/max-height clamp (CSS 2.2 §10.4); min wins over max.
+      if (box->style.min_height.has_value()) {
+        content_height =
+            std::max(content_height, ResolveSize(box->style.min_height.value(), containing_width));
+      }
+      if (box->style.max_height.has_value()) {
+        content_height =
+            std::min(content_height, ResolveSize(box->style.max_height.value(), containing_width));
+      }
+      if (box->style.min_height.has_value()) {
+        content_height =
+            std::max(content_height, ResolveSize(box->style.min_height.value(), containing_width));
       }
       box->height = content_height + box->border_top + box->border_bottom + box->padding_top +
                     box->padding_bottom;
@@ -1323,10 +1349,16 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       float margin_cross = 0;
       float base_main = 0;     // flex base size (content-box)
       float min_main = 0;      // clamp floor when shrinking
+      float min_main_clamp = 0; // resolved min-width/height on the main axis
+      float max_main_clamp = 0; // resolved max-width/height on the main axis (0 = none)
       float content_main = 0;  // final content-box main size
       float content_cross = 0; // natural content-box cross size
       bool base_from_spec = false;
       bool cross_auto = true; // no explicit cross-size property
+      int auto_main_margins = 0;  // number of auto margins on the main axis
+      int auto_cross_margins = 0; // number of auto margins on the cross axis
+      bool auto_main_start = false;  // an auto margin on the main-start side
+      bool auto_cross_start = false; // an auto margin on the cross-start side
       std::unique_ptr<LayoutBox> box;
     };
 
@@ -1378,6 +1410,10 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
           item.border_padding_cross =
               edges.border_top + edges.border_bottom + edges.padding_top + edges.padding_bottom;
           item.margin_cross = edges.margin_top + edges.margin_bottom;
+          item.auto_main_margins = (s.margin_left_auto ? 1 : 0) + (s.margin_right_auto ? 1 : 0);
+          item.auto_cross_margins = (s.margin_top_auto ? 1 : 0) + (s.margin_bottom_auto ? 1 : 0);
+          item.auto_main_start = s.margin_left_auto;
+          item.auto_cross_start = s.margin_top_auto;
         } else {
           item.border_padding_main =
               edges.border_top + edges.border_bottom + edges.padding_top + edges.padding_bottom;
@@ -1385,6 +1421,35 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
           item.border_padding_cross =
               edges.border_left + edges.border_right + edges.padding_left + edges.padding_right;
           item.margin_cross = edges.margin_left + edges.margin_right;
+          item.auto_main_margins = (s.margin_top_auto ? 1 : 0) + (s.margin_bottom_auto ? 1 : 0);
+          item.auto_cross_margins = (s.margin_left_auto ? 1 : 0) + (s.margin_right_auto ? 1 : 0);
+          item.auto_main_start = s.margin_top_auto;
+          item.auto_cross_start = s.margin_left_auto;
+        }
+        // Resolved min/max sizes on the main axis (clamp the flexible main
+        // size; percentages resolve against the container content width).
+        const style::SizeSpec* min_main_spec = nullptr;
+        const style::SizeSpec* max_main_spec = nullptr;
+        if (row) {
+          if (s.min_width.has_value()) {
+            min_main_spec = &s.min_width.value();
+          }
+          if (s.max_width.has_value()) {
+            max_main_spec = &s.max_width.value();
+          }
+        } else {
+          if (s.min_height.has_value()) {
+            min_main_spec = &s.min_height.value();
+          }
+          if (s.max_height.has_value()) {
+            max_main_spec = &s.max_height.value();
+          }
+        }
+        if (min_main_spec != nullptr) {
+          item.min_main_clamp = ResolveSize(*min_main_spec, avail_width);
+        }
+        if (max_main_spec != nullptr) {
+          item.max_main_clamp = ResolveSize(*max_main_spec, avail_width);
         }
         // Flex base size: flex-basis, else the main-size property, else the
         // item's intrinsic content size.  Percentages resolve against the
@@ -1402,7 +1467,12 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
           item.base_main = MeasureContent(child_el, styles, registry).max;
         }
         if (row) {
+          // Shrink floor: the item's min-content main size, but never below
+          // the resolved min-width (CSS Flexbox 1 §9.7).
           item.min_main = MeasureContent(child_el, styles, registry).min;
+          if (item.min_main_clamp > item.min_main) {
+            item.min_main = item.min_main_clamp;
+          }
         }
         item.cross_auto = !(row ? s.height.has_value() : s.width.has_value());
         items.push_back(std::move(item));
@@ -1428,7 +1498,7 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
           if (!item.base_from_spec) {
             item.base_main = item.box->content_height();
           }
-          item.min_main = 0;
+          item.min_main = item.min_main_clamp;
           item.content_cross = item.box->content_width();
         }
       }
@@ -1465,7 +1535,8 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
     // Resolves each item's flexible main size on every line (CSS Flexbox 1
     // §9.7).  Grow distributes positive free space by flex-grow; shrink takes
     // it back proportionally to flex-shrink × content-box flex base size,
-    // clamped at the item's min-content main size.
+    // clamped at the item's min-content main size.  Resolved min/max main
+    // sizes are applied last (min wins over max, matching CSS 2.2 §10.4).
     static void
     ResolveFlexLengths(bool main_definite, float container_main, std::vector<FlexLineData>& lines)
     {
@@ -1504,6 +1575,15 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
               }
               it->content_main = final;
             }
+          }
+        }
+        // Apply the resolved min/max constraints on the final main size.
+        for (FlexItemData* it : line.items) {
+          if (it->max_main_clamp > 0 && it->content_main > it->max_main_clamp) {
+            it->content_main = it->max_main_clamp;
+          }
+          if (it->min_main > 0 && it->content_main < it->min_main) {
+            it->content_main = it->min_main;
           }
         }
       }
@@ -1564,6 +1644,15 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
                        cb_h,
                        absolute_children,
                        items);
+
+      // ---- Ordering (CSS Flexbox 1 §5.4) ----
+      // Items are laid out in ascending |order|; a stable sort keeps document
+      // order for equal values (this affects packing, wrapping and the
+      // painting order of the finished boxes).
+      std::stable_sort(items.begin(), items.end(), [](const FlexItemData& a,
+                                                      const FlexItemData& b) {
+        return a.style->order < b.style->order;
+      });
 
       // ---- Collect items into lines (§9.3) ----
       std::vector<FlexLineData> lines;
@@ -1688,11 +1777,21 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
         const float free = container_main - (content_sum + gaps);
         float main_cursor = 0;
         float extra_gap = 0;
+        // Auto main margins absorb the positive free space and take
+        // precedence over justify-content (CSS Flexbox 1 §8.1); each auto
+        // margin on the line receives an equal share.
+        int auto_main_total = 0;
+        for (const FlexItemData* it : line.items) {
+          auto_main_total += it->auto_main_margins;
+        }
+        const float auto_main_share =
+            (free > 0 && auto_main_total > 0) ? free / static_cast<float>(auto_main_total) : 0.0f;
         // With negative free space the line overflows the container; every
         // justify-content value then packs items toward main-start with
         // overflow at main-end (CSS Flexbox 1 §8.2), so the distribution is
-        // only applied when there is space to distribute.
-        if (free > 0) {
+        // only applied when there is space to distribute (and no auto
+        // margins are consuming it).
+        if (free > 0 && auto_main_total == 0) {
           switch (cs.justify_content) {
           case style::JustifyContent::kFlexEnd:
             main_cursor = free;
@@ -1719,15 +1818,22 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
         }
 
         float line_baseline = 0;
-        if (cs.align_items == style::AlignItems::kBaseline) {
-          for (const FlexItemData* it : line.items) {
+        for (const FlexItemData* it : line.items) {
+          if (it->style->align_self.value_or(cs.align_items) == style::AlignItems::kBaseline) {
             line_baseline = std::max(line_baseline, baseline_of(*it->box));
           }
         }
 
         for (FlexItemData* it : line.items) {
-          // Cross size: stretch items fill the line.
-          if (cs.align_items == style::AlignItems::kStretch && it->cross_auto) {
+          // Effective cross alignment: align-self overrides align-items.
+          const style::AlignItems eff_align = it->style->align_self.value_or(cs.align_items);
+          // The item's effective main margin includes its share of the free
+          // space distributed to auto margins.
+          const float eff_margin_main = it->margin_main + auto_main_share * it->auto_main_margins;
+          // Cross size: stretch items fill the line (auto cross margins
+          // override stretch, CSS Flexbox 1 §8.1).
+          if (it->auto_cross_margins == 0 && eff_align == style::AlignItems::kStretch &&
+              it->cross_auto) {
             const float target = line_cross[li] - it->margin_cross;
             if (row) {
               it->box->height = std::max(it->box->height, target);
@@ -1739,26 +1845,42 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
           }
 
           const float outer_cross = it->content_cross + it->border_padding_cross + it->margin_cross;
-          const float outer_main = it->content_main + it->border_padding_main + it->margin_main;
+          const float outer_main = it->content_main + it->border_padding_main + eff_margin_main;
 
-          // Cross offset within the line.
+          // Cross offset within the line.  Auto cross margins absorb the
+          // line's free cross space and override align-self.
           float cross_pos = 0;
-          switch (cs.align_items) {
-          case style::AlignItems::kFlexEnd:
-            cross_pos = line_cross[li] - outer_cross;
-            break;
-          case style::AlignItems::kCenter:
-            cross_pos = (line_cross[li] - outer_cross) / 2.0f;
-            break;
-          case style::AlignItems::kBaseline:
-            cross_pos = line_baseline - baseline_of(*it->box);
-            break;
-          case style::AlignItems::kStretch:
-          case style::AlignItems::kFlexStart:
-            break;
+          if (it->auto_cross_margins > 0) {
+            const float free_cross = line_cross[li] - outer_cross;
+            if (free_cross > 0) {
+              const float share = free_cross / static_cast<float>(it->auto_cross_margins);
+              if (it->auto_cross_start) {
+                cross_pos += share;
+              }
+            }
+          } else {
+            switch (eff_align) {
+            case style::AlignItems::kFlexEnd:
+              cross_pos = line_cross[li] - outer_cross;
+              break;
+            case style::AlignItems::kCenter:
+              cross_pos = (line_cross[li] - outer_cross) / 2.0f;
+              break;
+            case style::AlignItems::kBaseline:
+              cross_pos = line_baseline - baseline_of(*it->box);
+              break;
+            case style::AlignItems::kStretch:
+            case style::AlignItems::kFlexStart:
+              break;
+            }
           }
 
-          // Margin-box origin in container content coordinates.
+          // Margin-box origin in container content coordinates.  An auto
+          // margin on the item's main-start side absorbs one share of the
+          // free space, pushing the item along the main axis.
+          if (it->auto_main_start) {
+            main_cursor += auto_main_share;
+          }
           float main_pos = main_cursor;
           if (reverse_main) {
             main_pos = container_main - main_cursor - outer_main;

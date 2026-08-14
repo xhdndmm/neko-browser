@@ -127,6 +127,68 @@ TEST(StyleTest, FlexShorthandSingleNumber)
   EXPECT_FLOAT_EQ(p.flex_basis.value().value, 0.0f);
 }
 
+TEST(StyleTest, FlexOrderAndAlignSelfParse)
+{
+  auto doc = MakeDoc("<body><div style=\"display:flex\"><p style=\"order:3; "
+                     "align-self:flex-end\">x</p></div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& p = Style(engine, *doc, "p");
+  EXPECT_EQ(p.order, 3);
+  ASSERT_TRUE(p.align_self.has_value());
+  EXPECT_EQ(p.align_self.value(), AlignItems::kFlexEnd);
+}
+
+TEST(StyleTest, AlignSelfAutoIsUnset)
+{
+  auto doc = MakeDoc("<body><div style=\"display:flex\"><p style=\"align-self:auto\">x</p>"
+                     "</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& p = Style(engine, *doc, "p");
+  EXPECT_FALSE(p.align_self.has_value());
+}
+
+TEST(StyleTest, MinMaxSizesParse)
+{
+  auto doc = MakeDoc("<body><div style=\"min-width:10px; max-width:50%; min-height:5px; "
+                     "max-height:none\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, "div");
+  ASSERT_TRUE(s.min_width.has_value());
+  EXPECT_FLOAT_EQ(s.min_width.value().value, 10.0f);
+  ASSERT_TRUE(s.max_width.has_value());
+  EXPECT_TRUE(s.max_width.value().percent);
+  EXPECT_FLOAT_EQ(s.max_width.value().value, 50.0f);
+  ASSERT_TRUE(s.min_height.has_value());
+  EXPECT_FLOAT_EQ(s.min_height.value().value, 5.0f);
+  // max-height: none means "no constraint".
+  EXPECT_FALSE(s.max_height.has_value());
+}
+
+TEST(StyleTest, AutoMarginsParseLonghandAndShorthand)
+{
+  auto longhand = MakeDoc("<body><div style=\"margin-left:auto; margin-top:auto\">x</div></body>");
+  StyleEngine engine1;
+  engine1.ApplyStyles(*longhand);
+  const ComputedStyle& l = Style(engine1, *longhand, "div");
+  EXPECT_TRUE(l.margin_left_auto);
+  EXPECT_TRUE(l.margin_top_auto);
+  EXPECT_FALSE(l.margin_right_auto);
+  EXPECT_FALSE(l.margin_bottom_auto);
+
+  auto shorthand = MakeDoc("<body><div style=\"margin:0 auto\">x</div></body>");
+  StyleEngine engine2;
+  engine2.ApplyStyles(*shorthand);
+  const ComputedStyle& s = Style(engine2, *shorthand, "div");
+  // "margin: 0 auto" -> top/bottom 0, left/right auto.
+  EXPECT_FALSE(s.margin_top_auto);
+  EXPECT_TRUE(s.margin_right_auto);
+  EXPECT_FALSE(s.margin_bottom_auto);
+  EXPECT_TRUE(s.margin_left_auto);
+}
+
 TEST(StyleTest, HeadingIsBlock)
 {
   auto doc = MakeDoc("<body><h1>x</h1><h2>y</h2></body>");

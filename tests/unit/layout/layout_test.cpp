@@ -1333,5 +1333,134 @@ TEST(FlexLayoutTest, ShrinkWeightUsesContentBoxBase)
   EXPECT_NEAR(a->width + b->width, 100.0f, 0.01f);
 }
 
+TEST(FlexLayoutTest, OrderReordersItems)
+{
+  Page page = Build("<body><div style=\"display:flex\">"
+                    "<div id=\"a\" style=\"order:2\">a</div>"
+                    "<div id=\"b\" style=\"order:1\">b</div>"
+                    "<div id=\"c\" style=\"order:1\">c</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 3u);
+  // Ascending order; equal order keeps document order (b before c).
+  EXPECT_EQ(flex->children[0]->element->Id().value(), "b");
+  EXPECT_EQ(flex->children[1]->element->Id().value(), "c");
+  EXPECT_EQ(flex->children[2]->element->Id().value(), "a");
+  EXPECT_FLOAT_EQ(flex->children[0]->x, 8.0f);
+  EXPECT_FLOAT_EQ(flex->children[1]->x, 24.0f);
+  EXPECT_FLOAT_EQ(flex->children[2]->x, 40.0f);
+}
+
+TEST(FlexLayoutTest, AlignSelfOverridesAlignItems)
+{
+  Page page = Build("<body><div style=\"display:flex; align-items:center; height:100px\">"
+                    "<div style=\"height:20px\">a</div>"
+                    "<div style=\"height:20px; align-self:flex-start\">b</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 2u);
+  // Default align-items centers both, but align-self:flex-start pins b to the
+  // cross-start (top) edge.
+  EXPECT_FLOAT_EQ(flex->children[0]->y, 8.0f + (100.0f - 20.0f) / 2.0f);
+  EXPECT_FLOAT_EQ(flex->children[1]->y, 8.0f);
+}
+
+TEST(FlexLayoutTest, AlignSelfStretchOverridePreventsStretch)
+{
+  // align-self:flex-start also disables the default stretch for an
+  // auto-height item.
+  Page page = Build("<body><div style=\"display:flex\">"
+                    "<div style=\"height:50px\">a</div>"
+                    "<div style=\"align-self:flex-start\">b</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 2u);
+  EXPECT_FLOAT_EQ(flex->children[0]->height, 50.0f);
+  // b is not stretched: its height stays at the line-height content box.
+  EXPECT_LT(flex->children[1]->height, 50.0f);
+}
+
+TEST(FlexLayoutTest, MinWidthClampsShrink)
+{
+  Page page = Build("<body><div style=\"display:flex; width:100px\">"
+                    "<div style=\"width:80px; min-width:60px\">a</div>"
+                    "<div style=\"width:80px\">b</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 2u);
+  // Equal shrink (both base 80) would give 50/50, but a's min-width floors it
+  // at 60; b takes the remaining reduction.
+  EXPECT_NEAR(flex->children[0]->width, 60.0f, 0.01f);
+  EXPECT_NEAR(flex->children[1]->width, 50.0f, 0.01f);
+}
+
+TEST(FlexLayoutTest, MaxWidthClampsGrow)
+{
+  Page page = Build("<body><div style=\"display:flex\">"
+                    "<div style=\"width:16px; max-width:20px; flex-grow:1\">a</div>"
+                    "<div style=\"width:16px; flex-grow:1\">b</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 2u);
+  // Equal growth would give both ~392, but a is capped at its 20px max-width
+  // (the freed space is not re-distributed — documented limitation).
+  EXPECT_NEAR(flex->children[0]->width, 20.0f, 0.01f);
+  EXPECT_NEAR(flex->children[1]->width, 16.0f + 752.0f / 2.0f, 0.01f);
+}
+
+TEST(FlexLayoutTest, AutoMarginCentersOnMainAxis)
+{
+  // margin: auto on the main axis absorbs the free space, centering the item
+  // (CSS Flexbox 1 §8.1); it overrides justify-content.
+  Page page = Build("<body><div style=\"display:flex\">"
+                    "<div style=\"margin:0 auto\">a</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 1u);
+  // (784 - 16) / 2 = 384 on each side.
+  EXPECT_NEAR(flex->children[0]->x, 8.0f + 384.0f, 0.01f);
+}
+
+TEST(FlexLayoutTest, AutoMarginOnCrossAxis)
+{
+  Page page = Build("<body><div style=\"display:flex; height:100px\">"
+                    "<div style=\"margin-top:auto; margin-bottom:auto; height:20px\">a</div>"
+                    "</div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 1u);
+  // (100 - 20) / 2 = 40 pushed down by the auto top margin.
+  EXPECT_NEAR(flex->children[0]->y, 8.0f + 40.0f, 0.01f);
+}
+
+TEST(FlexLayoutTest, ColumnMinHeightClamps)
+{
+  Page page = Build("<body><div style=\"display:flex; flex-direction:column; height:100px\">"
+                    "<div style=\"height:80px; min-height:60px\">a</div>"
+                    "<div style=\"height:80px\">b</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 2u);
+  // Column main axis is height: equal shrink would give 50/50, but a's
+  // min-height floors it at 60.
+  EXPECT_NEAR(flex->children[0]->height, 60.0f, 0.01f);
+  EXPECT_NEAR(flex->children[1]->height, 50.0f, 0.01f);
+}
+
+TEST(FlexLayoutTest, AlignSelfOnColumnCrossAxis)
+{
+  // In a column, align-self acts on the horizontal (cross) axis.
+  Page page = Build("<body><div style=\"display:flex; flex-direction:column; "
+                    "align-items:flex-start; width:200px\">"
+                    "<div style=\"width:60px\">a</div>"
+                    "<div style=\"width:60px; align-self:flex-end\">b</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 2u);
+  // a at the cross-start (left); b pinned to the cross-end (right edge).
+  EXPECT_FLOAT_EQ(flex->children[0]->x, 8.0f);
+  EXPECT_FLOAT_EQ(flex->children[1]->x, 8.0f + 200.0f - 60.0f);
+}
+
 } // namespace
 } // namespace neko::layout

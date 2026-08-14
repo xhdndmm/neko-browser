@@ -140,11 +140,25 @@ struct ComputedStyle
   std::optional<SizeSpec> width;
   std::optional<SizeSpec> height;
 
+  // min/max constraints (CSS 2.2 §10.4).  Percentages resolve against the
+  // containing block like width/height.  nullopt = auto (no constraint).
+  std::optional<SizeSpec> min_width;
+  std::optional<SizeSpec> max_width;
+  std::optional<SizeSpec> min_height;
+  std::optional<SizeSpec> max_height;
+
   // Box insets (percentages resolve against the containing block width).
+  // Each margin carries an *auto flag: margin: auto (CSS 2.2 §10.3.4) leaves
+  // the resolved value at 0 in normal flow but lets flex layout distribute
+  // free space between the auto margins (CSS Flexbox 1 §8.1).
   SizeSpec margin_top;
   SizeSpec margin_right;
   SizeSpec margin_bottom;
   SizeSpec margin_left;
+  bool margin_top_auto = false;
+  bool margin_right_auto = false;
+  bool margin_bottom_auto = false;
+  bool margin_left_auto = false;
   SizeSpec padding_top;
   SizeSpec padding_right;
   SizeSpec padding_bottom;
@@ -199,6 +213,11 @@ struct ComputedStyle
   std::optional<SizeSpec> flex_basis; // nullopt = auto (content-based)
   float row_gap = 0;
   float column_gap = 0;
+
+  // Flex item ordering and per-item cross-axis alignment (CSS Flexbox 1 §5.3
+  // and §8.3).  align_self overrides the container's align-items when set.
+  int order = 0;
+  std::optional<AlignItems> align_self;
 };
 
 } // namespace neko::style

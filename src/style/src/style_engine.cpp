@@ -133,6 +133,70 @@ void ApplyBoxShorthand(const std::string& value,
   }
 }
 
+// Margin shorthand ("margin: <top> <right> <bottom> <left>" with the usual
+// 1-4 value rules).  Each token may be a length/percentage or "auto"; the
+// per-side auto flags mirror the resolved sizes.
+void ApplyMarginShorthand(const std::string& value,
+                          float font_size,
+                          float root_font_size,
+                          std::array<SizeSpec, 4>& sides,
+                          std::array<bool, 4>& auto_flags)
+{
+  const std::vector<std::string> parts = SplitWhitespace(value);
+  auto parse = [&](const std::string& text, SizeSpec& out, bool& is_auto) {
+    const css::CssValue v = css::ParseCssValue(text);
+    if (v.type == css::CssValue::Type::kKeyword && v.text == "auto") {
+      out = SizeSpec{};
+      is_auto = true;
+      return;
+    }
+    is_auto = false;
+    if (const std::optional<SizeSpec> spec = ParseSize(text, font_size, root_font_size)) {
+      out = spec.value();
+    } else {
+      out = SizeSpec{};
+    }
+  };
+  auto set1 = [&](SizeSpec& s, bool& a) { parse(parts[0], s, a); };
+  auto set2 = [&](SizeSpec& s, bool& a) {
+    parse(parts.size() >= 2 ? parts[1] : parts[0], s, a);
+  };
+  auto set3 = [&](SizeSpec& s, bool& a) {
+    parse(parts.size() >= 3 ? parts[2] : parts[0], s, a);
+  };
+  auto set4 = [&](SizeSpec& s, bool& a) {
+    parse(parts.size() >= 4 ? parts[3] : (parts.size() == 2 ? parts[1] : parts[0]), s, a);
+  };
+  switch (parts.size()) {
+  case 1:
+    set1(sides[0], auto_flags[0]);
+    set1(sides[1], auto_flags[1]);
+    set1(sides[2], auto_flags[2]);
+    set1(sides[3], auto_flags[3]);
+    break;
+  case 2:
+    set1(sides[0], auto_flags[0]);
+    set2(sides[1], auto_flags[1]);
+    set1(sides[2], auto_flags[2]);
+    set2(sides[3], auto_flags[3]);
+    break;
+  case 3:
+    set1(sides[0], auto_flags[0]);
+    set2(sides[1], auto_flags[1]);
+    set3(sides[2], auto_flags[2]);
+    set2(sides[3], auto_flags[3]);
+    break;
+  default:
+    if (parts.size() >= 4) {
+      set1(sides[0], auto_flags[0]);
+      set2(sides[1], auto_flags[1]);
+      set3(sides[2], auto_flags[2]);
+      set4(sides[3], auto_flags[3]);
+    }
+    break;
+  }
+}
+
 // Extracts width/color/style from a border value ("1px solid #000").
 void ParseBorderValue(const std::string& value,
                       float font_size,
@@ -685,6 +749,36 @@ void StyleEngine::ComputeElement(dom::Element& element,
     }
   }
 
+  // order (flex item; CSS Flexbox 1 §5.4).  Items are laid out in ascending
+  // order; equal values keep document order.
+  if (const css::Declaration* d = find("order")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kNumber) {
+      out.order = static_cast<int>(v.number);
+    }
+  }
+
+  // align-self (flex item; CSS Flexbox 1 §8.3).  Overrides the container's
+  // align-items for this item; "auto" falls back to the container.
+  if (const css::Declaration* d = find("align-self")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kKeyword) {
+      if (v.text == "auto") {
+        out.align_self = std::nullopt;
+      } else if (v.text == "flex-start") {
+        out.align_self = AlignItems::kFlexStart;
+      } else if (v.text == "flex-end") {
+        out.align_self = AlignItems::kFlexEnd;
+      } else if (v.text == "center") {
+        out.align_self = AlignItems::kCenter;
+      } else if (v.text == "baseline") {
+        out.align_self = AlignItems::kBaseline;
+      } else {
+        out.align_self = AlignItems::kStretch;
+      }
+    }
+  }
+
   // gap (row-gap / column-gap / shorthand).  The shorthand is applied first
   // so an explicit longhand declared later overrides its component.
   auto parse_gap = [&](const std::string& text) -> float {
@@ -743,18 +837,45 @@ void StyleEngine::ComputeElement(dom::Element& element,
     out.height = ParseSize(d->value, out.font_size, root_font_size);
   }
 
-  // margin / padding.
-  auto set_margin = [&](const char* name, SizeSpec& target) {
+  // min-width / min-height / max-width / max-height (CSS 2.2 §10.4).
+  // A max value of "none" means "no constraint" (nullopt); "auto" is invalid
+  // for these properties and is treated as no constraint.
+  auto parse_bounds = [&](const char* name) -> std::optional<SizeSpec> {
     if (const css::Declaration* d = find(name)) {
-      if (const std::optional<SizeSpec> spec = ParseSize(d->value, out.font_size, root_font_size)) {
+      const css::CssValue v = css::ParseCssValue(d->value);
+      if (v.type == css::CssValue::Type::kKeyword && v.text == "none") {
+        return std::nullopt;
+      }
+      return ParseSize(d->value, out.font_size, root_font_size);
+    }
+    return std::nullopt;
+  };
+  out.min_width = parse_bounds("min-width");
+  out.max_width = parse_bounds("max-width");
+  out.min_height = parse_bounds("min-height");
+  out.max_height = parse_bounds("max-height");
+
+  // margin / padding.
+  // Each margin side also tracks whether the value was "auto" (only legal for
+  // margins).  Auto margins resolve to 0 in normal flow; flex layout uses the
+  // flag to distribute free space (CSS Flexbox 1 §8.1).
+  auto set_margin = [&](const char* name, SizeSpec& target, bool& auto_flag) {
+    if (const css::Declaration* d = find(name)) {
+      const css::CssValue v = css::ParseCssValue(d->value);
+      if (v.type == css::CssValue::Type::kKeyword && v.text == "auto") {
+        target = SizeSpec{};
+        auto_flag = true;
+      } else if (const std::optional<SizeSpec> spec =
+                     ParseSize(d->value, out.font_size, root_font_size)) {
         target = spec.value();
+        auto_flag = false;
       }
     }
   };
-  set_margin("margin-top", out.margin_top);
-  set_margin("margin-right", out.margin_right);
-  set_margin("margin-bottom", out.margin_bottom);
-  set_margin("margin-left", out.margin_left);
+  set_margin("margin-top", out.margin_top, out.margin_top_auto);
+  set_margin("margin-right", out.margin_right, out.margin_right_auto);
+  set_margin("margin-bottom", out.margin_bottom, out.margin_bottom_auto);
+  set_margin("margin-left", out.margin_left, out.margin_left_auto);
   auto set_padding = [&](const char* name, SizeSpec& target) {
     if (const css::Declaration* d = find(name)) {
       if (const std::optional<SizeSpec> spec = ParseSize(d->value, out.font_size, root_font_size)) {
@@ -770,11 +891,17 @@ void StyleEngine::ComputeElement(dom::Element& element,
   if (const css::Declaration* d = find("margin")) {
     std::array<SizeSpec, 4> sides = {
         out.margin_top, out.margin_right, out.margin_bottom, out.margin_left};
-    ApplyBoxShorthand(d->value, out.font_size, root_font_size, sides);
+    std::array<bool, 4> auto_flags = {out.margin_top_auto, out.margin_right_auto,
+                                      out.margin_bottom_auto, out.margin_left_auto};
+    ApplyMarginShorthand(d->value, out.font_size, root_font_size, sides, auto_flags);
     out.margin_top = sides[0];
     out.margin_right = sides[1];
     out.margin_bottom = sides[2];
     out.margin_left = sides[3];
+    out.margin_top_auto = auto_flags[0];
+    out.margin_right_auto = auto_flags[1];
+    out.margin_bottom_auto = auto_flags[2];
+    out.margin_left_auto = auto_flags[3];
   }
   if (const css::Declaration* d = find("padding")) {
     std::array<SizeSpec, 4> sides = {
