@@ -227,6 +227,29 @@ TEST(HtmlTest, AdoptionAgencyWithFurthestBlock) {
             "<html><head></head><body><b>1</b><p><b>2</b>3</p></body></html>");
 }
 
+// Regression: the adoption agency inner loop used to re-index the current node
+// after removing it from the stack, which returned -1 and dereferenced
+// stack_[-2] (overflow) -- for inputs with a non-formatting element (e.g.
+// <span>) between the formatting element and the furthest block this looped
+// forever.  These all parsed to a well-formed tree instead of hanging.
+TEST(HtmlTest, AdoptionAgencySpanBetweenFormattingAndBlock) {
+  auto doc = ParseDoc("<b><span>x<div>y</b>");
+  EXPECT_EQ(doc->ToString(),
+            "<html><head></head><body><b><span>x</span></b><div><b>y</b></div></body></html>");
+}
+
+TEST(HtmlTest, AdoptionAgencyEmSpanDiv) {
+  auto doc = ParseDoc("<em><span>a<div>b</em>");
+  EXPECT_EQ(doc->ToString(),
+            "<html><head></head><body><em><span>a</span></em><div><em>b</em></div></body></html>");
+}
+
+TEST(HtmlTest, AdoptionAgencyBoldDivParagraph) {
+  auto doc = ParseDoc("<b><div><p>x</b>");
+  EXPECT_EQ(doc->ToString(),
+            "<html><head></head><body><b></b><div><b><p>x</p></b></div></body></html>");
+}
+
 TEST(HtmlTest, NoahsArkBoundsFormattingElements) {
   // Four nested <b> elements (same tag + attributes) trigger the Noah's Ark
   // clause; the DOM must still nest correctly.

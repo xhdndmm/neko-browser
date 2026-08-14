@@ -453,14 +453,26 @@ void Parser::RunAdoptionAgency(std::string_view subject) {
         (fmt_idx - 1 >= 0) ? stack_[static_cast<std::size_t>(fmt_idx - 1)] : nullptr;
     long bookmark = active_index(formatting);
 
+    // Inner loop (WHATWG 13.2.6.4.7): walk down the stack from the element
+    // just below furthest_block toward the formatting element.  |node_pos| is
+    // the stack index of the element *below* the one currently being examined,
+    // so it stays valid even after the examined node is removed from the stack
+    // (removal shifts only elements above it, never below it).  This avoids
+    // re-indexing a removed node (which would return -1 and overflow).
     dom::Element* node = furthest_block;
     dom::Element* last_node = furthest_block;
+    long node_pos = stack_index(furthest_block);
 
     int inner = 0;
     for (;;) {
       ++inner;
-      const long node_idx = stack_index(node);
-      node = (node_idx - 1 >= 0) ? stack_[static_cast<std::size_t>(node_idx - 1)] : nullptr;
+      if (node_pos <= 0) {
+        // Nothing below furthest_block in the stack: nothing left to re-parent.
+        node = nullptr;
+        break;
+      }
+      node = stack_[static_cast<std::size_t>(node_pos - 1)];
+      --node_pos;
       if (node == formatting) {
         break;
       }
