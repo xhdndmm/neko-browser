@@ -87,6 +87,17 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(quickjs)
 
+# Third-party code must never fail the build on its own warnings: strip any
+# warnings-as-errors flag that the dependency (or a parent scope) enabled.
+# Our own targets opt into strict warnings via apply_compiler_warnings().
+if(TARGET qjs)
+  if(MSVC)
+    target_compile_options(qjs PRIVATE /WX-)
+  else()
+    target_compile_options(qjs PRIVATE -Wno-error)
+  endif()
+endif()
+
 # -----------------------------------------------------------------------------
 # Global tooling integration (warnings, sanitizers, coverage)
 # -----------------------------------------------------------------------------
