@@ -192,8 +192,13 @@ bool ParseComplex(std::string_view text, ComplexSelector& out) {
         ++depth;
       } else if (ch == ']' && depth > 0) {
         --depth;
+      } else if (ch == '(') {
+        ++depth;
+      } else if (ch == ')' && depth > 0) {
+        --depth;
       }
-      // Combinator characters only act as combinators outside brackets.
+      // Combinator characters only act as combinators outside brackets and
+      // parentheses (e.g. the '+' inside :nth-child(2n+1)).
       if (depth == 0 && (IsWhitespace(ch) || ch == '>' || ch == '+' || ch == '~')) {
         break;
       }

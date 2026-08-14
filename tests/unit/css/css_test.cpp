@@ -201,6 +201,21 @@ TEST(CssSelectorTest, PseudoClasses) {
   EXPECT_TRUE(MatchesSelector(*p2, ParseSelectorList("p:nth-child(2n)")[0]));
 }
 
+TEST(CssSelectorTest, NthChildWithPlusParses) {
+  // The '+' inside :nth-child(An+B) must not be mistaken for a sibling
+  // combinator (regression: the complex-selector scanner only tracked []).
+  auto doc = MakeTree();
+  const std::vector<dom::Element*> ps = dom::QuerySelectorAll(*doc, "p");
+  ASSERT_EQ(ps.size(), 2u);
+  dom::Element* p1 = ps[0];
+  dom::Element* p2 = ps[1];
+  EXPECT_EQ(ParseSelectorList("p:nth-child(2n+1)").size(), 1u);
+  EXPECT_EQ(ParseSelectorList("p:nth-child(2n + 1)").size(), 1u);
+  EXPECT_EQ(ParseSelectorList("p:nth-child(-n+3)").size(), 1u);
+  EXPECT_TRUE(MatchesSelector(*p1, ParseSelectorList("p:nth-child(2n+1)")[0]));
+  EXPECT_FALSE(MatchesSelector(*p2, ParseSelectorList("p:nth-child(2n+1)")[0]));
+}
+
 TEST(CssSelectorTest, Specificity) {
   auto doc = MakeTree();
   dom::Element* main = ById(*doc, "main");
