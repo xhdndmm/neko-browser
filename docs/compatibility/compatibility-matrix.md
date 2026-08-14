@@ -18,6 +18,7 @@
 | 级联 / 计算样式 | Tested | Style 套件 | 特异性、继承、内联样式 |
 | Block layout | Tested | Layout 套件 | 盒模型、堆叠、宽度填充 |
 | Inline layout | Tested | Layout 套件 | 文字换行、行盒 |
+| inline-block | Partial | Layout + Style + Paint 套件 | 行内原子块盒：显式/shrink-to-fit 宽度、内部块格式化上下文、background/border/padding、vertical-align 与行高参与行盒；精确基线对齐（多行内块按自身最后一行盒基线）未做 |
 | Table layout | Partial | Layout 套件 | 行列网格、colspan/rowspan（含 rowspan=0 跨行组末尾、WHATWG 截断）、显式列宽、auto 列分配；无 border-collapse/vertical-align/caption |
 | 超链接（`<a>`） | Partial | Browser + Renderer 套件 | 蓝色+下划线样式、命中测试、相对 URL 解析、点击导航；无 fragment 滚动与 :visited/:hover/:active 伪类 |
 | Flexbox | Not Started | — | display:flex 按 block 处理 |

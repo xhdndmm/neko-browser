@@ -48,6 +48,9 @@ class FontSelector {
   // Ascent of the primary face at |px_size| (0 when no face).
   float Ascent(float px_size) const;
 
+  // Descent (positive) of the primary face at |px_size| (0 when no face).
+  float Descent(float px_size) const;
+
   const std::vector<const FontFace*>& faces() const { return faces_; }
 
  private:

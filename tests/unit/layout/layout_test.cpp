@@ -49,6 +49,31 @@ const LayoutBox* FindBox(const LayoutBox& box, std::string_view selector,
   return nullptr;
 }
 
+// Finds the first inline-block box within |box| (via line box block_boxes)
+// whose element matches |element|; surfaces the containing InlineBox too.
+const LayoutBox* FindInlineBlock(const LayoutBox& box, const dom::Element* element,
+                                 const InlineBox*& holder) {
+  for (const Line& line : box.lines) {
+    for (const InlineBox& ib : line.boxes) {
+      if (ib.block_box != nullptr && ib.block_box->element == element) {
+        holder = &ib;
+        return ib.block_box.get();
+      }
+      if (ib.block_box != nullptr) {
+        if (const LayoutBox* found = FindInlineBlock(*ib.block_box, element, holder)) {
+          return found;
+        }
+      }
+    }
+  }
+  for (const auto& child : box.children) {
+    if (const LayoutBox* found = FindInlineBlock(*child, element, holder)) {
+      return found;
+    }
+  }
+  return nullptr;
+}
+
 TEST(LayoutTest, BlockFillsContainingBlock) {
   Page page = Build("<body><div>x</div></body>");
   ASSERT_NE(page.root, nullptr);
@@ -714,6 +739,165 @@ TEST(LayoutTest, TableRowspanSpansRows) {
   EXPECT_FLOAT_EQ(row0->children[0]->height, row0->height + row1->height);
   // S sits in the second row, below the first.
   EXPECT_GT(row1->children[0]->y, row0->y);
+}
+
+TEST(LayoutTest, InlineBlockExplicitSizeIsAtomicBox) {
+  // An inline-block with explicit size is an atomic inline box on its line.
+  auto doc = html::Parser("<body><p>a<span style=\"display:inline-block;width:50px;height:30px\">b"
+                          "</span>c</p></body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+  const LayoutBox* p = FindBox(*root, "p", *doc);
+  ASSERT_NE(p, nullptr);
+  ASSERT_GE(p->lines.size(), 1u);
+  ASSERT_EQ(p->lines[0].boxes.size(), 1u);
+  dom::Element* el = dom::QuerySelector(*doc, "span");
+  ASSERT_NE(el, nullptr);
+  const InlineBox* holder = nullptr;
+  const LayoutBox* block = FindInlineBlock(*root, el, holder);
+  ASSERT_NE(block, nullptr);
+  ASSERT_NE(holder, nullptr);
+  EXPECT_FLOAT_EQ(holder->width, 50.0f);
+  EXPECT_FLOAT_EQ(holder->height, 30.0f);
+  EXPECT_FLOAT_EQ(block->width, 50.0f);
+  EXPECT_FLOAT_EQ(block->height, 30.0f);
+  // It flows between the text runs "a" and "c" on the same line.
+  ASSERT_GE(p->lines[0].runs.size(), 2u);
+  EXPECT_EQ(p->lines[0].runs[0].text, "a");
+  EXPECT_EQ(p->lines[0].runs.back().text, "c");
+}
+
+TEST(LayoutTest, InlineBlockShrinkToFitWidth) {
+  // Auto width: inline-block wraps its content (preferred/max-content width).
+  auto doc = html::Parser("<body><div style=\"width:600px\">"
+                          "<span style=\"display:inline-block\">hello world</span></div></body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+  dom::Element* el = dom::QuerySelector(*doc, "span");
+  ASSERT_NE(el, nullptr);
+  const InlineBox* holder = nullptr;
+  const LayoutBox* block = FindInlineBlock(*root, el, holder);
+  ASSERT_NE(block, nullptr);
+  EXPECT_GT(block->width, 0.0f);
+  EXPECT_LT(block->width, 600.0f);  // does not fill the container
+}
+
+TEST(LayoutTest, InlineBlockHoldsBlockChildren) {
+  // The inline-block's content is a block formatting context; a block child
+  // stacks vertically inside it (an outer <div> is used: a <p> would be
+  // auto-closed by a nested <div>).
+  auto doc = html::Parser(
+                  "<body><div>L<span style=\"display:inline-block;width:120px\">"
+                  "<div>one</div><div>two</div></span>R</div></body>")
+                  .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+  dom::Element* el = dom::QuerySelector(*doc, "span");
+  ASSERT_NE(el, nullptr);
+  const InlineBox* holder = nullptr;
+  const LayoutBox* block = FindInlineBlock(*root, el, holder);
+  ASSERT_NE(block, nullptr);
+  ASSERT_EQ(block->children.size(), 2u);
+  EXPECT_GT(block->children[1]->y, block->children[0]->y);  // stacks vertically
+  EXPECT_LE(block->children[0]->width, 120.0f + 0.01f);
+}
+
+TEST(LayoutTest, InlineBlockNestedInsideInlineElement) {
+  auto doc = html::Parser(
+                  "<body><p><span>a<span style=\"display:inline-block;width:40px;height:20px\">x"
+                  "</span>b</span></p></body>")
+                  .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+  const LayoutBox* p = FindBox(*root, "p", *doc);
+  ASSERT_NE(p, nullptr);
+  ASSERT_EQ(p->lines[0].boxes.size(), 1u);
+  const InlineBox& ib = p->lines[0].boxes[0];
+  ASSERT_NE(ib.block_box, nullptr);
+  EXPECT_FLOAT_EQ(ib.width, 40.0f);
+  EXPECT_FLOAT_EQ(ib.height, 20.0f);
+}
+
+TEST(LayoutTest, InlineBlockBorderBoxSitsAtMarginEdge) {
+  // Regression: the inner block's border-box origin is at the margin edge
+  // (not shifted by -(border+padding), which pushed the left/top borders
+  // off-canvas).
+  auto doc = html::Parser(
+                  "<body><div><span style=\"display:inline-block;border:3px solid #003366;"
+                  "padding:10px\">x</span></div></body>")
+                  .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 400);
+  dom::Element* el = dom::QuerySelector(*doc, "span");
+  ASSERT_NE(el, nullptr);
+  const InlineBox* holder = nullptr;
+  const LayoutBox* block = FindInlineBlock(*root, el, holder);
+  ASSERT_NE(block, nullptr);
+  const LayoutBox* div = FindBox(*root, "div", *doc);
+  ASSERT_NE(div, nullptr);
+  EXPECT_GE(block->x, div->content_x() - 0.01f);  // left border on screen
+  EXPECT_FLOAT_EQ(block->border_left, 3.0f);
+  EXPECT_FLOAT_EQ(block->padding_left, 10.0f);
+}
+
+TEST(LayoutTest, InlineBlockExplicitHeightNotGrownByContent) {
+  // CSS2.2 10.6.2: a specified height wins; content taller overflows rather
+  // than growing the box.
+  auto doc = html::Parser(
+                  "<body><div><span style=\"display:inline-block;width:60px;height:20px\">"
+                  "tail<br>content</span></div></body>")
+                  .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 400);
+  dom::Element* el = dom::QuerySelector(*doc, "span");
+  ASSERT_NE(el, nullptr);
+  const InlineBox* holder = nullptr;
+  const LayoutBox* block = FindInlineBlock(*root, el, holder);
+  ASSERT_NE(block, nullptr);
+  EXPECT_FLOAT_EQ(block->height, 20.0f);
+}
+
+TEST(LayoutTest, VerticalAlignEqualHeightBoxesFlatten) {
+  // Three inline-blocks of the same height (60px) with top/middle/bottom
+  // vertical-align fill the same 60px line box: they all overlap (flatten) at
+  // the same y instead of stacking their heights.
+  auto doc = html::Parser(
+                  "<body><div>"
+                  "<span style=\"display:inline-block;width:40px;height:60px;"
+                  "vertical-align:top\">t</span>"
+                  "<span style=\"display:inline-block;width:40px;height:60px;"
+                  "vertical-align:middle\">m</span>"
+                  "<span style=\"display:inline-block;width:40px;height:60px;"
+                  "vertical-align:bottom\">b</span>"
+                  "</div></body>")
+                  .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+  const LayoutBox* div = FindBox(*root, "div", *doc);
+  ASSERT_NE(div, nullptr);
+  ASSERT_EQ(div->lines.size(), 1u);
+  const Line& line = div->lines[0];
+  ASSERT_EQ(line.boxes.size(), 3u);
+  EXPECT_FLOAT_EQ(line.height, 60.0f);
+  // All three boxes flatten to the same top y.
+  EXPECT_FLOAT_EQ(line.boxes[0].y, line.boxes[1].y);
+  EXPECT_FLOAT_EQ(line.boxes[1].y, line.boxes[2].y);
 }
 
 }  // namespace

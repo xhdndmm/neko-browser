@@ -13,6 +13,12 @@ DOM 与布局树分离：布局树持有几何信息（盒模型、行盒、文�
   margin/border/padding 分别存储；`content_*()` 访问器。
 - 块级子盒垂直堆叠；内联内容（文本节点 + inline 元素）按词换行生成 `Line`
   与 `TextRun`（含字号与颜色）。
+- `display:inline-block`：`CollectInline`（Builder 成员）遇到该元素时调用
+  `BuildInlineBlock` 构建内部块盒（局部原点，border-box 在 margin 边缘），作为
+  原子 `InlineBox`（`block_box`）汇入行盒；宽度显式或 shrink-to-fit
+  `min(max(min-content, available), preferred)`（CSS2.1 10.3.9）。行盒里原子盒
+  通过 `InlineBox.x/y` 定位后，`block_box` 再 `TranslateBox` 平移到行盒坐标；
+  内部是独立块格式化上下文（块子元素垂直堆叠）。
 - 宽度：显式 px/% 或填满包含块内容宽；高度：内容驱动或显式值。
 - 文本测量：`LayoutEngine` 接受可选 `graphics::FontFace`；提供时词宽/空格宽用
   FreeType 真实 advance（`TextRun.width` 记录），表格 max-content 测量与命中

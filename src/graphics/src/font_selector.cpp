@@ -148,4 +148,9 @@ float FontSelector::Ascent(float px_size) const {
   return face != nullptr ? face->Ascent(px_size) : 0.0f;
 }
 
+float FontSelector::Descent(float px_size) const {
+  const FontFace* face = PrimaryFace();
+  return face != nullptr ? face->Descent(px_size) : 0.0f;
+}
+
 }  // namespace neko::graphics

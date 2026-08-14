@@ -13,6 +13,7 @@ namespace neko::style {
 enum class Display {
   kBlock,
   kInline,
+  kInlineBlock,  // inline-level block container (CSS2.2 9.2.2.1)
   kNone,
   kTable,
   kTableRowGroup,  // thead/tbody/tfoot

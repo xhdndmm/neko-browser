@@ -8,6 +8,9 @@
 - 盒模型（margin/border/padding，百分比按包含块宽度解析）
 - block layout（垂直堆叠、宽度填充/显式/百分比、内容高度/显式高度）
 - inline layout（词级换行 → 行盒 → 文本游程，inline 元素样式作用于文本）
+- inline-block（`display:inline-block`）：行内级原子盒，内部为块格式化上下文
+  （块子元素垂直堆叠），宽度显式或 shrink-to-fit（CSS2.1 10.3.9），background/
+  border/padding、vertical-align/行高参与行盒，嵌套于任意行内元素中亦可
 - 文本宽度：注入 `neko::graphics` 字体时按 FreeType 真实 advance 测量（词宽、
   空格宽、表格 max-content 测量、命中测试），无字体时回退"每字符 = font_size"
   等宽模型

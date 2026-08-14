@@ -18,6 +18,10 @@ struct Image;
 
 namespace neko::layout {
 
+// Forward declaration: InlineBox holds a unique_ptr<LayoutBox> for inline-block
+// content, but LayoutBox is defined below.
+struct LayoutBox;
+
 // Lookup of decoded images for replaced elements (implemented by the renderer
 // page; the layout engine is network/image-free).
 class ImageProvider {
@@ -42,7 +46,9 @@ struct TextRun {
   const dom::Element* element = nullptr;  // source element (for hit-testing)
 };
 
-// A positioned atomic inline box (a replaced <img>) within a line.
+// A positioned atomic inline box within a line.  It is either a replaced
+// <img> (|image| set) or an inline-block (|block_box| set); the box's width/
+// height on the line is |width|/|height|.
 struct InlineBox {
   const dom::Element* element = nullptr;
   const image::Image* image = nullptr;
@@ -51,6 +57,14 @@ struct InlineBox {
   float y = 0;
   float width = 0;
   float height = 0;
+  // Baseline offset from this atomic box's border-box top (for vertical-align:
+  // baseline).  For an inline-block this is the baseline of its inner block
+  // (last in-flow line box); for a replaced <img> it is its bottom edge.
+  float baseline_offset = 0;
+  // For an inline-block: the laid-out inner block box (padding/border edges
+  // included).  Its origin is local to this atomic box (0,0 = this box's
+  // border-box top-left); |x|/|y| give its position on the line.
+  std::unique_ptr<LayoutBox> block_box = nullptr;
 };
 
 // A line of inline content.
@@ -59,6 +73,7 @@ struct Line {
   std::vector<InlineBox> boxes;  // atomic inline boxes (replaced <img>)
   float height = 0;
   float baseline_offset = 0;  // distance from line top to run top
+  float baseline = 0;         // distance from line top to the text baseline
 };
 
 // A laid-out box.

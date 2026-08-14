@@ -482,8 +482,10 @@ void StyleEngine::ComputeElement(dom::Element& element, const ComputedStyle& inh
     if (v.type == css::CssValue::Type::kKeyword) {
       if (v.text == "block" || v.text == "flex" || v.text == "grid") {
         out.display = Display::kBlock;
-      } else if (v.text == "inline" || v.text == "inline-block") {
+      } else if (v.text == "inline") {
         out.display = Display::kInline;
+      } else if (v.text == "inline-block") {
+        out.display = Display::kInlineBlock;
       } else if (v.text == "none") {
         out.display = Display::kNone;
       } else if (v.text == "table") {

@@ -40,6 +40,19 @@ TEST(StyleTest, UaDefaults) {
   EXPECT_FLOAT_EQ(p.font_size, 16.0f);
 }
 
+TEST(StyleTest, DisplayInlineBlock) {
+  // display:inline-block must be its own Display kind (not folded into
+  // display:inline) so layout can treat it as an atomic block box.
+  auto doc = MakeDoc(
+      "<body><div style=\"display:block\">b</div>"
+      "<span style=\"display:inline-block\">ib</span></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  EXPECT_EQ(Style(engine, *doc, "body").display, Display::kBlock);
+  EXPECT_EQ(Style(engine, *doc, "div").display, Display::kBlock);
+  EXPECT_EQ(Style(engine, *doc, "span").display, Display::kInlineBlock);
+}
+
 TEST(StyleTest, HeadingIsBlock) {
   auto doc = MakeDoc("<body><h1>x</h1><h2>y</h2></body>");
   StyleEngine engine;

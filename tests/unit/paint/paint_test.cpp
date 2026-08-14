@@ -262,5 +262,32 @@ TEST(PainterTest, EndToEndRasterization) {
   EXPECT_EQ(red, (css::Color{255, 0, 0, 255}));
 }
 
+TEST(PainterTest, InlineBlockPaintsInnerBlockBackground) {
+  // An inline-block's inner block layout (background) must be painted even
+  // though it lives inside a line box, not a block child.
+  auto doc = html::Parser(
+      "<body><div><span style=\"display:inline-block;background-color:#ff0000;"
+      "width:100px;height:40px\">x</span></div></body>")
+      .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine layout(styles);
+  std::unique_ptr<layout::LayoutBox> root = layout.BuildLayoutTree(*doc, 400);
+
+  Painter painter(root.get());
+  const DisplayList list = painter.Paint();
+  ASSERT_FALSE(list.commands().empty());
+
+  bool found = false;
+  for (const DrawCommand& c : list.commands()) {
+    if (c.type == CommandType::kFillRect && c.color == css::Color{255, 0, 0, 255}) {
+      EXPECT_FLOAT_EQ(c.width, 100.0f);
+      EXPECT_FLOAT_EQ(c.height, 40.0f);
+      found = true;
+    }
+  }
+  EXPECT_TRUE(found);
+}
+
 }  // namespace
 }  // namespace neko::paint

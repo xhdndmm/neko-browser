@@ -132,4 +132,13 @@ float FontFace::Ascent(float px_size) const {
   return static_cast<float>(impl_->face->size->metrics.ascender) / 64.0f;
 }
 
+float FontFace::Descent(float px_size) const {
+  if (!valid() || !SetPixelSize(impl_->face, px_size) || impl_->face->size == nullptr) {
+    return 0.0f;
+  }
+  // FreeType's descender is negative (below the baseline); report a positive
+  // magnitude for line box / leading math.
+  return -static_cast<float>(impl_->face->size->metrics.descender) / 64.0f;
+}
+
 }  // namespace neko::graphics

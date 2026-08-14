@@ -21,10 +21,13 @@ struct InlineItem {
   const style::ComputedStyle* style;
   const dom::Element* element;  // source element (null for block-level text)
   bool line_break = false;      // <br>: force a line break
-  bool atomic = false;          // atomic inline box (replaced <img>)
+  bool atomic = false;          // atomic inline box (replaced <img> / inline-block)
   const image::Image* image = nullptr;
   float width = 0;
   float height = 0;
+  float baseline_offset = 0;  // baseline from this atomic box's top (for vertical-align)
+  // For an inline-block atomic box: its inner block layout.
+  std::unique_ptr<LayoutBox> block_box = nullptr;
 };
 
 // True when |c| is an ASCII whitespace character used for word breaking.
@@ -108,101 +111,156 @@ void ComputeReplacedSize(const style::ComputedStyle& style, const dom::Element& 
                          const image::Image* img, float containing_width, float& out_w,
                          float& out_h);
 
-// Collects inline content: text nodes, atomic inline boxes (<img>) and inline
-// elements (recursively).  |containing_width| is the block container's content
-// width, used to resolve percentage image sizes.
-void CollectInline(dom::Node& node, const style::ComputedStyle& style, const dom::Element* element,
-                   const style::StyleEngine& styles, const ImageProvider* images,
-                   float containing_width, std::vector<InlineItem>& items) {
-  if (node.node_type() == dom::NodeType::kText) {
-    CollectText(static_cast<const dom::Text&>(node).data(), style, element, items);
-    return;
-  }
-  if (node.node_type() != dom::NodeType::kElement) {
-    return;
-  }
-  const dom::Element& child_element = static_cast<const dom::Element&>(node);
-  const style::ComputedStyle& child_style = styles.StyleFor(child_element);
-  if (child_element.tag_name() == "br") {
-    // <br> is a void inline element: it forces a line break and carries the
-    // line-height of its style but no text.
-    items.push_back(InlineItem{{}, &child_style, &child_element, /*line_break=*/true});
-    return;
-  }
-  if (child_element.tag_name() == "img") {
-    const image::Image* img = images != nullptr ? images->Find(child_element) : nullptr;
-    float w = 0;
-    float h = 0;
-    ComputeReplacedSize(child_style, child_element, img, containing_width, w, h);
-    items.push_back(InlineItem{{}, &child_style, &child_element, /*line_break=*/false,
-                               /*atomic=*/true, img, w, h});
-    return;
-  }
-  for (dom::Node* child : node.ChildNodes()) {
-    CollectInline(*child, child_style, &child_element, styles, images, containing_width, items);
-  }
-}
+// CollectInline is implemented as a Builder method (see BuildLayoutTree) so it
+// can lay out nested inline-blocks on demand; see the Builder struct below.
+
+// Defined below; used by LayoutLines when placing an inline-block's inner box.
+void TranslateBox(LayoutBox& box, float dx, float dy);
 
 // Breaks inline items into wrapped lines and fills |out_lines|.  Positions are
 // relative to the box (origin_x/origin_y are the content box origin).  Word
 // widths come from |registry| when provided (real advances with per-character
-// font fallback); otherwise the monospace fallback is used.
-void LayoutLines(const std::vector<InlineItem>& items, float available_width, float origin_x,
+// font fallback); otherwise the monospace fallback is used.  |container_style|
+// supplies the imaginary-strut font metrics and line-height (CSS2.2 10.8).
+void LayoutLines(std::vector<InlineItem>& items, float available_width, float origin_x,
                  float origin_y, const graphics::FontRegistry* registry,
-                 std::vector<Line>& out_lines, float& total_height) {
+                 const style::ComputedStyle& container_style, std::vector<Line>& out_lines,
+                 float& total_height) {
   Line line;
   float x = 0;
   float line_top = 0;
+
+  // Strut ascent/descent (baseline offsets) of the block container's font.
+  const auto strut_metrics = [&](float& asc, float& desc) {
+    if (registry != nullptr) {
+      const graphics::FontSelector* sel =
+          registry->SelectorFor(container_style.font_family, container_style.font_weight,
+                                container_style.font_italic);
+      if (sel != nullptr) {
+        asc = sel->Ascent(container_style.font_size);
+        desc = sel->Descent(container_style.font_size);
+        if (asc + desc > 0.0f) {
+          return;
+        }
+      }
+    }
+    asc = container_style.font_size * 0.8f;
+    desc = container_style.font_size * 0.2f;
+  };
+  float strut_asc = 0, strut_desc = 0;
+  strut_metrics(strut_asc, strut_desc);
+  const float half_leading =
+      std::max(0.0f, (container_style.line_height - (strut_asc + strut_desc)) / 2.0f);
+  const float strut_up = strut_asc + half_leading;     // baseline to line top
+  const float strut_down = strut_desc + half_leading;  // baseline to line bottom
+
+  // Per-run metrics (ascent above baseline, descent below).
+  const auto run_metrics = [&](const TextRun& run, float& asc, float& desc) {
+    if (registry != nullptr) {
+      const graphics::FontSelector* sel =
+          registry->SelectorFor(run.font_family, run.font_weight, run.font_italic);
+      if (sel != nullptr) {
+        asc = sel->Ascent(run.font_size);
+        desc = sel->Descent(run.font_size);
+        if (asc + desc > 0.0f) {
+          return;
+        }
+      }
+    }
+    asc = run.font_size * 0.8f;
+    desc = run.font_size * 0.2f;
+  };
 
   auto flush_line = [&]() {
     if (line.runs.empty() && line.boxes.empty() && line.height <= 0) {
       // Nothing to emit: no content and no height (e.g. leading whitespace).
       return;
     }
-    // Position text runs within the line (vertically centered); the first run's
-    // bottom edge approximates the line's text baseline for <img> alignment.
-    float text_bottom = 0;
-    bool has_text = false;
-    for (TextRun& run : line.runs) {
-      const float run_y = (line.height - run.font_size) / 2.0f;
-      if (!has_text) {
-        text_bottom = run_y + run.font_size;
-        has_text = true;
+
+    // Baseline offset (line top to baseline) is set by the strut and any
+    // baseline-aligned participant; descent offset (baseline to line bottom)
+    // by the strut.  top / bottom / middle boxes only demand that the line be
+    // tall enough (or, for middle, symmetrically place its centre on the line
+    // centre), never distorting the baseline.
+    float baseline_off = strut_up;
+    float descent_off = strut_down;
+    for (const TextRun& run : line.runs) {
+      float asc = 0, desc = 0;
+      run_metrics(run, asc, desc);
+      baseline_off = std::max(baseline_off, asc);
+      descent_off = std::max(descent_off, desc);
+    }
+    for (const InlineBox& b : line.boxes) {
+      if (b.style.vertical_align == style::VerticalAlign::kBaseline) {
+        baseline_off = std::max(baseline_off, b.baseline_offset);
+        descent_off = std::max(descent_off, b.height - b.baseline_offset);
       }
-      run.y = origin_y + line_top + run_y;
+    }
+
+    // The line height is at least the baseline span; top / bottom boxes fit
+    // because the line is at least as tall as they are.
+    float row_height = baseline_off + descent_off;
+    for (const InlineBox& b : line.boxes) {
+      switch (b.style.vertical_align) {
+        case style::VerticalAlign::kTop:
+        case style::VerticalAlign::kTextTop:
+        case style::VerticalAlign::kBottom:
+        case style::VerticalAlign::kTextBottom:
+          row_height = std::max(row_height, b.height);
+          break;
+        case style::VerticalAlign::kMiddle:
+          baseline_off = std::max(baseline_off, b.height / 2.0f);
+          descent_off = std::max(descent_off, b.height / 2.0f);
+          row_height = std::max(row_height, baseline_off + descent_off);
+          break;
+        case style::VerticalAlign::kBaseline:
+        default:
+          break;
+      }
+    }
+    line.height = row_height;
+
+    // Baseline absolute within the line.
+    const float baseline = origin_y + line_top + baseline_off;
+    line.baseline = baseline;
+    // Position text runs: their bottom sits on the baseline.
+    for (TextRun& run : line.runs) {
+      float asc = 0, desc = 0;
+      run_metrics(run, asc, desc);
+      run.y = baseline - asc;
       run.x = origin_x + run.x;
     }
-    if (!has_text) {
-      text_bottom = line.height;  // no text: baseline sits at the line bottom
-    }
-    // Position atomic inline boxes (replaced <img>) per vertical-align.
+
+    // Position atomic inline boxes per vertical-align.
+    const float line_top_abs = origin_y + line_top;
+    const float line_bottom_abs = line_top_abs + line.height;
     for (InlineBox& b : line.boxes) {
       float y = 0;
       switch (b.style.vertical_align) {
         case style::VerticalAlign::kTop:
         case style::VerticalAlign::kTextTop:
-          y = 0;
+          y = line_top_abs;
           break;
         case style::VerticalAlign::kBottom:
         case style::VerticalAlign::kTextBottom:
-          y = line.height - b.height;
+          y = line_bottom_abs - b.height;
           break;
         case style::VerticalAlign::kMiddle:
-          y = text_bottom - b.height / 2.0f;
+          y = line_top_abs + (line.height - b.height) / 2.0f;
           break;
         case style::VerticalAlign::kBaseline:
         default:
-          y = text_bottom - b.height;  // bottom edge sits on the baseline
-          if (y < 0) {
-            y = 0;  // an image taller than the line clips to the line top
-          }
+          y = baseline - b.baseline_offset;  // its baseline sits on the line baseline
           break;
       }
-      b.y = origin_y + line_top + y;
+      b.y = y;
       b.x = origin_x + b.x;
+      // The inline-block's inner block was laid out at a local origin; move it
+      // into the line's coordinate space with the positioned atomic box.
+      if (b.block_box != nullptr) {
+        TranslateBox(*b.block_box, b.x, b.y);
+      }
     }
-    // Empty lines (line.height > 0, no runs) are emitted too: they are the
-    // lines produced by <br>.
     out_lines.push_back(std::move(line));
     line = Line{};
     total_height += out_lines.back().height;
@@ -234,7 +292,7 @@ void LayoutLines(const std::vector<InlineItem>& items, float available_width, fl
     x += word_width;
   };
 
-  for (const InlineItem& item : items) {
+  for (InlineItem& item : items) {
     const style::ComputedStyle& style = *item.style;
     if (item.line_break) {
       // <br>: end the current line (content or a previous empty break line),
@@ -246,8 +304,8 @@ void LayoutLines(const std::vector<InlineItem>& items, float available_width, fl
       continue;
     }
     if (item.atomic) {
-      // Atomic inline box (replaced <img>): an indivisible box flowing on the
-      // current line.
+      // Atomic inline box (<img> or inline-block): an indivisible box flowing
+      // on the current line.
       if (x + item.width > available_width && x > 0) {
         flush_line();
       }
@@ -258,6 +316,8 @@ void LayoutLines(const std::vector<InlineItem>& items, float available_width, fl
       box.x = x;
       box.width = item.width;
       box.height = item.height;
+      box.baseline_offset = item.baseline_offset;
+      box.block_box = std::move(item.block_box);
       line.boxes.push_back(std::move(box));
       line.height = std::max(line.height, item.height);
       x += item.width;
@@ -514,6 +574,9 @@ void TranslateBox(LayoutBox& box, float dx, float dy) {
     for (InlineBox& inline_box : line.boxes) {
       inline_box.x += dx;
       inline_box.y += dy;
+      if (inline_box.block_box != nullptr) {
+        TranslateBox(*inline_box.block_box, dx, dy);
+      }
     }
   }
   for (auto& child : box.children) {
@@ -612,6 +675,106 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       box.padding_left = ResolveSize(box.style.padding_left, containing_width);
     }
 
+    // Lays out an inline-block (display:inline-block, CSS2.2 9.2.2.1) as an
+    // atomic block-level box at a local origin.  Width is the explicit value,
+    // else shrink-to-fit min(max(min-content, available), preferred)
+    // (CSS2.2 10.3.9), with the containing block width used as "available".
+    // The box is positioned at its margin edge (border-box top-left at x=y=0
+    // plus margins), so its four borders stay on-screen.
+    std::unique_ptr<LayoutBox> BuildInlineBlock(dom::Element& element,
+                                                float containing_width) {
+      auto box = std::make_unique<LayoutBox>();
+      box->element = &element;
+      box->style = styles.StyleFor(element);
+      ResolveBoxEdges(*box, containing_width);
+
+      float content_width;
+      if (box->style.width.has_value()) {
+        content_width = ResolveSize(box->style.width.value(), containing_width);
+      } else {
+        const float extras = box->margin_left + box->margin_right + box->border_left +
+                             box->border_right + box->padding_left + box->padding_right;
+        const float available = std::max(0.0f, containing_width - extras);
+        const IntrinsicWidths w = MeasureContent(element, styles, registry);
+        content_width = std::min(std::max(w.min, available), w.max);
+      }
+      box->width = content_width + box->border_left + box->border_right + box->padding_left +
+                   box->padding_right;
+
+      // Border-box origin at the margin edge; content is placed at
+      // content_x()/content_y() = +border+padding.
+      box->x = box->margin_left;
+      box->y = box->margin_top;
+
+      const float avail_width = box->width - box->border_left - box->border_right -
+                                box->padding_left - box->padding_right;
+      std::vector<dom::Element*> absolute_children;
+      float content_height = LayoutBlockContent(*box, element, avail_width, 0, 0, avail_width,
+                                                0, absolute_children);
+      if (box->style.height.has_value() && !box->style.height.value().percent) {
+        content_height = box->style.height.value().value;  // specified height wins (10.6.2)
+      }
+      box->height = content_height + box->border_top + box->border_bottom + box->padding_top +
+                    box->padding_bottom;
+      const float child_cb_h = box->height - box->border_top - box->border_bottom;
+      for (dom::Element* child : absolute_children) {
+        box->positioned_children.push_back(
+            BuildAbsolute(*child, 0, 0, avail_width, child_cb_h));
+      }
+      return box;
+    }
+
+    // Collects inline content under |node| into |items|: text, <br>, atomic
+    // replaced <img> boxes, inline-blocks (atomic block boxes), and inline
+    // element recursion.  |style|/|element| apply to |node|'s text children.
+    // |containing_width| is the block container's content width.
+    void CollectInline(dom::Node& node, const style::ComputedStyle& style,
+                       const dom::Element* element, float containing_width,
+                       std::vector<InlineItem>& items) {
+      if (node.node_type() == dom::NodeType::kText) {
+        CollectText(static_cast<const dom::Text&>(node).data(), style, element, items);
+        return;
+      }
+      if (node.node_type() != dom::NodeType::kElement) {
+        return;
+      }
+      dom::Element& child_element = static_cast<dom::Element&>(node);
+      const style::ComputedStyle& child_style = styles.StyleFor(child_element);
+      if (child_element.tag_name() == "br") {
+        items.push_back(InlineItem{{}, &child_style, &child_element, /*line_break=*/true});
+        return;
+      }
+      if (child_element.tag_name() == "img") {
+        const image::Image* img = images != nullptr ? images->Find(child_element) : nullptr;
+        float w = 0;
+        float h = 0;
+        ComputeReplacedSize(child_style, child_element, img, containing_width, w, h);
+        // A replaced <img>'s baseline is its bottom edge.
+        items.push_back(InlineItem{{}, &child_style, &child_element, /*line_break=*/false,
+                                   /*atomic=*/true, img, w, h, /*baseline_offset=*/h});
+        return;
+      }
+      if (child_style.display == style::Display::kInlineBlock &&
+          child_style.position == style::Position::kStatic) {
+        auto block_box = BuildInlineBlock(child_element, containing_width);
+        InlineItem item;
+        item.style = &child_style;
+        item.element = &child_element;
+        item.atomic = true;
+        item.width = block_box->margin_left + block_box->width + block_box->margin_right;
+        item.height = block_box->margin_top + block_box->height + block_box->margin_bottom;
+        item.baseline_offset = block_box->lines.empty()
+                                   ? block_box->margin_top + block_box->height
+                                   : block_box->lines.back().baseline;
+        item.block_box = std::move(block_box);
+        items.push_back(std::move(item));
+        return;
+      }
+      for (dom::Node* child : node.ChildNodes()) {
+        CollectInline(*child, child_style, &child_element, containing_width, items);
+      }
+    }
+
     // Lays out the block-level children and inline content of |element| into
     // |box| (which already has its width and content origin set).  Fills
     // box.children and box.lines; returns the total content height.
@@ -655,16 +818,15 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
           cursor_y += child_box->margin_top + child_box->height + child_box->margin_bottom;
           box.children.push_back(std::move(child_box));
         } else {
-          // Inline element: its text (and atomic <img> boxes) flows into this
-          // box's lines.
-          CollectInline(child_element, child_style, &child_element, styles, images,
-                        avail_width, inline_items);
+          // Inline element: its text (and atomic <img>/inline-block boxes)
+          // flows into this box's lines.
+          CollectInline(child_element, child_style, &child_element, avail_width, inline_items);
         }
       }
 
       float lines_height = 0;
       LayoutLines(inline_items, avail_width, box.content_x(), box.content_y() + cursor_y,
-                  registry, box.lines, lines_height);
+                  registry, box.style, box.lines, lines_height);
       return cursor_y + lines_height;
     }
 

@@ -127,8 +127,10 @@ TEST(PageTest, RendersElementImageAtIntrinsicSize) {
   page.Layout(400);
   paint::Rasterizer image = page.Rasterize(400, 100);
 
-  // The 2x2 image is placed at body content (8,8); its pixels are red.
-  const std::size_t o = (static_cast<std::size_t>(9) * 400 + 9) * 4;
+  // The 2x2 image is baseline-aligned in its line box (CSS2.2 10.8: the line
+  // has an imaginary strut whose ascent places the baseline ~14px down); the
+  // image's bottom sits on that baseline (rows ~22-23).  Its pixels are red.
+  const std::size_t o = (static_cast<std::size_t>(22) * 400 + 9) * 4;
   EXPECT_EQ(image.pixels()[o], 255);
   EXPECT_EQ(image.pixels()[o + 1], 0);
   EXPECT_EQ(image.pixels()[o + 2], 0);

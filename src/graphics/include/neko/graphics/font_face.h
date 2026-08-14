@@ -53,6 +53,9 @@ class FontFace {
   // Ascent above the baseline (px) at |px_size|.
   float Ascent(float px_size) const;
 
+  // Descent below the baseline (px, positive magnitude) at |px_size|.
+  float Descent(float px_size) const;
+
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

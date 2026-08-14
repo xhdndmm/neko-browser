@@ -54,6 +54,9 @@ TEST(FontFaceTest, RendersAndCachesGlyphs) {
   // shifted glyphs a full line below their hit-test box).
   EXPECT_GT(face->Ascent(16), 0.0f);
   EXPECT_LT(face->Ascent(16), 16.0f);
+  // Descent is a positive magnitude below the baseline, scaled to pixel size.
+  EXPECT_GT(face->Descent(16), 0.0f);
+  EXPECT_LT(face->Descent(16), 16.0f);
   EXPECT_GT(face->TextWidth("hello", 16), 0.0f);
   EXPECT_TRUE(face->HasGlyph('A'));
 
