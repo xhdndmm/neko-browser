@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html><head><title>button appearance</title>
+<style>
+  body { font-family: sans-serif; }
+  h3 { margin: 12px 0 4px; }
+  .row { margin: 6px 0; }
+  .flat { appearance: none; background-color: #ffd; border: 1px solid #999;
+          padding: 4px 12px; color: #333; }
+  .forced { appearance: button; padding: 1px 6px; }
+</style>
+</head>
+<body>
+  <h3>default buttons (appearance: auto)</h3>
+  <p class="row"><button>OK</button> <button>Cancel</button>
+     <button><b>Bold</b> label</button></p>
+
+  <h3>appearance: none (plain CSS boxes)</h3>
+  <p class="row"><button style="appearance: none">No look</button>
+     <button class="flat">Styled flat</button></p>
+
+  <h3>appearance: button forced on non-button elements</h3>
+  <p class="row"><span class="forced">Span as button</span>
+     <div class="forced" style="width: 120px">Div as button</div></p>
+
+  <h3>author background with appearance: auto (author wins, like browsers)</h3>
+  <p class="row"><button style="background-color: #f00">Red button</button>
+     <button style="border: 4px solid #060">Green border</button></p>
+</body>
+</html>

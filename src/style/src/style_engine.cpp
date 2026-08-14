@@ -34,8 +34,10 @@ caption { display: table-caption; }
 thead, tbody, tfoot { display: table-row-group; }
 tr { display: table-row; }
 td, th { display: table-cell; }
-a, span, em, strong, b, i, u, s, small, sub, sup, code, label, button,
+a, span, em, strong, b, i, u, s, small, sub, sup, code, label,
 select, textarea, input, q, cite, mark, time { display: inline; }
+button { display: inline-block; appearance: auto; text-align: center;
+         padding: 1px 6px; border: 2px solid; }
 p { margin-top: 1em; margin-bottom: 1em; }
 h1 { font-size: 2em; font-weight: bold; margin-top: 0.67em; margin-bottom: 0.67em; }
 h2 { font-size: 1.5em; font-weight: bold; margin-top: 0.83em; margin-bottom: 0.83em; }
@@ -731,6 +733,22 @@ void StyleEngine::ComputeElement(dom::Element& element,
         out.floating = Float::kLeft;
       } else if (v.text == "right") {
         out.floating = Float::kRight;
+      }
+    }
+  }
+
+  // appearance (CSS-UI-4 §7.2): none / auto / button.  Other compat values
+  // (checkbox, radio, textfield, ...) are not implemented; the declaration
+  // is ignored and the computed value stays at the initial value (none).
+  if (const css::Declaration* d = find("appearance")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kKeyword) {
+      if (v.text == "none") {
+        out.appearance = Appearance::kNone;
+      } else if (v.text == "auto") {
+        out.appearance = Appearance::kAuto;
+      } else if (v.text == "button") {
+        out.appearance = Appearance::kButton;
       }
     }
   }

@@ -14,7 +14,6 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
-#include <cstdio>
 #include <filesystem>
 #include <string>
 

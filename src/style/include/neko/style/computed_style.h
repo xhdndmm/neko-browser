@@ -123,6 +123,14 @@ enum class AlignContent
   kSpaceAround,
 };
 
+// appearance (CSS-UI-4 §7.2): whether the element keeps a native (UA) widget
+// look.  Supported values: none (plain CSS box; author background/border
+// apply), auto (native look for elements with a definite appearance —
+// currently <button>) and button (force the button look on any element).
+// Other compat values (checkbox, radio, textfield, ...) are not implemented;
+// their declarations are ignored.
+enum class Appearance { kNone, kAuto, kButton };
+
 // A length that may be a percentage (resolved against the containing block).
 struct SizeSpec
 {
@@ -157,6 +165,9 @@ struct ComputedStyle
   std::optional<css::Color> border_color;
 
   std::optional<css::Color> background_color;
+
+  // Native widget look (CSS-UI-4 §7.2).  Initial value: none.
+  Appearance appearance = Appearance::kNone;
 
   // Replaced content fitting (img).
   ObjectFit object_fit = ObjectFit::kFill;

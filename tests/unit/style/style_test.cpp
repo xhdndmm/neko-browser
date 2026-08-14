@@ -295,5 +295,53 @@ TEST(StyleTest, MediaQueryPrintSkipped)
   EXPECT_FALSE(Style(engine, *doc, "p").color.has_value());
 }
 
-} // namespace
-} // namespace neko::style
+TEST(StyleTest, ButtonUaDefaultAppearance) {
+  // WHATWG rendering §15.5.4: <button> is an inline-block with a native
+  // (appearance:auto) look, centered text and a UA border/padding.
+  auto doc = MakeDoc("<body><button>OK</button></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& b = Style(engine, *doc, "button");
+  EXPECT_EQ(b.display, Display::kInlineBlock);
+  EXPECT_EQ(b.appearance, Appearance::kAuto);
+  EXPECT_EQ(b.text_align, TextAlign::kCenter);
+  EXPECT_FLOAT_EQ(b.padding_left.value, 6.0f);
+  EXPECT_FLOAT_EQ(b.padding_top.value, 1.0f);
+  EXPECT_FLOAT_EQ(b.border_top.value, 2.0f);
+  // appearance:none keeps the UA box model but drops the native look.
+  auto doc2 = MakeDoc("<body><button style=\"appearance: none\">OK</button></body>");
+  StyleEngine engine2;
+  engine2.ApplyStyles(*doc2);
+  EXPECT_EQ(Style(engine2, *doc2, "button").appearance, Appearance::kNone);
+}
+
+TEST(StyleTest, AppearanceParsesNoneAutoButton) {
+  auto doc = MakeDoc(
+      "<body>"
+      "<button id=\"a\">a</button>"
+      "<div id=\"b\" style=\"appearance: auto\">b</div>"
+      "<div id=\"c\" style=\"appearance: button\">c</div>"
+      "<div id=\"d\" style=\"appearance: checkbox\">d</div>"
+      "</body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  // UA default for button; explicit auto on a plain div; forced button.
+  EXPECT_EQ(Style(engine, *doc, "#a").appearance, Appearance::kAuto);
+  EXPECT_EQ(Style(engine, *doc, "#b").appearance, Appearance::kAuto);
+  EXPECT_EQ(Style(engine, *doc, "#c").appearance, Appearance::kButton);
+  // Unsupported compat value: declaration ignored, initial value none.
+  EXPECT_EQ(Style(engine, *doc, "#d").appearance, Appearance::kNone);
+}
+
+TEST(StyleTest, AuthorAppearanceOverridesUa) {
+  auto doc = MakeDoc(
+      "<body><button id=\"x\" style=\"appearance: none\">a</button>"
+      "<button id=\"y\" style=\"appearance: button\">b</button></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  EXPECT_EQ(Style(engine, *doc, "#x").appearance, Appearance::kNone);
+  EXPECT_EQ(Style(engine, *doc, "#y").appearance, Appearance::kButton);
+}
+
+}  // namespace
+}  // namespace neko::style

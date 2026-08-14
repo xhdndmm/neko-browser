@@ -28,6 +28,11 @@ ComputedStyle（px 值）
   "作者 !important > 内联普通"。
 - em/rem 在计算时解析：em 相对父元素 font-size，rem 相对根 font-size；
   百分比（宽/高/边距/内边距）留给布局阶段按包含块解析。
+- `appearance`（CSS-UI-4 §7.2，初始值 none）：解析 none/auto/button 到
+  `ComputedStyle::appearance`；其他 compat 值（checkbox/radio/textfield 等）
+  未实现，声明被忽略。UA 样式表给 `<button>` 提供默认外观（inline-block、
+  appearance:auto、text-align:center、padding、border），作者可覆盖为
+  none/button。
 
 ## 未实现
 

@@ -7,6 +7,7 @@
 #include <functional>
 #include <string>
 #include <thread>
+#include <tuple>
 
 #include "neko/dom/query.h"
 #include "neko/html/parser.h"
@@ -328,5 +329,90 @@ TEST(PageTest, LoadFile) {
   fs::remove_all(dir);
 }
 
+// --- button / appearance rendering ---------------------------------------
+
+// Reads the RGB triple at (x, y) of a 400x300 raster.
+std::tuple<int, int, int> RgbAt(const paint::Rasterizer& image, int x, int y) {
+  const std::size_t offset =
+      (static_cast<std::size_t>(y) * 400 + static_cast<std::size_t>(x)) * 4;
+  return {image.pixels()[offset], image.pixels()[offset + 1], image.pixels()[offset + 2]};
+}
+
+bool HasColor(const paint::Rasterizer& image, int r, int g, int b) {
+  for (std::size_t i = 0; i + 2 < image.pixels().size(); i += 4) {
+    if (image.pixels()[i] == r && image.pixels()[i + 1] == g && image.pixels()[i + 2] == b) {
+      return true;
+    }
+  }
+  return false;
+}
+
+TEST(PageTest, ButtonRendersNativeAppearance) {
+  // A <button> defaults to appearance:auto (WHATWG rendering §15.5.4) and
+  // paints a native buttonface with an outset border.
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body><button>OK</button></body>").has_value());
+  page.Layout(400);
+  const paint::Rasterizer image = page.Rasterize(400, 300);
+  // Button box starts at (8,8) (body margin); (12,12) is inside the 2px
+  // border, in the left padding — buttonface, no glyph there.
+  EXPECT_EQ((RgbAt(image, 12, 12)), (std::make_tuple(0xec, 0xec, 0xec)));
+  EXPECT_TRUE(HasColor(image, 0xec, 0xec, 0xec));
+}
+
+TEST(PageTest, ButtonAppearanceNoneDisablesNativeLook) {
+  // appearance:none drops the native face; the UA border (black) remains.
+  Page page;
+  ASSERT_TRUE(
+      page.LoadHtml("<body><button style=\"appearance: none\">OK</button></body>")
+          .has_value());
+  page.Layout(400);
+  const paint::Rasterizer image = page.Rasterize(400, 300);
+  EXPECT_FALSE(HasColor(image, 0xec, 0xec, 0xec));
+  // Top-left corner of the button box: the 2px UA border is black.
+  EXPECT_EQ((RgbAt(image, 8, 8)), (std::make_tuple(0, 0, 0)));
+}
+
+TEST(PageTest, ButtonAutoUsesAuthorBackground) {
+  // With a definite appearance (button, auto) author background-color still
+  // wins over the native face (browser behavior for e.g. styled dropdown
+  // buttons); the native buttonface is only the no-style fallback.
+  Page page;
+  ASSERT_TRUE(page.LoadHtml(
+                          "<body><button style=\"background-color:#ff0000;"
+                          "width:100px;height:30px\">B</button></body>")
+                  .has_value());
+  page.Layout(400);
+  const paint::Rasterizer image = page.Rasterize(400, 300);
+  EXPECT_EQ((RgbAt(image, 20, 15)), (std::make_tuple(255, 0, 0)));
+  EXPECT_FALSE(HasColor(image, 0xec, 0xec, 0xec));
+}
+
+TEST(PageTest, ButtonNoneUsesAuthorBackground) {
+  // appearance:none -> plain CSS box: the author's background paints.
+  Page page;
+  ASSERT_TRUE(page.LoadHtml(
+                          "<body><button style=\"appearance:none;background-color:#ff0000;"
+                          "width:100px;height:30px\">B</button></body>")
+                  .has_value());
+  page.Layout(400);
+  const paint::Rasterizer image = page.Rasterize(400, 300);
+  EXPECT_EQ((RgbAt(image, 20, 15)), (std::make_tuple(255, 0, 0)));
+}
+
+TEST(PageTest, AppearanceButtonForcesNativeLookOnDiv) {
+  // appearance:button forces the button look on any element.
+  Page page;
+  ASSERT_TRUE(page.LoadHtml(
+                          "<body><div style=\"appearance:button;width:80px;height:30px\">"
+                          "D</div></body>")
+                  .has_value());
+  page.Layout(400);
+  const paint::Rasterizer image = page.Rasterize(400, 300);
+  EXPECT_EQ((RgbAt(image, 10, 10)), (std::make_tuple(0xec, 0xec, 0xec)));
+}
+
 }  // namespace
+
 }  // namespace neko::renderer
+

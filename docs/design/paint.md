@@ -22,7 +22,12 @@ Layout Tree → Painter → DisplayList → Rasterizer → RGBA 缓冲 → PPM
   8x8 位图字体（公有领域，见 `font8x8.h` 头注释）。
 - `Painter`：按 背景 → 边框 → 行内原子盒（`Line.boxes`：`<img>` 走 DrawImage，
   `display:inline-block` 递归 `PaintBox(block_box)` 绘制其内部块内容）→ 行内文本
-  → 块级子盒 的顺序生成命令。
+  → 块级子盒 的顺序生成命令。原生控件外观（`appearance`，见 CSS-UI-4 §7.2 +
+  WHATWG rendering §15.5.4）：`<button>`（`appearance:auto`）或
+  `appearance:button` 的盒默认用 buttonface 背景 + outset 边框（上/左亮、下/右
+  暗，宽度沿用布局边框）绘制；作者的 background-color/border-color 声明优先于
+  原生外观（§7.2.3 允许 UA 忽略，但引擎与浏览器一致保留作者样式，如导航
+  dropdown 按钮 `background:#2a3c54`）；`appearance:none` 走普通背景/边框路径。
 
 ## 文本渲染决策（ADR 0005 → ADR 0009）
 

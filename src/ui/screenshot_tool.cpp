@@ -10,6 +10,7 @@
 #include <QImage>
 #include <QPixmap>
 #include <QString>
+#include <QTabBar>
 
 #include <chrono>
 #include <cstdio>
@@ -46,12 +47,18 @@ int main(int argc, char** argv) {
 
   worker.NavigateActive(url);
 
-  // Wait for the GUI to reflect the navigation (tab title / address bar).
+  // Wait for the GUI to reflect the navigation.  The tab bar is only
+  // populated by RefreshAll(), which runs after the worker's StateChanged()
+  // has been delivered — so a non-empty tab label also guarantees the
+  // WebView's snapshot (and therefore the rendered page) is up to date.
+  // (Waiting on the controller title alone is racy: it becomes visible as
+  // soon as the worker publishes, before the queued StateChanged refreshes
+  // the views.)
   bool ready = false;
   for (int i = 0; i < 200 && !ready; ++i) {
     QCoreApplication::processEvents();
-    const auto tab = worker.SnapshotActiveTab();
-    ready = tab.id >= 0 && !tab.title.empty();
+    ready = window.TabBarWidget()->count() > 0 &&
+            !window.TabBarWidget()->tabText(0).isEmpty();
     if (!ready) std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
 
