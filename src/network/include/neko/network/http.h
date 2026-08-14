@@ -25,6 +25,11 @@ struct HttpResponse
   std::vector<HttpHeader> headers;
   std::string body;
 
+  // The URL the response was received from (the request URL, or the final
+  // hop's URL after following redirects).  Set by HttpGet so callers can
+  // resolve relative references against the real document URL.
+  std::string final_url;
+
   // First header value matching |name| (case-insensitive), or empty.
   std::string GetHeader(std::string_view name) const;
 };

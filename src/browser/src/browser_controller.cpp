@@ -498,7 +498,12 @@ void BrowserController::FetchAndLoad(Tab& tab, const url::Url& url)
   }
 
   const std::string content_type = response.value().GetHeader("content-type");
-  LoadBytes(tab, response.value().body, content_type, url.Serialize());
+  // Use the final URL (after redirects) so relative hrefs/srcs in the page
+  // resolve against the real document URL, not the pre-redirect request URL.
+  const std::string& final_url = response.value().final_url.empty()
+                                     ? url.Serialize()
+                                     : response.value().final_url;
+  LoadBytes(tab, response.value().body, content_type, final_url);
 }
 
 void BrowserController::LoadBytes(Tab& tab,

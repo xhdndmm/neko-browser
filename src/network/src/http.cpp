@@ -202,6 +202,11 @@ base::Result<HttpResponse> ParseHttpResponse(std::string_view raw)
     return base::Err(base::Error::Parse("missing status code"));
   }
   int code = 0;
+  // Status codes are three digits (RFC 7230 5.3.2); reject anything longer
+  // so the accumulation below cannot overflow.
+  if (code_str.size() > 5) {
+    return base::Err(base::Error::Parse("status code too long"));
+  }
   for (const char c : code_str) {
     if (c < '0' || c > '9') {
       return base::Err(base::Error::Parse("invalid status code"));
@@ -375,6 +380,10 @@ base::Result<HttpResponse> HttpGet(const url::Url& url,
       }
     }
   }
+
+  // Record the URL this response came from.  Redirects return their own
+  // (already final) response above, so reaching here means |url| is final.
+  response.value().final_url = url.Serialize();
 
   // Decode the body per Content-Encoding (RFC 7231 §3.1.2).  An unsupported
   // coding is an explicit error rather than returning corrupted content.

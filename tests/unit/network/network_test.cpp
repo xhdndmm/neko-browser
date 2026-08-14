@@ -440,6 +440,16 @@ TEST(HttpTest, ParseMalformed)
   EXPECT_FALSE(ParseHttpResponse("HTTP/1.1 200 OK\r\nContent-Length: abc\r\n\r\nx").has_value());
 }
 
+TEST(HttpTest, RejectsOverlongStatusCode)
+{
+  // A status code longer than the 3-digit form must be rejected instead of
+  // overflowing the int accumulation.
+  EXPECT_FALSE(ParseHttpResponse(
+                   "HTTP/1.1 999999999999999999999999999999 OK\r\n\r\n")
+                   .has_value());
+  EXPECT_FALSE(ParseHttpResponse("HTTP/1.1 123456 OK\r\n\r\n").has_value());
+}
+
 TEST(HttpTest, RejectsChunkSizeOverflow)
 {
   // A chunk size of 2^64 wraps to 0 in size_t arithmetic; the decoder must
@@ -589,6 +599,10 @@ TEST(HttpTest, RedirectFollowed)
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result.value().status_code, 200);
   EXPECT_EQ(result.value().body, "<h1>Hello World</h1>");
+  // The response must expose the final (post-redirect) URL so callers can
+  // resolve relative references against the real document location.
+  EXPECT_EQ(result.value().final_url,
+            "http://127.0.0.1:" + std::to_string(server.port()) + "/");
 }
 
 TEST(HttpTest, ChunkedFromServer)
