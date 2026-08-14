@@ -137,6 +137,32 @@ TEST(PageTest, RendersElementImageAtIntrinsicSize) {
   EXPECT_EQ(image.pixels()[o + 2], 0);
 }
 
+TEST(PageTest, LoadHtmlClearsStaleElementImages) {
+  // Image entries are keyed by element address.  After a navigation the old
+  // DOM (and its element addresses) is gone; a stale entry could be reused by
+  // a new element at the same address and render the previous page's image.
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<html><body><img></body></html>").has_value());
+  dom::Element* img_el = dom::QuerySelector(*page.document(), "img");
+  ASSERT_NE(img_el, nullptr);
+  page.SetElementImage(*img_el, SolidImage(2, 2, 255, 0, 0));
+
+  // Navigate: the previous document (and img element) is replaced.
+  ASSERT_TRUE(page.LoadHtml("<html><body><p>x</p></body></html>").has_value());
+  page.Layout(400);
+  paint::Rasterizer image = page.Rasterize(400, 100);
+  // No red image pixels may survive the navigation (the new page has no img).
+  bool saw_red = false;
+  const auto& pix = image.pixels();
+  for (std::size_t i = 0; i + 2 < pix.size(); i += 4) {
+    if (pix[i] == 255 && pix[i + 1] == 0 && pix[i + 2] == 0) {
+      saw_red = true;
+      break;
+    }
+  }
+  EXPECT_FALSE(saw_red);
+}
+
 TEST(PageTest, ImageWithExplicitWidthScalesAndFills) {
   Page page;
   ASSERT_TRUE(page.LoadHtml(

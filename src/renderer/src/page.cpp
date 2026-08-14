@@ -55,6 +55,8 @@ base::Result<void> Page::LoadHtml(std::string_view html) {
   document_ = html::Parser(html).Parse();
   styles_.ApplyStyles(*document_);
   root_.reset();
+  // The old DOM is gone; image entries keyed by element address are stale.
+  images_.clear();
   return base::Ok();
 }
 
