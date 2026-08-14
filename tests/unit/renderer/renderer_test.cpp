@@ -412,6 +412,27 @@ TEST(PageTest, AppearanceButtonForcesNativeLookOnDiv) {
   EXPECT_EQ((RgbAt(image, 10, 10)), (std::make_tuple(0xec, 0xec, 0xec)));
 }
 
+TEST(PageTest, FloatPaintsAboveBlockChildBackground) {
+  // A float paints above in-flow block children but below inline content
+  // (CSS2.1 Appendix E).  A red float followed by a block element with a
+  // background must not be covered by that background where they overlap.
+  Page page;
+  ASSERT_TRUE(page.LoadHtml(
+                          "<body><div style=\"width:300px\">"
+                          "<span style=\"float:left;background:red;width:100px;height:50px\">"
+                          "L</span>"
+                          "<p style=\"background:gray\">after</p>"
+                          "</div></body>")
+                  .has_value());
+  page.Layout(400);
+  const paint::Rasterizer image = page.Rasterize(400, 300);
+  // The following paragraph's gray background box (y~24..43, full width)
+  // overlaps the red float (y 8..58, x<100).  In the overlap the float must
+  // win: the pixel must stay red, not gray.
+  EXPECT_EQ((RgbAt(image, 20, 30)), (std::make_tuple(255, 0, 0)));
+  EXPECT_EQ((RgbAt(image, 20, 40)), (std::make_tuple(255, 0, 0)));
+}
+
 }  // namespace
 
 }  // namespace neko::renderer

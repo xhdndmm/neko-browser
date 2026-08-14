@@ -81,7 +81,14 @@ void Painter::PaintBox(const layout::LayoutBox& box, DisplayList& list) const {
                    *box.image, box.style.object_fit);
   }
 
-  // Floats (out of flow) paint below the block's in-flow line content.
+  // Block children (back to front).
+  for (const auto& child : box.children) {
+    PaintBox(*child, list);
+  }
+
+  // Floats paint above in-flow block children but below inline content
+  // (CSS2.1 Appendix E), so a float's background/text is not covered by a
+  // later block-level sibling.
   for (const auto& f : box.floats) {
     PaintBox(*f, list);
   }
@@ -108,11 +115,6 @@ void Painter::PaintBox(const layout::LayoutBox& box, DisplayList& list) const {
                       run.font_family, run.font_weight, run.font_italic);
       }
     }
-  }
-
-  // Block children (back to front).
-  for (const auto& child : box.children) {
-    PaintBox(*child, list);
   }
 
   // Absolutely positioned descendants paint above in-flow content.
