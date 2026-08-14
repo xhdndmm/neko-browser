@@ -18,6 +18,10 @@
 #include <string>
 #include <vector>
 
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+
 namespace neko::storage {
 namespace {
 
@@ -587,6 +591,31 @@ TEST(FileUtilTest, WriteReplacesExistingContent)
   ASSERT_TRUE(WriteFileAtomic(path, "two").has_value());
   EXPECT_THAT(ReadFile(path).value(), Eq("two"));
 }
+
+#ifndef _WIN32
+TEST(FileUtilTest, AtomicWriteDoesNotFollowSymlink)
+{
+  // An attacker who can write to the profile directory must not be able to
+  // redirect the atomic write to an arbitrary file via a symlink placed at
+  // the predictable temp name.  The write uses O_EXCL on an unpredictable
+  // name, so it either writes to its own temp file or fails; the target
+  // file's contents are untouched.
+  TempProfile tp;
+  const std::string dir = tp.path();
+  const std::string victim = dir + "/victim.txt";
+  ASSERT_TRUE(WriteFileAtomic(victim, "original").has_value());
+  // Place a symlink at a plausible temp name pointing at another file.
+  const std::string target = dir + "/target.txt";
+  ASSERT_TRUE(WriteFileAtomic(target, "keep").has_value());
+  // Try a temp-name symlink pointing at |target| (the classic attack).
+  const std::string tmp_name = target + ".tmp";
+  ::symlink(victim.c_str(), tmp_name.c_str());
+  ASSERT_TRUE(WriteFileAtomic(target, "overwritten").has_value());
+  ::unlink(tmp_name.c_str());
+  // |victim| must still hold its original contents.
+  EXPECT_THAT(ReadFile(victim).value(), Eq("original"));
+}
+#endif
 
 } // namespace
 } // namespace neko::storage
