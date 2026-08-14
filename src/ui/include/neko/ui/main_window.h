@@ -36,6 +36,7 @@ class MainWindow : public QMainWindow {
  private slots:
   void OnStateChanged();
   void OnNavigateRequested();
+  void OnAddressEdited();
   void OnTabBarChanged(int index);
   void OnTabCloseRequested(int index);
   void OnNewTab();
@@ -67,6 +68,9 @@ class MainWindow : public QMainWindow {
   QVector<WebView*> views_;
   QVector<int> view_ids_;  // tab id for each view, in order
   QLineEdit* address_ = nullptr;
+  // True while the user is editing the address bar; RefreshAll() then leaves
+  // the text alone instead of clobbering it with the tab's URL.
+  bool address_editing_ = false;
 
   // Docks.
   QTreeWidget* dom_tree_ = nullptr;

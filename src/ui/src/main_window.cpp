@@ -116,6 +116,7 @@ void MainWindow::BuildToolbar() {
   address_->setPlaceholderText(tr("Enter URL or search..."));
   address_->setClearButtonEnabled(true);
   connect(address_, &QLineEdit::returnPressed, this, &MainWindow::OnNavigateRequested);
+  connect(address_, &QLineEdit::textEdited, this, &MainWindow::OnAddressEdited);
   toolbar->addWidget(address_);
 
   toolbar->addSeparator();
@@ -225,7 +226,14 @@ void MainWindow::BuildDocks() {
 
 void MainWindow::OnStateChanged() { RefreshAll(); }
 
+void MainWindow::OnAddressEdited() {
+  // The user typed into the address bar; stop refreshing its text until the
+  // navigation is committed.
+  address_editing_ = true;
+}
+
 void MainWindow::OnNavigateRequested() {
+  address_editing_ = false;  // committed: let RefreshAll sync the URL again
   Navigate(address_->text());
 }
 
@@ -243,6 +251,8 @@ void MainWindow::Navigate(const QString& input) {
 
 void MainWindow::OnTabBarChanged(int index) {
   if (index < 0) return;
+  // Switching tabs abandons any in-progress address-bar edit.
+  address_editing_ = false;
   pages_->setCurrentIndex(index);
   const auto tabs = worker_->SnapshotTabs();
   if (index >= static_cast<int>(tabs.size())) return;
@@ -294,7 +304,9 @@ void MainWindow::RefreshAll() {
   // Address bar + title from the active tab.
   const browser::TabSnapshot tab = worker_->SnapshotActiveTab();
   if (tab.id >= 0) {
-    if (!tab.url.empty()) {
+    // Don't clobber the address bar while the user is editing it (typing a
+    // new URL); only sync the URL once the edit is committed by Enter.
+    if (!tab.url.empty() && !address_editing_) {
       address_->setText(FromUtf8(tab.url));
     }
     QString title = FromUtf8(tab.title);
