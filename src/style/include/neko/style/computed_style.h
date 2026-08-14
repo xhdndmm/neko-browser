@@ -1,56 +1,141 @@
 #pragma once
 
+#include "neko/css/color.h"
+
 #include <optional>
 #include <string>
 
-#include "neko/css/color.h"
-
 namespace neko::style {
 
-// Display values.  flex/grid are parsed but NOT yet implemented: elements
-// declaring them are laid out as blocks (documented limitation).  Table
-// display values are laid out by the table layout algorithm.
-enum class Display {
+// Display values.  flex/inline-flex are laid out by the flex layout
+// algorithm; grid is parsed but NOT yet implemented (declaring elements are
+// laid out as blocks, a documented limitation).  Table display values are
+// laid out by the table layout algorithm.
+enum class Display
+{
   kBlock,
   kInline,
-  kInlineBlock,  // inline-level block container (CSS2.2 9.2.2.1)
+  kInlineBlock, // inline-level block container (CSS2.2 9.2.2.1)
   kNone,
+  kFlex,       // block-level flex container (CSS Flexbox 1)
+  kInlineFlex, // inline-level flex container
   kTable,
-  kTableRowGroup,  // thead/tbody/tfoot
-  kTableRow,       // tr
-  kTableCell,      // td/th
-  kTableCaption,   // caption
+  kTableRowGroup, // thead/tbody/tfoot
+  kTableRow,      // tr
+  kTableCell,     // td/th
+  kTableCaption,  // caption
 };
 
 // position.  Layout currently honors static and relative; absolute/fixed are
 // stored but treated as static (documented limitation).
-enum class Position { kStatic, kRelative, kAbsolute, kFixed };
+enum class Position
+{
+  kStatic,
+  kRelative,
+  kAbsolute,
+  kFixed
+};
 
 // float (CSS 2.2 §9.5): drops the box out of normal flow and floats it to one
 // side of its containing block; following line boxes wrap around it.
-enum class Float { kNone, kLeft, kRight };
+enum class Float
+{
+  kNone,
+  kLeft,
+  kRight
+};
 
-enum class TextAlign { kLeft, kCenter, kRight, kJustify };
+enum class TextAlign
+{
+  kLeft,
+  kCenter,
+  kRight,
+  kJustify
+};
 
 // object-fit (CSS Images 3 §4.5): how replaced content fits its box.
-enum class ObjectFit { kFill, kContain, kCover, kNone, kScaleDown };
+enum class ObjectFit
+{
+  kFill,
+  kContain,
+  kCover,
+  kNone,
+  kScaleDown
+};
 
 // vertical-align (CSS 2.2 §10.8): inline-level box alignment within a line.
-enum class VerticalAlign { kBaseline, kMiddle, kTop, kBottom, kTextTop, kTextBottom };
+enum class VerticalAlign
+{
+  kBaseline,
+  kMiddle,
+  kTop,
+  kBottom,
+  kTextTop,
+  kTextBottom
+};
 
-enum class BorderStyle { kNone, kSolid, kDashed, kDotted };
+enum class BorderStyle
+{
+  kNone,
+  kSolid,
+  kDashed,
+  kDotted
+};
+
+// Flex layout properties (CSS Flexible Box Layout Module Level 1).
+enum class FlexDirection
+{
+  kRow,
+  kRowReverse,
+  kColumn,
+  kColumnReverse
+};
+enum class FlexWrap
+{
+  kNoWrap,
+  kWrap,
+  kWrapReverse
+};
+enum class JustifyContent
+{
+  kFlexStart,
+  kFlexEnd,
+  kCenter,
+  kSpaceBetween,
+  kSpaceAround,
+  kSpaceEvenly,
+};
+enum class AlignItems
+{
+  kStretch,
+  kFlexStart,
+  kFlexEnd,
+  kCenter,
+  kBaseline
+};
+enum class AlignContent
+{
+  kStretch,
+  kFlexStart,
+  kFlexEnd,
+  kCenter,
+  kSpaceBetween,
+  kSpaceAround,
+};
 
 // A length that may be a percentage (resolved against the containing block).
-struct SizeSpec {
+struct SizeSpec
+{
   float value = 0;
   bool percent = false;
 };
 
 // Fully resolved style for one element (px values unless noted).
-struct ComputedStyle {
-  Display display = Display::kInline;  // CSS initial value
+struct ComputedStyle
+{
+  Display display = Display::kInline; // CSS initial value
   Position position = Position::kStatic;
-  Float floating = Float::kNone;  // float: left/right/none
+  Float floating = Float::kNone; // float: left/right/none
 
   std::optional<SizeSpec> width;
   std::optional<SizeSpec> height;
@@ -79,7 +164,7 @@ struct ComputedStyle {
 
   // Font (inherited).
   float font_size = 16;
-  float line_height = 19.2f;  // 1.2 * default font-size
+  float line_height = 19.2f; // 1.2 * default font-size
   std::string font_family = "sans-serif";
   int font_weight = 400;
   bool font_italic = false;
@@ -100,6 +185,20 @@ struct ComputedStyle {
   bool top_auto = true;
   bool right_auto = true;
   bool bottom_auto = true;
+
+  // Flex layout (CSS Flexbox 1).  Flex-direction/flex-wrap/justify-content/
+  // align-items/align-content/gap live on the container; flex-grow/
+  // flex-shrink/flex-basis live on the items (computed per element).
+  FlexDirection flex_direction = FlexDirection::kRow;
+  FlexWrap flex_wrap = FlexWrap::kNoWrap;
+  JustifyContent justify_content = JustifyContent::kFlexStart;
+  AlignItems align_items = AlignItems::kStretch;
+  AlignContent align_content = AlignContent::kStretch;
+  float flex_grow = 0;
+  float flex_shrink = 1;
+  std::optional<SizeSpec> flex_basis; // nullopt = auto (content-based)
+  float row_gap = 0;
+  float column_gap = 0;
 };
 
-}  // namespace neko::style
+} // namespace neko::style

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body { font-family: monospace; }
+  .row { display: flex; background: #eee; margin-bottom: 16px; padding: 8px; }
+  .item { width: 60px; height: 40px; margin: 4px; background: #8cf; text-align: center; }
+  .grow { flex: 1; }
+  .column { display: flex; flex-direction: column; background: #e8e8e8; margin-bottom: 16px; padding: 8px; }
+  .center { display: flex; justify-content: center; align-items: center; height: 80px; background: #ddd; margin-bottom: 16px; }
+  .wrap { display: flex; flex-wrap: wrap; width: 220px; background: #eee; padding: 8px; }
+  .between { display: flex; justify-content: space-between; background: #ffd; margin-bottom: 16px; padding: 8px; }
+  .box { background: #fc8; padding: 4px; }
+</style>
+</head>
+<body>
+  <h3>1. Row (default)</h3>
+  <div class="row">
+    <div class="item">a</div>
+    <div class="item">b</div>
+    <div class="item">c</div>
+  </div>
+
+  <h3>2. Row with flex:1 (grow)</h3>
+  <div class="row">
+    <div class="item grow">a</div>
+    <div class="item grow">b</div>
+    <div class="item grow">c</div>
+  </div>
+
+  <h3>3. Column</h3>
+  <div class="column">
+    <div class="item">a</div>
+    <div class="item">b</div>
+    <div class="item">c</div>
+  </div>
+
+  <h3>4. Center (justify + align)</h3>
+  <div class="center">
+    <div class="box">centered</div>
+  </div>
+
+  <h3>5. Wrap</h3>
+  <div class="wrap">
+    <div class="item">1</div>
+    <div class="item">2</div>
+    <div class="item">3</div>
+    <div class="item">4</div>
+    <div class="item">5</div>
+  </div>
+
+  <h3>6. Space-between</h3>
+  <div class="between">
+    <div class="box">left</div>
+    <div class="box">right</div>
+  </div>
+</body>
+</html>

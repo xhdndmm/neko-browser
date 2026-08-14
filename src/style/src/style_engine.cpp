@@ -1,13 +1,5 @@
 #include "neko/style/style_engine.h"
 
-#include <array>
-#include <map>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
-
 #include "neko/base/logging.h"
 #include "neko/base/string_util.h"
 #include "neko/css/parser.h"
@@ -15,6 +7,15 @@
 #include "neko/css/stylesheet.h"
 #include "neko/css/value.h"
 #include "neko/dom/query.h"
+
+#include <algorithm>
+#include <array>
+#include <map>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace neko::style {
 namespace {
@@ -59,7 +60,8 @@ constexpr unsigned kInlineSpecificityA = 1000000;
 constexpr css::Specificity kInlineSpecificity = {kInlineSpecificityA, 0, 0};
 
 // Splits a value on whitespace.
-std::vector<std::string> SplitWhitespace(std::string_view value) {
+std::vector<std::string> SplitWhitespace(std::string_view value)
+{
   std::vector<std::string> parts;
   std::size_t i = 0;
   while (i < value.size()) {
@@ -78,8 +80,8 @@ std::vector<std::string> SplitWhitespace(std::string_view value) {
 }
 
 // Parses a single value into a SizeSpec (resolving em/rem against font sizes).
-std::optional<SizeSpec> ParseSize(const std::string& text, float font_size,
-                                  float root_font_size) {
+std::optional<SizeSpec> ParseSize(const std::string& text, float font_size, float root_font_size)
+{
   const css::CssValue value = css::ParseCssValue(text);
   if (value.type != css::CssValue::Type::kLength && value.type != css::CssValue::Type::kNumber) {
     return std::nullopt;
@@ -101,8 +103,11 @@ std::optional<SizeSpec> ParseSize(const std::string& text, float font_size,
 }
 
 // Applies a 1-4 value shorthand to the four sides.
-void ApplyBoxShorthand(const std::string& value, float font_size, float root_font_size,
-                       std::array<SizeSpec, 4>& sides) {
+void ApplyBoxShorthand(const std::string& value,
+                       float font_size,
+                       float root_font_size,
+                       std::array<SizeSpec, 4>& sides)
+{
   const std::vector<std::string> parts = SplitWhitespace(value);
   auto parse = [&](const std::string& text) -> SizeSpec {
     if (const std::optional<SizeSpec> spec = ParseSize(text, font_size, root_font_size)) {
@@ -111,27 +116,31 @@ void ApplyBoxShorthand(const std::string& value, float font_size, float root_fon
     return SizeSpec{};
   };
   switch (parts.size()) {
-    case 1:
-      sides = {parse(parts[0]), parse(parts[0]), parse(parts[0]), parse(parts[0])};
-      break;
-    case 2:
-      sides = {parse(parts[0]), parse(parts[1]), parse(parts[0]), parse(parts[1])};
-      break;
-    case 3:
-      sides = {parse(parts[0]), parse(parts[1]), parse(parts[2]), parse(parts[1])};
-      break;
-    default:
-      if (parts.size() >= 4) {
-        sides = {parse(parts[0]), parse(parts[1]), parse(parts[2]), parse(parts[3])};
-      }
-      break;
+  case 1:
+    sides = {parse(parts[0]), parse(parts[0]), parse(parts[0]), parse(parts[0])};
+    break;
+  case 2:
+    sides = {parse(parts[0]), parse(parts[1]), parse(parts[0]), parse(parts[1])};
+    break;
+  case 3:
+    sides = {parse(parts[0]), parse(parts[1]), parse(parts[2]), parse(parts[1])};
+    break;
+  default:
+    if (parts.size() >= 4) {
+      sides = {parse(parts[0]), parse(parts[1]), parse(parts[2]), parse(parts[3])};
+    }
+    break;
   }
 }
 
 // Extracts width/color/style from a border value ("1px solid #000").
-void ParseBorderValue(const std::string& value, float font_size, float root_font_size,
-                      float& width, std::optional<css::Color>& color,
-                      BorderStyle& style) {
+void ParseBorderValue(const std::string& value,
+                      float font_size,
+                      float root_font_size,
+                      float& width,
+                      std::optional<css::Color>& color,
+                      BorderStyle& style)
+{
   for (const std::string& part : SplitWhitespace(value)) {
     if (const std::optional<css::Color> c = css::ParseColor(part)) {
       color = c;
@@ -159,7 +168,8 @@ void ParseBorderValue(const std::string& value, float font_size, float root_font
   }
 }
 
-bool MediaQueryMatches(std::string_view prelude) {
+bool MediaQueryMatches(std::string_view prelude)
+{
   const std::string lower = neko::base::ToLower(prelude);
   // A media query is treated as matching when it targets screen/all or the
   // empty query (the common case).  print/speech queries do not match.
@@ -172,9 +182,10 @@ bool MediaQueryMatches(std::string_view prelude) {
   return true;
 }
 
-}  // namespace
+} // namespace
 
-void StyleEngine::ApplyStyles(dom::Document& document) {
+void StyleEngine::ApplyStyles(dom::Document& document)
+{
   // Collect author sheets from <style> elements.
   author_sheets_.clear();
   for (dom::Element* style : dom::QuerySelectorAll(document, "style")) {
@@ -196,7 +207,8 @@ void StyleEngine::ApplyStyles(dom::Document& document) {
   ComputeElement(*root, root_style, root_style.font_size);
 }
 
-const ComputedStyle& StyleEngine::StyleFor(const dom::Element& element) const {
+const ComputedStyle& StyleEngine::StyleFor(const dom::Element& element) const
+{
   const auto it = styles_.find(&element);
   if (it != styles_.end()) {
     return it->second;
@@ -205,10 +217,13 @@ const ComputedStyle& StyleEngine::StyleFor(const dom::Element& element) const {
   return kDefault;
 }
 
-void StyleEngine::ComputeElement(dom::Element& element, const ComputedStyle& inherited,
-                                 float root_font_size) {
+void StyleEngine::ComputeElement(dom::Element& element,
+                                 const ComputedStyle& inherited,
+                                 float root_font_size)
+{
   // Collect all matching declarations for this element.
-  struct Candidate {
+  struct Candidate
+  {
     const css::Declaration* declaration;
     css::Specificity specificity;
     int order;
@@ -354,9 +369,13 @@ void StyleEngine::ComputeElement(dom::Element& element, const ComputedStyle& inh
         out.font_size = v.value;
       }
     } else if (v.type == css::CssValue::Type::kKeyword) {
-      static const std::map<std::string, float> kSizes = {
-          {"xx-small", 9.0f}, {"x-small", 10.0f}, {"small", 13.0f}, {"medium", 16.0f},
-          {"large", 18.0f},   {"x-large", 24.0f}, {"xx-large", 32.0f}};
+      static const std::map<std::string, float> kSizes = {{"xx-small", 9.0f},
+                                                          {"x-small", 10.0f},
+                                                          {"small", 13.0f},
+                                                          {"medium", 16.0f},
+                                                          {"large", 18.0f},
+                                                          {"x-large", 24.0f},
+                                                          {"xx-large", 32.0f}};
       const auto it = kSizes.find(v.text);
       if (it != kSizes.end()) {
         out.font_size = it->second;
@@ -480,8 +499,14 @@ void StyleEngine::ComputeElement(dom::Element& element, const ComputedStyle& inh
   if (const css::Declaration* d = find("display")) {
     const css::CssValue v = css::ParseCssValue(d->value);
     if (v.type == css::CssValue::Type::kKeyword) {
-      if (v.text == "block" || v.text == "flex" || v.text == "grid") {
+      if (v.text == "block" || v.text == "grid") {
+        // grid is parsed but not implemented: laid out as a block (see
+        // computed_style.h).
         out.display = Display::kBlock;
+      } else if (v.text == "flex") {
+        out.display = Display::kFlex;
+      } else if (v.text == "inline-flex") {
+        out.display = Display::kInlineFlex;
       } else if (v.text == "inline") {
         out.display = Display::kInline;
       } else if (v.text == "inline-block") {
@@ -501,6 +526,187 @@ void StyleEngine::ComputeElement(dom::Element& element, const ComputedStyle& inh
         out.display = Display::kTableCaption;
       }
     }
+  }
+
+  // flex-direction (flex container).
+  if (const css::Declaration* d = find("flex-direction")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kKeyword) {
+      if (v.text == "row-reverse") {
+        out.flex_direction = FlexDirection::kRowReverse;
+      } else if (v.text == "column") {
+        out.flex_direction = FlexDirection::kColumn;
+      } else if (v.text == "column-reverse") {
+        out.flex_direction = FlexDirection::kColumnReverse;
+      } else {
+        out.flex_direction = FlexDirection::kRow;
+      }
+    }
+  }
+
+  // flex-wrap (flex container).
+  if (const css::Declaration* d = find("flex-wrap")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kKeyword) {
+      if (v.text == "wrap") {
+        out.flex_wrap = FlexWrap::kWrap;
+      } else if (v.text == "wrap-reverse") {
+        out.flex_wrap = FlexWrap::kWrapReverse;
+      } else {
+        out.flex_wrap = FlexWrap::kNoWrap;
+      }
+    }
+  }
+
+  // justify-content (flex container).
+  if (const css::Declaration* d = find("justify-content")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kKeyword) {
+      if (v.text == "flex-end") {
+        out.justify_content = JustifyContent::kFlexEnd;
+      } else if (v.text == "center") {
+        out.justify_content = JustifyContent::kCenter;
+      } else if (v.text == "space-between") {
+        out.justify_content = JustifyContent::kSpaceBetween;
+      } else if (v.text == "space-around") {
+        out.justify_content = JustifyContent::kSpaceAround;
+      } else if (v.text == "space-evenly") {
+        out.justify_content = JustifyContent::kSpaceEvenly;
+      } else {
+        out.justify_content = JustifyContent::kFlexStart;
+      }
+    }
+  }
+
+  // align-items (flex container; CSS initial value is stretch).
+  if (const css::Declaration* d = find("align-items")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kKeyword) {
+      if (v.text == "flex-start") {
+        out.align_items = AlignItems::kFlexStart;
+      } else if (v.text == "flex-end") {
+        out.align_items = AlignItems::kFlexEnd;
+      } else if (v.text == "center") {
+        out.align_items = AlignItems::kCenter;
+      } else if (v.text == "baseline") {
+        out.align_items = AlignItems::kBaseline;
+      } else {
+        out.align_items = AlignItems::kStretch;
+      }
+    }
+  }
+
+  // align-content (flex container; used with multiple lines).
+  if (const css::Declaration* d = find("align-content")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kKeyword) {
+      if (v.text == "flex-start") {
+        out.align_content = AlignContent::kFlexStart;
+      } else if (v.text == "flex-end") {
+        out.align_content = AlignContent::kFlexEnd;
+      } else if (v.text == "center") {
+        out.align_content = AlignContent::kCenter;
+      } else if (v.text == "space-between") {
+        out.align_content = AlignContent::kSpaceBetween;
+      } else if (v.text == "space-around") {
+        out.align_content = AlignContent::kSpaceAround;
+      } else {
+        out.align_content = AlignContent::kStretch;
+      }
+    }
+  }
+
+  // flex-grow (flex item).
+  if (const css::Declaration* d = find("flex-grow")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kNumber) {
+      out.flex_grow = std::max(0.0f, v.number);
+    }
+  }
+
+  // flex-shrink (flex item).
+  if (const css::Declaration* d = find("flex-shrink")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kNumber) {
+      out.flex_shrink = std::max(0.0f, v.number);
+    }
+  }
+
+  // flex-basis (flex item; auto => content-based).
+  if (const css::Declaration* d = find("flex-basis")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kKeyword && v.text == "auto") {
+      out.flex_basis = std::nullopt;
+    } else if (const std::optional<SizeSpec> spec =
+                   ParseSize(d->value, out.font_size, root_font_size)) {
+      out.flex_basis = spec.value();
+    }
+  }
+
+  // flex shorthand: <grow> <shrink> <basis> | <grow> (=> 1 1 0) | none.
+  if (const css::Declaration* d = find("flex")) {
+    const std::vector<std::string> parts = SplitWhitespace(d->value);
+    auto parse_number = [](const std::string& s) -> std::optional<float> {
+      const css::CssValue v = css::ParseCssValue(s);
+      if (v.type == css::CssValue::Type::kNumber) {
+        return std::max(0.0f, v.number);
+      }
+      return std::nullopt;
+    };
+    if (parts.size() == 1 && parts[0] == "none") {
+      out.flex_grow = 0;
+      out.flex_shrink = 0;
+      out.flex_basis = SizeSpec{0, false};
+    } else if (parts.size() == 1) {
+      // "flex: <grow>" == "flex: <grow> 1 0".
+      if (const std::optional<float> g = parse_number(parts[0])) {
+        out.flex_grow = g.value();
+        out.flex_shrink = 1;
+        out.flex_basis = SizeSpec{0, false};
+      }
+    } else if (parts.size() >= 2) {
+      if (const std::optional<float> g = parse_number(parts[0])) {
+        out.flex_grow = g.value();
+      }
+      if (const std::optional<float> s = parse_number(parts[1])) {
+        out.flex_shrink = s.value();
+      }
+      if (parts.size() >= 3) {
+        const std::string& basis = parts[2];
+        if (basis != "auto") {
+          if (const std::optional<SizeSpec> spec =
+                  ParseSize(basis, out.font_size, root_font_size)) {
+            out.flex_basis = spec.value();
+          }
+        } else {
+          out.flex_basis = std::nullopt;
+        }
+      }
+    }
+  }
+
+  // gap (row-gap / column-gap / shorthand).  The shorthand is applied first
+  // so an explicit longhand declared later overrides its component.
+  auto parse_gap = [&](const std::string& text) -> float {
+    if (const std::optional<SizeSpec> spec = ParseSize(text, out.font_size, root_font_size)) {
+      return spec.value().value;
+    }
+    return 0.0f;
+  };
+  if (const css::Declaration* d = find("gap")) {
+    const std::vector<std::string> parts = SplitWhitespace(d->value);
+    if (parts.size() >= 2) {
+      out.row_gap = parse_gap(parts[0]);
+      out.column_gap = parse_gap(parts[1]);
+    } else if (parts.size() == 1) {
+      out.row_gap = out.column_gap = parse_gap(parts[0]);
+    }
+  }
+  if (const css::Declaration* d = find("row-gap")) {
+    out.row_gap = parse_gap(d->value);
+  }
+  if (const css::Declaration* d = find("column-gap")) {
+    out.column_gap = parse_gap(d->value);
   }
 
   // position.
@@ -562,8 +768,8 @@ void StyleEngine::ComputeElement(dom::Element& element, const ComputedStyle& inh
   set_padding("padding-left", out.padding_left);
 
   if (const css::Declaration* d = find("margin")) {
-    std::array<SizeSpec, 4> sides = {out.margin_top, out.margin_right, out.margin_bottom,
-                                     out.margin_left};
+    std::array<SizeSpec, 4> sides = {
+        out.margin_top, out.margin_right, out.margin_bottom, out.margin_left};
     ApplyBoxShorthand(d->value, out.font_size, root_font_size, sides);
     out.margin_top = sides[0];
     out.margin_right = sides[1];
@@ -571,8 +777,8 @@ void StyleEngine::ComputeElement(dom::Element& element, const ComputedStyle& inh
     out.margin_left = sides[3];
   }
   if (const css::Declaration* d = find("padding")) {
-    std::array<SizeSpec, 4> sides = {out.padding_top, out.padding_right, out.padding_bottom,
-                                     out.padding_left};
+    std::array<SizeSpec, 4> sides = {
+        out.padding_top, out.padding_right, out.padding_bottom, out.padding_left};
     ApplyBoxShorthand(d->value, out.font_size, root_font_size, sides);
     out.padding_top = sides[0];
     out.padding_right = sides[1];
@@ -616,8 +822,10 @@ void StyleEngine::ComputeElement(dom::Element& element, const ComputedStyle& inh
     BorderStyle style = BorderStyle::kNone;
     ParseBorderValue(d->value, out.font_size, root_font_size, w, color, style);
     if (w > 0) {
-      out.border_top.value = out.border_right.value = out.border_bottom.value = out.border_left.value = w;
-      out.border_top.percent = out.border_right.percent = out.border_bottom.percent = out.border_left.percent = false;
+      out.border_top.value = out.border_right.value = out.border_bottom.value =
+          out.border_left.value = w;
+      out.border_top.percent = out.border_right.percent = out.border_bottom.percent =
+          out.border_left.percent = false;
     }
   }
   if (const css::Declaration* d = find("border-color")) {
@@ -631,8 +839,10 @@ void StyleEngine::ComputeElement(dom::Element& element, const ComputedStyle& inh
     BorderStyle style = BorderStyle::kNone;
     ParseBorderValue(d->value, out.font_size, root_font_size, w, color, style);
     if (w > 0) {
-      out.border_top.value = out.border_right.value = out.border_bottom.value = out.border_left.value = w;
-      out.border_top.percent = out.border_right.percent = out.border_bottom.percent = out.border_left.percent = false;
+      out.border_top.value = out.border_right.value = out.border_bottom.value =
+          out.border_left.value = w;
+      out.border_top.percent = out.border_right.percent = out.border_bottom.percent =
+          out.border_left.percent = false;
     }
     if (color.has_value()) {
       out.border_color = color;
@@ -682,4 +892,4 @@ void StyleEngine::ComputeElement(dom::Element& element, const ComputedStyle& inh
   }
 }
 
-}  // namespace neko::style
+} // namespace neko::style

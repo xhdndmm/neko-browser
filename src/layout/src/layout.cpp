@@ -1,3 +1,8 @@
+#include "neko/base/utf8.h"
+#include "neko/dom/element.h"
+#include "neko/graphics/font_registry.h"
+#include "neko/graphics/font_selector.h"
+#include "neko/image/image.h"
 #include "neko/layout/layout_tree.h"
 
 #include <algorithm>
@@ -7,12 +12,6 @@
 #include <string_view>
 #include <vector>
 
-#include "neko/dom/element.h"
-#include "neko/base/utf8.h"
-#include "neko/graphics/font_registry.h"
-#include "neko/graphics/font_selector.h"
-#include "neko/image/image.h"
-
 namespace neko::layout {
 namespace {
 
@@ -21,41 +20,51 @@ namespace {
 const std::vector<const LayoutBox*> kNoFloats;
 
 // A unit of inline content (a text chunk with its style).
-struct InlineItem {
+struct InlineItem
+{
   std::string text;
   const style::ComputedStyle* style;
-  const dom::Element* element;  // source element (null for block-level text)
-  bool line_break = false;      // <br>: force a line break
-  bool atomic = false;          // atomic inline box (replaced <img> / inline-block)
+  const dom::Element* element; // source element (null for block-level text)
+  bool line_break = false;     // <br>: force a line break
+  bool atomic = false;         // atomic inline box (replaced <img> / inline-block)
   const image::Image* image = nullptr;
   float width = 0;
   float height = 0;
-  float baseline_offset = 0;  // baseline from this atomic box's top (for vertical-align)
+  float baseline_offset = 0; // baseline from this atomic box's top (for vertical-align)
   // For an inline-block atomic box: its inner block layout.
   std::unique_ptr<LayoutBox> block_box = nullptr;
 };
 
 // True when |c| is an ASCII whitespace character used for word breaking.
-bool IsWordBreak(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
+bool IsWordBreak(char c)
+{
+  return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
 
 // True when |cp| is an East Asian ideograph (CJK).  Such characters may break
 // between any two of them (CSS text: "CJK text can be broken anywhere"), so a
 // long CJK run can wrap inside a narrowed (float-avoiding) line.
-bool IsCjkCodePoint(char32_t cp) {
-  return (cp >= 0x2E80 && cp <= 0x2FFF) ||   // CJK radicals / Kangxi
-         (cp >= 0x3000 && cp <= 0x303F) ||   // CJK punctuation
-         (cp >= 0x3040 && cp <= 0x30FF) ||   // Hiragana / Katakana
-         (cp >= 0x3400 && cp <= 0x4DBF) ||   // CJK ext A
-         (cp >= 0x4E00 && cp <= 0x9FFF) ||   // CJK unified
-         (cp >= 0xF900 && cp <= 0xFAFF) ||   // CJK compat
-         (cp >= 0x20000 && cp <= 0x2FA1F);   // CJK ext B..F
+bool IsCjkCodePoint(char32_t cp)
+{
+  return (cp >= 0x2E80 && cp <= 0x2FFF) || // CJK radicals / Kangxi
+         (cp >= 0x3000 && cp <= 0x303F) || // CJK punctuation
+         (cp >= 0x3040 && cp <= 0x30FF) || // Hiragana / Katakana
+         (cp >= 0x3400 && cp <= 0x4DBF) || // CJK ext A
+         (cp >= 0x4E00 && cp <= 0x9FFF) || // CJK unified
+         (cp >= 0xF900 && cp <= 0xFAFF) || // CJK compat
+         (cp >= 0x20000 && cp <= 0x2FA1F); // CJK ext B..F
 }
 
 // Measures the advance width of |text| at |font_size| using the font selector
 // for |family| when a registry is available; falls back to the monospace model
 // (font_size per character).
-float MeasureTextWidth(const graphics::FontRegistry* registry, std::string_view family,
-                       int weight, bool italic, std::string_view text, float font_size) {
+float MeasureTextWidth(const graphics::FontRegistry* registry,
+                       std::string_view family,
+                       int weight,
+                       bool italic,
+                       std::string_view text,
+                       float font_size)
+{
   if (registry == nullptr) {
     return static_cast<float>(text.size()) * font_size;
   }
@@ -63,8 +72,13 @@ float MeasureTextWidth(const graphics::FontRegistry* registry, std::string_view 
 }
 
 // Width of the widest space-separated word in |text| (the min-content width).
-float WidestWordWidth(const graphics::FontRegistry* registry, std::string_view family,
-                      int weight, bool italic, std::string_view text, float font_size) {
+float WidestWordWidth(const graphics::FontRegistry* registry,
+                      std::string_view family,
+                      int weight,
+                      bool italic,
+                      std::string_view text,
+                      float font_size)
+{
   float widest = 0;
   std::size_t start = 0;
   while (start < text.size()) {
@@ -75,8 +89,8 @@ float WidestWordWidth(const graphics::FontRegistry* registry, std::string_view f
       break;
     }
     const std::size_t end = text.find_first_of(" \t\n\r", start);
-    const std::string_view word = text.substr(
-        start, end == std::string_view::npos ? text.size() - start : end - start);
+    const std::string_view word =
+        text.substr(start, end == std::string_view::npos ? text.size() - start : end - start);
     widest = std::max(widest, MeasureTextWidth(registry, family, weight, italic, word, font_size));
     start = end == std::string_view::npos ? text.size() : end;
   }
@@ -86,7 +100,8 @@ float WidestWordWidth(const graphics::FontRegistry* registry, std::string_view f
 // Collapses a whitespace run per CSS white-space: normal: leading/trailing
 // whitespace is dropped and interior runs collapse to a single space.  Used by
 // intrinsic width measurement so source indentation does not inflate width.
-std::string CollapseWhitespace(std::string_view text) {
+std::string CollapseWhitespace(std::string_view text)
+{
   std::string out;
   bool pending_space = false;
   bool started = false;
@@ -107,15 +122,19 @@ std::string CollapseWhitespace(std::string_view text) {
   return out;
 }
 
-float ResolveSize(const style::SizeSpec& spec, float containing) {
+float ResolveSize(const style::SizeSpec& spec, float containing)
+{
   if (spec.percent) {
     return containing * spec.value / 100.0f;
   }
   return spec.value;
 }
 
-void CollectText(std::string_view text, const style::ComputedStyle& style,
-                 const dom::Element* element, std::vector<InlineItem>& items) {
+void CollectText(std::string_view text,
+                 const style::ComputedStyle& style,
+                 const dom::Element* element,
+                 std::vector<InlineItem>& items)
+{
   if (!text.empty()) {
     items.push_back(InlineItem{std::string(text), &style, element});
   }
@@ -125,8 +144,11 @@ void CollectText(std::string_view text, const style::ComputedStyle& style,
 // explicit CSS width/height, else the presentational width/height attributes,
 // else intrinsic, preserving the aspect ratio when only one axis is given.
 // Defined after ParseNonNegativeInt; declared here for CollectInline.
-void ComputeReplacedSize(const style::ComputedStyle& style, const dom::Element& element,
-                         const image::Image* img, float containing_width, float& out_w,
+void ComputeReplacedSize(const style::ComputedStyle& style,
+                         const dom::Element& element,
+                         const image::Image* img,
+                         float containing_width,
+                         float& out_w,
                          float& out_h);
 
 // CollectInline is implemented as a Builder method (see BuildLayoutTree) so it
@@ -140,11 +162,16 @@ void TranslateBox(LayoutBox& box, float dx, float dy);
 // widths come from |registry| when provided (real advances with per-character
 // font fallback); otherwise the monospace fallback is used.  |container_style|
 // supplies the imaginary-strut font metrics and line-height (CSS2.2 10.8).
-void LayoutLines(std::vector<InlineItem>& items, float available_width, float origin_x,
-                 float origin_y, const graphics::FontRegistry* registry,
+void LayoutLines(std::vector<InlineItem>& items,
+                 float available_width,
+                 float origin_x,
+                 float origin_y,
+                 const graphics::FontRegistry* registry,
                  const style::ComputedStyle& container_style,
                  const std::vector<const LayoutBox*>& floats,
-                 std::vector<Line>& out_lines, float& total_height) {
+                 std::vector<Line>& out_lines,
+                 float& total_height)
+{
   Line line;
   float x = 0;
   float line_top = 0;
@@ -218,9 +245,8 @@ void LayoutLines(std::vector<InlineItem>& items, float available_width, float or
   // Strut ascent/descent (baseline offsets) of the block container's font.
   const auto strut_metrics = [&](float& asc, float& desc) {
     if (registry != nullptr) {
-      const graphics::FontSelector* sel =
-          registry->SelectorFor(container_style.font_family, container_style.font_weight,
-                                container_style.font_italic);
+      const graphics::FontSelector* sel = registry->SelectorFor(
+          container_style.font_family, container_style.font_weight, container_style.font_italic);
       if (sel != nullptr) {
         asc = sel->Ascent(container_style.font_size);
         desc = sel->Descent(container_style.font_size);
@@ -236,8 +262,8 @@ void LayoutLines(std::vector<InlineItem>& items, float available_width, float or
   strut_metrics(strut_asc, strut_desc);
   const float half_leading =
       std::max(0.0f, (container_style.line_height - (strut_asc + strut_desc)) / 2.0f);
-  const float strut_up = strut_asc + half_leading;     // baseline to line top
-  const float strut_down = strut_desc + half_leading;  // baseline to line bottom
+  const float strut_up = strut_asc + half_leading;    // baseline to line top
+  const float strut_down = strut_desc + half_leading; // baseline to line bottom
 
   // Per-run metrics (ascent above baseline, descent below).
   const auto run_metrics = [&](const TextRun& run, float& asc, float& desc) {
@@ -304,20 +330,20 @@ void LayoutLines(std::vector<InlineItem>& items, float available_width, float or
     float row_height = baseline_off + descent_off;
     for (const InlineBox& b : line.boxes) {
       switch (b.style.vertical_align) {
-        case style::VerticalAlign::kTop:
-        case style::VerticalAlign::kTextTop:
-        case style::VerticalAlign::kBottom:
-        case style::VerticalAlign::kTextBottom:
-          row_height = std::max(row_height, b.height);
-          break;
-        case style::VerticalAlign::kMiddle:
-          baseline_off = std::max(baseline_off, b.height / 2.0f);
-          descent_off = std::max(descent_off, b.height / 2.0f);
-          row_height = std::max(row_height, baseline_off + descent_off);
-          break;
-        case style::VerticalAlign::kBaseline:
-        default:
-          break;
+      case style::VerticalAlign::kTop:
+      case style::VerticalAlign::kTextTop:
+      case style::VerticalAlign::kBottom:
+      case style::VerticalAlign::kTextBottom:
+        row_height = std::max(row_height, b.height);
+        break;
+      case style::VerticalAlign::kMiddle:
+        baseline_off = std::max(baseline_off, b.height / 2.0f);
+        descent_off = std::max(descent_off, b.height / 2.0f);
+        row_height = std::max(row_height, baseline_off + descent_off);
+        break;
+      case style::VerticalAlign::kBaseline:
+      default:
+        break;
       }
     }
     line.height = row_height;
@@ -339,21 +365,21 @@ void LayoutLines(std::vector<InlineItem>& items, float available_width, float or
     for (InlineBox& b : line.boxes) {
       float y = 0;
       switch (b.style.vertical_align) {
-        case style::VerticalAlign::kTop:
-        case style::VerticalAlign::kTextTop:
-          y = line_top_abs;
-          break;
-        case style::VerticalAlign::kBottom:
-        case style::VerticalAlign::kTextBottom:
-          y = line_bottom_abs - b.height;
-          break;
-        case style::VerticalAlign::kMiddle:
-          y = line_top_abs + (line.height - b.height) / 2.0f;
-          break;
-        case style::VerticalAlign::kBaseline:
-        default:
-          y = baseline - b.baseline_offset;  // its baseline sits on the line baseline
-          break;
+      case style::VerticalAlign::kTop:
+      case style::VerticalAlign::kTextTop:
+        y = line_top_abs;
+        break;
+      case style::VerticalAlign::kBottom:
+      case style::VerticalAlign::kTextBottom:
+        y = line_bottom_abs - b.height;
+        break;
+      case style::VerticalAlign::kMiddle:
+        y = line_top_abs + (line.height - b.height) / 2.0f;
+        break;
+      case style::VerticalAlign::kBaseline:
+      default:
+        y = baseline - b.baseline_offset; // its baseline sits on the line baseline
+        break;
       }
       b.y = y;
       b.x = origin_x + b.x;
@@ -374,23 +400,25 @@ void LayoutLines(std::vector<InlineItem>& items, float available_width, float or
     x = line_left;
   };
 
-  auto add_word = [&](std::string_view word, const style::ComputedStyle& style,
-                      const dom::Element* element, const graphics::FontSelector* selector) {
-    const float word_width =
-        selector != nullptr ? selector->TextWidth(word, style.font_size)
-                            : static_cast<float>(word.size()) * style.font_size;
+  auto add_word = [&](std::string_view word,
+                      const style::ComputedStyle& style,
+                      const dom::Element* element,
+                      const graphics::FontSelector* selector) {
+    const float word_width = selector != nullptr
+                                 ? selector->TextWidth(word, style.font_size)
+                                 : static_cast<float>(word.size()) * style.font_size;
     // Ensure the word fits on the current (or a lower) line; a word that
     // cannot fit even at a line start is pushed below any overlapping floats.
     // An item wider than the block itself is placed as-is (never dropped).
     while (x + word_width > line_right) {
       const float prev_top = line_top;
       if (x > line_left) {
-        flush_line();  // normal wrap to a new line
+        flush_line(); // normal wrap to a new line
       } else if (!push_past_floats()) {
-        break;  // no float to move past: place the (over-wide) word
+        break; // no float to move past: place the (over-wide) word
       }
       if (line_top == prev_top) {
-        break;  // safety: nothing advanced (e.g. an empty line flush)
+        break; // safety: nothing advanced (e.g. an empty line flush)
       }
     }
     TextRun run;
@@ -431,7 +459,7 @@ void LayoutLines(std::vector<InlineItem>& items, float available_width, float or
           break;
         }
         if (line_top == prev_top) {
-          break;  // safety: nothing advanced
+          break; // safety: nothing advanced
         }
       }
       InlineBox box;
@@ -464,9 +492,8 @@ void LayoutLines(std::vector<InlineItem>& items, float available_width, float or
         }
         const bool at_line_start = x == line_left && line.runs.empty() && line.boxes.empty();
         if (!at_line_start) {
-          const float space_width =
-              selector != nullptr ? selector->Advance(' ', style.font_size)
-                                  : style.font_size * 0.5f;
+          const float space_width = selector != nullptr ? selector->Advance(' ', style.font_size)
+                                                        : style.font_size * 0.5f;
           if (x + space_width > line_right && x > line_left) {
             flush_line();
           }
@@ -484,7 +511,7 @@ void LayoutLines(std::vector<InlineItem>& items, float available_width, float or
         std::size_t pos = start;
         char32_t cp = 0;
         if (base::DecodeUtf8Next(text, pos, cp) && IsCjkCodePoint(cp)) {
-          end = pos;  // this single CJK character is one word
+          end = pos; // this single CJK character is one word
         } else {
           end = text.find_first_of(" \t\n\r", start);
           end = end == std::string::npos ? text.size() : end;
@@ -503,9 +530,10 @@ void LayoutLines(std::vector<InlineItem>& items, float available_width, float or
 // ---------------------------------------------------------------------------
 
 // Intrinsic content width of a box (CSS2.1 "preferred width").
-struct IntrinsicWidths {
-  float min = 0;  // widest unbreakable unit (word / replaced element)
-  float max = 0;  // widest line when laid out on a single line
+struct IntrinsicWidths
+{
+  float min = 0; // widest unbreakable unit (word / replaced element)
+  float max = 0; // widest line when laid out on a single line
 };
 
 // An element's left+right padding and border (added to intrinsic content).
@@ -515,8 +543,10 @@ struct IntrinsicWidths {
 // are out of scope for this measurement.  Text is measured through |registry|
 // (real advances with per-character fallback) when provided, else with the
 // monospace fallback.
-IntrinsicWidths MeasureContent(const dom::Element& element, const style::StyleEngine& styles,
-                               const graphics::FontRegistry* registry) {
+IntrinsicWidths MeasureContent(const dom::Element& element,
+                               const style::StyleEngine& styles,
+                               const graphics::FontRegistry* registry)
+{
   const style::ComputedStyle& style = styles.StyleFor(element);
   const bool replaced = element.tag_name() == "img" || element.tag_name() == "input" ||
                         element.tag_name() == "textarea" || element.tag_name() == "select";
@@ -541,11 +571,19 @@ IntrinsicWidths MeasureContent(const dom::Element& element, const style::StyleEn
   for (const dom::Node* child : element.ChildNodes()) {
     if (child->node_type() == dom::NodeType::kText) {
       const std::string& text = static_cast<const dom::Text&>(*child).data();
-      line_min = std::max(line_min, WidestWordWidth(registry, style.font_family,
-                                                    style.font_weight, style.font_italic, text,
-                                                    style.font_size));
-      line_max += MeasureTextWidth(registry, style.font_family, style.font_weight,
-                                   style.font_italic, CollapseWhitespace(text), style.font_size);
+      line_min = std::max(line_min,
+                          WidestWordWidth(registry,
+                                          style.font_family,
+                                          style.font_weight,
+                                          style.font_italic,
+                                          text,
+                                          style.font_size));
+      line_max += MeasureTextWidth(registry,
+                                   style.font_family,
+                                   style.font_weight,
+                                   style.font_italic,
+                                   CollapseWhitespace(text),
+                                   style.font_size);
       continue;
     }
     if (child->node_type() != dom::NodeType::kElement) {
@@ -563,6 +601,7 @@ IntrinsicWidths MeasureContent(const dom::Element& element, const style::StyleEn
     }
     const bool block_level = child_style.display == style::Display::kBlock ||
                              child_style.display == style::Display::kTable ||
+                             child_style.display == style::Display::kFlex ||
                              child_style.display == style::Display::kTableRowGroup ||
                              child_style.display == style::Display::kTableRow ||
                              child_style.display == style::Display::kTableCell ||
@@ -585,20 +624,22 @@ IntrinsicWidths MeasureContent(const dom::Element& element, const style::StyleEn
 }
 
 // One table cell (td/th) with its grid coordinates and laid-out box.
-struct CellInfo {
+struct CellInfo
+{
   dom::Element* element = nullptr;
   style::ComputedStyle style;
   int row = 0;
   int col = 0;
   int colspan = 1;
   int rowspan = 1;
-  bool grows_downward = false;  // rowspan="0": spans to the end of the row group
+  bool grows_downward = false; // rowspan="0": spans to the end of the row group
   float min_width = 0;
   float max_width = 0;
   std::unique_ptr<LayoutBox> box;
 };
 
-bool IsAsciiWhitespace(char c) {
+bool IsAsciiWhitespace(char c)
+{
   return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r';
 }
 
@@ -607,8 +648,8 @@ bool IsAsciiWhitespace(char c) {
 // digits is read (trailing non-digits are ignored); anything else before the
 // first digit is an error.  Returns nullopt when the attribute is absent or the
 // value is not a valid non-negative integer.
-std::optional<std::int64_t> ParseNonNegativeInt(const dom::Element& element,
-                                                std::string_view name) {
+std::optional<std::int64_t> ParseNonNegativeInt(const dom::Element& element, std::string_view name)
+{
   const std::optional<std::string_view> attr = element.GetAttribute(name);
   if (!attr.has_value()) {
     return std::nullopt;
@@ -629,7 +670,7 @@ std::optional<std::int64_t> ParseNonNegativeInt(const dom::Element& element,
     }
     result = result * 10 + (c - '0');
     if (result > 65535) {
-      return 65535;  // callers clamp to <= 1000 / <= 65534 anyway
+      return 65535; // callers clamp to <= 1000 / <= 65534 anyway
     }
   }
   return result;
@@ -637,7 +678,8 @@ std::optional<std::int64_t> ParseNonNegativeInt(const dom::Element& element,
 
 // Resolves a colspan attribute per the table model: parse as a non-negative
 // integer; zero / failure / absent yields 1; values above 1000 clamp to 1000.
-int ResolveColspan(const dom::Element& element) {
+int ResolveColspan(const dom::Element& element)
+{
   const std::optional<std::int64_t> v = ParseNonNegativeInt(element, "colspan");
   if (!v.has_value() || *v == 0) {
     return 1;
@@ -649,7 +691,8 @@ int ResolveColspan(const dom::Element& element) {
 // integer; failure / absent yields 1; values above 65534 clamp to 65534.  Sets
 // |grows_downward| when the value is zero, meaning the cell spans the remaining
 // rows of its row group.
-int ResolveRowspan(const dom::Element& element, bool& grows_downward) {
+int ResolveRowspan(const dom::Element& element, bool& grows_downward)
+{
   const std::optional<std::int64_t> v = ParseNonNegativeInt(element, "rowspan");
   grows_downward = false;
   if (!v.has_value()) {
@@ -662,9 +705,13 @@ int ResolveRowspan(const dom::Element& element, bool& grows_downward) {
   return static_cast<int>(std::min<std::int64_t>(*v, 65534));
 }
 
-void ComputeReplacedSize(const style::ComputedStyle& style, const dom::Element& element,
-                         const image::Image* img, float containing_width, float& out_w,
-                         float& out_h) {
+void ComputeReplacedSize(const style::ComputedStyle& style,
+                         const dom::Element& element,
+                         const image::Image* img,
+                         float containing_width,
+                         float& out_w,
+                         float& out_h)
+{
   const float intrinsic_w = img != nullptr ? static_cast<float>(img->width) : 0.0f;
   const float intrinsic_h = img != nullptr ? static_cast<float>(img->height) : 0.0f;
 
@@ -700,7 +747,8 @@ void ComputeReplacedSize(const style::ComputedStyle& style, const dom::Element& 
 
 // Shifts a laid-out box (and its descendants and text runs) by (dx, dy).  Used
 // to move a cell's content from its local (0,0) origin into its grid slot.
-void TranslateBox(LayoutBox& box, float dx, float dy) {
+void TranslateBox(LayoutBox& box, float dx, float dy)
+{
   box.x += dx;
   box.y += dy;
   for (Line& line : box.lines) {
@@ -727,14 +775,15 @@ void TranslateBox(LayoutBox& box, float dx, float dy) {
 // Resolves per-column content widths for a table.  Columns carrying a cell
 // with an explicit width are fixed; the remaining table width is distributed
 // across auto columns proportionally to their measured max-content width.
-std::vector<float> ComputeColumnWidths(const std::vector<CellInfo>& cells, int ncols,
-                                       float table_width) {
+std::vector<float>
+ComputeColumnWidths(const std::vector<CellInfo>& cells, int ncols, float table_width)
+{
   const std::size_t n = static_cast<std::size_t>(std::max(ncols, 0));
   std::vector<float> fixed(n, -1.0f);
   std::vector<float> auto_max(n, 0.0f);
   for (const CellInfo& cell : cells) {
     if (cell.colspan != 1) {
-      continue;  // a spanning cell's width is the sum of its columns
+      continue; // a spanning cell's width is the sum of its columns
     }
     const std::size_t c = static_cast<std::size_t>(cell.col);
     if (cell.style.width.has_value()) {
@@ -774,30 +823,34 @@ std::vector<float> ComputeColumnWidths(const std::vector<CellInfo>& cells, int n
 }
 
 // Sums |count| column widths starting at |start| (clamped to the column set).
-float SumColumns(const std::vector<float>& widths, int start, int count) {
+float SumColumns(const std::vector<float>& widths, int start, int count)
+{
   float sum = 0;
   const std::size_t begin = static_cast<std::size_t>(std::max(start, 0));
-  const std::size_t end = std::min(begin + static_cast<std::size_t>(std::max(count, 0)),
-                                   widths.size());
+  const std::size_t end =
+      std::min(begin + static_cast<std::size_t>(std::max(count, 0)), widths.size());
   for (std::size_t i = begin; i < end; ++i) {
     sum += widths[i];
   }
   return sum;
 }
 
-}  // namespace
+} // namespace
 
 std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document,
-                                                         float viewport_width) {
+                                                         float viewport_width)
+{
   // Coordinates are absolute (viewport space).  BuildBlock lays out |element|
   // inside a containing block whose content box starts at |origin_x|/|origin_y|.
-  struct Builder {
+  struct Builder
+  {
     const style::StyleEngine& styles;
-    const graphics::FontRegistry* registry;  // may be null (monospace fallback)
-    const ImageProvider* images;             // may be null (no decoded images)
+    const graphics::FontRegistry* registry; // may be null (monospace fallback)
+    const ImageProvider* images;            // may be null (no decoded images)
 
     // Resolves the box-model edges (margins, borders, padding) of |box|.
-    void ResolveBoxEdges(LayoutBox& box, float containing_width) {
+    void ResolveBoxEdges(LayoutBox& box, float containing_width)
+    {
       box.margin_top = ResolveSize(box.style.margin_top, containing_width);
       box.margin_right = ResolveSize(box.style.margin_right, containing_width);
       box.margin_bottom = ResolveSize(box.style.margin_bottom, containing_width);
@@ -818,8 +871,8 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
     // (CSS2.2 10.3.9), with the containing block width used as "available".
     // The box is positioned at its margin edge (border-box top-left at x=y=0
     // plus margins), so its four borders stay on-screen.
-    std::unique_ptr<LayoutBox> BuildInlineBlock(dom::Element& element,
-                                                float containing_width) {
+    std::unique_ptr<LayoutBox> BuildInlineBlock(dom::Element& element, float containing_width)
+    {
       auto box = std::make_unique<LayoutBox>();
       box->element = &element;
       box->style = styles.StyleFor(element);
@@ -846,10 +899,10 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       const float avail_width = box->width - box->border_left - box->border_right -
                                 box->padding_left - box->padding_right;
       std::vector<dom::Element*> absolute_children;
-      float content_height = LayoutBlockContent(*box, element, avail_width, 0, 0, avail_width,
-                                                0, kNoFloats, absolute_children);
+      float content_height = LayoutBlockContent(
+          *box, element, avail_width, 0, 0, avail_width, 0, kNoFloats, absolute_children);
       if (box->style.height.has_value() && !box->style.height.value().percent) {
-        content_height = box->style.height.value().value;  // specified height wins (10.6.2)
+        content_height = box->style.height.value().value; // specified height wins (10.6.2)
       }
       box->height = content_height + box->border_top + box->border_bottom + box->padding_top +
                     box->padding_bottom;
@@ -866,8 +919,9 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
     // |containing_width| wide.  Width is the explicit value, else shrink-to-fit
     // (CSS2.2 10.3.5).  A left float hugs the left edge; a right float the
     // right edge.  Line boxes later wrap around it.
-    std::unique_ptr<LayoutBox> BuildFloat(dom::Element& element, float containing_width,
-                                          float left_edge, float float_y) {
+    std::unique_ptr<LayoutBox>
+    BuildFloat(dom::Element& element, float containing_width, float left_edge, float float_y)
+    {
       auto box = std::make_unique<LayoutBox>();
       box->element = &element;
       box->style = styles.StyleFor(element);
@@ -893,16 +947,21 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       if (box->style.floating == style::Float::kLeft) {
         box->x = left_edge + box->margin_left - box->border_left - box->padding_left;
       } else {
-        box->x = left_edge + containing_width - box->margin_left - box->margin_right -
-                 box->width;
+        box->x = left_edge + containing_width - box->margin_left - box->margin_right - box->width;
       }
       box->y = float_y + box->margin_top - box->border_top - box->padding_top;
 
       const float avail_width = box->width - box->border_left - box->border_right -
                                 box->padding_left - box->padding_right;
       std::vector<dom::Element*> absolute_children;
-      float content_height = LayoutBlockContent(*box, element, avail_width, box->border_left,
-                                                box->border_top, avail_width, 0, kNoFloats,
+      float content_height = LayoutBlockContent(*box,
+                                                element,
+                                                avail_width,
+                                                box->border_left,
+                                                box->border_top,
+                                                avail_width,
+                                                0,
+                                                kNoFloats,
                                                 absolute_children);
       if (box->style.height.has_value() && !box->style.height.value().percent) {
         content_height = box->style.height.value().value;
@@ -916,9 +975,12 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
     // replaced <img> boxes, inline-blocks (atomic block boxes), and inline
     // element recursion.  |style|/|element| apply to |node|'s text children.
     // |containing_width| is the block container's content width.
-    void CollectInline(dom::Node& node, const style::ComputedStyle& style,
-                       const dom::Element* element, float containing_width,
-                       std::vector<InlineItem>& items) {
+    void CollectInline(dom::Node& node,
+                       const style::ComputedStyle& style,
+                       const dom::Element* element,
+                       float containing_width,
+                       std::vector<InlineItem>& items)
+    {
       if (node.node_type() == dom::NodeType::kText) {
         CollectText(static_cast<const dom::Text&>(node).data(), style, element, items);
         return;
@@ -938,8 +1000,15 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
         float h = 0;
         ComputeReplacedSize(child_style, child_element, img, containing_width, w, h);
         // A replaced <img>'s baseline is its bottom edge.
-        items.push_back(InlineItem{{}, &child_style, &child_element, /*line_break=*/false,
-                                   /*atomic=*/true, img, w, h, /*baseline_offset=*/h});
+        items.push_back(InlineItem{{},
+                                   &child_style,
+                                   &child_element,
+                                   /*line_break=*/false,
+                                   /*atomic=*/true,
+                                   img,
+                                   w,
+                                   h,
+                                   /*baseline_offset=*/h});
         return;
       }
       if (child_style.display == style::Display::kInlineBlock &&
@@ -951,9 +1020,26 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
         item.atomic = true;
         item.width = block_box->margin_left + block_box->width + block_box->margin_right;
         item.height = block_box->margin_top + block_box->height + block_box->margin_bottom;
-        item.baseline_offset = block_box->lines.empty()
-                                   ? block_box->margin_top + block_box->height
-                                   : block_box->lines.back().baseline;
+        item.baseline_offset = block_box->lines.empty() ? block_box->margin_top + block_box->height
+                                                        : block_box->lines.back().baseline;
+        item.block_box = std::move(block_box);
+        items.push_back(std::move(item));
+        return;
+      }
+      if (child_style.display == style::Display::kInlineFlex &&
+          child_style.position == style::Position::kStatic) {
+        // Inline-level flex container: an atomic inline box whose content is
+        // a flex container (handled by LayoutFlexContent inside
+        // BuildInlineBlock's LayoutBlockContent dispatch).
+        auto block_box = BuildInlineBlock(child_element, containing_width);
+        InlineItem item;
+        item.style = &child_style;
+        item.element = &child_element;
+        item.atomic = true;
+        item.width = block_box->margin_left + block_box->width + block_box->margin_right;
+        item.height = block_box->margin_top + block_box->height + block_box->margin_bottom;
+        item.baseline_offset = block_box->lines.empty() ? block_box->margin_top + block_box->height
+                                                        : block_box->lines.back().baseline;
         item.block_box = std::move(block_box);
         items.push_back(std::move(item));
         return;
@@ -973,10 +1059,22 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
     // |box|.  |parent_floats| are floats from the enclosing block formatting
     // context; they keep affecting this block's line boxes (and those of its
     // block children) until their vertical extent ends (CSS2.2 9.5).
-    float LayoutBlockContent(LayoutBox& box, dom::Element& element, float avail_width,
-                             float cb_x, float cb_y, float cb_w, float cb_h,
+    float LayoutBlockContent(LayoutBox& box,
+                             dom::Element& element,
+                             float avail_width,
+                             float cb_x,
+                             float cb_y,
+                             float cb_w,
+                             float cb_h,
                              const std::vector<const LayoutBox*>& parent_floats,
-                             std::vector<dom::Element*>& absolute_children) {
+                             std::vector<dom::Element*>& absolute_children)
+    {
+      // A flex container's children are flex items, not normal-flow content.
+      if (box.style.display == style::Display::kFlex ||
+          box.style.display == style::Display::kInlineFlex) {
+        return LayoutFlexContent(
+            box, element, avail_width, cb_x, cb_y, cb_w, cb_h, absolute_children);
+      }
       float cursor_y = 0;
       std::vector<InlineItem> inline_items;
       for (dom::Node* child : element.ChildNodes()) {
@@ -1003,26 +1101,37 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
           // float: left/right -- out of flow, placed at the block's side at
           // its source vertical position; line boxes wrap around it.
           float f_y = box.content_y() + cursor_y;
-          box.floats.push_back(
-              BuildFloat(child_element, avail_width, box.content_x(), f_y));
+          box.floats.push_back(BuildFloat(child_element, avail_width, box.content_x(), f_y));
           continue;
         }
-        if (child_style.display == style::Display::kBlock) {
+        if (child_style.display == style::Display::kBlock ||
+            child_style.display == style::Display::kFlex) {
           // Floats declared before this block in the source still affect its
           // line boxes, so pass the parent's plus this box's own floats.
           std::vector<const LayoutBox*> cur = parent_floats;
           for (const auto& f : box.floats) {
             cur.push_back(f.get());
           }
-          std::unique_ptr<LayoutBox> child_box =
-              BuildBlock(child_element, avail_width, box.content_x(), box.content_y() + cursor_y,
-                         cb_x, cb_y, cb_w, cb_h, cur);
+          std::unique_ptr<LayoutBox> child_box = BuildBlock(child_element,
+                                                            avail_width,
+                                                            box.content_x(),
+                                                            box.content_y() + cursor_y,
+                                                            cb_x,
+                                                            cb_y,
+                                                            cb_w,
+                                                            cb_h,
+                                                            cur);
           cursor_y += child_box->margin_top + child_box->height + child_box->margin_bottom;
           box.children.push_back(std::move(child_box));
         } else if (child_style.display == style::Display::kTable) {
-          std::unique_ptr<LayoutBox> child_box =
-              BuildTable(child_element, avail_width, box.content_x(), box.content_y() + cursor_y,
-                         cb_x, cb_y, cb_w, cb_h);
+          std::unique_ptr<LayoutBox> child_box = BuildTable(child_element,
+                                                            avail_width,
+                                                            box.content_x(),
+                                                            box.content_y() + cursor_y,
+                                                            cb_x,
+                                                            cb_y,
+                                                            cb_w,
+                                                            cb_h);
           cursor_y += child_box->margin_top + child_box->height + child_box->margin_bottom;
           box.children.push_back(std::move(child_box));
         } else {
@@ -1039,8 +1148,15 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
         all_floats.push_back(f.get());
       }
       float lines_height = 0;
-      LayoutLines(inline_items, avail_width, box.content_x(), box.content_y() + cursor_y,
-                  registry, box.style, all_floats, box.lines, lines_height);
+      LayoutLines(inline_items,
+                  avail_width,
+                  box.content_x(),
+                  box.content_y() + cursor_y,
+                  registry,
+                  box.style,
+                  all_floats,
+                  box.lines,
+                  lines_height);
       // Floats expand the containing block: its height reaches at least the
       // bottom of every float it holds (the float is out of flow, so its
       // height is not otherwise counted here).
@@ -1051,10 +1167,16 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       return bottom;
     }
 
-    std::unique_ptr<LayoutBox> BuildBlock(dom::Element& element, float containing_width,
-                                          float origin_x, float origin_y, float cb_x, float cb_y,
-                                          float cb_w, float cb_h,
-                                          const std::vector<const LayoutBox*>& parent_floats) {
+    std::unique_ptr<LayoutBox> BuildBlock(dom::Element& element,
+                                          float containing_width,
+                                          float origin_x,
+                                          float origin_y,
+                                          float cb_x,
+                                          float cb_y,
+                                          float cb_w,
+                                          float cb_h,
+                                          const std::vector<const LayoutBox*>& parent_floats)
+    {
       auto box = std::make_unique<LayoutBox>();
       box->element = &element;
       box->style = styles.StyleFor(element);
@@ -1065,9 +1187,8 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       if (box->style.width.has_value()) {
         content_width = ResolveSize(box->style.width.value(), containing_width);
       } else {
-        content_width = containing_width - box->margin_left - box->margin_right -
-                        box->border_left - box->border_right - box->padding_left -
-                        box->padding_right;
+        content_width = containing_width - box->margin_left - box->margin_right - box->border_left -
+                        box->border_right - box->padding_left - box->padding_right;
         if (content_width < 0) {
           content_width = 0;
         }
@@ -1103,8 +1224,14 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       }
 
       std::vector<dom::Element*> absolute_children;
-      float content_height = LayoutBlockContent(*box, element, avail_width, child_cb_x, child_cb_y,
-                                                child_cb_w, /*cb_h*/ 0.0f, parent_floats,
+      float content_height = LayoutBlockContent(*box,
+                                                element,
+                                                avail_width,
+                                                child_cb_x,
+                                                child_cb_y,
+                                                child_cb_w,
+                                                /*cb_h*/ 0.0f,
+                                                parent_floats,
                                                 absolute_children);
 
       if (box->style.height.has_value() && !box->style.height.value().percent) {
@@ -1113,15 +1240,563 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       box->height = content_height + box->border_top + box->border_bottom + box->padding_top +
                     box->padding_bottom;
 
-      const float child_cb_h =
-          box->style.position != style::Position::kStatic
-              ? box->height - box->border_top - box->border_bottom
-              : cb_h;
+      const float child_cb_h = box->style.position != style::Position::kStatic
+                                   ? box->height - box->border_top - box->border_bottom
+                                   : cb_h;
       for (dom::Element* child : absolute_children) {
         box->positioned_children.push_back(
             BuildAbsolute(*child, child_cb_x, child_cb_y, child_cb_w, child_cb_h, kNoFloats));
       }
       return box;
+    }
+
+    // Builds one flex item's box.  For a row container |forced_content_width|
+    // is the item's resolved flex main size; for a column container
+    // |forced_content_height| is the main size and the width comes from the
+    // item's own style or fills the container (stretch).  The box is laid out
+    // with its margin-box origin at (0,0); the flex algorithm translates it
+    // into place afterwards.
+    std::unique_ptr<LayoutBox> BuildFlexItem(dom::Element& element,
+                                             std::optional<float> forced_content_width,
+                                             std::optional<float> forced_content_height,
+                                             float containing_width,
+                                             float cb_x,
+                                             float cb_y,
+                                             float cb_w,
+                                             float cb_h)
+    {
+      auto box = std::make_unique<LayoutBox>();
+      box->element = &element;
+      box->style = styles.StyleFor(element);
+      ResolveBoxEdges(*box, containing_width);
+
+      float content_width;
+      if (forced_content_width.has_value()) {
+        content_width = forced_content_width.value();
+      } else if (box->style.width.has_value()) {
+        const style::SizeSpec& width = box->style.width.value();
+        content_width = ResolveSize(width, containing_width);
+      } else {
+        content_width = containing_width - box->margin_left - box->margin_right - box->border_left -
+                        box->border_right - box->padding_left - box->padding_right;
+        if (content_width < 0) {
+          content_width = 0;
+        }
+      }
+      box->width = content_width + box->border_left + box->border_right + box->padding_left +
+                   box->padding_right;
+      // Margin-box origin at (0,0); content is placed at +border+padding.
+      box->x = box->margin_left - box->border_left - box->padding_left;
+      box->y = box->margin_top - box->border_top - box->padding_top;
+
+      const float avail = box->width - box->border_left - box->border_right - box->padding_left -
+                          box->padding_right;
+      std::vector<dom::Element*> absolute_children;
+      float content_height = LayoutBlockContent(
+          *box, element, avail, cb_x, cb_y, cb_w, cb_h, kNoFloats, absolute_children);
+      if (forced_content_height.has_value()) {
+        content_height = forced_content_height.value();
+      } else if (box->style.height.has_value()) {
+        const style::SizeSpec& height = box->style.height.value();
+        if (!height.percent) {
+          content_height = std::max(content_height, height.value);
+        }
+      }
+      box->height = content_height + box->border_top + box->border_bottom + box->padding_top +
+                    box->padding_bottom;
+      const float child_cb_h = box->height - box->border_top - box->border_bottom;
+      for (dom::Element* child : absolute_children) {
+        box->positioned_children.push_back(
+            BuildAbsolute(*child, cb_x, cb_y, cb_w, child_cb_h, kNoFloats));
+      }
+      return box;
+    }
+
+    // One in-flow flex item (CSS Flexbox 1 §9.2).
+    struct FlexItemData
+    {
+      dom::Element* element = nullptr;
+      const style::ComputedStyle* style = nullptr;
+      float border_padding_main = 0;
+      float margin_main = 0;
+      float border_padding_cross = 0;
+      float margin_cross = 0;
+      float base_main = 0;     // flex base size (content-box)
+      float min_main = 0;      // clamp floor when shrinking
+      float content_main = 0;  // final content-box main size
+      float content_cross = 0; // natural content-box cross size
+      bool base_from_spec = false;
+      bool cross_auto = true; // no explicit cross-size property
+      std::unique_ptr<LayoutBox> box;
+    };
+
+    // A flex line (CSS Flexbox 1 §9.3).
+    struct FlexLineData
+    {
+      std::vector<FlexItemData*> items;
+      float outer_main_sum = 0; // outer main sizes including gaps
+    };
+
+    // Collects and measures the in-flow flex items of |element|.  |row|
+    // selects the main-axis interpretation.  Column items are laid out at
+    // their cross width up front so the measured content height can serve as
+    // the flex base size.
+    void CollectFlexItems(dom::Element& element,
+                          float avail_width,
+                          bool row,
+                          style::AlignItems align_items,
+                          float cb_x,
+                          float cb_y,
+                          float cb_w,
+                          float cb_h,
+                          std::vector<dom::Element*>& absolute_children,
+                          std::vector<FlexItemData>& items)
+    {
+      for (dom::Node* child : element.ChildNodes()) {
+        if (child->node_type() != dom::NodeType::kElement) {
+          continue;
+        }
+        dom::Element& child_el = *static_cast<dom::Element*>(child);
+        const style::ComputedStyle& s = styles.StyleFor(child_el);
+        if (s.display == style::Display::kNone) {
+          continue;
+        }
+        if (s.position == style::Position::kAbsolute || s.position == style::Position::kFixed) {
+          absolute_children.push_back(&child_el);
+          continue;
+        }
+        FlexItemData item;
+        item.element = &child_el;
+        item.style = &s;
+        LayoutBox edges;
+        edges.style = s;
+        ResolveBoxEdges(edges, avail_width);
+        if (row) {
+          item.border_padding_main =
+              edges.border_left + edges.border_right + edges.padding_left + edges.padding_right;
+          item.margin_main = edges.margin_left + edges.margin_right;
+          item.border_padding_cross =
+              edges.border_top + edges.border_bottom + edges.padding_top + edges.padding_bottom;
+          item.margin_cross = edges.margin_top + edges.margin_bottom;
+        } else {
+          item.border_padding_main =
+              edges.border_top + edges.border_bottom + edges.padding_top + edges.padding_bottom;
+          item.margin_main = edges.margin_top + edges.margin_bottom;
+          item.border_padding_cross =
+              edges.border_left + edges.border_right + edges.padding_left + edges.padding_right;
+          item.margin_cross = edges.margin_left + edges.margin_right;
+        }
+        // Flex base size: flex-basis, else the main-size property, else the
+        // item's intrinsic content size.  Percentages resolve against the
+        // container's content width.
+        const style::SizeSpec* main_spec = nullptr;
+        if (s.flex_basis.has_value()) {
+          main_spec = &s.flex_basis.value();
+        } else if (row ? s.width.has_value() : s.height.has_value()) {
+          main_spec = row ? &s.width.value() : &s.height.value();
+        }
+        if (main_spec != nullptr) {
+          item.base_main = ResolveSize(*main_spec, avail_width);
+          item.base_from_spec = true;
+        } else if (row) {
+          item.base_main = MeasureContent(child_el, styles, registry).max;
+        }
+        if (row) {
+          item.min_main = MeasureContent(child_el, styles, registry).min;
+        }
+        item.cross_auto = !(row ? s.height.has_value() : s.width.has_value());
+        items.push_back(std::move(item));
+      }
+
+      // For a column, the base main size (height) is unknown until the item
+      // is laid out at its cross width: build the boxes now and measure.
+      if (!row) {
+        for (FlexItemData& item : items) {
+          float cross_width;
+          if (item.style->width.has_value()) {
+            cross_width = ResolveSize(item.style->width.value(), avail_width);
+          } else if (align_items == style::AlignItems::kStretch) {
+            cross_width = avail_width - item.margin_cross - item.border_padding_cross;
+            if (cross_width < 0) {
+              cross_width = 0;
+            }
+          } else {
+            cross_width = MeasureContent(*item.element, styles, registry).max;
+          }
+          item.box = BuildFlexItem(
+              *item.element, cross_width, std::nullopt, avail_width, cb_x, cb_y, cb_w, cb_h);
+          if (!item.base_from_spec) {
+            item.base_main = item.box->content_height();
+          }
+          item.min_main = 0;
+          item.content_cross = item.box->content_width();
+        }
+      }
+    }
+
+    // Collects items into flex lines, wrapping when the container main size
+    // is definite (CSS Flexbox 1 §9.3).
+    static void PackFlexLines(const style::ComputedStyle& cs,
+                              bool main_definite,
+                              float container_main,
+                              float main_gap,
+                              std::vector<FlexItemData>& items,
+                              std::vector<FlexLineData>& lines)
+    {
+      FlexLineData current;
+      for (FlexItemData& item : items) {
+        const float outer = item.base_main + item.border_padding_main + item.margin_main;
+        if (cs.flex_wrap != style::FlexWrap::kNoWrap && main_definite && !current.items.empty() &&
+            current.outer_main_sum + main_gap + outer > container_main) {
+          lines.push_back(std::move(current));
+          current = FlexLineData{};
+        }
+        if (!current.items.empty()) {
+          current.outer_main_sum += main_gap;
+        }
+        current.outer_main_sum += outer;
+        current.items.push_back(&item);
+      }
+      if (!current.items.empty()) {
+        lines.push_back(std::move(current));
+      }
+    }
+
+    // Resolves each item's flexible main size on every line (CSS Flexbox 1
+    // §9.7).  Grow distributes positive free space by flex-grow; shrink takes
+    // it back proportionally to flex-shrink × content-box flex base size,
+    // clamped at the item's min-content main size.
+    static void
+    ResolveFlexLengths(bool main_definite, float container_main, std::vector<FlexLineData>& lines)
+    {
+      for (FlexLineData& line : lines) {
+        for (FlexItemData* it : line.items) {
+          it->content_main = it->base_main;
+        }
+        if (!main_definite) {
+          continue;
+        }
+        const float free = container_main - line.outer_main_sum;
+        if (free > 0) {
+          float total_grow = 0;
+          for (const FlexItemData* it : line.items) {
+            total_grow += it->style->flex_grow;
+          }
+          if (total_grow > 0) {
+            for (FlexItemData* it : line.items) {
+              it->content_main += free * it->style->flex_grow / total_grow;
+            }
+          }
+        } else if (free < 0) {
+          float total_shrink = 0;
+          for (const FlexItemData* it : line.items) {
+            total_shrink += it->style->flex_shrink * it->base_main;
+          }
+          if (total_shrink > 0) {
+            for (FlexItemData* it : line.items) {
+              const float weight = it->style->flex_shrink * it->base_main;
+              float final = it->base_main - (-free) * weight / total_shrink;
+              if (it->min_main > 0 && final < it->min_main) {
+                final = it->min_main;
+              }
+              if (final < 0) {
+                final = 0;
+              }
+              it->content_main = final;
+            }
+          }
+        }
+      }
+    }
+
+    // Lays out |element|'s children as flex items (CSS Flexbox 1 §9), into
+    // |box| (whose border-box width is already set).  Supports
+    // flex-direction row/column (and reverses), flex-wrap, flex-grow/shrink/
+    // basis, justify-content, align-items, align-content (with a definite
+    // container cross size) and row/column gap.  Returns the container's
+    // content height.
+    float LayoutFlexContent(LayoutBox& box,
+                            dom::Element& element,
+                            float avail_width,
+                            float cb_x,
+                            float cb_y,
+                            float cb_w,
+                            float cb_h,
+                            std::vector<dom::Element*>& absolute_children)
+    {
+      const style::ComputedStyle& cs = box.style;
+      const bool row = cs.flex_direction == style::FlexDirection::kRow ||
+                       cs.flex_direction == style::FlexDirection::kRowReverse;
+      const bool reverse_main = cs.flex_direction == style::FlexDirection::kRowReverse ||
+                                cs.flex_direction == style::FlexDirection::kColumnReverse;
+      const bool reverse_cross = cs.flex_wrap == style::FlexWrap::kWrapReverse;
+      const float main_gap = row ? cs.column_gap : cs.row_gap;
+      const float cross_gap = row ? cs.row_gap : cs.column_gap;
+
+      // Container main size along the item-flow axis.  For a row this is the
+      // (definite) content width; for a column it is the specified content
+      // height, else auto (content-determined).  Percent heights are not yet
+      // supported and fall back to auto.
+      float container_main = avail_width;
+      if (!row && cs.height.has_value()) {
+        const style::SizeSpec& height = cs.height.value();
+        container_main = height.percent ? 0.0f : height.value;
+      }
+      const bool main_definite = row || cs.height.has_value();
+      // Container cross size: for a column it is the (definite) content
+      // width; for a row it is the specified content height, else auto.
+      float container_cross = avail_width;
+      if (row && cs.height.has_value()) {
+        const style::SizeSpec& height = cs.height.value();
+        container_cross = height.percent ? 0.0f : height.value;
+      }
+      const bool cross_definite = !row || cs.height.has_value();
+
+      // ---- Collect and measure flex items (§9.2) ----
+      std::vector<FlexItemData> items;
+      CollectFlexItems(element,
+                       avail_width,
+                       row,
+                       cs.align_items,
+                       cb_x,
+                       cb_y,
+                       cb_w,
+                       cb_h,
+                       absolute_children,
+                       items);
+
+      // ---- Collect items into lines (§9.3) ----
+      std::vector<FlexLineData> lines;
+      PackFlexLines(cs, main_definite, container_main, main_gap, items, lines);
+      if (lines.empty()) {
+        return 0.0f;
+      }
+
+      // ---- Resolve flexible lengths (§9.7) ----
+      ResolveFlexLengths(main_definite, container_main, lines);
+
+      // ---- Build row item boxes at their final main size; fix column
+      // heights to their final main size ----
+      for (FlexItemData& item : items) {
+        if (row) {
+          item.box = BuildFlexItem(
+              *item.element, item.content_main, std::nullopt, avail_width, cb_x, cb_y, cb_w, cb_h);
+          item.content_cross = item.box->content_height();
+        } else {
+          item.box->height =
+              item.content_main + item.border_padding_main; // main == height for column
+        }
+      }
+
+      // ---- Cross sizes of lines and items (§9.6) ----
+      std::vector<float> line_cross(lines.size(), 0.0f);
+      for (std::size_t li = 0; li < lines.size(); ++li) {
+        for (const FlexItemData* it : lines[li].items) {
+          const float outer_cross = it->content_cross + it->border_padding_cross + it->margin_cross;
+          line_cross[li] = std::max(line_cross[li], outer_cross);
+        }
+      }
+      // A single line with a definite container cross size and the default
+      // align-content: stretch grows to fill the container, so align-items
+      // (center / flex-end / stretch) positions items within the full cross
+      // size rather than the natural content height.
+      if (cross_definite && lines.size() == 1 &&
+          cs.align_content == style::AlignContent::kStretch) {
+        line_cross[0] = container_cross;
+      }
+
+      float total_lines_cross = 0;
+      for (std::size_t li = 0; li < lines.size(); ++li) {
+        total_lines_cross += line_cross[li];
+        if (li + 1 < lines.size()) {
+          total_lines_cross += cross_gap;
+        }
+      }
+
+      // Line cross positions.  Lines always stack along the cross axis; a
+      // definite container cross size with multiple lines lets align-content
+      // distribute the extra space (or stretch the lines).
+      std::vector<float> line_offsets(lines.size(), 0.0f);
+      float leading = 0;
+      float gap = cross_gap;
+      // With a definite container cross size and multiple lines,
+      // align-content distributes the positive extra space.  With no (or
+      // negative) extra space every alignment packs toward cross-start
+      // (CSS Flexbox 1 §8.4), so the switch is skipped entirely.
+      const float align_extra = cross_definite ? container_cross - total_lines_cross : 0.0f;
+      if (align_extra > 0) {
+        switch (cs.align_content) {
+        case style::AlignContent::kStretch:
+          if (align_extra > 0) {
+            const float share = align_extra / static_cast<float>(lines.size());
+            for (float& lc : line_cross) {
+              lc += share;
+            }
+          }
+          break;
+        case style::AlignContent::kFlexEnd:
+          leading = align_extra;
+          break;
+        case style::AlignContent::kCenter:
+          leading = align_extra / 2.0f;
+          break;
+        case style::AlignContent::kSpaceBetween:
+          gap = cross_gap + align_extra / static_cast<float>(lines.size() - 1);
+          break;
+        case style::AlignContent::kSpaceAround:
+          gap = cross_gap + align_extra / static_cast<float>(lines.size());
+          leading = (align_extra / static_cast<float>(lines.size())) / 2.0f;
+          break;
+        case style::AlignContent::kFlexStart:
+          break;
+        }
+      }
+      if (reverse_cross) {
+        // Wrap-reverse stacks the lines from the cross end.
+        float cursor = cross_definite ? container_cross : total_lines_cross;
+        for (std::size_t li = 0; li < lines.size(); ++li) {
+          cursor -= line_cross[li];
+          line_offsets[li] = cursor;
+          cursor -= gap;
+        }
+      } else {
+        float cursor = leading;
+        for (std::size_t li = 0; li < lines.size(); ++li) {
+          line_offsets[li] = cursor;
+          cursor += line_cross[li] + gap;
+        }
+      }
+
+      // Baseline of a laid-out box relative to its border-box top.
+      auto baseline_of = [](const LayoutBox& b) -> float {
+        if (b.lines.empty()) {
+          return b.height;
+        }
+        return b.lines.back().baseline - b.y;
+      };
+
+      // ---- Place items (§9.4 / §9.5) ----
+      for (std::size_t li = 0; li < lines.size(); ++li) {
+        const FlexLineData& line = lines[li];
+        const int n = static_cast<int>(line.items.size());
+        // Final free space along the main axis for this line.
+        float content_sum = 0;
+        for (const FlexItemData* it : line.items) {
+          content_sum += it->content_main + it->border_padding_main + it->margin_main;
+        }
+        const float gaps = main_gap * static_cast<float>(std::max(0, n - 1));
+        const float free = container_main - (content_sum + gaps);
+        float main_cursor = 0;
+        float extra_gap = 0;
+        // With negative free space the line overflows the container; every
+        // justify-content value then packs items toward main-start with
+        // overflow at main-end (CSS Flexbox 1 §8.2), so the distribution is
+        // only applied when there is space to distribute.
+        if (free > 0) {
+          switch (cs.justify_content) {
+          case style::JustifyContent::kFlexEnd:
+            main_cursor = free;
+            break;
+          case style::JustifyContent::kCenter:
+            main_cursor = free / 2.0f;
+            break;
+          case style::JustifyContent::kSpaceBetween:
+            if (n > 1) {
+              extra_gap = free / static_cast<float>(n - 1);
+            }
+            break;
+          case style::JustifyContent::kSpaceAround:
+            extra_gap = free / static_cast<float>(n);
+            main_cursor = extra_gap / 2.0f;
+            break;
+          case style::JustifyContent::kSpaceEvenly:
+            extra_gap = free / static_cast<float>(n + 1);
+            main_cursor = extra_gap;
+            break;
+          case style::JustifyContent::kFlexStart:
+            break;
+          }
+        }
+
+        float line_baseline = 0;
+        if (cs.align_items == style::AlignItems::kBaseline) {
+          for (const FlexItemData* it : line.items) {
+            line_baseline = std::max(line_baseline, baseline_of(*it->box));
+          }
+        }
+
+        for (FlexItemData* it : line.items) {
+          // Cross size: stretch items fill the line.
+          if (cs.align_items == style::AlignItems::kStretch && it->cross_auto) {
+            const float target = line_cross[li] - it->margin_cross;
+            if (row) {
+              it->box->height = std::max(it->box->height, target);
+              it->content_cross = it->box->content_height();
+            } else {
+              it->box->width = std::max(it->box->width, target);
+              it->content_cross = it->box->content_width();
+            }
+          }
+
+          const float outer_cross = it->content_cross + it->border_padding_cross + it->margin_cross;
+          const float outer_main = it->content_main + it->border_padding_main + it->margin_main;
+
+          // Cross offset within the line.
+          float cross_pos = 0;
+          switch (cs.align_items) {
+          case style::AlignItems::kFlexEnd:
+            cross_pos = line_cross[li] - outer_cross;
+            break;
+          case style::AlignItems::kCenter:
+            cross_pos = (line_cross[li] - outer_cross) / 2.0f;
+            break;
+          case style::AlignItems::kBaseline:
+            cross_pos = line_baseline - baseline_of(*it->box);
+            break;
+          case style::AlignItems::kStretch:
+          case style::AlignItems::kFlexStart:
+            break;
+          }
+
+          // Margin-box origin in container content coordinates.
+          float main_pos = main_cursor;
+          if (reverse_main) {
+            main_pos = container_main - main_cursor - outer_main;
+          }
+          float cross_pos_abs = line_offsets[li] + cross_pos;
+
+          float dx = main_pos;
+          float dy = cross_pos_abs;
+          if (!row) {
+            std::swap(dx, dy);
+          }
+          TranslateBox(*it->box, box.content_x() + dx, box.content_y() + dy);
+          box.children.push_back(std::move(it->box));
+
+          main_cursor += outer_main + main_gap + extra_gap;
+        }
+      }
+
+      // Container content height: for a row it is the stacked cross sizes of
+      // the lines; for a column it is the tallest line's main extent.
+      float content_height = 0;
+      if (row) {
+        content_height = total_lines_cross;
+        if (cross_definite) {
+          content_height = std::max(content_height, container_cross);
+        }
+      } else {
+        for (const FlexLineData& line : lines) {
+          float extent = 0;
+          for (const FlexItemData* it : line.items) {
+            extent += it->content_main + it->border_padding_main + it->margin_main;
+          }
+          extent +=
+              main_gap * static_cast<float>(std::max(0, static_cast<int>(line.items.size()) - 1));
+          content_height = std::max(content_height, extent);
+        }
+      }
+      return content_height;
     }
 
     // Lays out an absolutely positioned element (out of flow) against its
@@ -1130,9 +1805,13 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
     // bottom/right offsets) is known.  Width follows CSS2.2 §10.3.7: the
     // shrink-to-fit min(max(min-content, available), preferred) when auto, or
     // the left/right constraint equation when both insets are given.
-    std::unique_ptr<LayoutBox> BuildAbsolute(dom::Element& element, float cb_x, float cb_y,
-                                             float cb_w, float cb_h,
-                                             const std::vector<const LayoutBox*>& parent_floats) {
+    std::unique_ptr<LayoutBox> BuildAbsolute(dom::Element& element,
+                                             float cb_x,
+                                             float cb_y,
+                                             float cb_w,
+                                             float cb_h,
+                                             const std::vector<const LayoutBox*>& parent_floats)
+    {
       auto box = std::make_unique<LayoutBox>();
       box->element = &element;
       box->style = styles.StyleFor(element);
@@ -1172,9 +1851,15 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
                                 box->padding_left - box->padding_right;
 
       std::vector<dom::Element*> absolute_children;
-      float content_height = LayoutBlockContent(*box, element, avail_width, box->border_left,
-                                                box->border_top, avail_width, /*cb_h*/ 0.0f,
-                                                parent_floats, absolute_children);
+      float content_height = LayoutBlockContent(*box,
+                                                element,
+                                                avail_width,
+                                                box->border_left,
+                                                box->border_top,
+                                                avail_width,
+                                                /*cb_h*/ 0.0f,
+                                                parent_floats,
+                                                absolute_children);
       if (box->style.height.has_value() && !box->style.height.value().percent) {
         content_height = std::max(content_height, box->style.height.value().value);
       }
@@ -1184,9 +1869,8 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       // Absolutely positioned descendants use this box's padding box (local).
       const float child_cb_h = box->height - box->border_top - box->border_bottom;
       for (dom::Element* child : absolute_children) {
-        box->positioned_children.push_back(
-            BuildAbsolute(*child, box->border_left, box->border_top, avail_width, child_cb_h,
-                          parent_floats));
+        box->positioned_children.push_back(BuildAbsolute(
+            *child, box->border_left, box->border_top, avail_width, child_cb_h, parent_floats));
       }
 
       float x = cb_x;
@@ -1201,15 +1885,16 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       } else if (!box->style.bottom_auto) {
         y = cb_y + cb_h - box->style.bottom - box->height;
       }
-      TranslateBox(*box, x, y);  // content was laid out at the local (0,0)
+      TranslateBox(*box, x, y); // content was laid out at the local (0,0)
       return box;
     }
 
     // Lays out a table cell's content into a box of the given content width.
     // The box is positioned at (0,0); the caller translates it to its grid
     // slot.  Margins are ignored (table cells have no margin in CSS).
-    std::unique_ptr<LayoutBox> LayoutCell(dom::Element& element, float content_width, float cb_x,
-                                          float cb_y, float cb_w, float cb_h) {
+    std::unique_ptr<LayoutBox> LayoutCell(
+        dom::Element& element, float content_width, float cb_x, float cb_y, float cb_w, float cb_h)
+    {
       auto box = std::make_unique<LayoutBox>();
       box->element = &element;
       box->style = styles.StyleFor(element);
@@ -1219,9 +1904,8 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       const float avail_width = box->width - box->border_left - box->border_right -
                                 box->padding_left - box->padding_right;
       std::vector<dom::Element*> absolute_children;
-      const float content_height =
-          LayoutBlockContent(*box, element, avail_width, cb_x, cb_y, cb_w, cb_h, kNoFloats,
-                             absolute_children);
+      const float content_height = LayoutBlockContent(
+          *box, element, avail_width, cb_x, cb_y, cb_w, cb_h, kNoFloats, absolute_children);
       box->height = content_height + box->border_top + box->border_bottom + box->padding_top +
                     box->padding_bottom;
       for (dom::Element* child : absolute_children) {
@@ -1231,9 +1915,15 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       return box;
     }
 
-    std::unique_ptr<LayoutBox> BuildTable(dom::Element& element, float containing_width,
-                                          float origin_x, float origin_y, float cb_x, float cb_y,
-                                          float cb_w, float cb_h) {
+    std::unique_ptr<LayoutBox> BuildTable(dom::Element& element,
+                                          float containing_width,
+                                          float origin_x,
+                                          float origin_y,
+                                          float cb_x,
+                                          float cb_y,
+                                          float cb_w,
+                                          float cb_h)
+    {
       auto table = std::make_unique<LayoutBox>();
       table->element = &element;
       table->style = styles.StyleFor(element);
@@ -1263,19 +1953,21 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       // grid honoring colspan/rowspan.  Row-group boundaries are kept so a
       // rowspan="0" cell spans to the end of its own group (thead/tbody/tfoot,
       // or the implicit group of consecutive anonymous <tr>).
-      struct RowInfo {
+      struct RowInfo
+      {
         dom::Element* element = nullptr;
         style::ComputedStyle style;
       };
-      struct RowGroup {
-        int start = 0;  // inclusive first row index
-        int end = 0;    // exclusive last row index
+      struct RowGroup
+      {
+        int start = 0; // inclusive first row index
+        int end = 0;   // exclusive last row index
       };
       std::vector<RowInfo> rows;
       std::vector<RowGroup> row_groups;
       std::vector<CellInfo> cells;
-      std::vector<std::vector<int>> grid;  // grid[r][c] = cell index, or -1
-      int implicit_group_start_ = -1;  // first row of the current implicit group
+      std::vector<std::vector<int>> grid; // grid[r][c] = cell index, or -1
+      int implicit_group_start_ = -1;     // first row of the current implicit group
 
       auto flush_implicit_group = [&](int next_row) {
         if (implicit_group_start_ >= 0 && implicit_group_start_ < next_row) {
@@ -1394,14 +2086,13 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
         }
       }
 
-      const int ncols = grid.empty()
-                            ? 0
-                            : static_cast<int>(std::max_element(
-                                                  grid.begin(), grid.end(),
-                                                  [](const auto& a, const auto& b) {
-                                                    return a.size() < b.size();
-                                                  })
-                                                  ->size());
+      const int ncols =
+          grid.empty()
+              ? 0
+              : static_cast<int>(
+                    std::max_element(grid.begin(), grid.end(), [](const auto& a, const auto& b) {
+                      return a.size() < b.size();
+                    })->size());
 
       // Intrinsic widths for auto column sizing.
       for (CellInfo& cell : cells) {
@@ -1414,8 +2105,8 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
 
       // Lay out each cell (at a local origin) and derive row heights.
       for (CellInfo& cell : cells) {
-        cell.box = LayoutCell(*cell.element, SumColumns(col_widths, cell.col, cell.colspan),
-                              cb_x, cb_y, cb_w, cb_h);
+        cell.box = LayoutCell(
+            *cell.element, SumColumns(col_widths, cell.col, cell.colspan), cb_x, cb_y, cb_w, cb_h);
       }
 
       std::vector<float> row_heights(rows.size(), 0.0f);
@@ -1433,12 +2124,13 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
         }
         float spanned = 0;
         for (int r = cell.row;
-             r < cell.row + cell.rowspan && r < static_cast<int>(row_heights.size()); ++r) {
+             r < cell.row + cell.rowspan && r < static_cast<int>(row_heights.size());
+             ++r) {
           spanned += row_heights[static_cast<std::size_t>(r)];
         }
         if (cell.box->height > spanned) {
-          const int last = std::min(cell.row + cell.rowspan - 1,
-                                    static_cast<int>(row_heights.size()) - 1);
+          const int last =
+              std::min(cell.row + cell.rowspan - 1, static_cast<int>(row_heights.size()) - 1);
           row_heights[static_cast<std::size_t>(last)] += cell.box->height - spanned;
         }
       }
@@ -1477,8 +2169,8 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
         y += row_heights[r];
       }
 
-      table->height = y + table->border_top + table->border_bottom + table->padding_top +
-                      table->padding_bottom;
+      table->height =
+          y + table->border_top + table->border_bottom + table->padding_top + table->padding_bottom;
       return table;
     }
   };
@@ -1488,8 +2180,15 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
     return nullptr;
   }
   Builder builder{styles_, registry_, images_};
-  return builder.BuildBlock(*root, viewport_width, 0, 0, /*cb=initial containing block*/
-                            0, 0, viewport_width, 0, kNoFloats);
+  return builder.BuildBlock(*root,
+                            viewport_width,
+                            0,
+                            0, /*cb=initial containing block*/
+                            0,
+                            0,
+                            viewport_width,
+                            0,
+                            kNoFloats);
 }
 
-}  // namespace neko::layout
+} // namespace neko::layout

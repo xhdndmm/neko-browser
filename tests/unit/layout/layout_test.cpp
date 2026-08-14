@@ -1,28 +1,29 @@
-#include "neko/layout/layout_tree.h"
-
-#include <memory>
-#include <optional>
-#include <string>
-#include <string_view>
-
 #include "neko/dom/query.h"
 #include "neko/graphics/font_registry.h"
 #include "neko/graphics/system_fonts.h"
 #include "neko/html/parser.h"
 #include "neko/image/image.h"
+#include "neko/layout/layout_tree.h"
 #include "neko/style/style_engine.h"
+
 #include <gtest/gtest.h>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
 
 namespace neko::layout {
 namespace {
 
-struct Page {
+struct Page
+{
   std::unique_ptr<dom::Document> doc;
   style::StyleEngine styles;
   std::unique_ptr<LayoutBox> root;
 };
 
-Page Build(std::string_view html, float viewport = 800.0f) {
+Page Build(std::string_view html, float viewport = 800.0f)
+{
   Page page;
   page.doc = html::Parser(html).Parse();
   page.styles.ApplyStyles(*page.doc);
@@ -31,8 +32,8 @@ Page Build(std::string_view html, float viewport = 800.0f) {
   return page;
 }
 
-const LayoutBox* FindBox(const LayoutBox& box, std::string_view selector,
-                         dom::Document& doc) {
+const LayoutBox* FindBox(const LayoutBox& box, std::string_view selector, dom::Document& doc)
+{
   dom::Element* element = dom::QuerySelector(doc, selector);
   if (element == nullptr) {
     return nullptr;
@@ -51,8 +52,9 @@ const LayoutBox* FindBox(const LayoutBox& box, std::string_view selector,
 
 // Finds the first inline-block box within |box| (via line box block_boxes)
 // whose element matches |element|; surfaces the containing InlineBox too.
-const LayoutBox* FindInlineBlock(const LayoutBox& box, const dom::Element* element,
-                                 const InlineBox*& holder) {
+const LayoutBox*
+FindInlineBlock(const LayoutBox& box, const dom::Element* element, const InlineBox*& holder)
+{
   for (const Line& line : box.lines) {
     for (const InlineBox& ib : line.boxes) {
       if (ib.block_box != nullptr && ib.block_box->element == element) {
@@ -74,7 +76,8 @@ const LayoutBox* FindInlineBlock(const LayoutBox& box, const dom::Element* eleme
   return nullptr;
 }
 
-TEST(LayoutTest, BlockFillsContainingBlock) {
+TEST(LayoutTest, BlockFillsContainingBlock)
+{
   Page page = Build("<body><div>x</div></body>");
   ASSERT_NE(page.root, nullptr);
 
@@ -91,7 +94,8 @@ TEST(LayoutTest, BlockFillsContainingBlock) {
   EXPECT_FLOAT_EQ(div->width, 784.0f);
 }
 
-TEST(LayoutTest, VerticalStacking) {
+TEST(LayoutTest, VerticalStacking)
+{
   Page page = Build("<body><div>one</div><div>two</div></body>");
   const LayoutBox* body = FindBox(*page.root, "body", *page.doc);
   ASSERT_NE(body, nullptr);
@@ -103,27 +107,29 @@ TEST(LayoutTest, VerticalStacking) {
   EXPECT_FLOAT_EQ(body->y + body->height, second->y + second->height);
 }
 
-TEST(LayoutTest, BoxModelWithPaddingBorderMargin) {
-  Page page = Build(
-      "<body><div style=\"width: 200px; padding: 10px; border: 2px solid; "
-      "margin: 5px\">x</div></body>");
+TEST(LayoutTest, BoxModelWithPaddingBorderMargin)
+{
+  Page page = Build("<body><div style=\"width: 200px; padding: 10px; border: 2px solid; "
+                    "margin: 5px\">x</div></body>");
   const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
   ASSERT_NE(div, nullptr);
-  EXPECT_FLOAT_EQ(div->width, 224.0f);   // 200 + 2*10 + 2*2
+  EXPECT_FLOAT_EQ(div->width, 224.0f); // 200 + 2*10 + 2*2
   EXPECT_FLOAT_EQ(div->content_width(), 200.0f);
   EXPECT_FLOAT_EQ(div->margin_top, 5.0f);
   EXPECT_FLOAT_EQ(div->border_top, 2.0f);
   EXPECT_FLOAT_EQ(div->padding_top, 10.0f);
 }
 
-TEST(LayoutTest, ExplicitHeight) {
+TEST(LayoutTest, ExplicitHeight)
+{
   Page page = Build("<body><div style=\"height: 100px\">x</div></body>");
   const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
   ASSERT_NE(div, nullptr);
   EXPECT_FLOAT_EQ(div->height, 100.0f);
 }
 
-TEST(LayoutTest, PercentWidth) {
+TEST(LayoutTest, PercentWidth)
+{
   Page page = Build("<body><div style=\"width: 50%\">x</div></body>");
   const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
   ASSERT_NE(div, nullptr);
@@ -131,7 +137,8 @@ TEST(LayoutTest, PercentWidth) {
   EXPECT_FLOAT_EQ(div->width, 392.0f);
 }
 
-TEST(LayoutTest, InlineTextCreatesLines) {
+TEST(LayoutTest, InlineTextCreatesLines)
+{
   Page page = Build("<body><p>hello world</p></body>");
   const LayoutBox* p = FindBox(*page.root, "p", *page.doc);
   ASSERT_NE(p, nullptr);
@@ -142,17 +149,18 @@ TEST(LayoutTest, InlineTextCreatesLines) {
   EXPECT_FLOAT_EQ(p->lines[0].height, 19.2f);
 }
 
-TEST(LayoutTest, TextWrapsAtWordBoundary) {
+TEST(LayoutTest, TextWrapsAtWordBoundary)
+{
   // 100px content width fits one 16px-wide word per line at most.
-  Page page = Build(
-      "<body><div style=\"width: 100px\">one two three four</div></body>");
+  Page page = Build("<body><div style=\"width: 100px\">one two three four</div></body>");
   const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
   ASSERT_NE(div, nullptr);
-  ASSERT_GE(div->lines.size(), 2u);  // wrapped into multiple lines
+  ASSERT_GE(div->lines.size(), 2u); // wrapped into multiple lines
   EXPECT_LE(div->lines[0].runs.size(), 2u);
 }
 
-TEST(LayoutTest, WrappedHeadingLinesDoNotOverlap) {
+TEST(LayoutTest, WrappedHeadingLinesDoNotOverlap)
+{
   // h1 is 2em = 32px; its line height must scale with the font size so that
   // wrapped lines stack without overlapping. (Regression: line-height was a
   // fixed 19.2px, so the 32px glyphs overlapped vertically.)
@@ -161,12 +169,12 @@ TEST(LayoutTest, WrappedHeadingLinesDoNotOverlap) {
   ASSERT_NE(h1, nullptr);
   ASSERT_GE(h1->lines.size(), 2u);
   EXPECT_FLOAT_EQ(h1->lines[0].height, 38.4f);
-  const float first_bottom =
-      h1->lines[0].runs[0].y + h1->lines[0].runs[0].font_size;
+  const float first_bottom = h1->lines[0].runs[0].y + h1->lines[0].runs[0].font_size;
   EXPECT_GE(h1->lines[1].runs[0].y, first_bottom);
 }
 
-TEST(LayoutTest, DisplayNoneSkipped) {
+TEST(LayoutTest, DisplayNoneSkipped)
+{
   Page page = Build("<body><div>visible</div><div style=\"display:none\">hidden</div></body>");
   const LayoutBox* body = FindBox(*page.root, "body", *page.doc);
   ASSERT_NE(body, nullptr);
@@ -174,7 +182,8 @@ TEST(LayoutTest, DisplayNoneSkipped) {
   EXPECT_EQ(body->children[0]->element->tag_name(), "div");
 }
 
-TEST(LayoutTest, InlineElementStyleAppliesToText) {
+TEST(LayoutTest, InlineElementStyleAppliesToText)
+{
   Page page = Build("<body><p>a <span style=\"color: #ff0000\">b</span> c</p></body>");
   const LayoutBox* p = FindBox(*page.root, "p", *page.doc);
   ASSERT_NE(p, nullptr);
@@ -191,14 +200,16 @@ TEST(LayoutTest, InlineElementStyleAppliesToText) {
   EXPECT_TRUE(found_red);
 }
 
-TEST(LayoutTest, RelativePositionShift) {
+TEST(LayoutTest, RelativePositionShift)
+{
   Page page = Build("<body><div style=\"position: relative; top: 10px; left: 5px\">x</div></body>");
   const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
   ASSERT_NE(div, nullptr);
-  EXPECT_FLOAT_EQ(div->y, 8.0f + 10.0f);  // body content y (8) + offset
+  EXPECT_FLOAT_EQ(div->y, 8.0f + 10.0f); // body content y (8) + offset
 }
 
-TEST(LayoutTest, BrForcesLineBreak) {
+TEST(LayoutTest, BrForcesLineBreak)
+{
   Page page = Build("<body><p>one<br>two</p></body>");
   const LayoutBox* p = FindBox(*page.root, "p", *page.doc);
   ASSERT_NE(p, nullptr);
@@ -209,7 +220,8 @@ TEST(LayoutTest, BrForcesLineBreak) {
   EXPECT_GT(p->lines[1].runs[0].y, p->lines[0].runs[0].y);
 }
 
-TEST(LayoutTest, ConsecutiveBrProduceEmptyLines) {
+TEST(LayoutTest, ConsecutiveBrProduceEmptyLines)
+{
   Page page = Build("<body><p>a<br><br>b</p></body>");
   const LayoutBox* p = FindBox(*page.root, "p", *page.doc);
   ASSERT_NE(p, nullptr);
@@ -223,17 +235,19 @@ TEST(LayoutTest, ConsecutiveBrProduceEmptyLines) {
   EXPECT_GT(p->height, p->lines[0].height + p->lines[1].height);
 }
 
-TEST(LayoutTest, BrInsideInlineElement) {
+TEST(LayoutTest, BrInsideInlineElement)
+{
   // <br> nested in an inline element still breaks the line.
   Page page = Build("<body><p>a<span>b<br>c</span>d</p></body>");
   const LayoutBox* p = FindBox(*page.root, "p", *page.doc);
   ASSERT_NE(p, nullptr);
   ASSERT_GE(p->lines.size(), 2u);
-  EXPECT_EQ(p->lines[0].runs.size(), 2u);  // "a" + "b"
-  EXPECT_EQ(p->lines[1].runs.size(), 2u);  // "c" + "d"
+  EXPECT_EQ(p->lines[0].runs.size(), 2u); // "a" + "b"
+  EXPECT_EQ(p->lines[1].runs.size(), 2u); // "c" + "d"
 }
 
-TEST(LayoutTest, BoldAndItalicReachTextRuns) {
+TEST(LayoutTest, BoldAndItalicReachTextRuns)
+{
   Page page = Build("<body><p><b>bold</b> <i>italic</i> <em>em</em> plain</p></body>");
   const LayoutBox* p = FindBox(*page.root, "p", *page.doc);
   ASSERT_NE(p, nullptr);
@@ -260,15 +274,21 @@ TEST(LayoutTest, BoldAndItalicReachTextRuns) {
   EXPECT_TRUE(saw_plain);
 }
 
-TEST(LayoutTest, ImageBoxSizing) {
+TEST(LayoutTest, ImageBoxSizing)
+{
   // Fake provider with a 100x50 intrinsic image.
-  struct FakeProvider : public layout::ImageProvider {
+  struct FakeProvider : public layout::ImageProvider
+  {
     image::Image img;
-    FakeProvider() {
+    FakeProvider()
+    {
       img.width = 100;
       img.height = 50;
     }
-    const image::Image* Find(const dom::Element&) const override { return &img; }
+    const image::Image* Find(const dom::Element&) const override
+    {
+      return &img;
+    }
   };
 
   const auto build = [](const layout::ImageProvider* provider, std::string_view html) {
@@ -337,15 +357,21 @@ TEST(LayoutTest, ImageBoxSizing) {
   }
 }
 
-TEST(LayoutTest, InlineImageFlowsWithText) {
+TEST(LayoutTest, InlineImageFlowsWithText)
+{
   // <img> between text runs must share a line (no forced break).
-  struct FakeProvider : public layout::ImageProvider {
+  struct FakeProvider : public layout::ImageProvider
+  {
     image::Image img;
-    FakeProvider() {
+    FakeProvider()
+    {
       img.width = 20;
       img.height = 20;
     }
-    const image::Image* Find(const dom::Element&) const override { return &img; }
+    const image::Image* Find(const dom::Element&) const override
+    {
+      return &img;
+    }
   };
   FakeProvider provider;
   auto doc = html::Parser("<body><p>a<img>b</p></body>").Parse();
@@ -369,17 +395,23 @@ TEST(LayoutTest, InlineImageFlowsWithText) {
   EXPECT_LT(img.x, p->lines[0].runs.back().x);
 }
 
-TEST(LayoutTest, ImageInTableCellTranslatedToSlot) {
+TEST(LayoutTest, ImageInTableCellTranslatedToSlot)
+{
   // Regression: an <img> inside a table cell is laid out at a local origin and
   // then translated to its grid slot; the InlineBox must move with the cell
   // (it used to stay at the local y, overlapping earlier content).
-  struct FakeProvider : public layout::ImageProvider {
+  struct FakeProvider : public layout::ImageProvider
+  {
     image::Image img;
-    FakeProvider() {
+    FakeProvider()
+    {
       img.width = 20;
       img.height = 20;
     }
-    const image::Image* Find(const dom::Element&) const override { return &img; }
+    const image::Image* Find(const dom::Element&) const override
+    {
+      return &img;
+    }
   };
   FakeProvider provider;
   auto doc = html::Parser("<body><table><tr><td><img></td></tr></table></body>").Parse();
@@ -398,7 +430,8 @@ TEST(LayoutTest, ImageInTableCellTranslatedToSlot) {
   EXPECT_FLOAT_EQ(img.y, td->content_y());
 }
 
-TEST(LayoutTest, AbsolutePositioningAgainstRelativeAncestor) {
+TEST(LayoutTest, AbsolutePositioningAgainstRelativeAncestor)
+{
   // An absolutely positioned child is placed against its nearest positioned
   // ancestor's padding box using bottom/right offsets.
   auto doc = html::Parser("<body><div style=\"position:relative;width:200px;height:100px\">"
@@ -418,7 +451,8 @@ TEST(LayoutTest, AbsolutePositioningAgainstRelativeAncestor) {
   EXPECT_FLOAT_EQ(abs->y, rel->content_y() + rel->content_height() - 10.0f - abs->height);
 }
 
-TEST(LayoutTest, AbsoluteUsesNearestPositionedAncestor) {
+TEST(LayoutTest, AbsoluteUsesNearestPositionedAncestor)
+{
   // The containing block is the nearest positioned ancestor, skipping a
   // static intermediate div.
   auto doc = html::Parser("<body><div style=\"position:relative;width:300px\">"
@@ -442,16 +476,22 @@ TEST(LayoutTest, AbsoluteUsesNearestPositionedAncestor) {
   EXPECT_FLOAT_EQ(abs->y, rel->content_y() + 5.0f);
 }
 
-TEST(LayoutTest, LeadingWhitespaceDoesNotShiftInlineImage) {
+TEST(LayoutTest, LeadingWhitespaceDoesNotShiftInlineImage)
+{
   // HTML source indentation (newline + spaces) before an <img> must collapse
   // to nothing, not become an inline space that shifts the image right.
-  struct FakeProvider : public layout::ImageProvider {
+  struct FakeProvider : public layout::ImageProvider
+  {
     image::Image img;
-    FakeProvider() {
+    FakeProvider()
+    {
       img.width = 20;
       img.height = 20;
     }
-    const image::Image* Find(const dom::Element&) const override { return &img; }
+    const image::Image* Find(const dom::Element&) const override
+    {
+      return &img;
+    }
   };
   FakeProvider provider;
   auto doc = html::Parser("<body><div>\n    <img>\n</div></body>").Parse();
@@ -468,7 +508,8 @@ TEST(LayoutTest, LeadingWhitespaceDoesNotShiftInlineImage) {
   EXPECT_FLOAT_EQ(img.x, div->content_x());
 }
 
-TEST(LayoutTest, AbsoluteShrinkToFitExcludesInset) {
+TEST(LayoutTest, AbsoluteShrinkToFitExcludesInset)
+{
   // A left inset constrains the shrink-to-fit available width (CSS2.2 §10.3.7
   // case 3): the box must not overflow the containing block's right edge.
   auto doc = html::Parser("<body><div style=\"position:relative;width:300px\">"
@@ -489,7 +530,8 @@ TEST(LayoutTest, AbsoluteShrinkToFitExcludesInset) {
   EXPECT_LE(abs->x + abs->width, rel->content_x() + rel->content_width() + 0.5f);
 }
 
-TEST(LayoutTest, AbsoluteShrinkToFitCollapsesWhitespace) {
+TEST(LayoutTest, AbsoluteShrinkToFitCollapsesWhitespace)
+{
   // Source indentation inside the element must not inflate shrink-to-fit.
   auto doc = html::Parser("<body><div style=\"position:relative;width:300px\">"
                           "<div style=\"position:absolute;left:0px\">\n      abc\n    </div>"
@@ -508,7 +550,8 @@ TEST(LayoutTest, AbsoluteShrinkToFitCollapsesWhitespace) {
   EXPECT_FLOAT_EQ(abs->width, 48.0f);
 }
 
-TEST(LayoutTest, NestedBlockHeightInherits) {
+TEST(LayoutTest, NestedBlockHeightInherits)
+{
   Page page = Build("<body><div><div>text</div></div></body>");
   const LayoutBox* outer = FindBox(*page.root, "div", *page.doc);
   ASSERT_NE(outer, nullptr);
@@ -518,7 +561,8 @@ TEST(LayoutTest, NestedBlockHeightInherits) {
   EXPECT_FLOAT_EQ(outer->height, inner->height);
 }
 
-TEST(LayoutTest, RealFontAdvancesWhenFontProvided) {
+TEST(LayoutTest, RealFontAdvancesWhenFontProvided)
+{
   // Skip unless a system font exists (any desktop has one).
   if (graphics::FindSystemFonts(graphics::GenericFamily::kSansSerif).empty()) {
     GTEST_SKIP() << "no system sans-serif font available";
@@ -526,7 +570,8 @@ TEST(LayoutTest, RealFontAdvancesWhenFontProvided) {
   graphics::FontRegistry registry;
 
   // Same HTML, laid out with and without a font registry.
-  struct Built {
+  struct Built
+  {
     std::unique_ptr<dom::Document> doc;
     std::unique_ptr<LayoutBox> root;
   };
@@ -557,13 +602,13 @@ TEST(LayoutTest, RealFontAdvancesWhenFontProvided) {
   EXPECT_LT(real_width, 80.0f);
 }
 
-TEST(LayoutTest, TableCellsAreSideBySide) {
-  Page page = Build(
-      "<body><table><tr><td>A</td><td>B</td></tr>"
-      "<tr><td>C</td><td>D</td></tr></table></body>");
+TEST(LayoutTest, TableCellsAreSideBySide)
+{
+  Page page = Build("<body><table><tr><td>A</td><td>B</td></tr>"
+                    "<tr><td>C</td><td>D</td></tr></table></body>");
   const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
   ASSERT_NE(table, nullptr);
-  ASSERT_EQ(table->children.size(), 2u);  // two rows
+  ASSERT_EQ(table->children.size(), 2u); // two rows
 
   const LayoutBox* row0 = table->children[0].get();
   const LayoutBox* row1 = table->children[1].get();
@@ -572,16 +617,16 @@ TEST(LayoutTest, TableCellsAreSideBySide) {
 
   // Cells in a row share the same top and sit side by side.
   EXPECT_FLOAT_EQ(row0->children[0]->y, row0->children[1]->y);
-  EXPECT_FLOAT_EQ(row0->children[0]->x, 8.0f);  // body content x
+  EXPECT_FLOAT_EQ(row0->children[0]->x, 8.0f); // body content x
   EXPECT_GT(row0->children[1]->x, row0->children[0]->x);
   // The second row is below the first.
   EXPECT_GT(row1->y, row0->y);
 }
 
-TEST(LayoutTest, TableExplicitCellWidthFixesColumn) {
-  Page page = Build(
-      "<body><table style=\"width: 400px\"><tr>"
-      "<td style=\"width: 100px\">A</td><td>B</td></tr></table></body>");
+TEST(LayoutTest, TableExplicitCellWidthFixesColumn)
+{
+  Page page = Build("<body><table style=\"width: 400px\"><tr>"
+                    "<td style=\"width: 100px\">A</td><td>B</td></tr></table></body>");
   const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
   ASSERT_NE(table, nullptr);
   ASSERT_EQ(table->children.size(), 1u);
@@ -593,18 +638,18 @@ TEST(LayoutTest, TableExplicitCellWidthFixesColumn) {
   EXPECT_FLOAT_EQ(row->children[1]->width, 300.0f);
 }
 
-TEST(LayoutTest, TableColspanSpansColumns) {
-  Page page = Build(
-      "<body><table style=\"width: 400px\">"
-      "<tr><td colspan=\"2\">wide</td></tr>"
-      "<tr><td style=\"width: 100px\">A</td><td>B</td></tr></table></body>");
+TEST(LayoutTest, TableColspanSpansColumns)
+{
+  Page page = Build("<body><table style=\"width: 400px\">"
+                    "<tr><td colspan=\"2\">wide</td></tr>"
+                    "<tr><td style=\"width: 100px\">A</td><td>B</td></tr></table></body>");
   const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
   ASSERT_NE(table, nullptr);
   ASSERT_EQ(table->children.size(), 2u);
 
   const LayoutBox* row0 = table->children[0].get();
   const LayoutBox* row1 = table->children[1].get();
-  ASSERT_EQ(row0->children.size(), 1u);  // one spanning cell
+  ASSERT_EQ(row0->children.size(), 1u); // one spanning cell
   ASSERT_EQ(row1->children.size(), 2u);
   // The colspan cell spans the full table width (both columns).
   EXPECT_FLOAT_EQ(row0->children[0]->width, 400.0f);
@@ -613,55 +658,55 @@ TEST(LayoutTest, TableColspanSpansColumns) {
   EXPECT_FLOAT_EQ(row1->children[1]->width, 300.0f);
 }
 
-TEST(LayoutTest, TableRowspanZeroSpansToEnd) {
+TEST(LayoutTest, TableRowspanZeroSpansToEnd)
+{
   // rowspan="0" means "span the remaining rows of the row group" (WHATWG HTML
   // tables.html); with a single flattened group that is the rest of the table.
-  Page page = Build(
-      "<body><table style=\"width: 400px\">"
-      "<tr><td rowspan=\"0\">X</td><td>A</td></tr>"
-      "<tr><td>B</td></tr></table></body>");
+  Page page = Build("<body><table style=\"width: 400px\">"
+                    "<tr><td rowspan=\"0\">X</td><td>A</td></tr>"
+                    "<tr><td>B</td></tr></table></body>");
   const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
   ASSERT_NE(table, nullptr);
   ASSERT_EQ(table->children.size(), 2u);
 
   const LayoutBox* row0 = table->children[0].get();
   const LayoutBox* row1 = table->children[1].get();
-  ASSERT_EQ(row0->children.size(), 2u);  // X (rowspan to end) + A
-  ASSERT_EQ(row1->children.size(), 1u);  // B (X continues)
+  ASSERT_EQ(row0->children.size(), 2u); // X (rowspan to end) + A
+  ASSERT_EQ(row1->children.size(), 1u); // B (X continues)
   // X spans both rows.
   EXPECT_FLOAT_EQ(row0->children[0]->height, row0->height + row1->height);
 }
 
-TEST(LayoutTest, TableRowspanZeroStopsAtRowGroupEnd) {
+TEST(LayoutTest, TableRowspanZeroStopsAtRowGroupEnd)
+{
   // rowspan="0" spans only to the end of its own row group.  The <thead> cell
   // must NOT grow through the <tbody> rows.
-  Page page = Build(
-      "<body><table style=\"width: 400px\">"
-      "<thead><tr><td rowspan=\"0\">H</td></tr></thead>"
-      "<tbody><tr><td>A</td></tr><tr><td>B</td></tr></tbody>"
-      "</table></body>");
+  Page page = Build("<body><table style=\"width: 400px\">"
+                    "<thead><tr><td rowspan=\"0\">H</td></tr></thead>"
+                    "<tbody><tr><td>A</td></tr><tr><td>B</td></tr></tbody>"
+                    "</table></body>");
   const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
   ASSERT_NE(table, nullptr);
-  ASSERT_EQ(table->children.size(), 3u);  // thead row + 2 tbody rows
+  ASSERT_EQ(table->children.size(), 3u); // thead row + 2 tbody rows
 
-  const LayoutBox* row0 = table->children[0].get();  // thead
-  const LayoutBox* row1 = table->children[1].get();  // tbody
-  const LayoutBox* row2 = table->children[2].get();  // tbody
-  ASSERT_EQ(row0->children.size(), 1u);  // H
-  ASSERT_EQ(row1->children.size(), 1u);  // A
-  ASSERT_EQ(row2->children.size(), 1u);  // B
+  const LayoutBox* row0 = table->children[0].get(); // thead
+  const LayoutBox* row1 = table->children[1].get(); // tbody
+  const LayoutBox* row2 = table->children[2].get(); // tbody
+  ASSERT_EQ(row0->children.size(), 1u);             // H
+  ASSERT_EQ(row1->children.size(), 1u);             // A
+  ASSERT_EQ(row2->children.size(), 1u);             // B
   // H spans only the thead row (its own group), not the whole table.
   EXPECT_FLOAT_EQ(row0->children[0]->height, row0->height);
 }
 
-TEST(LayoutTest, TableRowspanZeroImplicitGroup) {
+TEST(LayoutTest, TableRowspanZeroImplicitGroup)
+{
   // Consecutive anonymous <tr> children form one implicit row group, so
   // rowspan="0" spans all of them.
-  Page page = Build(
-      "<body><table style=\"width: 400px\">"
-      "<tr><td rowspan=\"0\">X</td></tr>"
-      "<tr><td>A</td></tr>"
-      "<tr><td>B</td></tr></table></body>");
+  Page page = Build("<body><table style=\"width: 400px\">"
+                    "<tr><td rowspan=\"0\">X</td></tr>"
+                    "<tr><td>A</td></tr>"
+                    "<tr><td>B</td></tr></table></body>");
   const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
   ASSERT_NE(table, nullptr);
   ASSERT_EQ(table->children.size(), 3u);
@@ -669,19 +714,19 @@ TEST(LayoutTest, TableRowspanZeroImplicitGroup) {
   const LayoutBox* row0 = table->children[0].get();
   const LayoutBox* row1 = table->children[1].get();
   const LayoutBox* row2 = table->children[2].get();
-  ASSERT_EQ(row0->children.size(), 1u);  // X
+  ASSERT_EQ(row0->children.size(), 1u); // X
   // X occupies the first column across all three rows; A/B land in column 1.
   EXPECT_FLOAT_EQ(row0->children[0]->height, row0->height + row1->height + row2->height);
   ASSERT_EQ(row1->children.size(), 1u);
   ASSERT_EQ(row2->children.size(), 1u);
 }
 
-TEST(LayoutTest, TableColspanClampsAboveThousand) {
+TEST(LayoutTest, TableColspanClampsAboveThousand)
+{
   // colspan above 1000 clamps to 1000 (WHATWG tables.html); the single
   // spanning cell then covers the whole 400px table.
-  Page page = Build(
-      "<body><table style=\"width: 400px\">"
-      "<tr><td colspan=\"1001\">wide</td></tr></table></body>");
+  Page page = Build("<body><table style=\"width: 400px\">"
+                    "<tr><td colspan=\"1001\">wide</td></tr></table></body>");
   const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
   ASSERT_NE(table, nullptr);
   const LayoutBox* row = table->children[0].get();
@@ -690,12 +735,12 @@ TEST(LayoutTest, TableColspanClampsAboveThousand) {
   EXPECT_NEAR(row->children[0]->width, 400.0f, 0.05f);
 }
 
-TEST(LayoutTest, TableColspanIgnoresTrailingText) {
+TEST(LayoutTest, TableColspanIgnoresTrailingText)
+{
   // colspan="2abc" parses as 2 (trailing non-digits are ignored).
-  Page page = Build(
-      "<body><table style=\"width: 400px\">"
-      "<tr><td colspan=\"2abc\">wide</td></tr>"
-      "<tr><td style=\"width: 100px\">A</td><td>B</td></tr></table></body>");
+  Page page = Build("<body><table style=\"width: 400px\">"
+                    "<tr><td colspan=\"2abc\">wide</td></tr>"
+                    "<tr><td style=\"width: 100px\">A</td><td>B</td></tr></table></body>");
   const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
   ASSERT_NE(table, nullptr);
   const LayoutBox* row0 = table->children[0].get();
@@ -708,13 +753,13 @@ TEST(LayoutTest, TableColspanIgnoresTrailingText) {
   EXPECT_FLOAT_EQ(row1->children[1]->width, 300.0f);
 }
 
-TEST(LayoutTest, TableInvalidSpanFallsBackToOne) {
+TEST(LayoutTest, TableInvalidSpanFallsBackToOne)
+{
   // A leading non-digit (colspan="x2") is an invalid non-negative integer, so
   // the span falls back to 1: the cell covers only the first column.
-  Page page = Build(
-      "<body><table style=\"width: 400px\">"
-      "<tr><td colspan=\"x2\">narrow</td></tr>"
-      "<tr><td style=\"width: 100px\">A</td><td>B</td></tr></table></body>");
+  Page page = Build("<body><table style=\"width: 400px\">"
+                    "<tr><td colspan=\"x2\">narrow</td></tr>"
+                    "<tr><td style=\"width: 100px\">A</td><td>B</td></tr></table></body>");
   const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
   ASSERT_NE(table, nullptr);
   const LayoutBox* row0 = table->children[0].get();
@@ -722,26 +767,27 @@ TEST(LayoutTest, TableInvalidSpanFallsBackToOne) {
   EXPECT_FLOAT_EQ(row0->children[0]->width, 100.0f);
 }
 
-TEST(LayoutTest, TableRowspanSpansRows) {
-  Page page = Build(
-      "<body><table style=\"width: 400px\">"
-      "<tr><td rowspan=\"2\">tall</td><td>R</td></tr>"
-      "<tr><td>S</td></tr></table></body>");
+TEST(LayoutTest, TableRowspanSpansRows)
+{
+  Page page = Build("<body><table style=\"width: 400px\">"
+                    "<tr><td rowspan=\"2\">tall</td><td>R</td></tr>"
+                    "<tr><td>S</td></tr></table></body>");
   const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
   ASSERT_NE(table, nullptr);
   ASSERT_EQ(table->children.size(), 2u);
 
   const LayoutBox* row0 = table->children[0].get();
   const LayoutBox* row1 = table->children[1].get();
-  ASSERT_EQ(row0->children.size(), 2u);  // rowspan cell + R
-  ASSERT_EQ(row1->children.size(), 1u);  // S (rowspan cell continues)
+  ASSERT_EQ(row0->children.size(), 2u); // rowspan cell + R
+  ASSERT_EQ(row1->children.size(), 1u); // S (rowspan cell continues)
   // The rowspan cell's height spans both rows.
   EXPECT_FLOAT_EQ(row0->children[0]->height, row0->height + row1->height);
   // S sits in the second row, below the first.
   EXPECT_GT(row1->children[0]->y, row0->y);
 }
 
-TEST(LayoutTest, InlineBlockExplicitSizeIsAtomicBox) {
+TEST(LayoutTest, InlineBlockExplicitSizeIsAtomicBox)
+{
   // An inline-block with explicit size is an atomic inline box on its line.
   auto doc = html::Parser("<body><p>a<span style=\"display:inline-block;width:50px;height:30px\">b"
                           "</span>c</p></body>")
@@ -770,7 +816,8 @@ TEST(LayoutTest, InlineBlockExplicitSizeIsAtomicBox) {
   EXPECT_EQ(p->lines[0].runs.back().text, "c");
 }
 
-TEST(LayoutTest, InlineBlockShrinkToFitWidth) {
+TEST(LayoutTest, InlineBlockShrinkToFitWidth)
+{
   // Auto width: inline-block wraps its content (preferred/max-content width).
   auto doc = html::Parser("<body><div style=\"width:600px\">"
                           "<span style=\"display:inline-block\">hello world</span></div></body>")
@@ -785,17 +832,17 @@ TEST(LayoutTest, InlineBlockShrinkToFitWidth) {
   const LayoutBox* block = FindInlineBlock(*root, el, holder);
   ASSERT_NE(block, nullptr);
   EXPECT_GT(block->width, 0.0f);
-  EXPECT_LT(block->width, 600.0f);  // does not fill the container
+  EXPECT_LT(block->width, 600.0f); // does not fill the container
 }
 
-TEST(LayoutTest, InlineBlockHoldsBlockChildren) {
+TEST(LayoutTest, InlineBlockHoldsBlockChildren)
+{
   // The inline-block's content is a block formatting context; a block child
   // stacks vertically inside it (an outer <div> is used: a <p> would be
   // auto-closed by a nested <div>).
-  auto doc = html::Parser(
-                  "<body><div>L<span style=\"display:inline-block;width:120px\">"
-                  "<div>one</div><div>two</div></span>R</div></body>")
-                  .Parse();
+  auto doc = html::Parser("<body><div>L<span style=\"display:inline-block;width:120px\">"
+                          "<div>one</div><div>two</div></span>R</div></body>")
+                 .Parse();
   style::StyleEngine styles;
   styles.ApplyStyles(*doc);
   layout::LayoutEngine engine(styles);
@@ -806,15 +853,16 @@ TEST(LayoutTest, InlineBlockHoldsBlockChildren) {
   const LayoutBox* block = FindInlineBlock(*root, el, holder);
   ASSERT_NE(block, nullptr);
   ASSERT_EQ(block->children.size(), 2u);
-  EXPECT_GT(block->children[1]->y, block->children[0]->y);  // stacks vertically
+  EXPECT_GT(block->children[1]->y, block->children[0]->y); // stacks vertically
   EXPECT_LE(block->children[0]->width, 120.0f + 0.01f);
 }
 
-TEST(LayoutTest, InlineBlockNestedInsideInlineElement) {
-  auto doc = html::Parser(
-                  "<body><p><span>a<span style=\"display:inline-block;width:40px;height:20px\">x"
-                  "</span>b</span></p></body>")
-                  .Parse();
+TEST(LayoutTest, InlineBlockNestedInsideInlineElement)
+{
+  auto doc =
+      html::Parser("<body><p><span>a<span style=\"display:inline-block;width:40px;height:20px\">x"
+                   "</span>b</span></p></body>")
+          .Parse();
   style::StyleEngine styles;
   styles.ApplyStyles(*doc);
   layout::LayoutEngine engine(styles);
@@ -828,14 +876,14 @@ TEST(LayoutTest, InlineBlockNestedInsideInlineElement) {
   EXPECT_FLOAT_EQ(ib.height, 20.0f);
 }
 
-TEST(LayoutTest, InlineBlockBorderBoxSitsAtMarginEdge) {
+TEST(LayoutTest, InlineBlockBorderBoxSitsAtMarginEdge)
+{
   // Regression: the inner block's border-box origin is at the margin edge
   // (not shifted by -(border+padding), which pushed the left/top borders
   // off-canvas).
-  auto doc = html::Parser(
-                  "<body><div><span style=\"display:inline-block;border:3px solid #003366;"
-                  "padding:10px\">x</span></div></body>")
-                  .Parse();
+  auto doc = html::Parser("<body><div><span style=\"display:inline-block;border:3px solid #003366;"
+                          "padding:10px\">x</span></div></body>")
+                 .Parse();
   style::StyleEngine styles;
   styles.ApplyStyles(*doc);
   layout::LayoutEngine engine(styles);
@@ -847,18 +895,18 @@ TEST(LayoutTest, InlineBlockBorderBoxSitsAtMarginEdge) {
   ASSERT_NE(block, nullptr);
   const LayoutBox* div = FindBox(*root, "div", *doc);
   ASSERT_NE(div, nullptr);
-  EXPECT_GE(block->x, div->content_x() - 0.01f);  // left border on screen
+  EXPECT_GE(block->x, div->content_x() - 0.01f); // left border on screen
   EXPECT_FLOAT_EQ(block->border_left, 3.0f);
   EXPECT_FLOAT_EQ(block->padding_left, 10.0f);
 }
 
-TEST(LayoutTest, InlineBlockExplicitHeightNotGrownByContent) {
+TEST(LayoutTest, InlineBlockExplicitHeightNotGrownByContent)
+{
   // CSS2.2 10.6.2: a specified height wins; content taller overflows rather
   // than growing the box.
-  auto doc = html::Parser(
-                  "<body><div><span style=\"display:inline-block;width:60px;height:20px\">"
-                  "tail<br>content</span></div></body>")
-                  .Parse();
+  auto doc = html::Parser("<body><div><span style=\"display:inline-block;width:60px;height:20px\">"
+                          "tail<br>content</span></div></body>")
+                 .Parse();
   style::StyleEngine styles;
   styles.ApplyStyles(*doc);
   layout::LayoutEngine engine(styles);
@@ -871,20 +919,20 @@ TEST(LayoutTest, InlineBlockExplicitHeightNotGrownByContent) {
   EXPECT_FLOAT_EQ(block->height, 20.0f);
 }
 
-TEST(LayoutTest, VerticalAlignEqualHeightBoxesFlatten) {
+TEST(LayoutTest, VerticalAlignEqualHeightBoxesFlatten)
+{
   // Three inline-blocks of the same height (60px) with top/middle/bottom
   // vertical-align fill the same 60px line box: they all overlap (flatten) at
   // the same y instead of stacking their heights.
-  auto doc = html::Parser(
-                  "<body><div>"
-                  "<span style=\"display:inline-block;width:40px;height:60px;"
-                  "vertical-align:top\">t</span>"
-                  "<span style=\"display:inline-block;width:40px;height:60px;"
-                  "vertical-align:middle\">m</span>"
-                  "<span style=\"display:inline-block;width:40px;height:60px;"
-                  "vertical-align:bottom\">b</span>"
-                  "</div></body>")
-                  .Parse();
+  auto doc = html::Parser("<body><div>"
+                          "<span style=\"display:inline-block;width:40px;height:60px;"
+                          "vertical-align:top\">t</span>"
+                          "<span style=\"display:inline-block;width:40px;height:60px;"
+                          "vertical-align:middle\">m</span>"
+                          "<span style=\"display:inline-block;width:40px;height:60px;"
+                          "vertical-align:bottom\">b</span>"
+                          "</div></body>")
+                 .Parse();
   style::StyleEngine styles;
   styles.ApplyStyles(*doc);
   layout::LayoutEngine engine(styles);
@@ -900,17 +948,17 @@ TEST(LayoutTest, VerticalAlignEqualHeightBoxesFlatten) {
   EXPECT_FLOAT_EQ(line.boxes[1].y, line.boxes[2].y);
 }
 
-TEST(LayoutTest, WrappedInlineBlockRowsKeepLeadingGap) {
+TEST(LayoutTest, WrappedInlineBlockRowsKeepLeadingGap)
+{
   // Regression: baseline-aligned inline-blocks of height ~line-height must
   // still leave the strut's leading gap between wrapped rows, instead of the
   // rows touching (Y += box height with no leading).
-  auto doc = html::Parser(
-                  "<body><div style=\"width:200px\">"
-                  "<span style=\"display:inline-block;width:110px;height:20px\">w110</span>"
-                  "<span style=\"display:inline-block;width:110px;height:20px\">w110</span>"
-                  "<span style=\"display:inline-block;width:110px;height:20px\">w110</span>"
-                  "</div></body>")
-                  .Parse();
+  auto doc = html::Parser("<body><div style=\"width:200px\">"
+                          "<span style=\"display:inline-block;width:110px;height:20px\">w110</span>"
+                          "<span style=\"display:inline-block;width:110px;height:20px\">w110</span>"
+                          "<span style=\"display:inline-block;width:110px;height:20px\">w110</span>"
+                          "</div></body>")
+                 .Parse();
   style::StyleEngine styles;
   styles.ApplyStyles(*doc);
   layout::LayoutEngine engine(styles);
@@ -925,18 +973,18 @@ TEST(LayoutTest, WrappedInlineBlockRowsKeepLeadingGap) {
   // consecutive rows.
   EXPECT_GT(gap01, 20.0f);
   EXPECT_GT(gap12, 20.0f);
-  EXPECT_LT(gap01, 20.0f + 4.0f);  // a small (~1-2px) leading, not a whole box
+  EXPECT_LT(gap01, 20.0f + 4.0f); // a small (~1-2px) leading, not a whole box
   EXPECT_LT(gap12, 20.0f + 4.0f);
 }
 
-TEST(LayoutTest, FloatLeftHugsContainingBlockLeftEdge) {
+TEST(LayoutTest, FloatLeftHugsContainingBlockLeftEdge)
+{
   // A float:left box is out of flow, placed at the block's left edge with its
   // specified size.
-  auto doc = html::Parser(
-                  "<body><div style=\"width:400px\">"
-                  "<span style=\"float:left;width:100px;height:60px\">L</span>"
-                  "text</div></body>")
-                  .Parse();
+  auto doc = html::Parser("<body><div style=\"width:400px\">"
+                          "<span style=\"float:left;width:100px;height:60px\">L</span>"
+                          "text</div></body>")
+                 .Parse();
   style::StyleEngine styles;
   styles.ApplyStyles(*doc);
   layout::LayoutEngine engine(styles);
@@ -945,17 +993,17 @@ TEST(LayoutTest, FloatLeftHugsContainingBlockLeftEdge) {
   ASSERT_NE(div, nullptr);
   ASSERT_EQ(div->floats.size(), 1u);
   const LayoutBox* f = div->floats[0].get();
-  EXPECT_FLOAT_EQ(f->x, div->content_x());  // hugs the left edge
+  EXPECT_FLOAT_EQ(f->x, div->content_x()); // hugs the left edge
   EXPECT_FLOAT_EQ(f->width, 100.0f);
   EXPECT_FLOAT_EQ(f->height, 60.0f);
 }
 
-TEST(LayoutTest, FloatRightHugsContainingBlockRightEdge) {
-  auto doc = html::Parser(
-                  "<body><div style=\"width:400px\">"
-                  "<span style=\"float:right;width:80px;height:50px\">R</span>"
-                  "text</div></body>")
-                  .Parse();
+TEST(LayoutTest, FloatRightHugsContainingBlockRightEdge)
+{
+  auto doc = html::Parser("<body><div style=\"width:400px\">"
+                          "<span style=\"float:right;width:80px;height:50px\">R</span>"
+                          "text</div></body>")
+                 .Parse();
   style::StyleEngine styles;
   styles.ApplyStyles(*doc);
   layout::LayoutEngine engine(styles);
@@ -969,13 +1017,13 @@ TEST(LayoutTest, FloatRightHugsContainingBlockRightEdge) {
   EXPECT_FLOAT_EQ(f->width, 80.0f);
 }
 
-TEST(LayoutTest, FloatShiftsFollowingLineStart) {
+TEST(LayoutTest, FloatShiftsFollowingLineStart)
+{
   // A left float pushes the line box right so the text wraps around it.
-  auto doc = html::Parser(
-                  "<body><div style=\"width:400px\">"
-                  "<span style=\"float:left;width:100px;height:60px\">L</span>"
-                  "aaabbb cccddd eeefff</div></body>")
-                  .Parse();
+  auto doc = html::Parser("<body><div style=\"width:400px\">"
+                          "<span style=\"float:left;width:100px;height:60px\">L</span>"
+                          "aaabbb cccddd eeefff</div></body>")
+                 .Parse();
   style::StyleEngine styles;
   styles.ApplyStyles(*doc);
   layout::LayoutEngine engine(styles);
@@ -990,20 +1038,20 @@ TEST(LayoutTest, FloatShiftsFollowingLineStart) {
   EXPECT_GE(div->lines[0].runs[0].x, float_right - 0.01f);
 }
 
-TEST(LayoutTest, CjkTextWrapsInsideFloatHeight) {
+TEST(LayoutTest, CjkTextWrapsInsideFloatHeight)
+{
   // CJK text may break anywhere, so a long run keeps wrapping on indented
   // lines (still inside the left float's height) rather than jumping back to
   // the left edge or overlapping the float.
-  auto doc = html::Parser(
-                  "<body><div style=\"width:300px\">"
-                  "<span style=\"float:left;width:100px;height:80px\">L</span>"
-                  "\xE5\x8F\xB3\xE4\xBE\xA7\xE6\x96\x87\xE5\xAD\x97"
-                  "\xE5\x8F\xB3\xE4\xBE\xA7\xE6\x96\x87\xE5\xAD\x97"
-                  "\xE5\x8F\xB3\xE4\xBE\xA7\xE6\x96\x87\xE5\xAD\x97"
-                  "\xE5\x8F\xB3\xE4\xBE\xA7\xE6\x96\x87\xE5\xAD\x97"
-                  "\xE5\x8F\xB3\xE4\xBE\xA7\xE6\x96\x87\xE5\xAD\x97"
-                  "</div></body>")
-                  .Parse();
+  auto doc = html::Parser("<body><div style=\"width:300px\">"
+                          "<span style=\"float:left;width:100px;height:80px\">L</span>"
+                          "\xE5\x8F\xB3\xE4\xBE\xA7\xE6\x96\x87\xE5\xAD\x97"
+                          "\xE5\x8F\xB3\xE4\xBE\xA7\xE6\x96\x87\xE5\xAD\x97"
+                          "\xE5\x8F\xB3\xE4\xBE\xA7\xE6\x96\x87\xE5\xAD\x97"
+                          "\xE5\x8F\xB3\xE4\xBE\xA7\xE6\x96\x87\xE5\xAD\x97"
+                          "\xE5\x8F\xB3\xE4\xBE\xA7\xE6\x96\x87\xE5\xAD\x97"
+                          "</div></body>")
+                 .Parse();
   style::StyleEngine styles;
   styles.ApplyStyles(*doc);
   layout::LayoutEngine engine(styles);
@@ -1025,16 +1073,16 @@ TEST(LayoutTest, CjkTextWrapsInsideFloatHeight) {
   }
 }
 
-TEST(LayoutTest, BlockChildTextAvoidsParentFloat) {
+TEST(LayoutTest, BlockChildTextAvoidsParentFloat)
+{
   // A float belongs to the enclosing block formatting context: the text of a
   // block-level child (e.g. <h3>) that vertically overlaps the float must
   // indent past it, not render underneath it.
-  auto doc = html::Parser(
-                  "<body><div style=\"width:500px\">"
-                  "<span style=\"float:left;width:120px;height:80px\">L</span>"
-                  "<h3>\xE6\xA0\x87\xE9\xA2\x98\xE6\x96\x87\xE6\x9C\xAC</h3>"
-                  "</div></body>")
-                  .Parse();
+  auto doc = html::Parser("<body><div style=\"width:500px\">"
+                          "<span style=\"float:left;width:120px;height:80px\">L</span>"
+                          "<h3>\xE6\xA0\x87\xE9\xA2\x98\xE6\x96\x87\xE6\x9C\xAC</h3>"
+                          "</div></body>")
+                 .Parse();
   style::StyleEngine styles;
   styles.ApplyStyles(*doc);
   layout::LayoutEngine engine(styles);
@@ -1057,5 +1105,233 @@ TEST(LayoutTest, BlockChildTextAvoidsParentFloat) {
   }
 }
 
-}  // namespace
-}  // namespace neko::layout
+// ---------------------------------------------------------------------------
+// Flex layout (monospace fallback: each character is font_size px wide)
+// ---------------------------------------------------------------------------
+
+TEST(FlexLayoutTest, ItemsFlowInRow)
+{
+  Page page = Build("<body><div style=\"display:flex\"><div>a</div><div>b</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 2u);
+  const LayoutBox* a = flex->children[0].get();
+  const LayoutBox* b = flex->children[1].get();
+  EXPECT_FLOAT_EQ(a->width, 16.0f); // "a" at 16px
+  EXPECT_FLOAT_EQ(b->width, 16.0f);
+  EXPECT_FLOAT_EQ(a->x, 8.0f); // container content starts at body content x
+  EXPECT_FLOAT_EQ(b->x, 24.0f);
+  EXPECT_FLOAT_EQ(a->y, b->y);
+}
+
+TEST(FlexLayoutTest, FlexGrowDistributesFreeSpace)
+{
+  Page page = Build("<body><div style=\"display:flex\">"
+                    "<div style=\"flex-grow:1\">a</div>"
+                    "<div style=\"flex-grow:2\">b</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 2u);
+  const LayoutBox* a = flex->children[0].get();
+  const LayoutBox* b = flex->children[1].get();
+  // Container content width 784; items 16 each; free 752 split 1:2.
+  EXPECT_NEAR(a->width, 16.0f + 752.0f / 3.0f, 0.01f);
+  EXPECT_NEAR(b->width, 16.0f + 752.0f * 2.0f / 3.0f, 0.01f);
+  EXPECT_NEAR(b->x, 8.0f + a->width, 0.01f);
+}
+
+TEST(FlexLayoutTest, FlexShrinkReducesOverflow)
+{
+  Page page = Build("<body><div style=\"display:flex; width:100px\">"
+                    "<div style=\"width:80px\">a</div>"
+                    "<div style=\"width:80px\">b</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 2u);
+  const LayoutBox* a = flex->children[0].get();
+  const LayoutBox* b = flex->children[1].get();
+  // Container 100, outer sum 160, free -60, equal shrink weights -> 50 each.
+  EXPECT_NEAR(a->width, 50.0f, 0.01f);
+  EXPECT_NEAR(b->width, 50.0f, 0.01f);
+}
+
+TEST(FlexLayoutTest, FlexBasisSizesItem)
+{
+  Page page = Build("<body><div style=\"display:flex\">"
+                    "<div style=\"flex-basis:100px\">a</div>"
+                    "<div style=\"flex-basis:50px\">b</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 2u);
+  EXPECT_FLOAT_EQ(flex->children[0]->width, 100.0f);
+  EXPECT_FLOAT_EQ(flex->children[1]->width, 50.0f);
+  EXPECT_FLOAT_EQ(flex->children[1]->x, 108.0f);
+}
+
+TEST(FlexLayoutTest, FlexShorthand)
+{
+  // flex:1 == grow 1, shrink 1, basis 0: items share the width equally.
+  Page page = Build("<body><div style=\"display:flex\">"
+                    "<div style=\"flex:1\">a</div>"
+                    "<div style=\"flex:1\">b</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 2u);
+  EXPECT_NEAR(flex->children[0]->width, 392.0f, 0.01f);
+  EXPECT_NEAR(flex->children[1]->width, 392.0f, 0.01f);
+}
+
+TEST(FlexLayoutTest, JustifyContentCenter)
+{
+  Page page =
+      Build("<body><div style=\"display:flex; justify-content:center\"><div>a</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 1u);
+  EXPECT_FLOAT_EQ(flex->children[0]->x, 8.0f + (784.0f - 16.0f) / 2.0f);
+}
+
+TEST(FlexLayoutTest, JustifyContentFlexEnd)
+{
+  Page page = Build(
+      "<body><div style=\"display:flex; justify-content:flex-end\"><div>a</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 1u);
+  EXPECT_FLOAT_EQ(flex->children[0]->x, 8.0f + 784.0f - 16.0f);
+}
+
+TEST(FlexLayoutTest, JustifyContentSpaceBetween)
+{
+  Page page = Build("<body><div style=\"display:flex; justify-content:space-between\">"
+                    "<div>a</div><div>b</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 2u);
+  EXPECT_FLOAT_EQ(flex->children[0]->x, 8.0f);
+  EXPECT_FLOAT_EQ(flex->children[1]->x, 8.0f + 784.0f - 16.0f);
+}
+
+TEST(FlexLayoutTest, ColumnStacksVertically)
+{
+  Page page = Build("<body><div style=\"display:flex; flex-direction:column\">"
+                    "<div>a</div><div>b</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 2u);
+  const LayoutBox* a = flex->children[0].get();
+  const LayoutBox* b = flex->children[1].get();
+  EXPECT_FLOAT_EQ(a->x, b->x);
+  EXPECT_FLOAT_EQ(a->y, 8.0f);
+  EXPECT_FLOAT_EQ(b->y, 8.0f + a->height);
+}
+
+TEST(FlexLayoutTest, AlignItemsCenter)
+{
+  Page page = Build("<body><div style=\"display:flex; align-items:center; height:100px\">"
+                    "<div style=\"height:20px\">a</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 1u);
+  // Single line stretches to the container height; the item is centered.
+  EXPECT_FLOAT_EQ(flex->children[0]->y, 8.0f + (100.0f - 20.0f) / 2.0f);
+}
+
+TEST(FlexLayoutTest, AlignItemsStretchDefault)
+{
+  Page page = Build("<body><div style=\"display:flex\">"
+                    "<div style=\"height:50px\">a</div><div>b</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 2u);
+  EXPECT_FLOAT_EQ(flex->children[0]->height, 50.0f);
+  // The auto-height item stretches to the line's cross size.
+  EXPECT_FLOAT_EQ(flex->children[1]->height, 50.0f);
+}
+
+TEST(FlexLayoutTest, FlexWrapCreatesLines)
+{
+  Page page = Build("<body><div style=\"display:flex; flex-wrap:wrap; width:100px\">"
+                    "<div style=\"width:60px\">a</div>"
+                    "<div style=\"width:30px\">b</div>"
+                    "<div style=\"width:60px\">c</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 3u);
+  const LayoutBox* a = flex->children[0].get();
+  const LayoutBox* b = flex->children[1].get();
+  const LayoutBox* c = flex->children[2].get();
+  // Line 1 = [a, b] (60 + 30 = 90 <= 100); line 2 = [c].
+  EXPECT_FLOAT_EQ(a->x, 8.0f);
+  EXPECT_FLOAT_EQ(b->x, 8.0f + 60.0f);
+  EXPECT_FLOAT_EQ(c->x, 8.0f);
+  EXPECT_FLOAT_EQ(a->y, 8.0f);
+  EXPECT_FLOAT_EQ(c->y, 8.0f + a->height);
+}
+
+TEST(FlexLayoutTest, GapSpacesItems)
+{
+  Page page = Build("<body><div style=\"display:flex; gap:10px\">"
+                    "<div>a</div><div>b</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 2u);
+  EXPECT_FLOAT_EQ(flex->children[0]->x, 8.0f);
+  EXPECT_FLOAT_EQ(flex->children[1]->x, 8.0f + 16.0f + 10.0f);
+}
+
+TEST(FlexLayoutTest, RowReverseMirrorsItems)
+{
+  Page page = Build("<body><div style=\"display:flex; flex-direction:row-reverse\">"
+                    "<div>a</div><div>b</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 2u);
+  // "a" is the first item but appears at the right (main-end) edge.
+  EXPECT_FLOAT_EQ(flex->children[0]->x, 8.0f + 784.0f - 16.0f);
+  EXPECT_FLOAT_EQ(flex->children[1]->x, 8.0f + 784.0f - 32.0f);
+}
+
+TEST(FlexLayoutTest, OverflowWithJustifyFlexEndPacksAtStart)
+{
+  // Regression: with negative free space (items do not shrink), every
+  // justify-content value must pack toward main-start (CSS Flexbox 1 §8.2).
+  // Previously flex-end set a negative cursor, pushing items off the left
+  // edge of the container.
+  Page page = Build("<body><div style=\"display:flex; width:100px; justify-content:flex-end\">"
+                    "<div style=\"width:80px; flex-shrink:0\">a</div>"
+                    "<div style=\"width:80px; flex-shrink:0\">b</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 2u);
+  const LayoutBox* a = flex->children[0].get();
+  const LayoutBox* b = flex->children[1].get();
+  // Packed from the start; the overflow runs off the right edge.
+  EXPECT_FLOAT_EQ(a->x, 8.0f);
+  EXPECT_FLOAT_EQ(b->x, 8.0f + 80.0f);
+}
+
+TEST(FlexLayoutTest, ShrinkWeightUsesContentBoxBase)
+{
+  // Regression: the scaled flex shrink factor uses the content-box flex base
+  // size (CSS Flexbox 1 §9.7), not border+padding+content.  Two items with
+  // equal content (60px) but different borders must shrink to equal content
+  // widths even though their outer sizes differ.
+  Page page = Build("<body><div style=\"display:flex; width:100px\">"
+                    "<div style=\"width:60px; border:10px solid\">a</div>"
+                    "<div style=\"width:60px\">b</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 2u);
+  const LayoutBox* a = flex->children[0].get();
+  const LayoutBox* b = flex->children[1].get();
+  // Outer sizes: a = 60+20 = 80, b = 60.  Total 140, container 100, free -40.
+  // Equal content-box weights (60/60) split the reduction 20/20.
+  EXPECT_NEAR(a->content_width(), 40.0f, 0.01f);
+  EXPECT_NEAR(b->content_width(), 40.0f, 0.01f);
+  // Both outer boxes fit the 100px container exactly.
+  EXPECT_NEAR(a->width + b->width, 100.0f, 0.01f);
+}
+
+} // namespace
+} // namespace neko::layout
