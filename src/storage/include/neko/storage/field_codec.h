@@ -1,9 +1,10 @@
 #pragma once
 
+#include "neko/base/status.h"
+
 #include <string>
 #include <string_view>
-
-#include "neko/base/status.h"
+#include <vector>
 
 namespace neko::storage {
 
@@ -24,4 +25,8 @@ std::string EncodeField(std::string_view value);
 // malformed percent-escapes or a trailing '%'.
 base::Result<std::string> DecodeField(std::string_view value);
 
-}  // namespace neko::storage
+// Splits a storage record line into its tab-separated fields.  Empty fields
+// (including a trailing one) are preserved; the caller validates the count.
+std::vector<std::string_view> SplitTabFields(std::string_view line);
+
+} // namespace neko::storage

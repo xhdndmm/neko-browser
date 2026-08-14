@@ -1,28 +1,33 @@
 #include "neko/storage/history_store.h"
 
-#include <algorithm>
-#include <cctype>
-
 #include "neko/base/logging.h"
 #include "neko/storage/field_codec.h"
 #include "neko/storage/file_util.h"
 
+#include <algorithm>
+#include <cctype>
+
 namespace neko::storage {
 namespace {
 
-bool ParseInt64(std::string_view s, int64_t* out) {
-  if (s.empty()) return false;
+bool ParseInt64(std::string_view s, int64_t* out)
+{
+  if (s.empty())
+    return false;
   int64_t v = 0;
   for (char c : s) {
-    if (!std::isdigit(static_cast<unsigned char>(c))) return false;
+    if (!std::isdigit(static_cast<unsigned char>(c)))
+      return false;
     v = v * 10 + (c - '0');
-    if (v < 0) return false;
+    if (v < 0)
+      return false;
   }
   *out = v;
   return true;
 }
 
-std::string ToLowerAscii(std::string_view s) {
+std::string ToLowerAscii(std::string_view s)
+{
   std::string out;
   out.reserve(s.size());
   for (char c : s) {
@@ -31,33 +36,20 @@ std::string ToLowerAscii(std::string_view s) {
   return out;
 }
 
-std::vector<std::string_view> SplitTabs(std::string_view line) {
-  std::vector<std::string_view> fields;
-  size_t start = 0;
-  while (true) {
-    const size_t tab = line.find('\t', start);
-    if (tab == std::string_view::npos) {
-      fields.push_back(line.substr(start));
-      break;
-    }
-    fields.push_back(line.substr(start, tab - start));
-    start = tab + 1;
-  }
-  return fields;
-}
-
-}  // namespace
+} // namespace
 
 HistoryStore::HistoryStore(std::string profile_dir)
-    : profile_dir_(std::move(profile_dir)),
-      file_path_(profile_dir_ + "/history.txt") {}
+    : profile_dir_(std::move(profile_dir)), file_path_(profile_dir_ + "/history.txt")
+{}
 
-base::Result<void> HistoryStore::Load() {
+base::Result<void> HistoryStore::Load()
+{
   std::lock_guard<std::mutex> lock(mutex_);
   entries_.clear();
   auto maybe_data = ReadFile(file_path_);
   if (!maybe_data) {
-    if (maybe_data.error().category() == base::ErrorCategory::kIo) return base::Error();
+    if (maybe_data.error().category() == base::ErrorCategory::kIo)
+      return base::Error();
     return maybe_data.error();
   }
   const std::string& data = maybe_data.value();
@@ -69,9 +61,10 @@ base::Result<void> HistoryStore::Load() {
     const std::string_view line(data.data() + pos, end - pos);
     pos = (nl == std::string::npos) ? data.size() : nl + 1;
     ++line_no;
-    if (line.empty() || line.front() == '#') continue;
+    if (line.empty() || line.front() == '#')
+      continue;
 
-    const auto fields = SplitTabs(line);
+    const auto fields = SplitTabFields(line);
     if (fields.size() != 4) {
       NEKO_LOG_WARNING_F("history store: skipping malformed line {}", line_no);
       continue;
@@ -91,7 +84,8 @@ base::Result<void> HistoryStore::Load() {
   return base::Error();
 }
 
-base::Result<void> HistoryStore::Save() const {
+base::Result<void> HistoryStore::Save() const
+{
   std::lock_guard<std::mutex> lock(mutex_);
   std::string out = "# neko-history v1\n";
   for (const auto& e : entries_) {
@@ -107,7 +101,8 @@ base::Result<void> HistoryStore::Save() const {
   return WriteFileAtomic(file_path_, out);
 }
 
-void HistoryStore::RecordVisit(std::string_view url, std::string_view title, int64_t now) {
+void HistoryStore::RecordVisit(std::string_view url, std::string_view title, int64_t now)
+{
   std::lock_guard<std::mutex> lock(mutex_);
   for (auto& e : entries_) {
     if (e.url == url) {
@@ -120,23 +115,26 @@ void HistoryStore::RecordVisit(std::string_view url, std::string_view title, int
   entries_.push_back(HistoryEntry{std::string(url), std::string(title), now, 1});
 }
 
-std::vector<HistoryEntry> HistoryStore::All() const {
+std::vector<HistoryEntry> HistoryStore::All() const
+{
   std::lock_guard<std::mutex> lock(mutex_);
   return AllLocked();
 }
 
-std::vector<HistoryEntry> HistoryStore::AllLocked() const {
+std::vector<HistoryEntry> HistoryStore::AllLocked() const
+{
   std::vector<HistoryEntry> out = entries_;
-  std::stable_sort(out.begin(), out.end(),
-                   [](const HistoryEntry& a, const HistoryEntry& b) {
-                     return a.last_visit > b.last_visit;
-                   });
+  std::stable_sort(out.begin(), out.end(), [](const HistoryEntry& a, const HistoryEntry& b) {
+    return a.last_visit > b.last_visit;
+  });
   return out;
 }
 
-std::vector<HistoryEntry> HistoryStore::Search(std::string_view query) const {
+std::vector<HistoryEntry> HistoryStore::Search(std::string_view query) const
+{
   std::lock_guard<std::mutex> lock(mutex_);
-  if (query.empty()) return AllLocked();
+  if (query.empty())
+    return AllLocked();
   const std::string needle = ToLowerAscii(query);
   std::vector<HistoryEntry> out;
   for (const auto& e : entries_) {
@@ -145,23 +143,24 @@ std::vector<HistoryEntry> HistoryStore::Search(std::string_view query) const {
       out.push_back(e);
     }
   }
-  std::stable_sort(out.begin(), out.end(),
-                   [](const HistoryEntry& a, const HistoryEntry& b) {
-                     return a.last_visit > b.last_visit;
-                   });
+  std::stable_sort(out.begin(), out.end(), [](const HistoryEntry& a, const HistoryEntry& b) {
+    return a.last_visit > b.last_visit;
+  });
   return out;
 }
 
-bool HistoryStore::Remove(std::string_view url) {
+bool HistoryStore::Remove(std::string_view url)
+{
   std::lock_guard<std::mutex> lock(mutex_);
   const size_t before = entries_.size();
   std::erase_if(entries_, [&](const HistoryEntry& e) { return e.url == url; });
   return entries_.size() != before;
 }
 
-void HistoryStore::Clear() {
+void HistoryStore::Clear()
+{
   std::lock_guard<std::mutex> lock(mutex_);
   entries_.clear();
 }
 
-}  // namespace neko::storage
+} // namespace neko::storage

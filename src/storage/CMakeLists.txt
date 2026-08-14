@@ -2,7 +2,7 @@
 # neko_storage — persistent profile data (Phase 10 preview).
 #
 # Self-implemented, line-oriented stores with atomic writes:
-#   cookies.txt  / history.txt  / bookmarks.txt
+#   cookies.txt  / history.txt  / bookmarks.txt  / local_storage.txt
 # No external dependencies.  See docs/architecture/architecture.md.
 # =============================================================================
 
@@ -12,6 +12,7 @@ add_library(neko_storage
   src/cookie_store.cpp
   src/history_store.cpp
   src/bookmark_store.cpp
+  src/local_storage.cpp
 )
 add_library(neko::storage ALIAS neko_storage)
 

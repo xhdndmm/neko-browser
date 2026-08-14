@@ -1,64 +1,57 @@
 #include "neko/storage/bookmark_store.h"
 
-#include <cctype>
-#include <random>
-
 #include "neko/base/logging.h"
 #include "neko/storage/field_codec.h"
 #include "neko/storage/file_util.h"
+
+#include <cctype>
+#include <random>
 
 namespace neko::storage {
 namespace {
 
 constexpr char kHex[] = "0123456789abcdef";
 
-bool ParseInt64(std::string_view s, int64_t* out) {
-  if (s.empty()) return false;
+bool ParseInt64(std::string_view s, int64_t* out)
+{
+  if (s.empty())
+    return false;
   int64_t v = 0;
   for (char c : s) {
-    if (!std::isdigit(static_cast<unsigned char>(c))) return false;
+    if (!std::isdigit(static_cast<unsigned char>(c)))
+      return false;
     v = v * 10 + (c - '0');
-    if (v < 0) return false;
+    if (v < 0)
+      return false;
   }
   *out = v;
   return true;
 }
 
-std::vector<std::string_view> SplitTabs(std::string_view line) {
-  std::vector<std::string_view> fields;
-  size_t start = 0;
-  while (true) {
-    const size_t tab = line.find('\t', start);
-    if (tab == std::string_view::npos) {
-      fields.push_back(line.substr(start));
-      break;
-    }
-    fields.push_back(line.substr(start, tab - start));
-    start = tab + 1;
-  }
-  return fields;
-}
-
-std::string NewId() {
+std::string NewId()
+{
   std::random_device rd;
   std::uniform_int_distribution<int> dist(0, 15);
   std::string id(16, '0');
-  for (char& c : id) c = kHex[dist(rd)];
+  for (char& c : id)
+    c = kHex[dist(rd)];
   return id;
 }
 
-}  // namespace
+} // namespace
 
 BookmarkStore::BookmarkStore(std::string profile_dir)
-    : profile_dir_(std::move(profile_dir)),
-      file_path_(profile_dir_ + "/bookmarks.txt") {}
+    : profile_dir_(std::move(profile_dir)), file_path_(profile_dir_ + "/bookmarks.txt")
+{}
 
-base::Result<void> BookmarkStore::Load() {
+base::Result<void> BookmarkStore::Load()
+{
   std::lock_guard<std::mutex> lock(mutex_);
   bookmarks_.clear();
   auto maybe_data = ReadFile(file_path_);
   if (!maybe_data) {
-    if (maybe_data.error().category() == base::ErrorCategory::kIo) return base::Error();
+    if (maybe_data.error().category() == base::ErrorCategory::kIo)
+      return base::Error();
     return maybe_data.error();
   }
   const std::string& data = maybe_data.value();
@@ -70,9 +63,10 @@ base::Result<void> BookmarkStore::Load() {
     const std::string_view line(data.data() + pos, end - pos);
     pos = (nl == std::string::npos) ? data.size() : nl + 1;
     ++line_no;
-    if (line.empty() || line.front() == '#') continue;
+    if (line.empty() || line.front() == '#')
+      continue;
 
-    const auto fields = SplitTabs(line);
+    const auto fields = SplitTabFields(line);
     if (fields.size() != 5) {
       NEKO_LOG_WARNING_F("bookmark store: skipping malformed line {}", line_no);
       continue;
@@ -95,7 +89,8 @@ base::Result<void> BookmarkStore::Load() {
   return base::Error();
 }
 
-base::Result<void> BookmarkStore::Save() const {
+base::Result<void> BookmarkStore::Save() const
+{
   std::lock_guard<std::mutex> lock(mutex_);
   std::string out = "# neko-bookmarks v1\n";
   for (const auto& b : bookmarks_) {
@@ -113,26 +108,31 @@ base::Result<void> BookmarkStore::Save() const {
   return WriteFileAtomic(file_path_, out);
 }
 
-base::Result<std::string> BookmarkStore::Add(std::string_view url, std::string_view title,
-                                             std::string_view folder, int64_t now) {
+base::Result<std::string> BookmarkStore::Add(std::string_view url,
+                                             std::string_view title,
+                                             std::string_view folder,
+                                             int64_t now)
+{
   std::lock_guard<std::mutex> lock(mutex_);
   if (url.empty()) {
     return base::Error::InvalidArgument("bookmark url must not be empty");
   }
   const std::string id = NewId();
-  bookmarks_.push_back(Bookmark{id, std::string(url), std::string(title),
-                                std::string(folder), now});
+  bookmarks_.push_back(
+      Bookmark{id, std::string(url), std::string(title), std::string(folder), now});
   return id;
 }
 
-bool BookmarkStore::Remove(std::string_view id) {
+bool BookmarkStore::Remove(std::string_view id)
+{
   std::lock_guard<std::mutex> lock(mutex_);
   const size_t before = bookmarks_.size();
   std::erase_if(bookmarks_, [&](const Bookmark& b) { return b.id == id; });
   return bookmarks_.size() != before;
 }
 
-bool BookmarkStore::UpdateTitle(std::string_view id, std::string_view title) {
+bool BookmarkStore::UpdateTitle(std::string_view id, std::string_view title)
+{
   std::lock_guard<std::mutex> lock(mutex_);
   for (auto& b : bookmarks_) {
     if (b.id == id) {
@@ -143,18 +143,21 @@ bool BookmarkStore::UpdateTitle(std::string_view id, std::string_view title) {
   return false;
 }
 
-std::vector<const Bookmark*> BookmarkStore::InFolder(std::string_view folder) const {
+std::vector<const Bookmark*> BookmarkStore::InFolder(std::string_view folder) const
+{
   std::lock_guard<std::mutex> lock(mutex_);
   std::vector<const Bookmark*> out;
   for (const auto& b : bookmarks_) {
-    if (b.folder == folder) out.push_back(&b);
+    if (b.folder == folder)
+      out.push_back(&b);
   }
   return out;
 }
 
-void BookmarkStore::Clear() {
+void BookmarkStore::Clear()
+{
   std::lock_guard<std::mutex> lock(mutex_);
   bookmarks_.clear();
 }
 
-}  // namespace neko::storage
+} // namespace neko::storage
