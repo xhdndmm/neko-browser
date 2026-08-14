@@ -1017,6 +1017,53 @@ TEST(LayoutTest, FloatRightHugsContainingBlockRightEdge)
   EXPECT_FLOAT_EQ(f->width, 80.0f);
 }
 
+TEST(LayoutTest, FloatLeftWithPaddingStaysAtContentEdge) {
+  // A float:left with padding must sit its margin box at the containing
+  // block's content left edge; its border box (and thus padding) extends
+  // rightward from there and must not shift left out of the block.
+  auto doc = html::Parser(
+                  "<body><div style=\"width:400px\">"
+                  "<span style=\"float:left;width:100px;height:50px;padding:10px\">L</span>"
+                  "text</div></body>")
+                  .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+  const LayoutBox* div = FindBox(*root, "div", *doc);
+  ASSERT_NE(div, nullptr);
+  ASSERT_EQ(div->floats.size(), 1u);
+  const LayoutBox* f = div->floats[0].get();
+  // Border box origin at the content left edge (margin box == border box
+  // when no margin): the box must not be shifted left by its padding.
+  EXPECT_FLOAT_EQ(f->x, div->content_x());
+  // Width includes the padding: 100 content + 10 + 10.
+  EXPECT_FLOAT_EQ(f->width, 120.0f);
+}
+
+TEST(LayoutTest, FloatRightWithMarginKeepsRightEdge) {
+  // A float:right with a left margin must still align its right margin box
+  // with the containing block's content right edge; the margin is taken out
+  // of the space between, not by shifting the whole box left.
+  auto doc = html::Parser(
+                  "<body><div style=\"width:400px\">"
+                  "<span style=\"float:right;width:80px;height:50px;margin-left:20px\">R</span>"
+                  "text</div></body>")
+                  .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+  const LayoutBox* div = FindBox(*root, "div", *doc);
+  ASSERT_NE(div, nullptr);
+  ASSERT_EQ(div->floats.size(), 1u);
+  const LayoutBox* f = div->floats[0].get();
+  // Right edge of the float (border box) aligns with the containing block's
+  // content right edge.  The left margin sits between the float and the
+  // content to its left; it does not shift the float off the right edge.
+  EXPECT_FLOAT_EQ(f->x + f->width, div->content_x() + div->content_width());
+}
+
 TEST(LayoutTest, FloatInsideTranslatedInlineBlockKeepsPosition) {
   // A float inside an inline-block is laid out at a local origin and then the
   // whole inline-block (including its floats) is translated to its final

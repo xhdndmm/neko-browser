@@ -947,14 +947,15 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
 
       // Horizontal placement: left float at the containing block's left edge,
       // right float at the right edge (aligned so its right margin box meets
-      // the right edge).  Set x/y before laying out content so the inner
-      // lines/runs are positioned at their final absolute coordinates.
+      // the right edge).  The border box origin sits at the margin edge (the
+      // same convention as in-flow blocks); border/padding extend right/down
+      // from there, so they are not subtracted.
       if (box->style.floating == style::Float::kLeft) {
-        box->x = left_edge + box->margin_left - box->border_left - box->padding_left;
+        box->x = left_edge + box->margin_left;
       } else {
-        box->x = left_edge + containing_width - box->margin_left - box->margin_right - box->width;
+        box->x = left_edge + containing_width - box->margin_right - box->width;
       }
-      box->y = float_y + box->margin_top - box->border_top - box->padding_top;
+      box->y = float_y + box->margin_top;
 
       const float avail_width = box->width - box->border_left - box->border_right -
                                 box->padding_left - box->padding_right;
