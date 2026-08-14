@@ -83,7 +83,7 @@ void FontSelector::AddFamily(const FontLibrary& library, std::string_view family
     return;
   }
   const std::string key = Lower(Unquote(family_name));
-  GenericFamily generic;
+  GenericFamily generic = GenericFamily::kSansSerif;
   bool is_generic = true;
   if (key == "sans-serif" || key == "cursive" || key == "fantasy") {
     generic = GenericFamily::kSansSerif;

@@ -37,7 +37,7 @@ std::string GzipCompress(std::string_view data)
     return {};
   }
   std::string out;
-  out.resize(deflateBound(&strm, data.size()));
+  out.resize(deflateBound(&strm, static_cast<uLong>(data.size())));
   strm.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data.data()));
   strm.avail_in = static_cast<uInt>(data.size());
   strm.next_out = reinterpret_cast<Bytef*>(out.data());
@@ -59,7 +59,7 @@ std::string ZlibCompress(std::string_view data)
     return {};
   }
   std::string out;
-  out.resize(deflateBound(&strm, data.size()));
+  out.resize(deflateBound(&strm, static_cast<uLong>(data.size())));
   strm.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data.data()));
   strm.avail_in = static_cast<uInt>(data.size());
   strm.next_out = reinterpret_cast<Bytef*>(out.data());
@@ -82,7 +82,7 @@ std::string RawDeflateCompress(std::string_view data)
     return {};
   }
   std::string out;
-  out.resize(deflateBound(&strm, data.size()));
+  out.resize(deflateBound(&strm, static_cast<uLong>(data.size())));
   strm.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data.data()));
   strm.avail_in = static_cast<uInt>(data.size());
   strm.next_out = reinterpret_cast<Bytef*>(out.data());

@@ -554,7 +554,7 @@ void BrowserController::LoadBytes(Tab& tab,
     tab.script_runtime = RunPageScripts(
         *new_page,
         final_url,
-        [this, &tab](const url::Url& script_url) {
+        [this](const url::Url& script_url) {
           return fetch_(script_url, CookieHeader(script_url, NowUnix()));
         },
         [this](std::string_view level, std::string_view text) { LogConsole(level, text); });

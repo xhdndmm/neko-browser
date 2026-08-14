@@ -413,7 +413,9 @@ void Parser::RunAdoptionAgency(std::string_view subject) {
     }
   };
 
-  for (int outer = 0; outer < 8; ++outer) {
+  // The adoption agency algorithm.  Every path in the body either completes
+  // the reconstruction or returns, so it runs a single pass.
+  {
     // Find the formatting element: the last element in the list (no markers)
     // whose tag name is `subject`.
     dom::Element* formatting = nullptr;
