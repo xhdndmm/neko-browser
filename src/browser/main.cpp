@@ -61,10 +61,14 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page, const std::strin
       if (!r) {
         return r;
       }
-      // Phase 8 M2: execute the page's inline scripts (mutates the DOM and
-      // re-applies styles inside RunPageScripts).
+      // Phase 8 M2: execute the page's scripts (inline + external src=,
+      // async/defer); scripts may mutate the DOM and RunPageScripts
+      // re-applies styles inside.
       neko::browser::RunPageScripts(
-          page, [](std::string_view level, std::string_view text) {
+          page,
+          url.Serialize(),
+          [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
+          [](std::string_view level, std::string_view text) {
             std::cout << "[" << level << "] " << text << "\n";
           });
       // Fetch and decode the page's <img> subresources (headless path).
@@ -80,7 +84,10 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page, const std::strin
         return r;
       }
       neko::browser::RunPageScripts(
-          page, [](std::string_view level, std::string_view text) {
+          page,
+          "",
+          [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
+          [](std::string_view level, std::string_view text) {
             std::cout << "[" << level << "] " << text << "\n";
           });
       // Local pages may still reference absolute http(s) images; fetch those.
@@ -98,7 +105,10 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page, const std::strin
     return r;
   }
   neko::browser::RunPageScripts(
-      page, [](std::string_view level, std::string_view text) {
+      page,
+      "",
+      [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
+      [](std::string_view level, std::string_view text) {
         std::cout << "[" << level << "] " << text << "\n";
       });
   return neko::base::Ok();

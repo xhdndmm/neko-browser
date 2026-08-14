@@ -529,13 +529,18 @@ void BrowserController::LoadBytes(Tab& tab,
       tab.title = "Parse error";
       return;
     }
-    // Phase 8 M2: execute the page's inline <script> elements with DOM
-    // bindings (mutating the DOM), then re-apply styles inside RunPageScripts.
-    // Console output from scripts goes to DevTools' console log.
+    // Phase 8 M2: execute the page's <script> elements (inline text and
+    // external src=) with DOM bindings, fetching external scripts through the
+    // same fetch path (with cookies).  Scripts may mutate the DOM;
+    // RunPageScripts re-applies styles inside.  Console output from scripts
+    // goes to DevTools' console log.
     tab.script_runtime = RunPageScripts(
-        *new_page, [this](std::string_view level, std::string_view text) {
-          LogConsole(level, text);
-        });
+        *new_page,
+        final_url,
+        [this, &tab](const url::Url& script_url) {
+          return fetch_(script_url, CookieHeader(script_url, NowUnix()));
+        },
+        [this](std::string_view level, std::string_view text) { LogConsole(level, text); });
     // Fetch and decode the page's <img> subresources before publishing.
     FetchPageImages(*new_page, final_url, fetch_);
     std::string title = new_page->document()->Title();
@@ -858,9 +863,8 @@ void FetchPageImages(renderer::Page& page,
   std::vector<std::future<base::Result<image::Image>>> futures;
   futures.reserve(pending.size());
   for (PendingImage& item : pending) {
-    futures.push_back(pool.Submit([bytes = std::move(item.bytes)]() {
-      return image::DecodeImage(bytes);
-    }));
+    futures.push_back(
+        pool.Submit([bytes = std::move(item.bytes)]() { return image::DecodeImage(bytes); }));
   }
   for (std::size_t i = 0; i < pending.size(); ++i) {
     auto decoded = futures[i].get();
