@@ -71,6 +71,9 @@ class MainWindow : public QMainWindow {
   // True while the user is editing the address bar; RefreshAll() then leaves
   // the text alone instead of clobbering it with the tab's URL.
   bool address_editing_ = false;
+  // Set while RefreshAll() writes the URL programmatically, so the
+  // selectionChanged signal it triggers is not mistaken for a user edit.
+  bool syncing_address_ = false;
 
   // Docks.
   QTreeWidget* dom_tree_ = nullptr;

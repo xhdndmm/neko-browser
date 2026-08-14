@@ -104,9 +104,18 @@ void MainWindow::BuildToolbar() {
   auto* toolbar = addToolBar(tr("Navigation"));
   toolbar->setMovable(false);
 
-  auto* back = toolbar->addAction(tr("◀"), this, [this] { worker_->Back(); });
-  auto* forward = toolbar->addAction(tr("▶"), this, [this] { worker_->Forward(); });
-  auto* reload = toolbar->addAction(tr("⟳"), this, [this] { worker_->Reload(); });
+  auto* back = toolbar->addAction(tr("◀"), this, [this] {
+    address_editing_ = false;
+    worker_->Back();
+  });
+  auto* forward = toolbar->addAction(tr("▶"), this, [this] {
+    address_editing_ = false;
+    worker_->Forward();
+  });
+  auto* reload = toolbar->addAction(tr("⟳"), this, [this] {
+    address_editing_ = false;
+    worker_->Reload();
+  });
   back->setToolTip(tr("Back"));
   forward->setToolTip(tr("Forward"));
   reload->setToolTip(tr("Reload"));
@@ -117,6 +126,7 @@ void MainWindow::BuildToolbar() {
   address_->setClearButtonEnabled(true);
   connect(address_, &QLineEdit::returnPressed, this, &MainWindow::OnNavigateRequested);
   connect(address_, &QLineEdit::textEdited, this, &MainWindow::OnAddressEdited);
+  connect(address_, &QLineEdit::selectionChanged, this, &MainWindow::OnAddressEdited);
   toolbar->addWidget(address_);
 
   toolbar->addSeparator();
@@ -227,9 +237,12 @@ void MainWindow::BuildDocks() {
 void MainWindow::OnStateChanged() { RefreshAll(); }
 
 void MainWindow::OnAddressEdited() {
-  // The user typed into the address bar; stop refreshing its text until the
-  // navigation is committed.
-  address_editing_ = true;
+  // The user typed or drag-selected in the address bar; stop refreshing its
+  // text until the edit is committed.  Programmatic writes (RefreshAll) are
+  // guarded by syncing_address_.
+  if (!syncing_address_) {
+    address_editing_ = true;
+  }
 }
 
 void MainWindow::OnNavigateRequested() {
@@ -305,9 +318,13 @@ void MainWindow::RefreshAll() {
   const browser::TabSnapshot tab = worker_->SnapshotActiveTab();
   if (tab.id >= 0) {
     // Don't clobber the address bar while the user is editing it (typing a
-    // new URL); only sync the URL once the edit is committed by Enter.
+    // new URL or drag-selecting the text): a refresh mid-edit resets the
+    // text and breaks the selection.  The programmatic write below is
+    // guarded so it does not re-mark the bar as edited.
     if (!tab.url.empty() && !address_editing_) {
+      syncing_address_ = true;
       address_->setText(FromUtf8(tab.url));
+      syncing_address_ = false;
     }
     QString title = FromUtf8(tab.title);
     if (title.isEmpty()) title = "Neko Browser";

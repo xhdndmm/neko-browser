@@ -378,8 +378,10 @@ base::Result<void> BrowserController::Navigate(int tab_id, const std::string& in
 
   NavigateToUrl(*tab, target);
 
-  // Update the address-bar URL for non-file schemes.
-  if (!StartsWith(target, "file://")) {
+  // Update the address-bar URL.  This covers file:// too (previously it was
+  // skipped, leaving the address bar blank and Reload/Back unable to show
+  // the current location).
+  {
     std::lock_guard<std::mutex> lock(mutex_);
     tab->url = target;
   }

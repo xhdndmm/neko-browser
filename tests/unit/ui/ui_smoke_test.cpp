@@ -86,6 +86,9 @@ TEST(UiSmokeTest, RendersLocalHtmlPage) {
 
   // Navigate through the worker (same path the address bar uses).
   worker.NavigateActive(QString::fromStdString(html_file));
+  // The offscreen platform keeps the address bar focused, which suppresses
+  // URL sync; drop focus to mimic the user clicking the page.
+  window.AddressBar()->clearFocus();
 
   // Wait until the GUI has refreshed and shows the page title in the tab
   // bar (which implies the controller finished routing/parsing it).
@@ -126,14 +129,49 @@ TEST(UiSmokeTest, NavigationUpdatesAddressBarAndHistory) {
 
   worker.NavigateActive(QString::fromStdString(html_file));
 
-  // The address bar is updated on the GUI thread after navigation; waiting
-  // on it also gives a happens-before for reading the controller.
+  // The address bar is updated on the GUI thread after navigation.  In the
+  // offscreen platform the address bar keeps focus, which suppresses the
+  // URL sync (the real GUI loses focus when the user clicks the page); mimic
+  // that by dropping focus so the refresh can write the URL.
+  window.AddressBar()->clearFocus();
   ASSERT_TRUE(WaitFor([&] {
     return window.AddressBar()->text().contains("nav.html");
   }));
   ASSERT_EQ(worker.SnapshotHistory().size(), 1u);
   EXPECT_NE(window.AddressBar()->text().toStdString().find("nav.html"),
             std::string::npos);
+}
+
+TEST(UiSmokeTest, BackUpdatesAddressBar) {
+  TempProfile tp;
+  const std::string a = tp.path() + "/a.html";
+  const std::string b = tp.path() + "/b.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(
+      a, "<html><head><title>A</title></head><body>a</body></html>")
+                  .has_value());
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(
+      b, "<html><head><title>B</title></head><body>b</body></html>")
+                  .has_value());
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.show();
+
+  // The offscreen platform keeps the address bar focused, which suppresses
+  // URL sync; drop focus to mimic the user clicking the page.
+  auto lose_focus = [&] { window.AddressBar()->clearFocus(); };
+
+  worker.NavigateActive(QString::fromStdString(a));
+  lose_focus();
+  ASSERT_TRUE(WaitFor([&] { return window.AddressBar()->text().contains("a.html"); }));
+  worker.NavigateActive(QString::fromStdString(b));
+  lose_focus();
+  ASSERT_TRUE(WaitFor([&] { return window.AddressBar()->text().contains("b.html"); }));
+
+  // Going back must refresh the address bar to the previous page's URL.
+  worker.Back();
+  lose_focus();
+  ASSERT_TRUE(WaitFor([&] { return window.AddressBar()->text().contains("a.html"); }));
 }
 
 TEST(UiSmokeTest, DevToolsConsoleEvaluatesJavaScript) {
