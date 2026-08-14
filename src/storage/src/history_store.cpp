@@ -53,6 +53,7 @@ HistoryStore::HistoryStore(std::string profile_dir)
       file_path_(profile_dir_ + "/history.txt") {}
 
 base::Result<void> HistoryStore::Load() {
+  std::lock_guard<std::mutex> lock(mutex_);
   entries_.clear();
   auto maybe_data = ReadFile(file_path_);
   if (!maybe_data) {
@@ -91,6 +92,7 @@ base::Result<void> HistoryStore::Load() {
 }
 
 base::Result<void> HistoryStore::Save() const {
+  std::lock_guard<std::mutex> lock(mutex_);
   std::string out = "# neko-history v1\n";
   for (const auto& e : entries_) {
     out += EncodeField(e.url);
@@ -106,6 +108,7 @@ base::Result<void> HistoryStore::Save() const {
 }
 
 void HistoryStore::RecordVisit(std::string_view url, std::string_view title, int64_t now) {
+  std::lock_guard<std::mutex> lock(mutex_);
   for (auto& e : entries_) {
     if (e.url == url) {
       e.title = std::string(title);
@@ -118,6 +121,11 @@ void HistoryStore::RecordVisit(std::string_view url, std::string_view title, int
 }
 
 std::vector<HistoryEntry> HistoryStore::All() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return AllLocked();
+}
+
+std::vector<HistoryEntry> HistoryStore::AllLocked() const {
   std::vector<HistoryEntry> out = entries_;
   std::stable_sort(out.begin(), out.end(),
                    [](const HistoryEntry& a, const HistoryEntry& b) {
@@ -127,7 +135,8 @@ std::vector<HistoryEntry> HistoryStore::All() const {
 }
 
 std::vector<HistoryEntry> HistoryStore::Search(std::string_view query) const {
-  if (query.empty()) return All();
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (query.empty()) return AllLocked();
   const std::string needle = ToLowerAscii(query);
   std::vector<HistoryEntry> out;
   for (const auto& e : entries_) {
@@ -144,11 +153,15 @@ std::vector<HistoryEntry> HistoryStore::Search(std::string_view query) const {
 }
 
 bool HistoryStore::Remove(std::string_view url) {
+  std::lock_guard<std::mutex> lock(mutex_);
   const size_t before = entries_.size();
   std::erase_if(entries_, [&](const HistoryEntry& e) { return e.url == url; });
   return entries_.size() != before;
 }
 
-void HistoryStore::Clear() { entries_.clear(); }
+void HistoryStore::Clear() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  entries_.clear();
+}
 
 }  // namespace neko::storage

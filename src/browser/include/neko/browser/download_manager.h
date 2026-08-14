@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -34,6 +35,10 @@ struct Download {
 // infrastructure yet; a GUI layer may run Start() on a worker thread).
 // Every download is recorded in |items()| so the UI can list past and
 // present downloads.
+//
+// Threading: internally synchronized — |mutex_| guards |items_|/|next_id_|
+// and is held only around short mutations (never across the network fetch),
+// so the GUI thread can read copies through items() while a download runs.
 class DownloadManager {
  public:
   using FetchFn = std::function<base::Result<network::HttpResponse>(const url::Url&)>;
@@ -44,13 +49,21 @@ class DownloadManager {
   // |cookie_header| is an optional "Cookie: ..." value to attach.
   base::Result<Download> Start(const url::Url& url, std::string_view cookie_header);
 
-  const std::vector<Download>& items() const { return items_; }
-  size_t size() const { return items_.size(); }
+  // All download records, copied under the lock (safe from any thread).
+  std::vector<Download> items() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return items_;
+  }
+  size_t size() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return items_.size();
+  }
   const Download* Find(int64_t id) const;
 
   const std::string& download_dir() const { return download_dir_; }
 
  private:
+  mutable std::mutex mutex_;
   std::string download_dir_;
   FetchFn fetch_;
   bool custom_fetch_ = false;

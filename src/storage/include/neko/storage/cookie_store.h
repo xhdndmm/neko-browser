@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -40,8 +41,10 @@ struct Cookie {
 //     client has no "site for cookies" / request-context concept.  Real
 //     enforcement requires navigation metadata (initiator site).
 //
-// Threading: single-threaded by design; all methods must be called from the
-// owning thread.  Save() is synchronous.
+// Threading: internally synchronized — every public method guards its
+// mutation/read with |mutex_|, so the store can be used from the worker
+// thread while the GUI thread reads snapshots (size/All).  Locked sections
+// are short; persistence (Save) is synchronous.
 class CookieStore {
  public:
   explicit CookieStore(std::string profile_dir);
@@ -80,15 +83,33 @@ class CookieStore {
 
   void Clear();
 
-  size_t size() const { return cookies_.size(); }
-  bool empty() const { return cookies_.empty(); }
+  size_t size() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return cookies_.size();
+  }
+  bool empty() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return cookies_.empty();
+  }
 
-  // All cookies (for UI listing / devtools).
-  const std::vector<Cookie>& All() const { return cookies_; }
+  // All cookies, copied under the lock (safe from any thread).
+  std::vector<Cookie> All() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return cookies_;
+  }
 
   const std::string& profile_dir() const { return profile_dir_; }
 
  private:
+  // Bodies of DeleteCookie/CookiesFor with |mutex_| already held (public
+  // methods lock and delegate; SetCookieFromHeader needs the DeleteCookie
+  // logic without re-entering the non-recursive lock).
+  bool DeleteCookieLocked(const std::string& name, const std::string& domain,
+                          const std::string& path);
+  std::vector<const Cookie*> CookiesForLocked(const url::Url& url,
+                                              int64_t now) const;
+
+  mutable std::mutex mutex_;
   std::string profile_dir_;
   std::string file_path_;
   std::vector<Cookie> cookies_;

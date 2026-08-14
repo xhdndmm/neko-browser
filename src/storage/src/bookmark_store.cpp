@@ -54,6 +54,7 @@ BookmarkStore::BookmarkStore(std::string profile_dir)
       file_path_(profile_dir_ + "/bookmarks.txt") {}
 
 base::Result<void> BookmarkStore::Load() {
+  std::lock_guard<std::mutex> lock(mutex_);
   bookmarks_.clear();
   auto maybe_data = ReadFile(file_path_);
   if (!maybe_data) {
@@ -95,6 +96,7 @@ base::Result<void> BookmarkStore::Load() {
 }
 
 base::Result<void> BookmarkStore::Save() const {
+  std::lock_guard<std::mutex> lock(mutex_);
   std::string out = "# neko-bookmarks v1\n";
   for (const auto& b : bookmarks_) {
     out += EncodeField(b.id);
@@ -113,6 +115,7 @@ base::Result<void> BookmarkStore::Save() const {
 
 base::Result<std::string> BookmarkStore::Add(std::string_view url, std::string_view title,
                                              std::string_view folder, int64_t now) {
+  std::lock_guard<std::mutex> lock(mutex_);
   if (url.empty()) {
     return base::Error::InvalidArgument("bookmark url must not be empty");
   }
@@ -123,12 +126,14 @@ base::Result<std::string> BookmarkStore::Add(std::string_view url, std::string_v
 }
 
 bool BookmarkStore::Remove(std::string_view id) {
+  std::lock_guard<std::mutex> lock(mutex_);
   const size_t before = bookmarks_.size();
   std::erase_if(bookmarks_, [&](const Bookmark& b) { return b.id == id; });
   return bookmarks_.size() != before;
 }
 
 bool BookmarkStore::UpdateTitle(std::string_view id, std::string_view title) {
+  std::lock_guard<std::mutex> lock(mutex_);
   for (auto& b : bookmarks_) {
     if (b.id == id) {
       b.title = std::string(title);
@@ -139,6 +144,7 @@ bool BookmarkStore::UpdateTitle(std::string_view id, std::string_view title) {
 }
 
 std::vector<const Bookmark*> BookmarkStore::InFolder(std::string_view folder) const {
+  std::lock_guard<std::mutex> lock(mutex_);
   std::vector<const Bookmark*> out;
   for (const auto& b : bookmarks_) {
     if (b.folder == folder) out.push_back(&b);
@@ -146,6 +152,9 @@ std::vector<const Bookmark*> BookmarkStore::InFolder(std::string_view folder) co
   return out;
 }
 
-void BookmarkStore::Clear() { bookmarks_.clear(); }
+void BookmarkStore::Clear() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  bookmarks_.clear();
+}
 
 }  // namespace neko::storage

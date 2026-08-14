@@ -58,6 +58,48 @@ void BrowserWorker::Navigate(int tab_id, const QString& input) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// GUI snapshots (thread-safe; forward to the controller's locked copies)
+// ---------------------------------------------------------------------------
+
+std::vector<browser::TabSnapshot> BrowserWorker::SnapshotTabs() const {
+  return controller_.SnapshotTabs();
+}
+
+browser::TabSnapshot BrowserWorker::SnapshotTab(int id) const {
+  return controller_.SnapshotTab(id);
+}
+
+browser::TabSnapshot BrowserWorker::SnapshotActiveTab() const {
+  return controller_.SnapshotActiveTab();
+}
+
+int BrowserWorker::ActiveTabIndex() const { return controller_.active_tab(); }
+
+std::vector<storage::HistoryEntry> BrowserWorker::SnapshotHistory() const {
+  return controller_.SnapshotHistory();
+}
+
+std::vector<storage::Bookmark> BrowserWorker::SnapshotBookmarks() const {
+  return controller_.SnapshotBookmarks();
+}
+
+std::vector<browser::Download> BrowserWorker::SnapshotDownloads() const {
+  return controller_.SnapshotDownloads();
+}
+
+size_t BrowserWorker::SnapshotCookieCount() const {
+  return controller_.SnapshotCookieCount();
+}
+
+std::vector<browser::NetworkLogEntry> BrowserWorker::SnapshotNetworkLog() const {
+  return controller_.SnapshotNetworkLog();
+}
+
+std::vector<browser::ConsoleEntry> BrowserWorker::SnapshotConsoleLog() const {
+  return controller_.SnapshotConsoleLog();
+}
+
 void BrowserWorker::NavigateActive(const QString& input) {
   Post([this, input = input.toStdString()] { (void)controller_.NavigateActive(input); });
 }
@@ -94,16 +136,7 @@ void BrowserWorker::BookmarkActive() {
 }
 
 void BrowserWorker::RemoveBookmark(const QString& url) {
-  Post([this, url = url.toStdString()] {
-    const auto& all = controller_.bookmarks().All();
-    for (const auto& b : all) {
-      if (b.url == url) {
-        controller_.bookmarks().Remove(b.id);
-        (void)controller_.Save();
-        break;
-      }
-    }
-  });
+  Post([this, url = url.toStdString()] { controller_.RemoveBookmark(url); });
 }
 
 void BrowserWorker::Download(const QString& url) {
@@ -114,8 +147,8 @@ void BrowserWorker::Download(const QString& url) {
       return;
     }
     const int64_t now = static_cast<int64_t>(std::time(nullptr));
-    auto result = controller_.downloads().Start(
-        parsed.value(), controller_.cookies().CookieHeaderFor(parsed.value(), now));
+    auto result = controller_.StartDownload(parsed.value(),
+                                            controller_.CookieHeader(parsed.value(), now));
     emit DownloadFinished(result.has_value()
                               ? static_cast<qint64>(result.value().id)
                               : -1,
@@ -124,13 +157,7 @@ void BrowserWorker::Download(const QString& url) {
 }
 
 void BrowserWorker::ClearStorage() {
-  Post([this] {
-    controller_.cookies().Clear();
-    controller_.history().Clear();
-    controller_.bookmarks().Clear();
-    controller_.ClearNetworkLog();
-    (void)controller_.Save();
-  });
+  Post([this] { controller_.ClearAllStorage(); });
 }
 
 namespace {

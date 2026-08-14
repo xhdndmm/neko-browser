@@ -94,7 +94,8 @@ TEST(CookieStoreTest, ParsesSetCookieAttributes) {
       now));
 
   ASSERT_EQ(store.size(), 1u);
-  const Cookie& c = store.All()[0];
+  const auto all = store.All();
+  const Cookie& c = all[0];
   EXPECT_THAT(c.name, Eq("sid"));
   EXPECT_THAT(c.value, Eq("abc123"));
   EXPECT_THAT(c.domain, Eq("example.com"));

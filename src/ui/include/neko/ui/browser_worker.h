@@ -10,6 +10,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "neko/browser/browser_controller.h"
 #include "neko/javascript/script_engine.h"
@@ -19,19 +20,38 @@ namespace neko::ui {
 // Owns the BrowserController and runs it on a dedicated thread so that the
 // synchronous network fetches never block the GUI thread.
 //
-// Threading: the controller is mutated ONLY on the worker thread; the GUI
-// thread reads controller state only after receiving StateChanged() (which
-// is delivered through Qt's queued connections, giving a happens-before).
+// Threading: the controller is mutated ONLY on the worker thread.  The GUI
+// thread never touches controller internals directly (there is no controller
+// accessor); it reads consistent copies through the Snapshot* methods, which
+// lock briefly inside the controller and are safe to call at ANY time —
+// including from repaint/wheel events while the worker is navigating or
+// closing tabs.  StateChanged() is emitted after each action for refresh.
 class BrowserWorker : public QObject {
   Q_OBJECT
  public:
   explicit BrowserWorker(QString profile_dir, QObject* parent = nullptr);
   ~BrowserWorker() override;
 
-  // Read-only access for the GUI (only after StateChanged()).
-  browser::BrowserController& controller() { return controller_; }
+  // -------------------------------------------------------------------------
+  // Thread-safe GUI reads (safe at any time, including while the worker is
+  // mid-navigation or closing tabs).
+  // -------------------------------------------------------------------------
+  std::vector<browser::TabSnapshot> SnapshotTabs() const;
+  browser::TabSnapshot SnapshotTab(int id) const;
+  browser::TabSnapshot SnapshotActiveTab() const;
+  int ActiveTabIndex() const;
+  std::vector<storage::HistoryEntry> SnapshotHistory() const;
+  std::vector<storage::Bookmark> SnapshotBookmarks() const;
+  std::vector<browser::Download> SnapshotDownloads() const;
+  size_t SnapshotCookieCount() const;
+  std::vector<browser::NetworkLogEntry> SnapshotNetworkLog() const;
+  std::vector<browser::ConsoleEntry> SnapshotConsoleLog() const;
+  std::string profile_dir() const { return controller_.profile_dir(); }
 
-  // Thread-safe: queues an action and returns immediately.
+  // -------------------------------------------------------------------------
+  // Actions (thread-safe: queues an action on the worker thread and returns
+  // immediately).
+  // -------------------------------------------------------------------------
   void Navigate(int tab_id, const QString& input);
   void NavigateActive(const QString& input);
   void Back();

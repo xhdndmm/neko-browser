@@ -97,15 +97,16 @@ TEST(UiSmokeTest, RendersLocalHtmlPage) {
     return false;
   }));
 
-  // The controller routed and parsed the page.
-  EXPECT_EQ(worker.controller().ActiveTab()->title, "UI Test");
-  EXPECT_EQ(worker.controller().ActiveTab()->content_type,
+  // The controller routed and parsed the page (read through the thread-safe
+  // snapshot API, the same path the GUI uses).
+  EXPECT_EQ(worker.SnapshotActiveTab().title, "UI Test");
+  EXPECT_EQ(worker.SnapshotActiveTab().content_type,
             neko::browser::ContentType::kHtml);
 
   // The address bar shows the file path and history has one entry.
   EXPECT_GE(window.TabBarWidget()->count(), 1);
   EXPECT_FALSE(window.AddressBar()->text().isEmpty());
-  EXPECT_EQ(worker.controller().history().size(), 1u);
+  EXPECT_EQ(worker.SnapshotHistory().size(), 1u);
 
   // Render the view to an image and verify it is non-blank.
   const QPixmap shot = window.grab();
@@ -131,7 +132,7 @@ TEST(UiSmokeTest, NavigationUpdatesAddressBarAndHistory) {
   ASSERT_TRUE(WaitFor([&] {
     return window.AddressBar()->text().contains("nav.html");
   }));
-  ASSERT_EQ(worker.controller().history().size(), 1u);
+  ASSERT_EQ(worker.SnapshotHistory().size(), 1u);
   EXPECT_NE(window.AddressBar()->text().toStdString().find("nav.html"),
             std::string::npos);
 }

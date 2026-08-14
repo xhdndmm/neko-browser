@@ -64,6 +64,7 @@ DownloadManager::DownloadManager(std::string download_dir, FetchFn fetch)
 }
 
 const Download* DownloadManager::Find(int64_t id) const {
+  std::lock_guard<std::mutex> lock(mutex_);
   const auto it = std::find_if(items_.begin(), items_.end(),
                                [id](const Download& d) { return d.id == id; });
   return it == items_.end() ? nullptr : &*it;
@@ -72,7 +73,10 @@ const Download* DownloadManager::Find(int64_t id) const {
 base::Result<Download> DownloadManager::Start(const url::Url& url,
                                               std::string_view cookie_header) {
   Download record;
-  record.id = next_id_++;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    record.id = next_id_++;
+  }
   record.url = url.Serialize();
   record.state = DownloadState::kInProgress;
 
@@ -90,11 +94,16 @@ base::Result<Download> DownloadManager::Start(const url::Url& url,
     }
     return network::HttpGet(url, 5, provider);
   };
+  // The fetch and the file write run WITHOUT |mutex_| so the GUI never
+  // blocks on a slow download; only the record mutations lock.
   auto response = fetch_lambda();
   if (!response) {
     record.state = DownloadState::kFailed;
     record.error = response.error().message();
-    items_.push_back(record);
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      items_.push_back(record);
+    }
     return base::Err(response.error());
   }
 
@@ -115,12 +124,18 @@ base::Result<Download> DownloadManager::Start(const url::Url& url,
   if (!written) {
     record.state = DownloadState::kFailed;
     record.error = written.error().message();
-    items_.push_back(record);
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      items_.push_back(record);
+    }
     return base::Err(written.error());
   }
 
   record.state = DownloadState::kCompleted;
-  items_.push_back(record);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    items_.push_back(record);
+  }
   NEKO_LOG_INFO("download " + std::to_string(record.id) + " -> " + record.filename +
                 " (" + std::to_string(record.total_bytes) + " bytes)");
   return record;

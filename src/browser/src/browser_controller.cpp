@@ -54,6 +54,24 @@ bool LooksLikeHtml(std::string_view bytes) {
   return i < bytes.size() && bytes[i] == '<';
 }
 
+// Copies the GUI-visible state of |tab|.  Called with the controller mutex
+// held; the shared payload handles keep the data alive for the caller.
+TabSnapshot ToSnapshot(const Tab& tab) {
+  TabSnapshot s;
+  s.id = tab.id;
+  s.url = tab.url;
+  s.title = tab.title;
+  s.loading = tab.loading;
+  s.content_type = tab.content_type;
+  s.page = tab.page;
+  s.image = tab.image;
+  s.pdf = tab.pdf;
+  s.audio = tab.audio;
+  s.raw_text = tab.raw_text;
+  s.error = tab.error;
+  return s;
+}
+
 }  // namespace
 
 std::string_view ToString(ContentType type) {
@@ -98,20 +116,23 @@ BrowserController::~BrowserController() { (void)Save(); }
 // ---------------------------------------------------------------------------
 
 int BrowserController::NewTab(const std::string& url, bool activate) {
-  auto tab = std::make_unique<Tab>();
-  tab->id = next_tab_id_++;
-  tabs_.push_back(std::move(tab));
-  const int id = tabs_.back()->id;
-  if (activate) {
-    ActivateTab(id);
-    if (!url.empty()) (void)Navigate(id, url);
-  } else if (!url.empty()) {
-    (void)Navigate(id, url);
+  int id;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto tab = std::make_unique<Tab>();
+    tab->id = next_tab_id_++;
+    tabs_.push_back(std::move(tab));
+    id = tabs_.back()->id;
+    if (activate) {
+      active_tab_ = static_cast<int>(tabs_.size()) - 1;
+    }
   }
+  if (!url.empty()) (void)Navigate(id, url);
   return id;
 }
 
 void BrowserController::ActivateTab(int id) {
+  std::lock_guard<std::mutex> lock(mutex_);
   for (size_t i = 0; i < tabs_.size(); ++i) {
     if (tabs_[i]->id == id) {
       active_tab_ = static_cast<int>(i);
@@ -121,6 +142,7 @@ void BrowserController::ActivateTab(int id) {
 }
 
 void BrowserController::CloseTab(int id) {
+  std::lock_guard<std::mutex> lock(mutex_);
   const auto it = std::find_if(tabs_.begin(), tabs_.end(),
                                [id](const auto& t) { return t->id == id; });
   if (it == tabs_.end()) return;
@@ -139,22 +161,84 @@ void BrowserController::CloseTab(int id) {
   }
 }
 
+int BrowserController::active_tab() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return active_tab_;
+}
+
 Tab* BrowserController::ActiveTab() {
+  std::lock_guard<std::mutex> lock(mutex_);
   if (active_tab_ < 0 || active_tab_ >= static_cast<int>(tabs_.size())) return nullptr;
   return tabs_[static_cast<size_t>(active_tab_)].get();
 }
 
 Tab* BrowserController::FindTab(int id) {
+  std::lock_guard<std::mutex> lock(mutex_);
   const auto it = std::find_if(tabs_.begin(), tabs_.end(),
                                [id](const auto& t) { return t->id == id; });
   return it == tabs_.end() ? nullptr : it->get();
 }
 
 ContentType BrowserController::active_content_type() const {
+  std::lock_guard<std::mutex> lock(mutex_);
   if (active_tab_ < 0 || active_tab_ >= static_cast<int>(tabs_.size())) {
     return ContentType::kError;
   }
   return tabs_[static_cast<size_t>(active_tab_)]->content_type;
+}
+
+// ---------------------------------------------------------------------------
+// GUI snapshots
+// ---------------------------------------------------------------------------
+
+std::vector<TabSnapshot> BrowserController::SnapshotTabs() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::vector<TabSnapshot> out;
+  out.reserve(tabs_.size());
+  for (const auto& tab : tabs_) {
+    out.push_back(ToSnapshot(*tab));
+  }
+  return out;
+}
+
+TabSnapshot BrowserController::SnapshotTab(int id) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (const auto& tab : tabs_) {
+    if (tab->id == id) return ToSnapshot(*tab);
+  }
+  return TabSnapshot{};
+}
+
+TabSnapshot BrowserController::SnapshotActiveTab() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (active_tab_ < 0 || active_tab_ >= static_cast<int>(tabs_.size())) {
+    return TabSnapshot{};
+  }
+  return ToSnapshot(*tabs_[static_cast<size_t>(active_tab_)]);
+}
+
+std::vector<storage::HistoryEntry> BrowserController::SnapshotHistory() const {
+  return history_.All();
+}
+
+std::vector<storage::Bookmark> BrowserController::SnapshotBookmarks() const {
+  return bookmarks_.All();
+}
+
+std::vector<Download> BrowserController::SnapshotDownloads() const {
+  return downloads_.items();
+}
+
+size_t BrowserController::SnapshotCookieCount() const { return cookies_.size(); }
+
+std::vector<NetworkLogEntry> BrowserController::SnapshotNetworkLog() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return network_log_;
+}
+
+std::vector<ConsoleEntry> BrowserController::SnapshotConsoleLog() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return console_log_;
 }
 
 // ---------------------------------------------------------------------------
@@ -195,16 +279,24 @@ void BrowserController::NavigateToUrl(Tab& tab, const std::string& url_string) {
     LoadLocalPath(tab, parsed.value().path());
     return;
   }
-  tab.loading = true;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    tab.loading = true;
+  }
   FetchAndLoad(tab, parsed.value());
-  tab.loading = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    tab.loading = false;
+  }
 }
 
 void BrowserController::LoadLocalPath(Tab& tab, const std::string& path) {
   auto maybe_bytes = storage::ReadFile(path);
   if (!maybe_bytes) {
+    std::lock_guard<std::mutex> lock(mutex_);
     tab.content_type = ContentType::kError;
-    tab.error = "cannot read file: " + maybe_bytes.error().message();
+    tab.error = std::make_shared<std::string>(
+        "cannot read file: " + maybe_bytes.error().message());
     tab.title = "File error";
     return;
   }
@@ -218,6 +310,7 @@ base::Result<void> BrowserController::Navigate(int tab_id, const std::string& in
   if (target.empty()) return base::Err(base::Error::InvalidArgument("empty URL"));
 
   // Push onto the back/forward stack (truncating any forward entries).
+  // The history stack is worker-thread only, so it needs no lock.
   if (!tab->history.empty() && tab->history_index >= 0 &&
       tab->history[static_cast<size_t>(tab->history_index)] == target) {
     // Reload of the current entry.
@@ -234,6 +327,7 @@ base::Result<void> BrowserController::Navigate(int tab_id, const std::string& in
 
   // Update the address-bar URL for non-file schemes.
   if (!StartsWith(target, "file://")) {
+    std::lock_guard<std::mutex> lock(mutex_);
     tab->url = target;
   }
   return base::Ok();
@@ -251,6 +345,7 @@ void BrowserController::Back() {
   --tab->history_index;
   const std::string target = tab->history[static_cast<size_t>(tab->history_index)];
   NavigateToUrl(*tab, target);
+  std::lock_guard<std::mutex> lock(mutex_);
   tab->url = target;
 }
 
@@ -260,6 +355,7 @@ void BrowserController::Forward() {
   ++tab->history_index;
   const std::string target = tab->history[static_cast<size_t>(tab->history_index)];
   NavigateToUrl(*tab, target);
+  std::lock_guard<std::mutex> lock(mutex_);
   tab->url = target;
 }
 
@@ -276,7 +372,7 @@ void BrowserController::Reload() {
 void BrowserController::FetchAndLoad(Tab& tab, const url::Url& url) {
   const auto start = std::chrono::steady_clock::now();
   const int64_t now = NowUnix();
-  const std::string cookie = cookies_.CookieHeaderFor(url, now);
+  const std::string cookie = CookieHeader(url, now);
   auto response = fetch_(url, cookie);
   const auto end = std::chrono::steady_clock::now();
   const double elapsed_ms =
@@ -288,10 +384,14 @@ void BrowserController::FetchAndLoad(Tab& tab, const url::Url& url) {
   entry.timestamp = NowUnix();
   if (!response) {
     entry.error = response.error().message();
-    network_log_.push_back(entry);
-    tab.content_type = ContentType::kError;
-    tab.error = "network error: " + response.error().message();
-    tab.title = "Network error";
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      network_log_.push_back(entry);
+      tab.content_type = ContentType::kError;
+      tab.error = std::make_shared<std::string>(
+          "network error: " + response.error().message());
+      tab.title = "Network error";
+    }
     LogConsole("error", "failed to fetch " + url.Serialize() + ": " +
                             response.error().message());
     return;
@@ -299,7 +399,10 @@ void BrowserController::FetchAndLoad(Tab& tab, const url::Url& url) {
 
   entry.status = response.value().status_code;
   entry.bytes = static_cast<int64_t>(response.value().body.size());
-  network_log_.push_back(entry);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    network_log_.push_back(entry);
+  }
 
   // Consume Set-Cookie headers.
   for (const network::HttpHeader& header : response.value().headers) {
@@ -309,11 +412,15 @@ void BrowserController::FetchAndLoad(Tab& tab, const url::Url& url) {
   }
 
   if (response.value().status_code >= 400) {
-    tab.content_type = ContentType::kError;
-    tab.error = "HTTP " + std::to_string(response.value().status_code) + " " +
-                response.value().reason;
-    tab.title = "HTTP " + std::to_string(response.value().status_code);
-    LogConsole("warning", tab.error);
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      tab.content_type = ContentType::kError;
+      tab.error = std::make_shared<std::string>(
+          "HTTP " + std::to_string(response.value().status_code) + " " +
+          response.value().reason);
+      tab.title = "HTTP " + std::to_string(response.value().status_code);
+    }
+    LogConsole("warning", *tab.error);
     return;
   }
 
@@ -339,18 +446,30 @@ void BrowserController::LoadBytes(Tab& tab, std::string_view bytes,
                         LooksLikeHtml(bytes));
 
   if (is_html) {
-    tab.content_type = ContentType::kHtml;
-    auto r = tab.page.LoadHtml(bytes);
+    // Build the new page entirely on the worker thread and publish it in one
+    // atomic step: a published Page (and its payload) is never mutated by the
+    // worker afterwards, so the GUI can safely hold a shared handle and
+    // Layout/Rasterize/hit-test it at any time.
+    auto new_page = std::make_shared<renderer::Page>();
+    auto r = new_page->LoadHtml(bytes);
     if (!r) {
+      std::lock_guard<std::mutex> lock(mutex_);
       tab.content_type = ContentType::kError;
-      tab.error = "HTML parse error: " + r.error().message();
+      tab.error = std::make_shared<std::string>(
+          "HTML parse error: " + r.error().message());
       tab.title = "Parse error";
       return;
     }
-    // Fetch and decode the page's <img> subresources.
-    FetchPageImages(tab.page, final_url, fetch_);
-    tab.title = tab.page.document()->Title();
-    if (tab.title.empty()) tab.title = final_url;
+    // Fetch and decode the page's <img> subresources before publishing.
+    FetchPageImages(*new_page, final_url, fetch_);
+    std::string title = new_page->document()->Title();
+    if (title.empty()) title = final_url;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      tab.content_type = ContentType::kHtml;
+      tab.page = std::move(new_page);
+      tab.title = std::move(title);
+    }
     RecordVisit(final_url, tab.title);
     return;
   }
@@ -358,14 +477,19 @@ void BrowserController::LoadBytes(Tab& tab, std::string_view bytes,
   if (is_image) {
     auto decoded = neko::image::DecodeImage(bytes);
     if (!decoded) {
+      std::lock_guard<std::mutex> lock(mutex_);
       tab.content_type = ContentType::kError;
-      tab.error = "image decode error: " + decoded.error().message();
+      tab.error = std::make_shared<std::string>(
+          "image decode error: " + decoded.error().message());
       tab.title = "Image error";
       return;
     }
-    tab.content_type = ContentType::kImage;
-    tab.image = std::move(decoded.value());
-    tab.title = final_url;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      tab.content_type = ContentType::kImage;
+      tab.image = std::make_shared<image::Image>(std::move(decoded.value()));
+      tab.title = final_url;
+    }
     RecordVisit(final_url, tab.title);
     return;
   }
@@ -373,14 +497,19 @@ void BrowserController::LoadBytes(Tab& tab, std::string_view bytes,
   if (is_pdf) {
     auto parsed = neko::pdf::ExtractText(bytes);
     if (!parsed) {
+      std::lock_guard<std::mutex> lock(mutex_);
       tab.content_type = ContentType::kError;
-      tab.error = "pdf error: " + parsed.error().message();
+      tab.error = std::make_shared<std::string>(
+          "pdf error: " + parsed.error().message());
       tab.title = "PDF error";
       return;
     }
-    tab.content_type = ContentType::kPdf;
-    tab.pdf = std::move(parsed.value());
-    tab.title = tab.pdf.title.empty() ? final_url : tab.pdf.title;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      tab.content_type = ContentType::kPdf;
+      tab.pdf = std::make_shared<pdf::PdfDocument>(std::move(parsed.value()));
+      tab.title = tab.pdf->title.empty() ? final_url : tab.pdf->title;
+    }
     RecordVisit(final_url, tab.title);
     return;
   }
@@ -388,30 +517,41 @@ void BrowserController::LoadBytes(Tab& tab, std::string_view bytes,
   if (is_audio) {
     auto decoded = neko::media::DecodeWav(bytes);
     if (!decoded) {
+      std::lock_guard<std::mutex> lock(mutex_);
       tab.content_type = ContentType::kError;
-      tab.error = "audio decode error: " + decoded.error().message();
+      tab.error = std::make_shared<std::string>(
+          "audio decode error: " + decoded.error().message());
       tab.title = "Audio error";
       return;
     }
-    tab.content_type = ContentType::kAudio;
-    tab.audio = std::move(decoded.value());
-    tab.title = final_url;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      tab.content_type = ContentType::kAudio;
+      tab.audio = std::make_shared<media::AudioData>(std::move(decoded.value()));
+      tab.title = final_url;
+    }
     RecordVisit(final_url, tab.title);
     return;
   }
 
   if (is_text) {
-    tab.content_type = ContentType::kText;
-    tab.raw_text.assign(bytes);
-    tab.title = final_url;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      tab.content_type = ContentType::kText;
+      tab.raw_text = std::make_shared<std::string>(bytes);
+      tab.title = final_url;
+    }
     RecordVisit(final_url, tab.title);
     return;
   }
 
   // Unknown binary content.
-  tab.content_type = ContentType::kOther;
-  tab.raw_text.assign(bytes);
-  tab.title = final_url;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    tab.content_type = ContentType::kOther;
+    tab.raw_text = std::make_shared<std::string>(bytes);
+    tab.title = final_url;
+  }
   RecordVisit(final_url, tab.title);
 }
 
@@ -433,12 +573,18 @@ base::Result<std::string> BrowserController::BookmarkActive(const std::string& f
 }
 
 void BrowserController::LogConsole(std::string_view level, std::string_view message) {
+  std::lock_guard<std::mutex> lock(mutex_);
   console_log_.push_back(ConsoleEntry{std::string(level), std::string(message),
                                       NowUnix()});
   if (console_log_.size() > 500) {
     console_log_.erase(console_log_.begin(), console_log_.begin() +
                                                  static_cast<ptrdiff_t>(console_log_.size() - 500));
   }
+}
+
+void BrowserController::ClearNetworkLog() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  network_log_.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -465,15 +611,51 @@ base::Result<void> BrowserController::Save() {
 }
 
 // ---------------------------------------------------------------------------
+// Worker-thread store operations
+// ---------------------------------------------------------------------------
+
+base::Result<Download> BrowserController::StartDownload(const url::Url& url,
+                                                        std::string_view cookie_header) {
+  return downloads_.Start(url, cookie_header);
+}
+
+void BrowserController::RemoveBookmark(const std::string& url) {
+  const auto all = bookmarks_.All();
+  for (const auto& b : all) {
+    if (b.url == url) {
+      (void)bookmarks_.Remove(b.id);
+      break;
+    }
+  }
+  (void)Save();
+}
+
+void BrowserController::ClearAllStorage() {
+  cookies_.Clear();
+  history_.Clear();
+  bookmarks_.Clear();
+  ClearNetworkLog();
+  (void)Save();
+}
+
+std::string BrowserController::CookieHeader(const url::Url& url, int64_t now) const {
+  return cookies_.CookieHeaderFor(url, now);
+}
+
+// ---------------------------------------------------------------------------
 // DevTools output
 // ---------------------------------------------------------------------------
 
 std::string BrowserController::DumpDom() const {
+  std::lock_guard<std::mutex> lock(mutex_);
   if (active_tab_ < 0 || active_tab_ >= static_cast<int>(tabs_.size())) return "";
-  return tabs_[static_cast<size_t>(active_tab_)]->page.DumpDom();
+  const std::shared_ptr<renderer::Page>& page =
+      tabs_[static_cast<size_t>(active_tab_)]->page;
+  return page != nullptr ? page->DumpDom() : std::string();
 }
 
 std::string BrowserController::DumpNetworkLog() const {
+  std::lock_guard<std::mutex> lock(mutex_);
   std::string out;
   for (const NetworkLogEntry& entry : network_log_) {
     out += entry.method;

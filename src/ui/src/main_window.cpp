@@ -38,7 +38,7 @@ MainWindow::MainWindow(BrowserWorker* worker, QWidget* parent)
     : QMainWindow(parent), worker_(worker) {
   BuildUi();
   // Ensure at least one tab exists (created through the worker thread).
-  if (worker_->controller().tabs().empty()) {
+  if (worker_->SnapshotTabs().empty()) {
     worker_->NewTab("", true);
   }
   connect(worker_, &BrowserWorker::StateChanged, this, &MainWindow::OnStateChanged,
@@ -225,19 +225,23 @@ void MainWindow::Navigate(const QString& input) {
     worker_->NewTab(input, true);
     return;
   }
-  worker_->Navigate(worker_->controller().tabs()[static_cast<size_t>(index)]->id, input);
+  const auto tabs = worker_->SnapshotTabs();
+  if (index >= static_cast<int>(tabs.size())) return;
+  worker_->Navigate(tabs[static_cast<size_t>(index)].id, input);
 }
 
 void MainWindow::OnTabBarChanged(int index) {
   if (index < 0) return;
   pages_->setCurrentIndex(index);
-  worker_->ActivateTab(worker_->controller().tabs()[static_cast<size_t>(index)]->id);
+  const auto tabs = worker_->SnapshotTabs();
+  if (index >= static_cast<int>(tabs.size())) return;
+  worker_->ActivateTab(tabs[static_cast<size_t>(index)].id);
 }
 
 void MainWindow::OnTabCloseRequested(int index) {
-  const auto& tabs = worker_->controller().tabs();
-  if (index >= static_cast<int>(tabs.size())) return;
-  worker_->CloseTab(tabs[static_cast<size_t>(index)]->id);
+  const auto tabs = worker_->SnapshotTabs();
+  if (index < 0 || index >= static_cast<int>(tabs.size())) return;
+  worker_->CloseTab(tabs[static_cast<size_t>(index)].id);
   // The worker will emit StateChanged and re-sync the tab bar.
 }
 
@@ -249,9 +253,9 @@ void MainWindow::OnBookmark() {
 }
 
 void MainWindow::OnDownloadActive() {
-  const auto* tab = worker_->controller().ActiveTab();
-  if (tab == nullptr || tab->url.empty()) return;
-  worker_->Download(FromUtf8(tab->url));
+  const browser::TabSnapshot tab = worker_->SnapshotActiveTab();
+  if (tab.id < 0 || tab.url.empty()) return;
+  worker_->Download(FromUtf8(tab.url));
 }
 
 void MainWindow::OnHistoryActivated(QListWidgetItem* item) {
@@ -277,12 +281,12 @@ void MainWindow::OnConsoleCommand() {
 void MainWindow::RefreshAll() {
   SyncTabs();
   // Address bar + title from the active tab.
-  const auto* tab = worker_->controller().ActiveTab();
-  if (tab != nullptr) {
-    if (!tab->url.empty()) {
-      address_->setText(FromUtf8(tab->url));
+  const browser::TabSnapshot tab = worker_->SnapshotActiveTab();
+  if (tab.id >= 0) {
+    if (!tab.url.empty()) {
+      address_->setText(FromUtf8(tab.url));
     }
-    QString title = FromUtf8(tab->title);
+    QString title = FromUtf8(tab.title);
     if (title.isEmpty()) title = "Neko Browser";
     setWindowTitle(title + QStringLiteral(" — Neko Browser"));
   } else {
@@ -295,8 +299,8 @@ void MainWindow::RefreshAll() {
 }
 
 void MainWindow::SyncTabs() {
-  const auto& tabs = worker_->controller().tabs();
-  const int active = worker_->controller().active_tab();
+  const auto tabs = worker_->SnapshotTabs();
+  const int active = worker_->ActiveTabIndex();
   const size_t tab_count = tabs.size();
 
   // Rebuild the per-tab views whenever the set/order of tab ids changes
@@ -304,7 +308,7 @@ void MainWindow::SyncTabs() {
   // so pointer identity is not stable — ids are).
   QVector<int> ids;
   ids.reserve(static_cast<int>(tab_count));
-  for (const auto& tab : tabs) ids.push_back(tab->id);
+  for (const auto& tab : tabs) ids.push_back(tab.id);
   if (ids != view_ids_) {
     for (WebView* view : views_) {
       pages_->removeWidget(view);
@@ -313,21 +317,21 @@ void MainWindow::SyncTabs() {
     views_.clear();
     view_ids_.clear();
     for (const auto& tab : tabs) {
-      auto* view = new WebView(worker_, tab->id, this);
+      auto* view = new WebView(worker_, tab.id, this);
       views_.append(view);
-      view_ids_.append(tab->id);
+      view_ids_.append(tab.id);
       pages_->addWidget(view);
     }
   }
 
   // Sync tab bar labels.
   for (int i = 0; i < tab_bar_->count() && i < static_cast<int>(tab_count); ++i) {
-    const auto& tab = tabs[static_cast<size_t>(i)];
-    QString label = FromUtf8(tab->title);
-    if (label.isEmpty()) label = FromUtf8(tab->url);
+    const browser::TabSnapshot& tab = tabs[static_cast<size_t>(i)];
+    QString label = FromUtf8(tab.title);
+    if (label.isEmpty()) label = FromUtf8(tab.url);
     if (label.isEmpty()) label = tr("New Tab");
     if (label.size() > 24) label = label.left(24) + "\u2026";
-    if (tab->loading) {
+    if (tab.loading) {
       label += " \u2026";
     }
     if (tab_bar_->tabText(i) != label) tab_bar_->setTabText(i, label);
@@ -350,7 +354,7 @@ void MainWindow::RefreshDevTools() {
   PopulateDomTree(dom_tree_);
 
   network_list_->clear();
-  for (const auto& entry : worker_->controller().network_log()) {
+  for (const auto& entry : worker_->SnapshotNetworkLog()) {
     QString line;
     if (entry.error.empty()) {
       line = QStringLiteral("%1 → %2 (%3 bytes)").arg(entry.status).arg(FromUtf8(entry.url))
@@ -363,16 +367,20 @@ void MainWindow::RefreshDevTools() {
   }
 
   console_view_->clear();
-  for (const auto& entry : worker_->controller().console_log()) {
+  for (const auto& entry : worker_->SnapshotConsoleLog()) {
     console_view_->appendPlainText(
         QStringLiteral("[%1] %2").arg(FromUtf8(entry.level), FromUtf8(entry.message)));
   }
 }
 
 void MainWindow::RefreshLists() {
+  const auto history = worker_->SnapshotHistory();
+  const auto bookmarks = worker_->SnapshotBookmarks();
+  const auto downloads = worker_->SnapshotDownloads();
+
   // History.
   history_list_->clear();
-  for (const auto& entry : worker_->controller().history().All()) {
+  for (const auto& entry : history) {
     auto* item = new QListWidgetItem(FromUtf8(entry.title.empty() ? entry.url : entry.title),
                                      history_list_);
     item->setToolTip(FromUtf8(entry.url));
@@ -381,7 +389,7 @@ void MainWindow::RefreshLists() {
 
   // Bookmarks.
   bookmark_list_->clear();
-  for (const auto& b : worker_->controller().bookmarks().All()) {
+  for (const auto& b : bookmarks) {
     auto* item = new QListWidgetItem(
         FromUtf8(b.title.empty() ? b.url : b.title) +
             (b.folder.empty() ? QString() : QStringLiteral("  [%1]").arg(FromUtf8(b.folder))),
@@ -391,7 +399,7 @@ void MainWindow::RefreshLists() {
 
   // Downloads.
   download_list_->clear();
-  for (const auto& d : worker_->controller().downloads().items()) {
+  for (const auto& d : downloads) {
     download_list_->addItem(QStringLiteral("%1  %2  %3 bytes")
                                 .arg(FromUtf8(browser::ToString(d.state)))
                                 .arg(FromUtf8(d.url))
@@ -400,22 +408,26 @@ void MainWindow::RefreshLists() {
 
   // Settings.
   if (settings_profile_ != nullptr) {
-    settings_profile_->setText(tr("Profile: %1")
-                                   .arg(FromUtf8(worker_->controller().profile_dir())));
+    settings_profile_->setText(tr("Profile: %1").arg(FromUtf8(worker_->profile_dir())));
     settings_counts_->setText(
         tr("Cookies: %1   History: %2   Bookmarks: %3   Downloads: %4")
-            .arg(worker_->controller().cookies().size())
-            .arg(worker_->controller().history().size())
-            .arg(worker_->controller().bookmarks().size())
-            .arg(worker_->controller().downloads().size()));
+            .arg(worker_->SnapshotCookieCount())
+            .arg(history.size())
+            .arg(bookmarks.size())
+            .arg(downloads.size()));
   }
 }
 
 void MainWindow::PopulateDomTree(QTreeWidget* tree) {
   tree->clear();
-  auto* tab = worker_->controller().ActiveTab();
-  if (tab == nullptr || tab->content_type != browser::ContentType::kHtml) return;
-  const dom::Node* root = tab->page.document();
+  const browser::TabSnapshot tab = worker_->SnapshotActiveTab();
+  if (tab.id < 0 || tab.content_type != browser::ContentType::kHtml ||
+      tab.page == nullptr) {
+    return;
+  }
+  // The snapshot keeps the page (and its DOM) alive; a published page is
+  // never mutated by the worker, so walking the document is safe here.
+  const dom::Node* root = tab.page->document();
   if (root == nullptr) return;
 
   const std::function<void(const dom::Node*, QTreeWidgetItem*)> add = [&](const dom::Node* node,

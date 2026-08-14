@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -34,6 +35,13 @@ enum class ContentType {
 std::string_view ToString(ContentType type);
 
 // One tab: its navigation history and the current page state.
+//
+// Threading: every member except |id| is written ONLY on the worker thread
+// and read by the GUI exclusively through the TabSnapshot copies produced by
+// BrowserController::Snapshot*.  Navigation publishes a freshly built
+// |page| (and payloads) under the controller mutex; the GUI keeps the shared
+// handles alive, so closing or navigating a tab never invalidates what the
+// GUI is currently rendering.
 struct Tab {
   int id = 0;
   std::string url;
@@ -41,19 +49,41 @@ struct Tab {
   bool loading = false;
 
   ContentType content_type = ContentType::kHtml;
-  renderer::Page page;            // kHtml
-  image::Image image;             // kImage
-  pdf::PdfDocument pdf;           // kPdf
-  media::AudioData audio;         // kAudio
-  std::string raw_text;           // kText / kOther
-  std::string error;              // kError
+  // kHtml.  Replaced wholesale by each navigation (never mutated in place
+  // after publishing), so a held handle is safe to Layout/Rasterize/read.
+  std::shared_ptr<renderer::Page> page;
+  std::shared_ptr<image::Image> image;           // kImage
+  std::shared_ptr<pdf::PdfDocument> pdf;         // kPdf
+  std::shared_ptr<media::AudioData> audio;       // kAudio
+  std::shared_ptr<std::string> raw_text;         // kText / kOther
+  std::shared_ptr<std::string> error;            // kError
 
-  std::vector<std::string> history;  // back/forward stack (URLs)
+  // Back/forward stack; worker-thread only (not exposed to the GUI).
+  std::vector<std::string> history;
   int history_index = -1;
 
   bool CanGoBack() const { return history_index > 0; }
   bool CanGoForward() const { return history_index >= 0 &&
                                      history_index + 1 < static_cast<int>(history.size()); }
+};
+
+// A consistent copy of everything the GUI needs to render one tab.  Produced
+// under the controller mutex; the snapshot owns its payload through shared
+// handles, so it stays valid even if the tab is closed or navigates
+// afterwards.  |id| is -1 when no such tab exists.
+struct TabSnapshot {
+  int id = -1;
+  std::string url;
+  std::string title;
+  bool loading = false;
+  ContentType content_type = ContentType::kHtml;
+
+  std::shared_ptr<renderer::Page> page;           // kHtml
+  std::shared_ptr<image::Image> image;            // kImage
+  std::shared_ptr<pdf::PdfDocument> pdf;          // kPdf
+  std::shared_ptr<media::AudioData> audio;        // kAudio
+  std::shared_ptr<std::string> raw_text;          // kText / kOther
+  std::shared_ptr<std::string> error;             // kError
 };
 
 // A network request record for DevTools.
@@ -78,8 +108,12 @@ struct ConsoleEntry {
 // stores, and exposes a DevTools view of what the engine is doing.  The UI
 // (Qt, CLI) talks only to this controller, never to engine internals.
 //
-// Threading: single-threaded by design.  Network fetches are synchronous;
-// a GUI layer may run Navigate()/Start() on a worker thread.
+// Threading: the controller is single-threaded by design — all mutation
+// happens on one worker thread (network fetches are synchronous).  The GUI
+// thread never touches the controller's internals directly; it reads
+// consistent copies through the Snapshot* accessors, which lock |mutex_|
+// briefly.  The lock is never held across network fetches or HTML parsing,
+// so GUI reads never block on slow navigation.
 class BrowserController {
  public:
   // Injectable fetch function (tests use a fake; production defaults to
@@ -95,15 +129,31 @@ class BrowserController {
   BrowserController& operator=(const BrowserController&) = delete;
 
   // -------------------------------------------------------------------------
-  // Tabs
+  // Tabs (mutating methods run on the worker thread)
   // -------------------------------------------------------------------------
   int NewTab(const std::string& url = "", bool activate = true);
   void CloseTab(int id);
   void ActivateTab(int id);
-  int active_tab() const { return active_tab_; }
+
+  // Worker/test thread only: raw handles into the live tab list.  The GUI
+  // must use SnapshotTabs()/SnapshotActiveTab() instead.
+  int active_tab() const;
   Tab* ActiveTab();
   const std::vector<std::unique_ptr<Tab>>& tabs() const { return tabs_; }
   Tab* FindTab(int id);
+
+  // -------------------------------------------------------------------------
+  // GUI snapshots (thread-safe; lock internally)
+  // -------------------------------------------------------------------------
+  std::vector<TabSnapshot> SnapshotTabs() const;
+  TabSnapshot SnapshotTab(int id) const;
+  TabSnapshot SnapshotActiveTab() const;
+  std::vector<storage::HistoryEntry> SnapshotHistory() const;
+  std::vector<storage::Bookmark> SnapshotBookmarks() const;
+  std::vector<Download> SnapshotDownloads() const;
+  size_t SnapshotCookieCount() const;
+  std::vector<NetworkLogEntry> SnapshotNetworkLog() const;
+  std::vector<ConsoleEntry> SnapshotConsoleLog() const;
 
   // -------------------------------------------------------------------------
   // Navigation
@@ -120,12 +170,19 @@ class BrowserController {
   ContentType active_content_type() const;
 
   // -------------------------------------------------------------------------
-  // Profile stores
+  // Profile stores (worker thread only; GUI reads via Snapshot*)
   // -------------------------------------------------------------------------
   storage::CookieStore& cookies() { return cookies_; }
   storage::HistoryStore& history() { return history_; }
   storage::BookmarkStore& bookmarks() { return bookmarks_; }
   DownloadManager& downloads() { return downloads_; }
+
+  // Worker-thread store operations (lock internally).
+  base::Result<Download> StartDownload(const url::Url& url,
+                                       std::string_view cookie_header);
+  void RemoveBookmark(const std::string& url);
+  void ClearAllStorage();
+  std::string CookieHeader(const url::Url& url, int64_t now) const;
 
   base::Result<void> Save();
   base::Result<void> Load();
@@ -134,10 +191,10 @@ class BrowserController {
   base::Result<std::string> BookmarkActive(const std::string& folder = "");
 
   // -------------------------------------------------------------------------
-  // DevTools data
+  // DevTools data (GUI reads via Snapshot*)
   // -------------------------------------------------------------------------
   const std::vector<NetworkLogEntry>& network_log() const { return network_log_; }
-  void ClearNetworkLog() { network_log_.clear(); }
+  void ClearNetworkLog();
   const std::vector<ConsoleEntry>& console_log() const { return console_log_; }
   void LogConsole(std::string_view level, std::string_view message);
   std::string DumpDom() const;         // active tab
@@ -158,6 +215,12 @@ class BrowserController {
 
   std::string profile_dir_;
   FetchFn fetch_;
+
+  // Guards every member the GUI can observe through the Snapshot* accessors:
+  // tabs_/active_tab_/next_tab_id_, network_log_/console_log_ and the store
+  // contents.  Held only around short reads/writes; never across network
+  // fetches or HTML parsing.
+  mutable std::mutex mutex_;
 
   std::vector<std::unique_ptr<Tab>> tabs_;
   int active_tab_ = -1;

@@ -199,7 +199,7 @@ TEST(BrowserControllerTest, NavigatesToHtmlAndRecordsHistory) {
   EXPECT_EQ(tab->content_type, ContentType::kHtml);
   EXPECT_EQ(tab->title, "Hello");
   EXPECT_EQ(tab->url, "http://example.com/");
-  EXPECT_EQ(tab->page.document()->Title(), "Hello");
+  EXPECT_EQ(tab->page->document()->Title(), "Hello");
   EXPECT_EQ(controller.history().size(), 1u);
   EXPECT_EQ(controller.history().All()[0].url, "http://example.com/");
   EXPECT_EQ(fetch.requests_.size(), 1u);
@@ -241,8 +241,8 @@ TEST(BrowserControllerTest, RoutesImageContent) {
   ASSERT_TRUE(controller.NavigateActive("http://example.com/img.png").has_value());
   Tab* tab = controller.ActiveTab();
   EXPECT_EQ(tab->content_type, ContentType::kImage);
-  EXPECT_EQ(tab->image.width, 2);
-  EXPECT_EQ(tab->image.height, 2);
+  EXPECT_EQ(tab->image->width, 2);
+  EXPECT_EQ(tab->image->height, 2);
 }
 
 TEST(BrowserControllerTest, RoutesPdfContent) {
@@ -256,8 +256,8 @@ TEST(BrowserControllerTest, RoutesPdfContent) {
   ASSERT_TRUE(controller.NavigateActive("http://example.com/doc.pdf").has_value());
   Tab* tab = controller.ActiveTab();
   EXPECT_EQ(tab->content_type, ContentType::kPdf);
-  EXPECT_EQ(tab->pdf.page_count, 1);
-  EXPECT_THAT(tab->pdf.pages[0].text, testing::HasSubstr("Extracted PDF Words"));
+  EXPECT_EQ(tab->pdf->page_count, 1);
+  EXPECT_THAT(tab->pdf->pages[0].text, testing::HasSubstr("Extracted PDF Words"));
 }
 
 TEST(BrowserControllerTest, RoutesAudioContent) {
@@ -270,8 +270,8 @@ TEST(BrowserControllerTest, RoutesAudioContent) {
   ASSERT_TRUE(controller.NavigateActive("http://example.com/sound.wav").has_value());
   Tab* tab = controller.ActiveTab();
   EXPECT_EQ(tab->content_type, ContentType::kAudio);
-  EXPECT_EQ(tab->audio.sample_rate, 8000);
-  EXPECT_EQ(tab->audio.samples.size(), 4u);
+  EXPECT_EQ(tab->audio->sample_rate, 8000);
+  EXPECT_EQ(tab->audio->samples.size(), 4u);
 }
 
 TEST(BrowserControllerTest, RoutesPlainText) {
@@ -284,7 +284,7 @@ TEST(BrowserControllerTest, RoutesPlainText) {
   controller.NewTab();
   ASSERT_TRUE(controller.NavigateActive("http://example.com/notes.txt").has_value());
   EXPECT_EQ(controller.ActiveTab()->content_type, ContentType::kText);
-  EXPECT_EQ(controller.ActiveTab()->raw_text, "plain text content");
+  EXPECT_EQ(*controller.ActiveTab()->raw_text, "plain text content");
 }
 
 TEST(BrowserControllerTest, ReportsHttpError) {
@@ -297,7 +297,7 @@ TEST(BrowserControllerTest, ReportsHttpError) {
   ASSERT_TRUE(controller.NavigateActive("http://example.com/missing").has_value());
   Tab* tab = controller.ActiveTab();
   EXPECT_EQ(tab->content_type, ContentType::kError);
-  EXPECT_NE(tab->error.find("404"), std::string::npos);
+  EXPECT_NE(tab->error->find("404"), std::string::npos);
   // Errors still land in the network log (DevTools).
   ASSERT_FALSE(controller.network_log().empty());
   EXPECT_EQ(controller.network_log().back().status, 404);

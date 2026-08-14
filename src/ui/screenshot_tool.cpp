@@ -50,8 +50,8 @@ int main(int argc, char** argv) {
   bool ready = false;
   for (int i = 0; i < 200 && !ready; ++i) {
     QCoreApplication::processEvents();
-    const auto* tab = worker.controller().ActiveTab();
-    ready = tab != nullptr && !tab->title.empty();
+    const auto tab = worker.SnapshotActiveTab();
+    ready = tab.id >= 0 && !tab.title.empty();
     if (!ready) std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
 

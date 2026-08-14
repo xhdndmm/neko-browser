@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -20,7 +21,8 @@ struct Bookmark {
 
 // A persistent, line-oriented bookmark store.
 //
-// Threading: single-threaded; call from the owning thread.
+// Threading: internally synchronized — every public method guards its
+// mutation/read with |mutex_|; the GUI thread reads copies through All().
 class BookmarkStore {
  public:
   explicit BookmarkStore(std::string profile_dir);
@@ -42,18 +44,25 @@ class BookmarkStore {
   // Updates the title of a bookmark by id.  Returns true on success.
   bool UpdateTitle(std::string_view id, std::string_view title);
 
-  // All bookmarks (stable order: insertion order).
-  const std::vector<Bookmark>& All() const { return bookmarks_; }
+  // All bookmarks (stable order: insertion order).  Copy under lock.
+  std::vector<Bookmark> All() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return bookmarks_;
+  }
 
   // Bookmarks in a folder.
   std::vector<const Bookmark*> InFolder(std::string_view folder) const;
 
   void Clear();
-  size_t size() const { return bookmarks_.size(); }
+  size_t size() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return bookmarks_.size();
+  }
 
   const std::string& profile_dir() const { return profile_dir_; }
 
  private:
+  mutable std::mutex mutex_;
   std::string profile_dir_;
   std::string file_path_;
   std::vector<Bookmark> bookmarks_;

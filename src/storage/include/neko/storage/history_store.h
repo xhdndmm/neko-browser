@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -23,7 +24,8 @@ struct HistoryEntry {
 // honest about it.  Entries are keyed by URL: revisiting updates the visit
 // count and timestamp instead of inserting a duplicate.
 //
-// Threading: single-threaded; call from the owning thread.
+// Threading: internally synchronized — every public method guards its
+// mutation/read with |mutex_|; the GUI thread reads copies through All().
 class HistoryStore {
  public:
   explicit HistoryStore(std::string profile_dir);
@@ -38,7 +40,7 @@ class HistoryStore {
   // Records a visit to |url| at |now|, updating the existing entry if any.
   void RecordVisit(std::string_view url, std::string_view title, int64_t now);
 
-  // All entries sorted by last_visit (most recent first).
+  // All entries sorted by last_visit (most recent first).  Copy under lock.
   std::vector<HistoryEntry> All() const;
 
   // Entries whose URL or title contains |query| (case-insensitive).
@@ -48,12 +50,22 @@ class HistoryStore {
   bool Remove(std::string_view url);
 
   void Clear();
-  size_t size() const { return entries_.size(); }
-  bool empty() const { return entries_.empty(); }
+  size_t size() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return entries_.size();
+  }
+  bool empty() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return entries_.empty();
+  }
 
   const std::string& profile_dir() const { return profile_dir_; }
 
  private:
+  // All entries sorted by last_visit, with |mutex_| already held.
+  std::vector<HistoryEntry> AllLocked() const;
+
+  mutable std::mutex mutex_;
   std::string profile_dir_;
   std::string file_path_;
   std::vector<HistoryEntry> entries_;

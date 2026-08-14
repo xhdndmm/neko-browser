@@ -253,6 +253,7 @@ CookieStore::CookieStore(std::string profile_dir)
       file_path_(profile_dir_ + "/cookies.txt") {}
 
 base::Result<void> CookieStore::Load() {
+  std::lock_guard<std::mutex> lock(mutex_);
   cookies_.clear();
   auto maybe_data = ReadFile(file_path_);
   if (!maybe_data) {
@@ -316,6 +317,7 @@ base::Result<void> CookieStore::Load() {
 }
 
 base::Result<void> CookieStore::Save() const {
+  std::lock_guard<std::mutex> lock(mutex_);
   std::string out = "# neko-cookie v1\n";
   for (const auto& c : cookies_) {
     if (c.expiry == 0) continue;  // session cookies never persist
@@ -345,6 +347,7 @@ base::Result<void> CookieStore::Save() const {
 
 bool CookieStore::SetCookieFromHeader(const url::Url& origin, std::string_view header,
                                       int64_t now) {
+  std::lock_guard<std::mutex> lock(mutex_);
   const std::vector<std::string_view> parts = SplitOnSemicolon(header);
   if (parts.empty()) return false;
 
@@ -425,7 +428,7 @@ bool CookieStore::SetCookieFromHeader(const url::Url& origin, std::string_view h
   if (has_max_age) {
     if (max_age <= 0) {
       // Delete the cookie: Max-Age=0 (or negative) means removal.
-      DeleteCookie(name, cookie_domain, cookie_path);
+      DeleteCookieLocked(name, cookie_domain, cookie_path);
       return true;
     }
     expiry = now + max_age;
@@ -434,7 +437,7 @@ bool CookieStore::SetCookieFromHeader(const url::Url& origin, std::string_view h
   }
   if (expiry > 0 && expiry <= now) {
     // Already expired: remove any existing cookie and do not store.
-    DeleteCookie(name, cookie_domain, cookie_path);
+    DeleteCookieLocked(name, cookie_domain, cookie_path);
     return true;
   }
 
@@ -461,6 +464,12 @@ bool CookieStore::SetCookieFromHeader(const url::Url& origin, std::string_view h
 }
 
 std::vector<const Cookie*> CookieStore::CookiesFor(const url::Url& url, int64_t now) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return CookiesForLocked(url, now);
+}
+
+std::vector<const Cookie*> CookieStore::CookiesForLocked(const url::Url& url,
+                                                         int64_t now) const {
   const std::string& host = url.host();
   const std::string& path = url.path();
   const bool is_secure = url.scheme() == "https";
@@ -481,7 +490,8 @@ std::vector<const Cookie*> CookieStore::CookiesFor(const url::Url& url, int64_t 
 }
 
 std::string CookieStore::CookieHeaderFor(const url::Url& url, int64_t now) const {
-  const auto cookies = CookiesFor(url, now);
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto cookies = CookiesForLocked(url, now);
   std::string header;
   for (const Cookie* c : cookies) {
     if (!header.empty()) header += "; ";
@@ -493,11 +503,18 @@ std::string CookieStore::CookieHeaderFor(const url::Url& url, int64_t now) const
 }
 
 void CookieStore::PurgeExpired(int64_t now) {
+  std::lock_guard<std::mutex> lock(mutex_);
   std::erase_if(cookies_, [now](const Cookie& c) { return c.expiry > 0 && now > c.expiry; });
 }
 
 bool CookieStore::DeleteCookie(const std::string& name, const std::string& domain,
                                const std::string& path) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return DeleteCookieLocked(name, domain, path);
+}
+
+bool CookieStore::DeleteCookieLocked(const std::string& name, const std::string& domain,
+                                     const std::string& path) {
   const size_t before = cookies_.size();
   std::erase_if(cookies_, [&](const Cookie& c) {
     return c.name == name && c.domain == domain && c.path == path;
@@ -505,6 +522,9 @@ bool CookieStore::DeleteCookie(const std::string& name, const std::string& domai
   return cookies_.size() != before;
 }
 
-void CookieStore::Clear() { cookies_.clear(); }
+void CookieStore::Clear() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  cookies_.clear();
+}
 
 }  // namespace neko::storage
