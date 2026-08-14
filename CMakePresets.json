@@ -140,31 +140,36 @@
       "name": "debug",
       "configurePreset": "debug",
       "output": { "outputOnFailure": true },
-      "execution": { "noTestsAction": "error" }
+      "execution": { "noTestsAction": "error" },
+      "configuration": "Debug"
     },
     {
       "name": "release",
       "configurePreset": "release",
       "output": { "outputOnFailure": true },
-      "execution": { "noTestsAction": "error" }
+      "execution": { "noTestsAction": "error" },
+      "configuration": "Release"
     },
     {
       "name": "relwithdebinfo",
       "configurePreset": "relwithdebinfo",
       "output": { "outputOnFailure": true },
-      "execution": { "noTestsAction": "error" }
+      "execution": { "noTestsAction": "error" },
+      "configuration": "RelWithDebInfo"
     },
     {
       "name": "asan",
       "configurePreset": "asan",
       "output": { "outputOnFailure": true },
-      "execution": { "noTestsAction": "error" }
+      "execution": { "noTestsAction": "error" },
+      "configuration": "RelWithDebInfo"
     },
     {
       "name": "ubsan",
       "configurePreset": "ubsan",
       "output": { "outputOnFailure": true },
-      "execution": { "noTestsAction": "error" }
+      "execution": { "noTestsAction": "error" },
+      "configuration": "RelWithDebInfo"
     },
     {
       "name": "tsan",
@@ -173,13 +178,15 @@
       "execution": { "noTestsAction": "error" },
       "environment": {
         "TSAN_OPTIONS": "suppressions=${sourceDir}/tools/tsan.supp"
-      }
+      },
+      "configuration": "RelWithDebInfo"
     },
     {
       "name": "coverage",
       "configurePreset": "coverage",
       "output": { "outputOnFailure": true },
-      "execution": { "noTestsAction": "error" }
+      "execution": { "noTestsAction": "error" },
+      "configuration": "Debug"
     }
   ],
   "workflowPresets": [
