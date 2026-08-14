@@ -39,6 +39,7 @@ target_link_libraries(neko_browser_core PUBLIC
   neko::pdf
   neko::media
   neko::javascript
+  neko::security
 )
 apply_compiler_warnings(neko_browser_core)
 

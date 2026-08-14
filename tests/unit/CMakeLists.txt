@@ -198,6 +198,16 @@ apply_compiler_warnings(neko_browser_tests)
 gtest_discover_tests(neko_browser_tests DISCOVERY_MODE PRE_TEST)
 
 # -----------------------------------------------------------------------------
+# neko_security_tests
+# -----------------------------------------------------------------------------
+add_executable(neko_security_tests
+  security/origin_test.cpp
+)
+target_link_libraries(neko_security_tests PRIVATE neko::security gtest_main)
+apply_compiler_warnings(neko_security_tests)
+gtest_discover_tests(neko_security_tests DISCOVERY_MODE PRE_TEST)
+
+# -----------------------------------------------------------------------------
 # neko_javascript_tests
 # -----------------------------------------------------------------------------
 add_executable(neko_javascript_tests

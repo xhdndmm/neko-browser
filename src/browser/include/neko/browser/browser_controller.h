@@ -72,6 +72,11 @@ struct Tab
   // pages without scripts.
   std::shared_ptr<javascript::DomBinder> script_runtime;
 
+  // The security origin of the current page (scheme+host+port, e.g.
+  // "https://example.com"), used by the Same-Origin Policy.  "null" for
+  // non-URL content and pages whose URL has no origin.  Worker thread only.
+  std::string origin;
+
   bool CanGoBack() const
   {
     return history_index > 0;
@@ -93,6 +98,8 @@ struct TabSnapshot
   std::string title;
   bool loading = false;
   ContentType content_type = ContentType::kHtml;
+  // Security origin of the current page ("null" when it has none).
+  std::string origin;
 
   std::shared_ptr<renderer::Page> page;    // kHtml
   std::shared_ptr<image::Image> image;     // kImage

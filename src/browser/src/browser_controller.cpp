@@ -6,6 +6,7 @@
 #include "neko/dom/element.h"
 #include "neko/image/image.h"
 #include "neko/network/http.h"
+#include "neko/security/origin.h"
 #include "neko/storage/file_util.h"
 
 #include <algorithm>
@@ -75,6 +76,7 @@ TabSnapshot ToSnapshot(const Tab& tab)
   s.title = tab.title;
   s.loading = tab.loading;
   s.content_type = tab.content_type;
+  s.origin = tab.origin;
   s.page = tab.page;
   s.image = tab.image;
   s.pdf = tab.pdf;
@@ -505,6 +507,21 @@ void BrowserController::LoadBytes(Tab& tab,
                                   const std::string& final_url)
 {
   const std::string ct = ToLower(content_type);
+
+  // The security origin of the loaded content (Phase 10 M1): the tuple of the
+  // final URL's scheme/host/port, "null" for non-URL content.  This is the
+  // basis for the Same-Origin Policy (enforcement is future work).
+  // The assignment is guarded by the controller mutex: the GUI reads snapshots
+  // under the same lock (see ToSnapshot), so every Tab field write must be
+  // locked even on the worker thread.
+  const auto parsed = url::Url::Parse(final_url);
+  const std::string origin =
+      parsed.has_value() ? security::Origin::FromUrl(parsed.value()).Serialize()
+                         : std::string("null");
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    tab.origin = origin;
+  }
 
   const bool is_image = ct.find("image/") != std::string::npos || neko::image::IsPng(bytes) ||
                         neko::image::IsJpeg(bytes);

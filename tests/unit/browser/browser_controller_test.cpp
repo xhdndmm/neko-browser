@@ -228,20 +228,42 @@ TEST(BrowserControllerTest, NavigatesToHtmlAndRecordsHistory)
   EXPECT_EQ(fetch.requests_.size(), 1u);
 }
 
-// Page <script> execution (Phase 8 M2): inline scripts run on load and can
-// mutate the DOM.
-TEST(BrowserControllerTest, RunsInlineScriptsOnHtmlLoad) {
+// The tab records the security origin of the loaded page (Phase 10 M1).
+TEST(BrowserControllerTest, RecordsPageOrigin)
+{
   TempProfile tp;
   FakeFetcher fetch;
   fetch.Add(
-      "http://example.com/",
-      FakeFetcher::Route{200, {{"content-type", "text/html"}},
-                         "<html><head><title>Before</title>"
-                         "<script>document.title = 'After';"
-                         "var d = document.createElement('div'); d.id = 'made';"
-                         "d.textContent = 'from script';"
-                         "document.body.appendChild(d);</script>"
-                         "</head><body><p>Hi</p></body></html>"});
+      "http://example.com:8080/path",
+      FakeFetcher::Route{200, {{"content-type", "text/html"}}, "<html><body>x</body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com:8080/path").has_value());
+
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  EXPECT_EQ(tab->origin, "http://example.com:8080");
+  // The snapshot exposes the same origin to the GUI.
+  const TabSnapshot snapshot = controller.SnapshotActiveTab();
+  EXPECT_EQ(snapshot.origin, "http://example.com:8080");
+}
+
+// Page <script> execution (Phase 8 M2): inline scripts run on load and can
+// mutate the DOM.
+TEST(BrowserControllerTest, RunsInlineScriptsOnHtmlLoad)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>Before</title>"
+                               "<script>document.title = 'After';"
+                               "var d = document.createElement('div'); d.id = 'made';"
+                               "d.textContent = 'from script';"
+                               "document.body.appendChild(d);</script>"
+                               "</head><body><p>Hi</p></body></html>"});
 
   BrowserController controller(tp.path(), std::ref(fetch));
   controller.NewTab();
