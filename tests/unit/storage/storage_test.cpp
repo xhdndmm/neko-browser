@@ -222,6 +222,25 @@ TEST(CookieStoreTest, ExpiredCookieIsNotStored)
   EXPECT_TRUE(store.empty());
 }
 
+TEST(CookieStoreTest, OversizedExpiresYearDoesNotOverflow)
+{
+  // A Set-Cookie Expires with an enormous year must not overflow the int
+  // accumulation (UB).  The date is invalid, so the cookie is accepted with
+  // a non-positive (invalid) expiry instead of a wrapped value.
+  TempProfile tp;
+  CookieStore store(tp.path());
+  ASSERT_TRUE(store.Load().has_value());
+  const int64_t now = 1'700'000'000;
+
+  ASSERT_TRUE(store.SetCookieFromHeader(
+      MakeUrl("http://example.com/"),
+      "evil=1; Expires=Sun, 06 Nov 99999999999999999999 08:49:37 GMT", now));
+  const auto cookies = store.All();
+  ASSERT_EQ(cookies.size(), 1u);
+  // Invalid date: expiry is not a wrapped huge/positive value.
+  EXPECT_LE(cookies[0].expiry, 0);
+}
+
 TEST(CookieStoreTest, DomainMatchingSelectsSubdomains)
 {
   TempProfile tp;

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <climits>
 #include <string>
 #include <vector>
 
@@ -38,9 +39,16 @@ bool AllDigits(std::string_view s) {
   return true;
 }
 
+// Parses a decimal integer, guarding against signed overflow (callers feed
+// untrusted token text such as a Set-Cookie Expires date).
 int ParseInt(std::string_view s) {
   int v = 0;
-  for (char c : s) v = v * 10 + (c - '0');
+  for (char c : s) {
+    if (v > (INT_MAX - (c - '0')) / 10) {
+      return INT_MAX;  // saturate; callers validate the value afterwards
+    }
+    v = v * 10 + (c - '0');
+  }
   return v;
 }
 
@@ -113,7 +121,9 @@ int64_t ParseCookieDate(std::string_view input) {
   int year = numerics[1];
   if (day < 1 || day > 31) return -1;
   if (year < 100) year += (year >= 50) ? 1900 : 2000;
-  if (year < 1601) return -1;
+  // RFC 6265 5.1.5.1: years must be within 1601..9999; anything else is a
+  // parse failure (also bounds the value after saturation).
+  if (year < 1601 || year > 9999) return -1;
   return CivilToUnix(year, month, day, hh, mm, ss);
 }
 
