@@ -900,5 +900,34 @@ TEST(LayoutTest, VerticalAlignEqualHeightBoxesFlatten) {
   EXPECT_FLOAT_EQ(line.boxes[1].y, line.boxes[2].y);
 }
 
+TEST(LayoutTest, WrappedInlineBlockRowsKeepLeadingGap) {
+  // Regression: baseline-aligned inline-blocks of height ~line-height must
+  // still leave the strut's leading gap between wrapped rows, instead of the
+  // rows touching (Y += box height with no leading).
+  auto doc = html::Parser(
+                  "<body><div style=\"width:200px\">"
+                  "<span style=\"display:inline-block;width:110px;height:20px\">w110</span>"
+                  "<span style=\"display:inline-block;width:110px;height:20px\">w110</span>"
+                  "<span style=\"display:inline-block;width:110px;height:20px\">w110</span>"
+                  "</div></body>")
+                  .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+  const LayoutBox* div = FindBox(*root, "div", *doc);
+  ASSERT_NE(div, nullptr);
+  // Three 110px boxes in a 200px container wrap onto three separate lines.
+  ASSERT_EQ(div->lines.size(), 3u);
+  const float gap01 = div->lines[1].boxes[0].y - div->lines[0].boxes[0].y;
+  const float gap12 = div->lines[2].boxes[0].y - div->lines[1].boxes[0].y;
+  // Each row is taller than its 20px box: the leading leaves a gap between
+  // consecutive rows.
+  EXPECT_GT(gap01, 20.0f);
+  EXPECT_GT(gap12, 20.0f);
+  EXPECT_LT(gap01, 20.0f + 4.0f);  // a small (~1-2px) leading, not a whole box
+  EXPECT_LT(gap12, 20.0f + 4.0f);
+}
+
 }  // namespace
 }  // namespace neko::layout

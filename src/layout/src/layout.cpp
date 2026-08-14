@@ -197,6 +197,23 @@ void LayoutLines(std::vector<InlineItem>& items, float available_width, float or
       }
     }
 
+    // When a line holds baseline-aligned inline-blocks, preserve the strut's
+    // "line-height: normal" leading below the baseline so wrapped inline-block
+    // rows keep a small visible gap (browsers show ~1-2px at 16px) instead of
+    // touching.  The gap is separate from the box's own height, which occupies
+    // the baseline span.
+    bool has_baseline_box = false;
+    for (const InlineBox& b : line.boxes) {
+      if (b.style.vertical_align == style::VerticalAlign::kBaseline) {
+        has_baseline_box = true;
+        break;
+      }
+    }
+    if (has_baseline_box) {
+      const float leading_gap = container_style.line_height - container_style.font_size;
+      descent_off = std::max(descent_off, strut_desc + leading_gap);
+    }
+
     // The line height is at least the baseline span; top / bottom boxes fit
     // because the line is at least as tall as they are.
     float row_height = baseline_off + descent_off;
