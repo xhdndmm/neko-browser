@@ -106,6 +106,7 @@ TEST(LoggingTest, FileSinkWritesLines) {
   ASSERT_TRUE(in.is_open());
   const std::string content((std::istreambuf_iterator<char>(in)),
                             std::istreambuf_iterator<char>());
+  in.close();
   EXPECT_NE(content.find("line one"), std::string::npos);
   EXPECT_NE(content.find("line two"), std::string::npos);
 

@@ -204,6 +204,7 @@ TEST(RasterizerTest, WritePpm) {
   std::ifstream in(file, std::ios::binary);
   ASSERT_TRUE(in.is_open());
   std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  in.close();
   EXPECT_EQ(content.substr(0, 11), "P6\n4 3\n255\n");
   // 11-byte header + 4*3*3 bytes of RGB data.
   EXPECT_EQ(content.size(), 11u + 36u);

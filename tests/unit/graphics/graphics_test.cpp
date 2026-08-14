@@ -51,9 +51,10 @@ TEST(FontFaceTest, RendersAndCachesGlyphs) {
   EXPECT_GT(face->Advance('A', 16), 0.0f);
   // The ascent is scaled to the pixel size and stays inside the em box
   // (regression: it was read as unscaled font units, ~30px at 16px, which
-  // shifted glyphs a full line below their hit-test box).
+  // shifted glyphs a full line below their hit-test box).  Some fonts (e.g.
+  // Segoe UI) have an ascent larger than the em height, so allow up to 1.5x.
   EXPECT_GT(face->Ascent(16), 0.0f);
-  EXPECT_LT(face->Ascent(16), 16.0f);
+  EXPECT_LT(face->Ascent(16), 24.0f);
   // Descent is a positive magnitude below the baseline, scaled to pixel size.
   EXPECT_GT(face->Descent(16), 0.0f);
   EXPECT_LT(face->Descent(16), 16.0f);
