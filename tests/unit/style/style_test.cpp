@@ -127,6 +127,68 @@ TEST(StyleTest, FlexShorthandSingleNumber)
   EXPECT_FLOAT_EQ(p.flex_basis.value().value, 0.0f);
 }
 
+TEST(StyleTest, FlexOrderAndAlignSelfParse)
+{
+  auto doc = MakeDoc("<body><div style=\"display:flex\"><p style=\"order:3; "
+                     "align-self:flex-end\">x</p></div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& p = Style(engine, *doc, "p");
+  EXPECT_EQ(p.order, 3);
+  ASSERT_TRUE(p.align_self.has_value());
+  EXPECT_EQ(p.align_self.value(), AlignItems::kFlexEnd);
+}
+
+TEST(StyleTest, AlignSelfAutoIsUnset)
+{
+  auto doc = MakeDoc("<body><div style=\"display:flex\"><p style=\"align-self:auto\">x</p>"
+                     "</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& p = Style(engine, *doc, "p");
+  EXPECT_FALSE(p.align_self.has_value());
+}
+
+TEST(StyleTest, MinMaxSizesParse)
+{
+  auto doc = MakeDoc("<body><div style=\"min-width:10px; max-width:50%; min-height:5px; "
+                     "max-height:none\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, "div");
+  ASSERT_TRUE(s.min_width.has_value());
+  EXPECT_FLOAT_EQ(s.min_width.value().value, 10.0f);
+  ASSERT_TRUE(s.max_width.has_value());
+  EXPECT_TRUE(s.max_width.value().percent);
+  EXPECT_FLOAT_EQ(s.max_width.value().value, 50.0f);
+  ASSERT_TRUE(s.min_height.has_value());
+  EXPECT_FLOAT_EQ(s.min_height.value().value, 5.0f);
+  // max-height: none means "no constraint".
+  EXPECT_FALSE(s.max_height.has_value());
+}
+
+TEST(StyleTest, AutoMarginsParseLonghandAndShorthand)
+{
+  auto longhand = MakeDoc("<body><div style=\"margin-left:auto; margin-top:auto\">x</div></body>");
+  StyleEngine engine1;
+  engine1.ApplyStyles(*longhand);
+  const ComputedStyle& l = Style(engine1, *longhand, "div");
+  EXPECT_TRUE(l.margin_left_auto);
+  EXPECT_TRUE(l.margin_top_auto);
+  EXPECT_FALSE(l.margin_right_auto);
+  EXPECT_FALSE(l.margin_bottom_auto);
+
+  auto shorthand = MakeDoc("<body><div style=\"margin:0 auto\">x</div></body>");
+  StyleEngine engine2;
+  engine2.ApplyStyles(*shorthand);
+  const ComputedStyle& s = Style(engine2, *shorthand, "div");
+  // "margin: 0 auto" -> top/bottom 0, left/right auto.
+  EXPECT_FALSE(s.margin_top_auto);
+  EXPECT_TRUE(s.margin_right_auto);
+  EXPECT_FALSE(s.margin_bottom_auto);
+  EXPECT_TRUE(s.margin_left_auto);
+}
+
 TEST(StyleTest, HeadingIsBlock)
 {
   auto doc = MakeDoc("<body><h1>x</h1><h2>y</h2></body>");
@@ -135,6 +197,82 @@ TEST(StyleTest, HeadingIsBlock)
 
   EXPECT_EQ(Style(engine, *doc, "h1").display, Display::kBlock);
   EXPECT_EQ(Style(engine, *doc, "h2").display, Display::kBlock);
+}
+
+TEST(StyleTest, DisplayGridParses)
+{
+  auto doc = MakeDoc("<body><div style=\"display:grid\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  EXPECT_EQ(Style(engine, *doc, "div").display, Display::kGrid);
+}
+
+TEST(StyleTest, GridTrackListParses)
+{
+  auto doc = MakeDoc("<body><div style=\"grid-template-columns:100px 1fr auto "
+                     "repeat(2, 50px)\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, "div");
+  ASSERT_EQ(s.grid_template_columns.size(), 5u);
+  EXPECT_EQ(s.grid_template_columns[0].kind, GridTrack::Kind::kFixed);
+  EXPECT_FLOAT_EQ(s.grid_template_columns[0].length, 100.0f);
+  EXPECT_EQ(s.grid_template_columns[1].kind, GridTrack::Kind::kFr);
+  EXPECT_FLOAT_EQ(s.grid_template_columns[1].fr, 1.0f);
+  EXPECT_EQ(s.grid_template_columns[2].kind, GridTrack::Kind::kAuto);
+  EXPECT_EQ(s.grid_template_columns[3].kind, GridTrack::Kind::kFixed);
+  EXPECT_FLOAT_EQ(s.grid_template_columns[3].length, 50.0f);
+  EXPECT_EQ(s.grid_template_columns[4].kind, GridTrack::Kind::kFixed);
+  EXPECT_FLOAT_EQ(s.grid_template_columns[4].length, 50.0f);
+}
+
+TEST(StyleTest, GridTrackPercentAndMinMaxContent)
+{
+  auto doc = MakeDoc("<body><div style=\"grid-template-columns:25% min-content max-content; "
+                     "grid-template-rows:30px\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, "div");
+  ASSERT_EQ(s.grid_template_columns.size(), 3u);
+  EXPECT_EQ(s.grid_template_columns[0].kind, GridTrack::Kind::kFixed);
+  EXPECT_FLOAT_EQ(s.grid_template_columns[0].percent, 25.0f);
+  EXPECT_EQ(s.grid_template_columns[1].kind, GridTrack::Kind::kMinContent);
+  EXPECT_EQ(s.grid_template_columns[2].kind, GridTrack::Kind::kMaxContent);
+  ASSERT_EQ(s.grid_template_rows.size(), 1u);
+  EXPECT_EQ(s.grid_template_rows[0].kind, GridTrack::Kind::kFixed);
+  EXPECT_FLOAT_EQ(s.grid_template_rows[0].length, 30.0f);
+}
+
+TEST(StyleTest, GridPlacementParses)
+{
+  auto doc = MakeDoc("<body><div style=\"grid-column:2 / span 3; grid-row:span 2\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, "div");
+  EXPECT_EQ(s.grid_column_start.kind, GridPlacement::Kind::kLine);
+  EXPECT_EQ(s.grid_column_start.line, 2);
+  EXPECT_EQ(s.grid_column_end.kind, GridPlacement::Kind::kSpan);
+  EXPECT_EQ(s.grid_column_end.span, 3);
+  EXPECT_EQ(s.grid_row_start.kind, GridPlacement::Kind::kAuto);
+  EXPECT_EQ(s.grid_row_end.kind, GridPlacement::Kind::kSpan);
+  EXPECT_EQ(s.grid_row_end.span, 2);
+}
+
+TEST(StyleTest, GridPlacementLonghandsAndSingleLine)
+{
+  auto doc = MakeDoc("<body><div style=\"grid-column-start:3; grid-column-end:5; "
+                     "grid-row:4\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, "div");
+  EXPECT_EQ(s.grid_column_start.kind, GridPlacement::Kind::kLine);
+  EXPECT_EQ(s.grid_column_start.line, 3);
+  EXPECT_EQ(s.grid_column_end.kind, GridPlacement::Kind::kLine);
+  EXPECT_EQ(s.grid_column_end.line, 5);
+  // "grid-row: 4" sets only the start line.
+  EXPECT_EQ(s.grid_row_start.kind, GridPlacement::Kind::kLine);
+  EXPECT_EQ(s.grid_row_start.line, 4);
+  EXPECT_EQ(s.grid_row_end.kind, GridPlacement::Kind::kAuto);
 }
 
 TEST(StyleTest, SpecificityCascade)

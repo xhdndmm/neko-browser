@@ -11,6 +11,7 @@
 #include "neko/base/version.h"
 #include "neko/browser/browser_controller.h"
 #include "neko/browser/browser_options.h"
+#include "neko/browser/page_scripts.h"
 #include "neko/image/image.h"
 #include "neko/javascript/script_engine.h"
 #include "neko/media/audio.h"
@@ -60,6 +61,16 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page, const std::strin
       if (!r) {
         return r;
       }
+      // Phase 8 M2: execute the page's scripts (inline + external src=,
+      // async/defer); scripts may mutate the DOM and RunPageScripts
+      // re-applies styles inside.
+      neko::browser::RunPageScripts(
+          page,
+          url.Serialize(),
+          [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
+          [](std::string_view level, std::string_view text) {
+            std::cout << "[" << level << "] " << text << "\n";
+          });
       // Fetch and decode the page's <img> subresources (headless path).
       neko::browser::FetchPageImages(
           page, url.Serialize(), [](const neko::url::Url& u, std::string_view) {
@@ -72,6 +83,13 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page, const std::strin
       if (!r) {
         return r;
       }
+      neko::browser::RunPageScripts(
+          page,
+          "",
+          [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
+          [](std::string_view level, std::string_view text) {
+            std::cout << "[" << level << "] " << text << "\n";
+          });
       // Local pages may still reference absolute http(s) images; fetch those.
       neko::browser::FetchPageImages(
           page, /*base_url=*/"", [](const neko::url::Url& u, std::string_view) {
@@ -82,7 +100,18 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page, const std::strin
     return neko::base::Err(
         neko::base::Error::NotImplemented("unsupported URL scheme: " + url.scheme()));
   }
-  return page.LoadFile(target);
+  const auto r = page.LoadFile(target);
+  if (!r) {
+    return r;
+  }
+  neko::browser::RunPageScripts(
+      page,
+      "",
+      [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
+      [](std::string_view level, std::string_view text) {
+        std::cout << "[" << level << "] " << text << "\n";
+      });
+  return neko::base::Ok();
 }
 
 // Writes an image::Image as a binary PPM (P6), compositing alpha over white.

@@ -116,6 +116,10 @@ void BrowserWorker::Reload() {
   Post([this] { controller_.Reload(); });
 }
 
+void BrowserWorker::PumpScriptTimers() {
+  Post([this] { controller_.PumpScriptTimers(); });
+}
+
 void BrowserWorker::NewTab(const QString& url, bool activate) {
   Post([this, url = url.toStdString(), activate] {
     const int id = controller_.NewTab(url, activate);

@@ -10,6 +10,7 @@
 
 add_library(neko_javascript
   src/script_engine.cpp
+  src/dom_binding.cpp
 )
 add_library(neko::javascript ALIAS neko_javascript)
 
@@ -17,7 +18,9 @@ target_compile_features(neko_javascript PUBLIC cxx_std_20)
 target_include_directories(neko_javascript PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
-target_link_libraries(neko_javascript PUBLIC neko::base PRIVATE qjs)
+# DOM bindings (Phase 8 M2) make the module depend on the DOM/HTML/CSS
+# layers; none of those depend back on javascript, so there is no cycle.
+target_link_libraries(neko_javascript PUBLIC neko::base neko::dom neko::css neko::html PRIVATE qjs)
 # QuickJS is a third-party dependency; mark its headers SYSTEM so our strict
 # warnings (-Wold-style-cast / -Wdouble-promotion) don't fire inside quickjs.h.
 target_include_directories(neko_javascript SYSTEM PRIVATE ${quickjs_SOURCE_DIR})

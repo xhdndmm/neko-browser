@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Script Page</title>
+  <style>
+    .highlight { color: rgb(255, 0, 0); }
+  </style>
+  <script>
+    document.title = 'Scripted Title';
+    var banner = document.createElement('div');
+    banner.id = 'banner';
+    banner.className = 'highlight';
+    banner.style.fontSize = '20px';
+    banner.textContent = 'Hello from script';
+    document.body.appendChild(banner);
+    var items = document.querySelectorAll('p');
+    items[0].setAttribute('data-count', String(items.length));
+    console.log('script ran, paragraphs: ' + items.length);
+  </script>
+</head>
+<body>
+  <p id="a">Alpha</p>
+  <p id="b">Beta</p>
+</body>
+</html>

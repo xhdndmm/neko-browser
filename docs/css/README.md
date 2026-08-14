@@ -12,10 +12,14 @@
 - flex 属性解析：display:flex/inline-flex、flex-direction/flex-wrap/
   justify-content/align-items/align-content、flex-grow/flex-shrink/flex-basis、
   flex 简写、gap/row-gap/column-gap
+- grid 属性解析：display:grid、grid-template-columns/rows
+  （px/%/fr/auto/min-content/max-content + repeat()）、grid-column/row
+  （含 start/end longhand）、gap（与 flex 共用）
 
 ## 未实现
 
-- grid/transform/动画/过渡、媒体查询完整求值
+- transform/动画/过渡、媒体查询完整求值
+- grid：minmax()、repeat(auto-fit/auto-fill)、命名线/区域
 - 完整伪类集（:hover 等按不匹配处理）
 
 ## 架构

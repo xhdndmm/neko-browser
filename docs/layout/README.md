@@ -24,16 +24,28 @@
 - span 解析按 WHATWG tables.html：非负整数解析（尾随文本忽略）、colspan>1000 截断
   到 1000、rowspan>65534 截断到 65534、rowspan=0 表示跨到**所在行组**末尾（保留
   thead/tbody/tfoot 与连续匿名 `<tr>` 的隐式行组边界）
-- **flexbox（M1–M5）**：display:flex/inline-flex；flex-direction
+- **flexbox（M1–M6）**：display:flex/inline-flex；flex-direction
   （row/column+reverse）、flex-wrap（含 wrap-reverse）、flex-grow/shrink/basis
   （含 flex 简写）、justify-content（6 值）、align-items
   （stretch/flex-start/flex-end/center/baseline）、align-content（确定 cross
-  尺寸时）、row/column gap；嵌套 flex 可用；内联 flex 为行内原子盒
+  尺寸时）、row/column gap、**order**（稳定排序）、**align-self**（逐项覆盖
+  align-items，含阻止 stretch）、**min/max-width/height**（主轴/交叉轴夹取，
+  min 优先于 max）、**auto 外边距**（主轴吸收自由空间并覆盖 justify-content；
+  交叉轴吸收行内自由空间并覆盖 align-self）；嵌套 flex 可用；内联 flex 为
+  行内原子盒
+- **grid（M1）**：display:grid；grid-template-columns/rows
+  （px/%/fr/auto/min-content/max-content + repeat()）、row-major 自动放置
+  （grid-auto-flow: row）、grid-column/row 行与 span 放置（含简写与 longhand）、
+  column/row gap；超出显式模板的隐式轨道按 auto 尺寸（auto 列按该列起始项目的
+  max-content、auto 行按该行项目内容高；fr 列/行分享容器剩余空间）
 
 ## 未实现
 
-- flexbox：auto 外边距、min/max-width、order、align-self、百分比高度精确解析
-- grid、fixed/sticky、margin 折叠、z-index、百分比 offset
+- flexbox：百分比高度精确解析、flex 容器自身 min/max、max-width 截断后的
+  剩余自由空间再分配、`flex-basis: content`
+- grid：inline-grid、命名区域、`dense` 打包、`minmax()`、`grid-auto-flow`
+  非 row、fr 行在容器高度不确定时的精确解析、网格项目内的绝对定位精确包含块
+- fixed/sticky、margin 折叠、z-index、百分比 offset
   （fixed 暂按 absolute 处理）
 - float：`clear`、多个浮动盒相交的 BFC 排布
 - 表格：border-collapse/border-spacing、`vertical-align`、`<caption>` 定位、

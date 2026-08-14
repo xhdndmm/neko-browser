@@ -121,6 +121,10 @@ class ScriptEngine {
   static std::string Version();
 
  private:
+  // Internal access for the DOM binder (same module); see
+  // script_engine_internal.h.
+  friend void* ScriptEngineContext(ScriptEngine&);
+
   std::shared_ptr<RuntimeCore> core_;
   std::chrono::milliseconds execution_limit_ = std::chrono::seconds(10);
 };

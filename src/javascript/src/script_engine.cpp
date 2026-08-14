@@ -8,6 +8,7 @@
 // locking is required.
 
 #include "neko/javascript/script_engine.h"
+#include "neko/javascript/script_engine_internal.h"
 
 #include <chrono>
 #include <cstddef>
@@ -470,6 +471,10 @@ std::string ScriptEngine::RuntimeName() { return "QuickJS"; }
 std::string ScriptEngine::Version() {
   return std::to_string(QJS_VERSION_MAJOR) + "." + std::to_string(QJS_VERSION_MINOR) + "." +
          std::to_string(QJS_VERSION_PATCH);
+}
+
+void* ScriptEngineContext(ScriptEngine& engine) {
+  return engine.core_ != nullptr ? engine.core_->ctx : nullptr;
 }
 
 }  // namespace neko::javascript

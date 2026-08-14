@@ -3,6 +3,7 @@
 #include "neko/base/status.h"
 #include "neko/browser/download_manager.h"
 #include "neko/image/image.h"
+#include "neko/javascript/dom_binding.h"
 #include "neko/media/audio.h"
 #include "neko/media/media_source.h"
 #include "neko/pdf/pdf.h"
@@ -65,6 +66,17 @@ struct Tab
   std::vector<std::string> history;
   int history_index = -1;
 
+  // Live JavaScript runtime for the current HTML page (Phase 8 M2): holds the
+  // DOM bindings, timers and event listeners of the page's scripts.  Worker
+  // thread only — never exposed to the GUI.  Null for non-HTML content or
+  // pages without scripts.
+  std::shared_ptr<javascript::DomBinder> script_runtime;
+
+  // The security origin of the current page (scheme+host+port, e.g.
+  // "https://example.com"), used by the Same-Origin Policy.  "null" for
+  // non-URL content and pages whose URL has no origin.  Worker thread only.
+  std::string origin;
+
   bool CanGoBack() const
   {
     return history_index > 0;
@@ -86,6 +98,8 @@ struct TabSnapshot
   std::string title;
   bool loading = false;
   ContentType content_type = ContentType::kHtml;
+  // Security origin of the current page ("null" when it has none).
+  std::string origin;
 
   std::shared_ptr<renderer::Page> page;    // kHtml
   std::shared_ptr<image::Image> image;     // kImage
@@ -180,6 +194,11 @@ public:
   void Back();
   void Forward();
   void Reload();
+
+  // Runs the active tab's pending script timers (setTimeout/setInterval) and
+  // re-applies the page styles so DOM mutations made by timers are reflected.
+  // Worker thread only (thread-confined like the JS runtime).
+  void PumpScriptTimers();
 
   // Returns the content-type of the active tab.
   ContentType active_content_type() const;

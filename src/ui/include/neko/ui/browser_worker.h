@@ -65,6 +65,11 @@ class BrowserWorker : public QObject {
   void Download(const QString& url);
   void ClearStorage();
 
+  // Runs the active tab's pending page-script timers on the worker thread
+  // (see BrowserController::PumpScriptTimers).  The GUI calls this on a
+  // periodic timer so setTimeout/setInterval callbacks progress.
+  void PumpScriptTimers();
+
   // Evaluates |script| in the DevTools console context (persistent global
   // scope, runs on the worker thread so the UI never blocks).  Emits
   // JavaScriptResult() with the formatted output.
