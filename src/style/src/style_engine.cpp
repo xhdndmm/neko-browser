@@ -882,7 +882,9 @@ void StyleEngine::ComputeElement(dom::Element& element,
     }
   }
 
-  // flex shorthand: <grow> <shrink> <basis> | <grow> (=> 1 1 0) | none.
+  // flex shorthand: [<'flex-grow'> <'flex-shrink'>? || <'flex-basis'>]
+  // (CSS Flexbox 1 §7.1).  Omitted components reset to their initial values:
+  // grow=1, shrink=1, basis=auto.
   if (const css::Declaration* d = find("flex")) {
     const std::vector<std::string> parts = SplitWhitespace(d->value);
     auto parse_number = [](const std::string& s) -> std::optional<float> {
@@ -892,26 +894,46 @@ void StyleEngine::ComputeElement(dom::Element& element,
       }
       return std::nullopt;
     };
+    // Reset to initial values first so omitted components are restored.
+    out.flex_grow = 1;
+    out.flex_shrink = 1;
+    out.flex_basis = std::nullopt;  // auto
+
     if (parts.size() == 1 && parts[0] == "none") {
+      // none = 0 0 auto
       out.flex_grow = 0;
       out.flex_shrink = 0;
-      out.flex_basis = SizeSpec{0, false};
+    } else if (parts.size() == 1 && parts[0] == "auto") {
+      // auto = 1 1 auto (already the reset values)
+    } else if (parts.size() == 1 && parts[0] == "initial") {
+      // initial = 0 1 auto
+      out.flex_grow = 0;
     } else if (parts.size() == 1) {
-      // "flex: <grow>" == "flex: <grow> 1 0".
+      // flex: <grow> == flex: <grow> 1 0
       if (const std::optional<float> g = parse_number(parts[0])) {
         out.flex_grow = g.value();
         out.flex_shrink = 1;
         out.flex_basis = SizeSpec{0, false};
       }
     } else if (parts.size() >= 2) {
+      // First component is grow (a number); a non-number second is basis.
+      std::size_t next = 1;
       if (const std::optional<float> g = parse_number(parts[0])) {
         out.flex_grow = g.value();
+      } else {
+        // grow must be a number; otherwise the shorthand is invalid.
+        next = parts.size();
       }
-      if (const std::optional<float> s = parse_number(parts[1])) {
-        out.flex_shrink = s.value();
+      if (next < parts.size()) {
+        if (const std::optional<float> s = parse_number(parts[next])) {
+          out.flex_shrink = s.value();
+          ++next;
+        }
       }
-      if (parts.size() >= 3) {
-        const std::string& basis = parts[2];
+      // A remaining component that is a length is the basis.  If the list is
+      // exhausted after grow/shrink, the omitted basis is 0.
+      if (next < parts.size()) {
+        const std::string& basis = parts[next];
         if (basis != "auto") {
           if (const std::optional<SizeSpec> spec =
                   ParseSize(basis, out.font_size, root_font_size)) {
@@ -920,6 +942,9 @@ void StyleEngine::ComputeElement(dom::Element& element,
         } else {
           out.flex_basis = std::nullopt;
         }
+      } else if (parts.size() >= 2 && parse_number(parts[0]).has_value()) {
+        // Two or more components with no length: basis resolves to 0.
+        out.flex_basis = SizeSpec{0, false};
       }
     }
   }

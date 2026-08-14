@@ -127,6 +127,60 @@ TEST(StyleTest, FlexShorthandSingleNumber)
   EXPECT_FLOAT_EQ(p.flex_basis.value().value, 0.0f);
 }
 
+TEST(StyleTest, FlexShorthandKeywords)
+{
+  // flex: none == flex: 0 0 auto (CSS Flexbox 1 §7.1).
+  auto doc = MakeDoc("<body><div style=\"display:flex\"><p style=\"flex:none\">x</p></div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& p = Style(engine, *doc, "p");
+  EXPECT_FLOAT_EQ(p.flex_grow, 0.0f);
+  EXPECT_FLOAT_EQ(p.flex_shrink, 0.0f);
+  EXPECT_FALSE(p.flex_basis.has_value());  // auto
+
+  // flex: auto == flex: 1 1 auto.
+  auto doc2 = MakeDoc("<body><div style=\"display:flex\"><p style=\"flex:auto\">x</p></div></body>");
+  StyleEngine engine2;
+  engine2.ApplyStyles(*doc2);
+  const ComputedStyle& p2 = Style(engine2, *doc2, "p");
+  EXPECT_FLOAT_EQ(p2.flex_grow, 1.0f);
+  EXPECT_FLOAT_EQ(p2.flex_shrink, 1.0f);
+  EXPECT_FALSE(p2.flex_basis.has_value());
+}
+
+TEST(StyleTest, FlexShorthandTwoAndThreeValues)
+{
+  // flex: 2 30px -> grow 2, shrink 1 (default), basis 30px.
+  auto doc = MakeDoc("<body><div style=\"display:flex\"><p style=\"flex:2 30px\">x</p></div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& p = Style(engine, *doc, "p");
+  EXPECT_FLOAT_EQ(p.flex_grow, 2.0f);
+  EXPECT_FLOAT_EQ(p.flex_shrink, 1.0f);
+  ASSERT_TRUE(p.flex_basis.has_value());
+  EXPECT_FLOAT_EQ(p.flex_basis.value().value, 30.0f);
+
+  // flex: 1 1 -> grow 1, shrink 1, basis 0 (omitted basis).
+  auto doc2 = MakeDoc("<body><div style=\"display:flex\"><p style=\"flex:1 1\">x</p></div></body>");
+  StyleEngine engine2;
+  engine2.ApplyStyles(*doc2);
+  const ComputedStyle& p2 = Style(engine2, *doc2, "p");
+  EXPECT_FLOAT_EQ(p2.flex_grow, 1.0f);
+  EXPECT_FLOAT_EQ(p2.flex_shrink, 1.0f);
+  ASSERT_TRUE(p2.flex_basis.has_value());
+  EXPECT_FLOAT_EQ(p2.flex_basis.value().value, 0.0f);
+
+  // flex: 2 1 40px.
+  auto doc3 = MakeDoc("<body><div style=\"display:flex\"><p style=\"flex:2 1 40px\">x</p></div></body>");
+  StyleEngine engine3;
+  engine3.ApplyStyles(*doc3);
+  const ComputedStyle& p3 = Style(engine3, *doc3, "p");
+  EXPECT_FLOAT_EQ(p3.flex_grow, 2.0f);
+  EXPECT_FLOAT_EQ(p3.flex_shrink, 1.0f);
+  ASSERT_TRUE(p3.flex_basis.has_value());
+  EXPECT_FLOAT_EQ(p3.flex_basis.value().value, 40.0f);
+}
+
 TEST(StyleTest, FlexOrderAndAlignSelfParse)
 {
   auto doc = MakeDoc("<body><div style=\"display:flex\"><p style=\"order:3; "
