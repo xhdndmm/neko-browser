@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <memory>
