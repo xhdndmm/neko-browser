@@ -888,6 +888,10 @@ void Parser::ProcessEndTag(Token token) {
       return;  // parse error; ignored
 
     case Mode::kBeforeHead:
+      // An end tag here is a parse error; ignore it rather than popping the
+      // html root (head has not been inserted yet).
+      return;
+
     case Mode::kInHead:
       if (token.name == "head") {
         PopElement();

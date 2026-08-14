@@ -131,6 +131,74 @@ TEST(HtmlTest, CharacterReferences) {
   EXPECT_EQ(p->TextContent(), "& < > \xC2\xA9 A B \xC2\xA0x");
 }
 
+TEST(HtmlTest, NamedReferenceDoesNotSwallowFollowingText) {
+  // A named reference that is a prefix of a longer alnum run must be emitted
+  // literally, keeping the trailing characters (WHATWG named character
+  // reference state).
+  auto doc = ParseDoc("<p>&ampfoo; &ltx &notin; &apos;</p>");
+  dom::Element* p = dom::QuerySelector(*doc, "p");
+  ASSERT_NE(p, nullptr);
+  // &ampfoo; -> literal "&ampfoo;"; &ltx -> literal "&ltx";
+  // &notin; -> literal "&notin;" (notin is not in the table);
+  // &apos; -> single quote.
+  EXPECT_EQ(p->TextContent(), "&ampfoo; &ltx &notin; '");
+}
+
+TEST(HtmlTest, RcdataRawtextEndTagClosesWithWhitespace) {
+  // A RCDATA/RAWTEXT end tag may be followed by whitespace or a slash before
+  // '>' (attributes / self-closing); the element must still close instead of
+  // swallowing the rest of the document as text.
+  auto doc = ParseDoc("<textarea>a</textarea ><p>x</p>");
+  dom::Element* ta = dom::QuerySelector(*doc, "textarea");
+  ASSERT_NE(ta, nullptr);
+  EXPECT_EQ(ta->TextContent(), "a");
+  dom::Element* p = dom::QuerySelector(*doc, "p");
+  ASSERT_NE(p, nullptr);
+  EXPECT_EQ(p->TextContent(), "x");
+
+  auto doc2 = ParseDoc("<style>a</style\n><p>x</p>");
+  dom::Element* style = dom::QuerySelector(*doc2, "style");
+  ASSERT_NE(style, nullptr);
+  EXPECT_EQ(style->TextContent(), "a");
+  dom::Element* p2 = dom::QuerySelector(*doc2, "p");
+  ASSERT_NE(p2, nullptr);
+  EXPECT_EQ(p2->TextContent(), "x");
+}
+
+TEST(HtmlTest, BeforeHeadEndTagDoesNotPopHtmlRoot) {
+  // In the "before head" insertion mode an end tag is a parse error and must
+  // be ignored; popping the html root here would make body a sibling of html.
+  auto doc = ParseDoc("<html></head><body>x</body></html>");
+  dom::Element* html = doc->document_element();
+  ASSERT_NE(html, nullptr);
+  EXPECT_EQ(html->tag_name(), "html");
+  EXPECT_EQ(html->child_count(), 2u);  // head + body
+  dom::Element* head = dom::QuerySelector(*doc, "head");
+  ASSERT_NE(head, nullptr);
+  EXPECT_EQ(head->parent(), html);
+  dom::Element* body = dom::QuerySelector(*doc, "body");
+  ASSERT_NE(body, nullptr);
+  EXPECT_EQ(body->parent(), html);
+  EXPECT_EQ(body->TextContent(), "x");
+}
+
+TEST(HtmlTest, SelfClosingSlashDoesNotCreateEmptyAttribute) {
+  // `<div />` must not produce an empty-named attribute (the '/' routes to
+  // the after-attribute-name state, not a new attribute).
+  auto doc = ParseDoc("<div />x");
+  dom::Element* div = dom::QuerySelector(*doc, "div");
+  ASSERT_NE(div, nullptr);
+  EXPECT_EQ(div->attributes().size(), 0u);
+
+  // Attributes before the slash are preserved.
+  auto doc2 = ParseDoc("<div a=\"b\"/>x");
+  dom::Element* div2 = dom::QuerySelector(*doc2, "div");
+  ASSERT_NE(div2, nullptr);
+  ASSERT_EQ(div2->attributes().size(), 1u);
+  EXPECT_EQ(div2->attributes()[0].name, "a");
+  EXPECT_EQ(div2->attributes()[0].value, "b");
+}
+
 TEST(HtmlTest, Comments) {
   auto doc = ParseDoc("<!-- hello --><p>x</p><!-- done -->");
   // A comment before <html> is attached to the Document.

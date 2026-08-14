@@ -11,6 +11,11 @@
 namespace neko::html {
 namespace {
 
+// WHATWG ASCII whitespace: tab, LF, FF, CR, space.
+bool IsWhitespace(char c) {
+  return c == '\t' || c == '\n' || c == '\x0C' || c == '\r' || c == ' ';
+}
+
 struct NamedEntity {
   std::string_view name;
   char32_t code_point;
@@ -28,7 +33,7 @@ constexpr NamedEntity kNamedEntities[] = {
     {"THORN", 0x00DE},   {"Uacute", 0x00DA}, {"Ucirc", 0x00DB},  {"Ugrave", 0x00D9},
     {"Uuml", 0x00DC},    {"Yacute", 0x00DD}, {"aacute", 0x00E1}, {"acirc", 0x00E2},
     {"acute", 0x00B4},   {"aelig", 0x00E6},  {"agrave", 0x00E0}, {"amp", 0x0026},
-    {"aring", 0x00E5},   {"atilde", 0x00E3}, {"auml", 0x00E4},   {"bdquo", 0x201E},
+    {"aring", 0x00E5},   {"apos", 0x0027},   {"atilde", 0x00E3}, {"auml", 0x00E4},   {"bdquo", 0x201E},
     {"brvbar", 0x00A6},  {"bull", 0x2022},   {"ccedil", 0x00E7}, {"cedil", 0x00B8},
     {"cent", 0x00A2},    {"copy", 0x00A9},   {"curren", 0x00A4}, {"deg", 0x00B0},
     {"divide", 0x00F7},  {"eacute", 0x00E9}, {"ecirc", 0x00EA},  {"egrave", 0x00E8},
@@ -180,6 +185,10 @@ std::string Tokenizer::ConsumeCharacterReference() {
   }
 
   // Named reference: scan [a-zA-Z0-9]* and take the longest table match.
+  // The reference is only consumed if the character after the matched name
+  // is ';' (or a legacy no-semicolon name not followed by a name char); if
+  // the name is a prefix of a longer alnum run (e.g. "amp" in "&ampfoo;")
+  // the whole sequence is emitted literally.
   const std::size_t start = pos_;
   while (pos_ < input_.size() && IsAsciiAlnum(input_[pos_])) {
     ++pos_;
@@ -191,19 +200,18 @@ std::string Tokenizer::ConsumeCharacterReference() {
     if (code_point == nullptr) {
       continue;
     }
-    const bool followed_by_semicolon = pos_ < input_.size() && input_[pos_] == ';';
-    const bool followed_by_alnum = pos_ < input_.size() && IsAsciiAlnum(input_[pos_]);
+    const std::size_t after = start + len;
+    const bool followed_by_semicolon = after < input_.size() && input_[after] == ';';
+    const bool followed_by_alnum = after < input_.size() && IsAsciiAlnum(input_[after]);
     if (followed_by_semicolon) {
-      ++pos_;
+      pos_ = after + 1;
       return base::EncodeUtf8(*code_point);
     }
     if (IsLegacyNoSemicolon(candidate) && !followed_by_alnum) {
+      pos_ = after;
       return base::EncodeUtf8(*code_point);
     }
-    // Matched a name but it is not a valid reference (no ';', not legacy, or
-    // followed by more name characters).  Rewind and emit a literal '&'.
-    pos_ = start;
-    return "&";
+    // The candidate is a prefix of a longer name; not a valid reference.
   }
   pos_ = start;
   return "&";
@@ -377,7 +385,11 @@ void Tokenizer::ProcessChar(char c) {
     case State::kBeforeAttributeName:
       if (IsAsciiWhitespace(c)) {
         // stay
-      } else if (c == '>' || c == '/' || c == '<' || c == '=') {
+      } else if (c == '>' || c == '/') {
+        // End of the start tag / self-closing slash: go to after-attribute
+        // name so no empty-named attribute is created for `<div />`.
+        ReconsumeIn(State::kAfterAttributeName);
+      } else if (c == '<' || c == '=') {
         ReconsumeIn(State::kAttributeName);
       } else {
         attribute_name_.clear();
@@ -995,7 +1007,10 @@ void Tokenizer::ProcessChar(char c) {
       if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
         pending_text_.push_back(c);
         end_tag_name_.push_back(static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c));
-      } else if (c == '>') {
+      } else if (c == '>' || IsWhitespace(c) || c == '/') {
+        // A matched end tag name is closed by '>', or by whitespace or '/'
+        // (attributes / self-closing slash follow; the parser consumes the
+        // tag).  An unmatched name is treated as text.
         if (end_tag_name_ == raw_text_tag_) {
           Emit(Token::MakeEndTag(std::move(end_tag_name_)));
           pending_text_.clear();
@@ -1003,7 +1018,7 @@ void Tokenizer::ProcessChar(char c) {
         } else {
           FlushCharacterRun();
           char_run_ += pending_text_;
-          char_run_.push_back('>');
+          char_run_.push_back(c);
           pending_text_.clear();
           state_ = State::kRcdata;
         }
@@ -1056,7 +1071,9 @@ void Tokenizer::ProcessChar(char c) {
       if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
         pending_text_.push_back(c);
         end_tag_name_.push_back(static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c));
-      } else if (c == '>') {
+      } else if (c == '>' || IsWhitespace(c) || c == '/') {
+        // A matched end tag name is closed by '>', or by whitespace or '/'
+        // (attributes / self-closing slash follow).  Unmatched names are text.
         if (end_tag_name_ == raw_text_tag_) {
           Emit(Token::MakeEndTag(std::move(end_tag_name_)));
           pending_text_.clear();
@@ -1064,7 +1081,7 @@ void Tokenizer::ProcessChar(char c) {
         } else {
           FlushCharacterRun();
           char_run_ += pending_text_;
-          char_run_.push_back('>');
+          char_run_.push_back(c);
           pending_text_.clear();
           state_ = State::kRawtext;
         }
