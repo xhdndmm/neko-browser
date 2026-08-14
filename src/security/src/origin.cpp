@@ -5,15 +5,6 @@
 #include "neko/security/origin.h"
 
 namespace neko::security {
-namespace {
-
-bool IsSpecialScheme(std::string_view scheme)
-{
-  return scheme == "http" || scheme == "https" || scheme == "ws" || scheme == "wss" ||
-         scheme == "ftp";
-}
-
-} // namespace
 
 Origin Origin::FromUrl(const url::Url& url)
 {

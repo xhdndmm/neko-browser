@@ -593,18 +593,18 @@ void BrowserController::LoadBytes(Tab& tab,
   }
 
   if (is_pdf) {
-    auto parsed = neko::pdf::ExtractText(bytes);
-    if (!parsed) {
+    auto pdf_result = neko::pdf::ExtractText(bytes);
+    if (!pdf_result) {
       std::lock_guard<std::mutex> lock(mutex_);
       tab.content_type = ContentType::kError;
-      tab.error = std::make_shared<std::string>("pdf error: " + parsed.error().message());
+      tab.error = std::make_shared<std::string>("pdf error: " + pdf_result.error().message());
       tab.title = "PDF error";
       return;
     }
     {
       std::lock_guard<std::mutex> lock(mutex_);
       tab.content_type = ContentType::kPdf;
-      tab.pdf = std::make_shared<pdf::PdfDocument>(std::move(parsed.value()));
+      tab.pdf = std::make_shared<pdf::PdfDocument>(std::move(pdf_result.value()));
       tab.title = tab.pdf->title.empty() ? final_url : tab.pdf->title;
     }
     RecordVisit(final_url, tab.title);
