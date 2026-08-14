@@ -170,7 +170,10 @@
       "name": "tsan",
       "configurePreset": "tsan",
       "output": { "outputOnFailure": true },
-      "execution": { "noTestsAction": "error" }
+      "execution": { "noTestsAction": "error" },
+      "environment": {
+        "TSAN_OPTIONS": "suppressions=${sourceDir}/tools/tsan.supp"
+      }
     },
     {
       "name": "coverage",

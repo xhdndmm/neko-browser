@@ -33,12 +33,19 @@
   min 优先于 max）、**auto 外边距**（主轴吸收自由空间并覆盖 justify-content；
   交叉轴吸收行内自由空间并覆盖 align-self）；嵌套 flex 可用；内联 flex 为
   行内原子盒
+- **grid（M1）**：display:grid；grid-template-columns/rows
+  （px/%/fr/auto/min-content/max-content + repeat()）、row-major 自动放置
+  （grid-auto-flow: row）、grid-column/row 行与 span 放置（含简写与 longhand）、
+  column/row gap；超出显式模板的隐式轨道按 auto 尺寸（auto 列按该列起始项目的
+  max-content、auto 行按该行项目内容高；fr 列/行分享容器剩余空间）
 
 ## 未实现
 
 - flexbox：百分比高度精确解析、flex 容器自身 min/max、max-width 截断后的
   剩余自由空间再分配、`flex-basis: content`
-- grid、fixed/sticky、margin 折叠、z-index、百分比 offset
+- grid：inline-grid、命名区域、`dense` 打包、`minmax()`、`grid-auto-flow`
+  非 row、fr 行在容器高度不确定时的精确解析、网格项目内的绝对定位精确包含块
+- fixed/sticky、margin 折叠、z-index、百分比 offset
   （fixed 暂按 absolute 处理）
 - float：`clear`、多个浮动盒相交的 BFC 排布
 - 表格：border-collapse/border-spacing、`vertical-align`、`<caption>` 定位、

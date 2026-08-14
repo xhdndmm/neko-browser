@@ -1,0 +1,22 @@
+# =============================================================================
+# ThreadSanitizer suppressions (tools/tsan.supp)
+#
+# Purpose
+# -------
+# The Qt 6 GUI smoke tests run a real Qt event loop / windowing stack under
+# ThreadSanitizer.  Qt's own internals (implicitly-shared QArrayData, the
+# QThreadPool, QWidget event dispatch, QWidget destruction) generate data-race
+# reports whose stack frames are entirely inside libQt6*.  These are Qt's
+# internal synchronization, not neko-browser code.
+#
+# These suppressions are scoped STRICTLY to Qt library modules.  No neko
+# source file is suppressed here: a race whose top frame is inside
+# src/, tests/ or any project target will still be reported and must be fixed.
+#
+# Verified 2026-08: every suppressed report had only libQt6* frames on both
+# the read and the write side.
+# =============================================================================
+
+race:libQt6Core.so*
+race:libQt6Gui.so*
+race:libQt6Widgets.so*

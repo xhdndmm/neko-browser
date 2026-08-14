@@ -46,8 +46,17 @@ HTML 解析后按文档顺序执行页内 `<script>`，随后重跑样式级联�
 Tab（`PumpScriptTimers` 供工作者线程推进定时器）；GUI 用 50ms QTimer 驱动；
 CLI `--url` 路径同样执行脚本。
 
-**测试**：48 个 JS 单元测试 + 6 个浏览器集成测试（脚本执行/console/错误/
-定时器/外部脚本不执行/多图并行解码）。ASan 无泄漏、TSan 无数据竞争。
+**外部脚本与 async/defer**（WHATWG HTML §4.12.1 的 classic 模型）：
+
+- classic（无 async/defer）：按文档序抓取并同步执行，阻塞后续脚本；
+- `defer`：在全部 classic 脚本之后按文档序执行（解析已完成，与规范一致）；
+- `async`：在 classic+defer 阶段之后按文档序执行 —— 同步引擎的文档化近似
+  （不抢占管线，无法先于更早的 classic 运行）。
+- 外部脚本经同一网络栈（生产带 Cookie）抓取；module 与动态 import 不支持。
+
+**测试**：48 个 JS 单元测试 + 10 个浏览器集成测试（脚本执行/console/错误/
+定时器/外部脚本/文档序/defer/async/失败不中断/多图并行解码/页面 origin）。
+ASan 无泄漏、TSan 无数据竞争。
 
 ## 所有权与生命周期
 
@@ -61,8 +70,10 @@ CLI `--url` 路径同样执行脚本。
 ## 未实现（诚实标注）
 
 - 属性 getter 仅覆盖上述子集；`childNodes`/`querySelectorAll` 返回快照数组
-  （非活 NodeList）；无事件冒泡/捕获/默认行为；`async`/`defer`/`module`
-  脚本与外部 `src=` 脚本不执行；无 fetch/XHR；无 storage 事件。
+  （非活 NodeList）；无事件冒泡/捕获/默认行为；**module 脚本与动态 import**
+  不执行；无 fetch/XHR；无 storage 事件。
+- async 脚本在同步引擎中按文档序在 classic+defer 之后执行（规范允许先于
+  部分 classic 运行，本引擎为文档化近似）。
 - microtask/Promise 与浏览器事件循环的完整对接（当前为同步任务泵）。
 - Web IDL 完整类型系统（接口继承、字典、枚举转换等）。
 

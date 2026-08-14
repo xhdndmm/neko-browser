@@ -168,7 +168,7 @@ graph LR
   （BT/ET/Td/TJ/Tj 等）、UTF-16BE/ASCII/Latin-1 解码。
 - **限制**：无 xref stream、无渲染、无 CMap，明确标注 PARTIAL。
 
-### javascript（Phase 8 已落地，里程碑 1）
+### javascript（Phase 8 已落地，里程碑 1 + M2 子集）
 
 - `src/javascript/`：`ScriptEngine` / `ScriptValue`，封装 QuickJS
   （quickjs-ng v0.16.1）自有接口，第三方头文件不泄漏。
@@ -176,7 +176,21 @@ graph LR
   （文件/进程/网络）不编译（`QJS_BUILD_LIBC=OFF`）。
 - 安全：默认内存上限 128 MiB、默认执行时限 10 秒（中断处理器防死循环）。
 - 集成：CLI `--eval`、GUI DevTools Console REPL（worker 线程求值）。
-- **未开始**：Web IDL / DOM 绑定、页面 `<script>` 执行、事件循环对接。
+- **里程碑 2 子集（已落地）**：`DomBinder` 每文档一个 runtime 的 DOM 绑定
+  （document/Node/Element/CSSStyleDeclaration/事件/timers）、页内 `<script>`
+  执行（内联 + 外部 src= + async/defer）、最小事件循环（同步定时器泵 +
+  事件派发）。依赖方向：javascript → dom/css/html，browser → javascript。
+- **未实现**：完整 Web IDL、fetch/XHR、microtask/Promise 完整对接、
+  module 脚本与动态 import。
+
+### security（Phase 10 M1 已落地）
+
+- `src/security/`：`Origin`（scheme + host + effective port 三元组）、
+  `IsSameOrigin` 同源判定、不透明 origin（data: 等）。浏览器控制器在每个
+  标签页记录页面 origin（`Tab::origin` / `TabSnapshot::origin`）。
+- **未实现**：SOP 在网络读取上的实施（fetch/XHR 需 CORS）、CORS/CSP、
+  secure context、权限系统 —— 见 docs/security/security-model.md 与
+  ADR 0011。
 
 ### browser / ui（Phase 7 已落地）
 

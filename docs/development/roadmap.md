@@ -142,11 +142,14 @@ graph LR
       setTimeout/setInterval
 - [x] **页内 `<script>` 执行**：`browser::RunPageScripts` 按文档顺序执行，
       脚本可改 DOM（随后重跑样式级联）；控制器/GUI/CLI 均已接入
+- [x] **外部 `<script src>` + async/defer**：外部脚本经同一网络栈（带 Cookie）
+      抓取；classic 按文档序阻塞执行、defer 在全部 classic 之后按序执行、
+      async 在 classic+defer 之后按序执行（同步引擎对 async 的文档化近似）
 - [x] **最小事件循环**：定时器同步泵（`RunPendingTimers`）+ 同步事件派发
 - [ ] 完整 Web IDL / binding 层（navigator/location/history/fetch/storage/events
       完整化、活 NodeList、事件冒泡/捕获）—— **后续**
 - [ ] microtask/Promise 与浏览器事件循环完整对接 —— **后续**
-- [ ] async/defer/module 与外部 `src=` 脚本执行 —— **后续**
+- [ ] module 脚本与动态 import —— **后续**
 - [ ] LocalStorage 已就绪（`storage::LocalStorage`），等待 Web IDL 绑定
 
 ## Phase 8 附注 — 多线程基础设施（已起步）
@@ -155,10 +158,12 @@ graph LR
 - [x] 页内多 `<img>` 并行解码（抓取串行、解码并行、主线程注入）
 - [ ] 多进程架构 —— Phase 12（未开始）
 
-## Phase 10 — Security
+## Phase 10 — Security（M1 已起步）
 
-- [ ] Origin / SOP / CORS / CSP / Cookie 安全 / TLS 校验
-- [ ] 权限系统 / 沙箱 / 导航与下载安全
+- [x] **Origin / 同源判定**：`security::Origin`（scheme+host+port 三元组、
+      不透明 origin），标签页记录页面 origin
+- [ ] SOP 实施（fetch/XHR 读取需 CORS）、CORS 头解析与预检 —— **后续**
+- [ ] CSP / Cookie 安全强制 / 权限系统 / 沙箱 / 导航下载安全 —— **后续**
 
 ## Phase 11 — Performance
 

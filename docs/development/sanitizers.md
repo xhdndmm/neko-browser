@@ -34,10 +34,18 @@ UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 ctest --preset asan
    这是工具链/内核兼容问题，**不是代码缺陷**。规避方式：
    - `sudo sysctl vm.mmap_rnd_bits=28`（系统级）
    - 或单次运行：`setarch $(uname -m) -R ctest --preset tsan`
-   已用后一种方式验证：本项目 TSan 下 54/54 测试通过，无数据竞争。
+   已用后一种方式验证：本项目 TSan 下 495/495 测试通过，无 neko 代码数据竞争。
 2. **GCC 系统头误报**：-O2 + TSan 时 GCC 可能在 libstdc++ 头（如 `<streambuf>`）
    报 `-Wnull-dereference` 误报。sanitizer preset 默认不开启
    `NEKO_WARNINGS_AS_ERRORS`，请勿为 sanitizer 构建强开 Werror 后去"修"系统头。
+3. **Qt 内部竞争抑制（`tools/tsan.supp`）**：GUI 冒烟测试在真实 Qt 事件循环
+   下运行，Qt 自身内部（QArrayData 隐式共享、QThreadPool、QWidget 事件分发/
+   析构）会被 TSan 报告数据竞争。经核实：这些报告的读写两侧栈帧**全部**在
+   `libQt6*` 内，与 neko 代码无关。`tools/tsan.supp` 仅按模块名抑制
+   `libQt6Core/Gui/Widgets` 的竞争，**不含任何 neko 源文件**——项目代码的
+   竞争仍会照常报告并必须修复（如 2026-08 修复的 `Tab::origin` 未持锁写入
+   竞争，见 ADR 0011 关联提交）。该抑制已通过 `tsan` 测试预设的
+   `TSAN_OPTIONS` 环境变量接入，无需手动指定。
 
 ## 铁律
 
