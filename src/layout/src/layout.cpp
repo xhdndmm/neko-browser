@@ -1627,22 +1627,22 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
 
       // Container main size along the item-flow axis.  For a row this is the
       // (definite) content width; for a column it is the specified content
-      // height, else auto (content-determined).  Percent heights are not yet
-      // supported and fall back to auto.
+      // height, else auto (content-determined).  Percent heights are
+      // indefinite (they depend on the containing block's resolved height,
+      // which the engine does not track) and fall back to auto; treating them
+      // as a definite 0 collapses the container.
       float container_main = avail_width;
-      if (!row && cs.height.has_value()) {
-        const style::SizeSpec& height = cs.height.value();
-        container_main = height.percent ? 0.0f : height.value;
+      if (!row && cs.height.has_value() && !cs.height.value().percent) {
+        container_main = cs.height.value().value;
       }
-      const bool main_definite = row || cs.height.has_value();
+      const bool main_definite = row || (cs.height.has_value() && !cs.height.value().percent);
       // Container cross size: for a column it is the (definite) content
       // width; for a row it is the specified content height, else auto.
       float container_cross = avail_width;
-      if (row && cs.height.has_value()) {
-        const style::SizeSpec& height = cs.height.value();
-        container_cross = height.percent ? 0.0f : height.value;
+      if (row && cs.height.has_value() && !cs.height.value().percent) {
+        container_cross = cs.height.value().value;
       }
-      const bool cross_definite = !row || cs.height.has_value();
+      const bool cross_definite = !row || (cs.height.has_value() && !cs.height.value().percent);
 
       // ---- Collect and measure flex items (§9.2) ----
       std::vector<FlexItemData> items;

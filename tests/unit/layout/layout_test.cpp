@@ -1567,6 +1567,22 @@ TEST(FlexLayoutTest, AlignSelfOnColumnCrossAxis)
   EXPECT_FLOAT_EQ(flex->children[1]->x, 8.0f + 200.0f - 60.0f);
 }
 
+TEST(FlexLayoutTest, PercentHeightContainerDoesNotCollapse)
+{
+  // A column flex container with height:50% is indefinite (the engine does
+  // not resolve the parent height), so it must size to content rather than
+  // collapsing to a definite 0.
+  Page page = Build("<body><div style=\"display:flex;flex-direction:column;height:50%\">"
+                    "<div style=\"height:30px\">a</div>"
+                    "<div style=\"height:40px\">b</div></div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  ASSERT_EQ(flex->children.size(), 2u);
+  // Container height follows content (30 + 40 = 70), not 0.
+  EXPECT_GT(flex->height, 0.0f);
+  EXPECT_FLOAT_EQ(flex->height, 70.0f);
+}
+
 // Grid layout (monospace fallback: each character is font_size px wide)
 // ---------------------------------------------------------------------------
 
