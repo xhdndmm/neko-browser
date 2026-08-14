@@ -8,13 +8,23 @@
 namespace neko::css {
 namespace {
 
-bool IsNameStart(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'; }
+bool IsNameStart(char c)
+{
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+}
 
-bool IsNameChar(char c) { return IsNameStart(c) || (c >= '0' && c <= '9') || c == '-'; }
+bool IsNameChar(char c)
+{
+  return IsNameStart(c) || (c >= '0' && c <= '9') || c == '-';
+}
 
-bool IsWhitespace(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
+bool IsWhitespace(char c)
+{
+  return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
 
-std::string ToLower(std::string_view s) {
+std::string ToLower(std::string_view s)
+{
   std::string out;
   out.reserve(s.size());
   for (const char c : s) {
@@ -24,7 +34,8 @@ std::string ToLower(std::string_view s) {
 }
 
 // Splits a selector list on top-level commas.
-std::vector<std::string_view> SplitOnCommas(std::string_view text) {
+std::vector<std::string_view> SplitOnCommas(std::string_view text)
+{
   std::vector<std::string_view> parts;
   std::size_t start = 0;
   int depth = 0;
@@ -46,7 +57,8 @@ std::vector<std::string_view> SplitOnCommas(std::string_view text) {
 }
 
 // Parses a compound selector (no combinators).
-bool ParseCompound(std::string_view text, CompoundSelector& out) {
+bool ParseCompound(std::string_view text, CompoundSelector& out)
+{
   std::size_t i = 0;
   while (i < text.size()) {
     const char c = text[i];
@@ -175,7 +187,8 @@ bool ParseCompound(std::string_view text, CompoundSelector& out) {
 }
 
 // Parses a complex selector: compounds separated by combinators.
-bool ParseComplex(std::string_view text, ComplexSelector& out) {
+bool ParseComplex(std::string_view text, ComplexSelector& out)
+{
   std::size_t i = 0;
   for (;;) {
     while (i < text.size() && IsWhitespace(text[i])) {
@@ -232,7 +245,8 @@ bool ParseComplex(std::string_view text, ComplexSelector& out) {
   return !out.compounds.empty() && out.combinators.size() == out.compounds.size() - 1;
 }
 
-const dom::Element* PreviousElementSibling(const dom::Node* node) {
+const dom::Element* PreviousElementSibling(const dom::Node* node)
+{
   // Walk the parent's children, remembering the last element seen before
   // |node|.
   const dom::Node* parent = node->parent();
@@ -251,7 +265,8 @@ const dom::Element* PreviousElementSibling(const dom::Node* node) {
   return nullptr;
 }
 
-const dom::Element* NextElementSibling(const dom::Node* node) {
+const dom::Element* NextElementSibling(const dom::Node* node)
+{
   const dom::Node* parent = node->parent();
   if (parent == nullptr) {
     return nullptr;
@@ -269,7 +284,8 @@ const dom::Element* NextElementSibling(const dom::Node* node) {
 }
 
 // 1-based index among element siblings; 0 when there are no element siblings.
-int ElementIndex(const dom::Node* node) {
+int ElementIndex(const dom::Node* node)
+{
   const dom::Node* parent = node->parent();
   if (parent == nullptr) {
     return 0;
@@ -290,7 +306,8 @@ int ElementIndex(const dom::Node* node) {
 // Parses an+b (e.g. "2n+1", "-n+3", "odd", "even") into (a, b) with b as the
 // 1-based matching positions offset.  Returns false for "n" alone which needs
 // special handling.
-bool ParseAnB(std::string_view text, int& a, int& b) {
+bool ParseAnB(std::string_view text, int& a, int& b)
+{
   std::string_view t = text;
   while (!t.empty() && (t.front() == ' ' || t.front() == '\t')) {
     t.remove_prefix(1);
@@ -352,7 +369,8 @@ bool ParseAnB(std::string_view text, int& a, int& b) {
   return false;
 }
 
-bool AttributeMatches(const dom::Element& element, const AttributeSelector& attr) {
+bool AttributeMatches(const dom::Element& element, const AttributeSelector& attr)
+{
   const std::optional<std::string_view> actual = element.GetAttribute(attr.name);
   if (!actual.has_value()) {
     return false;
@@ -392,15 +410,14 @@ bool AttributeMatches(const dom::Element& element, const AttributeSelector& attr
     return false;
   }
   if (attr.op == "|=") {
-    return text == value || (text.size() > value.size() && text.substr(0, value.size() + 1) ==
-                                                                 value + "-");
+    return text == value ||
+           (text.size() > value.size() && text.substr(0, value.size() + 1) == value + "-");
   }
   if (attr.op == "^=") {
     return text.rfind(value, 0) == 0;
   }
   if (attr.op == "$=") {
-    return text.size() >= value.size() &&
-           text.substr(text.size() - value.size()) == value;
+    return text.size() >= value.size() && text.substr(text.size() - value.size()) == value;
   }
   if (attr.op == "*=") {
     return text.find(value) != std::string_view::npos;
@@ -408,7 +425,13 @@ bool AttributeMatches(const dom::Element& element, const AttributeSelector& attr
   return false;
 }
 
-bool PseudoClassMatches(const dom::Element& element, std::string_view pseudo) {
+bool PseudoClassMatches(const dom::Element& element, std::string_view pseudo)
+{
+  if (pseudo == "root") {
+    // :root matches the document's root element (the <html> element).
+    const dom::Node* parent = element.parent();
+    return parent != nullptr && parent->node_type() == dom::NodeType::kDocument;
+  }
   if (pseudo == "first-child") {
     return PreviousElementSibling(&element) == nullptr;
   }
@@ -438,7 +461,8 @@ bool PseudoClassMatches(const dom::Element& element, std::string_view pseudo) {
   return false;
 }
 
-bool CompoundMatches(const dom::Element& element, const CompoundSelector& compound) {
+bool CompoundMatches(const dom::Element& element, const CompoundSelector& compound)
+{
   if (compound.tag.has_value() && *compound.tag != element.tag_name()) {
     return false;
   }
@@ -474,8 +498,8 @@ bool CompoundMatches(const dom::Element& element, const CompoundSelector& compou
   return true;
 }
 
-bool MatchOnElement(const dom::Element& element, const ComplexSelector& selector,
-                    std::size_t index) {
+bool MatchOnElement(const dom::Element& element, const ComplexSelector& selector, std::size_t index)
+{
   if (!CompoundMatches(element, selector.compounds[index])) {
     return false;
   }
@@ -514,7 +538,8 @@ bool MatchOnElement(const dom::Element& element, const ComplexSelector& selector
   return false;
 }
 
-void CompoundSpecificity(const CompoundSelector& compound, Specificity& out) {
+void CompoundSpecificity(const CompoundSelector& compound, Specificity& out)
+{
   if (compound.tag.has_value()) {
     ++out.c;
   }
@@ -526,7 +551,8 @@ void CompoundSpecificity(const CompoundSelector& compound, Specificity& out) {
   out.b += static_cast<unsigned>(compound.pseudo_classes.size());
 }
 
-Specificity SelectorSpecificity(const ComplexSelector& selector) {
+Specificity SelectorSpecificity(const ComplexSelector& selector)
+{
   Specificity out;
   for (const CompoundSelector& compound : selector.compounds) {
     CompoundSpecificity(compound, out);
@@ -534,9 +560,10 @@ Specificity SelectorSpecificity(const ComplexSelector& selector) {
   return out;
 }
 
-}  // namespace
+} // namespace
 
-std::vector<ComplexSelector> ParseSelectorList(std::string_view text) {
+std::vector<ComplexSelector> ParseSelectorList(std::string_view text)
+{
   std::vector<ComplexSelector> result;
   for (const std::string_view part : SplitOnCommas(text)) {
     ComplexSelector selector;
@@ -547,11 +574,13 @@ std::vector<ComplexSelector> ParseSelectorList(std::string_view text) {
   return result;
 }
 
-bool MatchesSelector(const dom::Element& element, const ComplexSelector& selector) {
+bool MatchesSelector(const dom::Element& element, const ComplexSelector& selector)
+{
   return MatchOnElement(element, selector, selector.compounds.size() - 1);
 }
 
-Specificity MatchingSpecificity(const dom::Element& element, std::string_view selector_list) {
+Specificity MatchingSpecificity(const dom::Element& element, std::string_view selector_list)
+{
   Specificity best;
   for (const ComplexSelector& selector : ParseSelectorList(selector_list)) {
     if (MatchesSelector(element, selector)) {
@@ -564,4 +593,4 @@ Specificity MatchingSpecificity(const dom::Element& element, std::string_view se
   return best;
 }
 
-}  // namespace neko::css
+} // namespace neko::css

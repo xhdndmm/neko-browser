@@ -2,6 +2,7 @@
 
 #include "neko/css/color.h"
 
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -130,7 +131,12 @@ enum class AlignContent
 // currently <button>) and button (force the button look on any element).
 // Other compat values (checkbox, radio, textfield, ...) are not implemented;
 // their declarations are ignored.
-enum class Appearance { kNone, kAuto, kButton };
+enum class Appearance
+{
+  kNone,
+  kAuto,
+  kButton
+};
 
 // A length that may be a percentage (resolved against the containing block).
 struct SizeSpec
@@ -271,6 +277,12 @@ struct ComputedStyle
   GridPlacement grid_column_end;
   GridPlacement grid_row_start;
   GridPlacement grid_row_end;
+
+  // CSS custom properties (CSS Custom Properties for Cascading Variables
+  // Level 1).  Values are the raw declaration text with var() references
+  // already resolved.  Custom properties inherit, so the map is copied from
+  // the parent and extended by declarations on the element itself.
+  std::map<std::string, std::string> custom_properties;
 };
 
 } // namespace neko::style

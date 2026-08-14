@@ -86,6 +86,93 @@ TEST_F(DomBinderTest, GlobalDocumentAndWindow)
   EXPECT_EQ(EvalString("document.body.tagName"), "BODY");
 }
 
+TEST_F(DomBinderTest, DocumentHead)
+{
+  EXPECT_EQ(EvalString("document.head.tagName"), "HEAD");
+  // Pages do document.head.appendChild(...) to inject <style>/<meta>.
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var meta = d.createElement('meta'); meta.name = 'x'; "
+                       "d.head.appendChild(meta); "
+                       "return d.head.children[d.head.children.length - 1] === meta; })()"));
+}
+
+TEST_F(DomBinderTest, DocumentReadyState)
+{
+  // Scripts run after parsing, so the document is always "complete".
+  EXPECT_EQ(EvalString("document.readyState"), "complete");
+}
+
+TEST_F(DomBinderTest, InterfaceGlobalsAndInstanceof)
+{
+  EXPECT_TRUE(EvalBool("document instanceof Document"));
+  EXPECT_TRUE(EvalBool("document instanceof Node"));
+  EXPECT_FALSE(EvalBool("document instanceof Element"));
+  EXPECT_TRUE(EvalBool("document.body instanceof Element"));
+  EXPECT_TRUE(EvalBool("document.body instanceof HTMLElement"));
+  EXPECT_TRUE(EvalBool("document.body instanceof Node"));
+  EXPECT_FALSE(EvalBool("document.body instanceof Document"));
+  EXPECT_TRUE(EvalBool("document.head instanceof Element"));
+  EXPECT_TRUE(EvalBool("document.createTextNode('x') instanceof Text"));
+  EXPECT_TRUE(EvalBool("document.createElement('div') instanceof Element"));
+}
+
+TEST_F(DomBinderTest, InterfacePrototypeExtension)
+{
+  // Element.prototype extension reaches live wrappers.
+  EXPECT_TRUE(EvalBool("(function(){ "
+                       "Element.prototype.foo = function() { return 'foo:' + this.tagName; }; "
+                       "HTMLElement.prototype.bar = function() { return 'bar'; }; "
+                       "return document.body.foo() === 'foo:BODY' "
+                       "       && document.body.bar() === 'bar'; })()"));
+  // The prototype's constructor points back at the interface constructor.
+  EXPECT_TRUE(EvalBool("document.body.constructor === Element"));
+  EXPECT_TRUE(EvalBool("document.constructor === Document"));
+}
+
+TEST_F(DomBinderTest, IllegalConstructorThrows)
+{
+  auto r = binder_->Evaluate("new Element()");
+  ASSERT_FALSE(r.has_value());
+  EXPECT_NE(r.error().message().find("Illegal constructor"), std::string::npos);
+}
+
+TEST_F(DomBinderTest, DocumentEventListener)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var hits = 0; "
+                       "document.addEventListener('app-ready', function(ev) { "
+                       "  hits++; window._ev = ev; "
+                       "}); "
+                       "document.dispatchEvent({type: 'app-ready'}); "
+                       "return hits === 1 && window._ev.type === 'app-ready' "
+                       "       && window._ev.target === document; })()"));
+}
+
+TEST_F(DomBinderTest, WindowEventListenerAndGlobalAlias)
+{
+  // window.addEventListener and the bare global alias both register listeners
+  // on the document (window and document share one event-target set here).
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var hits = 0; "
+      "window.addEventListener('load', function(ev) { hits++; window._loadType = ev.type; }); "
+      "addEventListener('after-load', function() { hits++; }); "
+      "document.dispatchEvent({type: 'load'}); "
+      "document.dispatchEvent({type: 'after-load'}); "
+      "return hits === 2 && window._loadType === 'load'; })()"));
+}
+
+TEST_F(DomBinderTest, DispatchDocumentEventFromCpp)
+{
+  ASSERT_TRUE(EvalBool("(function(){ window._ready = 0; window._loaded = 0; "
+                       "document.addEventListener('DOMContentLoaded', "
+                       "  function() { window._ready++; }); "
+                       "window.addEventListener('load', function() { window._loaded++; }); "
+                       "return true; })()"));
+  binder_->DispatchDocumentEvent("DOMContentLoaded");
+  binder_->DispatchDocumentEvent("load");
+  EXPECT_EQ(EvalNumber("window._ready"), 1.0);
+  EXPECT_EQ(EvalNumber("window._loaded"), 1.0);
+}
+
 TEST_F(DomBinderTest, GetElementById)
 {
   EXPECT_EQ(EvalString("document.getElementById('first').tagName"), "P");
@@ -319,6 +406,67 @@ TEST_F(DomBinderTest, ConsoleFromPageScript)
   ASSERT_TRUE(binder_->Evaluate("console.log('from page')").has_value());
   ASSERT_EQ(console_.size(), 1u);
   EXPECT_EQ(console_[0], "log: from page");
+}
+
+TEST_F(DomBinderTest, NavigatorGlobal)
+{
+  // The UA matches what the network stack sends; the page can read it without
+  // a ReferenceError.
+  EXPECT_EQ(EvalString("navigator.userAgent"), "neko-browser/0.1.0");
+  EXPECT_EQ(EvalString("window.navigator.userAgent"), "neko-browser/0.1.0");
+  EXPECT_TRUE(EvalBool("navigator === window.navigator"));
+  EXPECT_EQ(EvalString("navigator.language"), "en-US");
+  EXPECT_EQ(EvalString("navigator.languages.join(',')"), "en-US");
+  EXPECT_TRUE(EvalBool("navigator.onLine === true"));
+  EXPECT_TRUE(EvalBool("navigator.cookieEnabled === true"));
+  EXPECT_TRUE(EvalNumber("navigator.hardwareConcurrency") >= 1.0);
+  // Missing features are absent, so "x" in navigator is honestly false.
+  EXPECT_FALSE(EvalBool("'geolocation' in navigator"));
+  EXPECT_FALSE(EvalBool("'clipboard' in navigator"));
+}
+
+TEST_F(DomBinderTest, ScreenAndViewportGlobals)
+{
+  // Engine-default viewport (matches renderer::Page's default layout width).
+  EXPECT_EQ(EvalNumber("screen.width"), 800.0);
+  EXPECT_EQ(EvalNumber("screen.height"), 600.0);
+  EXPECT_EQ(EvalNumber("screen.colorDepth"), 24.0);
+  EXPECT_EQ(EvalNumber("window.innerWidth"), 800.0);
+  EXPECT_EQ(EvalNumber("window.innerHeight"), 600.0);
+  EXPECT_EQ(EvalNumber("window.devicePixelRatio"), 1.0);
+  EXPECT_TRUE(EvalBool("screen === window.screen"));
+}
+
+TEST_F(DomBinderTest, NodeAppend)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var list = d.createElement('ul'); "
+                       "var a = d.createElement('li'); a.textContent = 'a'; "
+                       "var b = d.createElement('li'); b.textContent = 'b'; "
+                       "list.append(a, b); "
+                       "return list.children.length === 2 "
+                       "       && list.children[0] === a && list.children[1] === b; })()"));
+  // append re-parents an already-attached node (DOM adoption): the element
+  // moves under the detached div, so it leaves the document tree.
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var e = d.getElementById('first'); "
+                       "var div = d.createElement('div'); "
+                       "div.append(e); "
+                       "return e.parentNode === div && d.getElementById('first') === null; })()"));
+}
+
+TEST_F(DomBinderTest, ReplaceChildren)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var list = d.createElement('ul'); "
+                       "list.append(d.createElement('li'), d.createElement('li')); "
+                       "list.replaceChildren(); "
+                       "return list.children.length === 0; })()"));
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var e = d.getElementById('main'); "
+                       "e.replaceChildren(); "
+                       "return e.children.length === 0 "
+                       "       && d.getElementById('first') === null; })()"));
 }
 
 } // namespace

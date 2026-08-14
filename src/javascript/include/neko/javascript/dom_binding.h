@@ -22,13 +22,28 @@ struct Impl;
 // surface:
 //
 //   globals:    document, window, setTimeout, clearTimeout, setInterval,
-//               clearInterval
-//   Document:   documentElement, body, title (get/set), getElementById,
-//               querySelector(All), createElement, createTextNode
+//               clearInterval, addEventListener, removeEventListener,
+//               dispatchEvent (window aliases), navigator, screen, plus the
+//               DOM interface constructors Node, Element, HTMLElement,
+//               Document, Text, Comment, DocumentFragment, CSSStyleDeclaration
+//               (whose .prototype is the live wrapper prototype, so `x
+//               instanceof Element` and prototype extension work; constructing
+//               them directly throws "Illegal constructor")
+//   window:     navigator, screen, innerWidth/innerHeight/devicePixelRatio
+//               (engine-default viewport 800x600@1x; real window-size wiring
+//               is future work)
+//   navigator:  userAgent (same string the network stack sends), platform,
+//               language/languages ("en-US" defaults), onLine, cookieEnabled,
+//               hardwareConcurrency, vendor
+//   screen:     width/height/availWidth/availHeight (800x600),
+//               colorDepth/pixelDepth (24)
+//   Document:   documentElement, body, head, readyState ("complete"),
+//               title (get/set), getElementById, querySelector(All),
+//               createElement, createTextNode
 //   Node:       nodeType, nodeName, textContent (get/set), parentNode,
-//               firstChild, lastChild, childNodes, appendChild, insertBefore,
-//               removeChild, hasChildNodes, cloneNode, addEventListener,
-//               removeEventListener, dispatchEvent
+//               firstChild, lastChild, childNodes, appendChild, append,
+//               replaceChildren, insertBefore, removeChild, hasChildNodes,
+//               cloneNode, addEventListener, removeEventListener, dispatchEvent
 //   Element:    tagName, id (get/set), className (get/set), attributes,
 //               getAttribute/setAttribute/removeAttribute/hasAttribute,
 //               children, firstElementChild, querySelector(All),
@@ -36,6 +51,16 @@ struct Impl;
 //               innerHTML (get/set), style (CSSStyleDeclaration)
 //   Style:      setProperty/getPropertyValue/removeProperty plus direct
 //               accessors for a documented subset of properties
+//
+// append/replaceChildren accept node arguments (DOM spec converts string
+// arguments to text nodes; that is a documented limitation here).
+//
+// addEventListener/removeEventListener/dispatchEvent work on any node
+// (elements and the document).  Window-level listeners (window.addEventListener
+// and the bare global aliases) are stored under the document node — the
+// window and the document share one event-target set in this minimal model —
+// and are fired by DispatchDocumentEvent (used by RunPageScripts to fire
+// DOMContentLoaded/load after the page's scripts run).
 //
 // NOT implemented (documented limitation): property getters beyond the above,
 // live NodeList objects (childNodes is a snapshot array), event propagation
@@ -83,6 +108,12 @@ public:
   // run synchronously (no bubbling).  No default action is defined for any
   // event type.
   void DispatchEvent(dom::Element& element, std::string_view type);
+
+  // Dispatches a synthetic document-level event (e.g. "DOMContentLoaded",
+  // "load") to listeners registered on the document — which is where
+  // window-level listeners are stored.  RunPageScripts calls this after the
+  // page's scripts have run.
+  void DispatchDocumentEvent(std::string_view type);
 
   // Underlying engine (for tests and integration).
   ScriptEngine& engine();

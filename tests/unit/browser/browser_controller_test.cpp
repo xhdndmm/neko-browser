@@ -489,6 +489,49 @@ TEST(BrowserControllerTest, AsyncScriptRuns)
   EXPECT_EQ(s.value(), "start,async");
 }
 
+// After every script has run, the document lifecycle events fire: pages that
+// register document/window listeners for DOMContentLoaded/load see them run.
+TEST(BrowserControllerTest, LifecycleEventsFireAfterScripts)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<script>"
+                               "window.ready = 0; window.loaded = 0; window.bare = 0;"
+                               "document.addEventListener('DOMContentLoaded', "
+                               "  function() { window.ready++; });"
+                               "window.addEventListener('load', "
+                               "  function() { window.loaded++; });"
+                               "addEventListener('bare-event', "
+                               "  function() { window.bare++; });"
+                               "</script>"
+                               "</body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  ASSERT_NE(tab->script_runtime, nullptr);
+  auto ready = tab->script_runtime->Evaluate("window.ready");
+  ASSERT_TRUE(ready.has_value());
+  ASSERT_TRUE(ready.value().ToNumber().has_value());
+  EXPECT_DOUBLE_EQ(ready.value().ToNumber().value(), 1.0);
+  auto loaded = tab->script_runtime->Evaluate("window.loaded");
+  ASSERT_TRUE(loaded.has_value());
+  ASSERT_TRUE(loaded.value().ToNumber().has_value());
+  EXPECT_DOUBLE_EQ(loaded.value().ToNumber().value(), 1.0);
+  // No one dispatched 'bare-event'; the global alias registered but nothing fired.
+  auto bare = tab->script_runtime->Evaluate("window.bare");
+  ASSERT_TRUE(bare.has_value());
+  ASSERT_TRUE(bare.value().ToNumber().has_value());
+  EXPECT_DOUBLE_EQ(bare.value().ToNumber().value(), 0.0);
+}
+
 // A failed external fetch is logged and does not stop the remaining scripts.
 TEST(BrowserControllerTest, FailedExternalScriptDoesNotStopOthers)
 {

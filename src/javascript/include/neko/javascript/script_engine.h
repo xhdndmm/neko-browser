@@ -1,5 +1,7 @@
 #pragma once
 
+#include "neko/base/status.h"
+
 #include <chrono>
 #include <cstddef>
 #include <functional>
@@ -8,8 +10,6 @@
 #include <string_view>
 #include <vector>
 
-#include "neko/base/status.h"
-
 namespace neko::javascript {
 
 // Owns the JSRuntime + JSContext (defined in script_engine.cpp).  Kept via
@@ -17,8 +17,9 @@ namespace neko::javascript {
 struct RuntimeCore;
 
 // The kind of a JavaScript value.
-enum class ValueKind {
-  kInvalid,   // default-constructed or moved-from handle
+enum class ValueKind
+{
+  kInvalid, // default-constructed or moved-from handle
   kUndefined,
   kNull,
   kBoolean,
@@ -38,10 +39,11 @@ std::string_view ToString(ValueKind kind);
 // keeps the underlying runtime alive, so a value may safely outlive the
 // ScriptEngine that created it.  Values from different engines must never be
 // mixed.  Threading: use a value from the same thread as its engine.
-class ScriptValue {
- public:
+class ScriptValue
+{
+public:
   ScriptValue();
-  ScriptValue(const ScriptValue& other);  // duplicates the reference
+  ScriptValue(const ScriptValue& other); // duplicates the reference
   ScriptValue& operator=(const ScriptValue& other);
   ScriptValue(ScriptValue&& other) noexcept;
   ScriptValue& operator=(ScriptValue&& other) noexcept;
@@ -59,14 +61,14 @@ class ScriptValue {
   // JSON.stringify(value); fails on non-serializable values (e.g. cycles).
   base::Result<std::string> JsonStringify() const;
 
- private:
+private:
   friend class ScriptEngine;
 
   ScriptValue(std::shared_ptr<RuntimeCore> core, void* js_value);
   void Reset();
 
   std::shared_ptr<RuntimeCore> core_;
-  void* js_value_ = nullptr;  // heap-allocated JSValue (owned)
+  void* js_value_ = nullptr; // heap-allocated JSValue (owned)
 };
 
 // A sandboxed JavaScript execution context: one runtime, one global scope.
@@ -77,8 +79,9 @@ class ScriptValue {
 //
 // Threading: thread-confined.  Use a ScriptEngine from one thread at a time;
 // the interrupt handler runs on the calling thread, so no locking is needed.
-class ScriptEngine {
- public:
+class ScriptEngine
+{
+public:
   ScriptEngine();
   ~ScriptEngine();
 
@@ -100,14 +103,24 @@ class ScriptEngine {
 
   // Evaluates a script in the global scope; returns the completion value.
   // Syntax errors surface as Error::Parse, runtime / limit errors as
-  // Error::Javascript.
-  base::Result<ScriptValue> Evaluate(std::string_view source,
-                                     std::string_view filename = "eval");
+  // Error::Javascript.  After evaluation, the runtime's job queue (promise
+  // reactions / microtasks) is drained, so async functions started by the
+  // script progress to completion (or until the execution limit).
+  base::Result<ScriptValue> Evaluate(std::string_view source, std::string_view filename = "eval");
 
   base::Result<ScriptValue> CallGlobal(const std::string& name,
                                        const std::vector<ScriptValue>& args = {});
   base::Result<ScriptValue> GetGlobal(const std::string& name);
   base::Result<void> SetGlobal(const std::string& name, const ScriptValue& value);
+
+  // Runs every pending job (promise .then continuations, microtasks) to
+  // completion, honouring the execution limit via the interrupt handler.  A
+  // job that throws (e.g. an unhandled rejection) is reported through the
+  // console sink and does not stop the remaining jobs.  QuickJS does not run
+  // jobs automatically; Evaluate/CallGlobal call this, and callers that pump
+  // timers or dispatch events should call it too so promise continuations
+  // created by callbacks make progress.
+  void RunPendingJobs();
 
   // Value constructors, tied to this engine.
   base::Result<ScriptValue> MakeUndefined();
@@ -120,7 +133,7 @@ class ScriptEngine {
   static std::string RuntimeName();
   static std::string Version();
 
- private:
+private:
   // Internal access for the DOM binder (same module); see
   // script_engine_internal.h.
   friend void* ScriptEngineContext(ScriptEngine&);
@@ -129,4 +142,4 @@ class ScriptEngine {
   std::chrono::milliseconds execution_limit_ = std::chrono::seconds(10);
 };
 
-}  // namespace neko::javascript
+} // namespace neko::javascript

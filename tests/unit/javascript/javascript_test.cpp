@@ -1,20 +1,21 @@
 // Unit tests for the neko::javascript module (QuickJS runtime wrapper).
 
-#include <chrono>
-#include <string>
-#include <vector>
-
-#include <gtest/gtest.h>
-
 #include "neko/base/status.h"
 #include "neko/javascript/script_engine.h"
+
+#include <chrono>
+#include <gtest/gtest.h>
+#include <string>
+#include <vector>
 
 namespace neko::javascript {
 namespace {
 
-class ScriptEngineTest : public ::testing::Test {
- protected:
-  void SetUp() override {
+class ScriptEngineTest : public ::testing::Test
+{
+protected:
+  void SetUp() override
+  {
     engine_ = std::make_unique<ScriptEngine>();
     engine_->SetConsoleSink([this](std::string_view level, std::string_view text) {
       console_.push_back(std::string(level) + ": " + std::string(text));
@@ -25,12 +26,14 @@ class ScriptEngineTest : public ::testing::Test {
   std::vector<std::string> console_;
 };
 
-TEST_F(ScriptEngineTest, RuntimeInfo) {
+TEST_F(ScriptEngineTest, RuntimeInfo)
+{
   EXPECT_EQ(ScriptEngine::RuntimeName(), "QuickJS");
   EXPECT_FALSE(ScriptEngine::Version().empty());
 }
 
-TEST_F(ScriptEngineTest, EvaluatesArithmetic) {
+TEST_F(ScriptEngineTest, EvaluatesArithmetic)
+{
   auto result = engine_->Evaluate("1 + 2 * 3");
   ASSERT_TRUE(result.has_value()) << result.error().message();
   EXPECT_EQ(result.value().Kind(), ValueKind::kNumber);
@@ -39,7 +42,65 @@ TEST_F(ScriptEngineTest, EvaluatesArithmetic) {
   EXPECT_DOUBLE_EQ(num.value(), 7.0);
 }
 
-TEST_F(ScriptEngineTest, EvaluatesString) {
+// Promise continuations (microtasks) are drained after evaluation, so an
+// async function started at top level completes even though Evaluate returns
+// synchronously.
+TEST_F(ScriptEngineTest, PromiseJobsDrainAfterEvaluate)
+{
+  ASSERT_TRUE(engine_
+                  ->Evaluate("window = {}; "
+                             "window._done = false; "
+                             "(async function(){ window._done = true; })();")
+                  .has_value());
+  auto v = engine_->Evaluate("window._done");
+  ASSERT_TRUE(v.has_value());
+  auto b = v.value().ToBoolean();
+  ASSERT_TRUE(b.has_value());
+  EXPECT_TRUE(b.value());
+}
+
+// An async function with an await chain progresses through the drained queue.
+TEST_F(ScriptEngineTest, AsyncAwaitChainCompletes)
+{
+  ASSERT_TRUE(engine_
+                  ->Evaluate("var _order = []; "
+                             "Promise.resolve()"
+                             "  .then(function(){ _order.push('a'); })"
+                             "  .then(function(){ _order.push('b'); });")
+                  .has_value());
+  auto v = engine_->Evaluate("_order.join(',')");
+  ASSERT_TRUE(v.has_value());
+  auto s = v.value().ToString();
+  ASSERT_TRUE(s.has_value());
+  EXPECT_EQ(s.value(), "a,b");
+}
+
+// An unhandled rejection is reported through the console sink and does not
+// stop the remaining jobs.
+TEST_F(ScriptEngineTest, UnhandledRejectionIsReported)
+{
+  ASSERT_TRUE(engine_
+                  ->Evaluate("var _done = false; "
+                             "Promise.reject(new Error('boom'))"
+                             "  .catch(function(){ _done = true; });")
+                  .has_value());
+  auto v = engine_->Evaluate("_done");
+  ASSERT_TRUE(v.has_value());
+  auto b = v.value().ToBoolean();
+  ASSERT_TRUE(b.has_value());
+  EXPECT_TRUE(b.value());
+  // The rejection had a handler, so nothing was reported.
+  EXPECT_TRUE(console_.empty());
+
+  // A truly unhandled rejection reaches the console sink as an error.
+  ASSERT_TRUE(engine_->Evaluate("Promise.reject(new Error('nobody listens'));").has_value());
+  ASSERT_EQ(console_.size(), 1u);
+  EXPECT_EQ(console_[0].substr(0, 6), "error:");
+  EXPECT_NE(console_[0].find("nobody listens"), std::string::npos);
+}
+
+TEST_F(ScriptEngineTest, EvaluatesString)
+{
   auto result = engine_->Evaluate("'hello ' + 'world'");
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result.value().Kind(), ValueKind::kString);
@@ -48,7 +109,8 @@ TEST_F(ScriptEngineTest, EvaluatesString) {
   EXPECT_EQ(str.value(), "hello world");
 }
 
-TEST_F(ScriptEngineTest, EvaluatesObjectAndJson) {
+TEST_F(ScriptEngineTest, EvaluatesObjectAndJson)
+{
   auto result = engine_->Evaluate("({a: 1, b: 'x'})");
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result.value().Kind(), ValueKind::kObject);
@@ -57,7 +119,8 @@ TEST_F(ScriptEngineTest, EvaluatesObjectAndJson) {
   EXPECT_EQ(json.value(), R"({"a":1,"b":"x"})");
 }
 
-TEST_F(ScriptEngineTest, EvaluatesBooleanAndNull) {
+TEST_F(ScriptEngineTest, EvaluatesBooleanAndNull)
+{
   auto t = engine_->Evaluate("true");
   ASSERT_TRUE(t.has_value());
   EXPECT_EQ(t.value().Kind(), ValueKind::kBoolean);
@@ -70,7 +133,8 @@ TEST_F(ScriptEngineTest, EvaluatesBooleanAndNull) {
   EXPECT_EQ(n.value().Kind(), ValueKind::kNull);
 }
 
-TEST_F(ScriptEngineTest, ToNumberConversion) {
+TEST_F(ScriptEngineTest, ToNumberConversion)
+{
   auto r = engine_->Evaluate("'42'");
   ASSERT_TRUE(r.has_value());
   auto num = r.value().ToNumber();
@@ -78,7 +142,8 @@ TEST_F(ScriptEngineTest, ToNumberConversion) {
   EXPECT_DOUBLE_EQ(num.value(), 42.0);
 }
 
-TEST_F(ScriptEngineTest, DefineFunctionAndCallGlobal) {
+TEST_F(ScriptEngineTest, DefineFunctionAndCallGlobal)
+{
   auto define = engine_->Evaluate("function add(a, b) { return a + b; }");
   ASSERT_TRUE(define.has_value());
   EXPECT_EQ(define.value().Kind(), ValueKind::kUndefined);
@@ -94,13 +159,15 @@ TEST_F(ScriptEngineTest, DefineFunctionAndCallGlobal) {
   EXPECT_DOUBLE_EQ(num.value(), 5.0);
 }
 
-TEST_F(ScriptEngineTest, CallGlobalOnMissingFunction) {
+TEST_F(ScriptEngineTest, CallGlobalOnMissingFunction)
+{
   auto result = engine_->CallGlobal("doesNotExist");
   ASSERT_FALSE(result.has_value());
   EXPECT_EQ(result.error().category(), base::ErrorCategory::kJavascript);
 }
 
-TEST_F(ScriptEngineTest, SetAndGetGlobal) {
+TEST_F(ScriptEngineTest, SetAndGetGlobal)
+{
   auto s = engine_->MakeString("neko");
   ASSERT_TRUE(s.has_value());
   auto set = engine_->SetGlobal("project", s.value());
@@ -114,7 +181,8 @@ TEST_F(ScriptEngineTest, SetAndGetGlobal) {
   EXPECT_EQ(str.value(), "neko");
 }
 
-TEST_F(ScriptEngineTest, PersistentGlobalStateAcrossEvaluations) {
+TEST_F(ScriptEngineTest, PersistentGlobalStateAcrossEvaluations)
+{
   ASSERT_TRUE(engine_->Evaluate("counter = 1;").has_value());
   auto bump = engine_->Evaluate("counter += 41; counter;");
   ASSERT_TRUE(bump.has_value());
@@ -123,46 +191,51 @@ TEST_F(ScriptEngineTest, PersistentGlobalStateAcrossEvaluations) {
   EXPECT_DOUBLE_EQ(num.value(), 42.0);
 }
 
-TEST_F(ScriptEngineTest, SyntaxErrorIsParseError) {
+TEST_F(ScriptEngineTest, SyntaxErrorIsParseError)
+{
   auto result = engine_->Evaluate("function (");
   ASSERT_FALSE(result.has_value());
   EXPECT_EQ(result.error().category(), base::ErrorCategory::kParse);
   EXPECT_NE(result.error().message().find("SyntaxError"), std::string::npos);
 }
 
-TEST_F(ScriptEngineTest, RuntimeErrorIsJavascriptError) {
+TEST_F(ScriptEngineTest, RuntimeErrorIsJavascriptError)
+{
   auto result = engine_->Evaluate("throw new Error('boom')");
   ASSERT_FALSE(result.has_value());
   EXPECT_EQ(result.error().category(), base::ErrorCategory::kJavascript);
   EXPECT_NE(result.error().message().find("boom"), std::string::npos);
 }
 
-TEST_F(ScriptEngineTest, ConsoleLogCapture) {
+TEST_F(ScriptEngineTest, ConsoleLogCapture)
+{
   auto result = engine_->Evaluate("console.log('hello', 42, {k: 1})");
   ASSERT_TRUE(result.has_value()) << result.error().message();
   ASSERT_EQ(console_.size(), 1u);
   EXPECT_EQ(console_[0], "log: hello 42 {\"k\":1}");
 }
 
-TEST_F(ScriptEngineTest, ConsoleErrorCapture) {
+TEST_F(ScriptEngineTest, ConsoleErrorCapture)
+{
   (void)engine_->Evaluate("console.error('fatal'); console.warn('careful')");
   ASSERT_EQ(console_.size(), 2u);
   EXPECT_EQ(console_[0], "error: fatal");
   EXPECT_EQ(console_[1], "warning: careful");
 }
 
-TEST_F(ScriptEngineTest, ConsoleSinkCanBeChanged) {
+TEST_F(ScriptEngineTest, ConsoleSinkCanBeChanged)
+{
   std::vector<std::string> second;
-  engine_->SetConsoleSink([&second](std::string_view, std::string_view text) {
-    second.push_back(std::string(text));
-  });
+  engine_->SetConsoleSink(
+      [&second](std::string_view, std::string_view text) { second.push_back(std::string(text)); });
   (void)engine_->Evaluate("console.log('moved')");
   ASSERT_EQ(console_.size(), 0u);
   ASSERT_EQ(second.size(), 1u);
   EXPECT_EQ(second[0], "moved");
 }
 
-TEST_F(ScriptEngineTest, InfiniteLoopIsInterrupted) {
+TEST_F(ScriptEngineTest, InfiniteLoopIsInterrupted)
+{
   engine_->SetExecutionLimit(std::chrono::milliseconds(50));
   const auto start = std::chrono::steady_clock::now();
   auto result = engine_->Evaluate("while (true) {}");
@@ -173,7 +246,8 @@ TEST_F(ScriptEngineTest, InfiniteLoopIsInterrupted) {
   EXPECT_LT(elapsed, std::chrono::seconds(10));
 }
 
-TEST_F(ScriptEngineTest, CallGlobalInfiniteLoopIsInterrupted) {
+TEST_F(ScriptEngineTest, CallGlobalInfiniteLoopIsInterrupted)
+{
   ASSERT_TRUE(engine_->Evaluate("function spin() { while (true) {} }").has_value());
   engine_->SetExecutionLimit(std::chrono::milliseconds(50));
   auto result = engine_->CallGlobal("spin");
@@ -181,8 +255,9 @@ TEST_F(ScriptEngineTest, CallGlobalInfiniteLoopIsInterrupted) {
   EXPECT_NE(result.error().message().find("interrupted"), std::string::npos);
 }
 
-TEST_F(ScriptEngineTest, MemoryLimitIsEnforced) {
-  engine_->SetMemoryLimit(1024u * 1024u);  // 1 MiB
+TEST_F(ScriptEngineTest, MemoryLimitIsEnforced)
+{
+  engine_->SetMemoryLimit(1024u * 1024u); // 1 MiB
   // A large allocation must be rejected by the runtime.  (new Array(n) only
   // sets length and does not actually allocate, so allocate a big string.)
   auto result = engine_->Evaluate("'x'.repeat(8 * 1024 * 1024);");
@@ -190,7 +265,8 @@ TEST_F(ScriptEngineTest, MemoryLimitIsEnforced) {
   EXPECT_EQ(result.error().category(), base::ErrorCategory::kJavascript);
 }
 
-TEST_F(ScriptEngineTest, ValueOutlivesEngine) {
+TEST_F(ScriptEngineTest, ValueOutlivesEngine)
+{
   ScriptValue saved;
   {
     ScriptEngine temp;
@@ -206,7 +282,8 @@ TEST_F(ScriptEngineTest, ValueOutlivesEngine) {
   EXPECT_EQ(str.value(), "survivor");
 }
 
-TEST_F(ScriptEngineTest, ValueCopyKeepsReference) {
+TEST_F(ScriptEngineTest, ValueCopyKeepsReference)
+{
   auto result = engine_->Evaluate("({n: 7})");
   ASSERT_TRUE(result.has_value());
   ScriptValue copy = result.value();
@@ -216,7 +293,8 @@ TEST_F(ScriptEngineTest, ValueCopyKeepsReference) {
   EXPECT_EQ(json.value(), R"({"n":7})");
 }
 
-TEST_F(ScriptEngineTest, ValueMoveTransfersOwnership) {
+TEST_F(ScriptEngineTest, ValueMoveTransfersOwnership)
+{
   auto result = engine_->Evaluate("'moved'");
   ASSERT_TRUE(result.has_value());
   ScriptValue moved = std::move(result.value());
@@ -227,7 +305,8 @@ TEST_F(ScriptEngineTest, ValueMoveTransfersOwnership) {
   EXPECT_EQ(str.value(), "moved");
 }
 
-TEST_F(ScriptEngineTest, DefaultValueIsInvalid) {
+TEST_F(ScriptEngineTest, DefaultValueIsInvalid)
+{
   ScriptValue v;
   EXPECT_FALSE(v.IsValid());
   EXPECT_EQ(v.Kind(), ValueKind::kInvalid);
@@ -236,13 +315,15 @@ TEST_F(ScriptEngineTest, DefaultValueIsInvalid) {
   EXPECT_EQ(str.error().category(), base::ErrorCategory::kInvalidArgument);
 }
 
-TEST_F(ScriptEngineTest, BigIntKind) {
+TEST_F(ScriptEngineTest, BigIntKind)
+{
   auto result = engine_->Evaluate("123n");
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(result.value().Kind(), ValueKind::kBigInt);
 }
 
-TEST_F(ScriptEngineTest, FunctionKind) {
+TEST_F(ScriptEngineTest, FunctionKind)
+{
   auto result = engine_->Evaluate("function f() {}");
   ASSERT_TRUE(result.has_value());
   // A function declaration evaluates to undefined; grab it from the global.
@@ -251,7 +332,8 @@ TEST_F(ScriptEngineTest, FunctionKind) {
   EXPECT_EQ(f.value().Kind(), ValueKind::kFunction);
 }
 
-TEST_F(ScriptEngineTest, ValueKindToString) {
+TEST_F(ScriptEngineTest, ValueKindToString)
+{
   EXPECT_EQ(ToString(ValueKind::kNumber), "number");
   EXPECT_EQ(ToString(ValueKind::kString), "string");
   EXPECT_EQ(ToString(ValueKind::kObject), "object");
@@ -259,7 +341,8 @@ TEST_F(ScriptEngineTest, ValueKindToString) {
   EXPECT_EQ(ToString(ValueKind::kInvalid), "invalid");
 }
 
-TEST_F(ScriptEngineTest, ArgumentsFromDifferentEngineRejected) {
+TEST_F(ScriptEngineTest, ArgumentsFromDifferentEngineRejected)
+{
   ScriptEngine other;
   auto other_val = other.MakeNumber(1);
   ASSERT_TRUE(other_val.has_value());
@@ -271,7 +354,8 @@ TEST_F(ScriptEngineTest, ArgumentsFromDifferentEngineRejected) {
   EXPECT_EQ(result.error().category(), base::ErrorCategory::kInvalidArgument);
 }
 
-TEST_F(ScriptEngineTest, JsonStringifyFailureOnCycle) {
+TEST_F(ScriptEngineTest, JsonStringifyFailureOnCycle)
+{
   auto result = engine_->Evaluate("var o = {}; o.self = o; o;");
   ASSERT_TRUE(result.has_value());
   auto json = result.value().JsonStringify();
@@ -279,5 +363,5 @@ TEST_F(ScriptEngineTest, JsonStringifyFailureOnCycle) {
   EXPECT_EQ(json.error().category(), base::ErrorCategory::kJavascript);
 }
 
-}  // namespace
-}  // namespace neko::javascript
+} // namespace
+} // namespace neko::javascript

@@ -8,16 +8,16 @@
 // locking is required.
 
 #include "neko/javascript/script_engine.h"
+
 #include "neko/javascript/script_engine_internal.h"
 
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <quickjs.h>
 #include <string>
 #include <utility>
 #include <vector>
-
-#include <quickjs.h>
 
 namespace neko::javascript {
 
@@ -25,18 +25,33 @@ namespace neko::javascript {
 // non-zero to abort the running script.
 int InterruptHandler(JSRuntime* rt, void* opaque);
 
+// Called by QuickJS when a promise rejection becomes unhandled (is_handled
+// false) or is later handled (is_handled true).  quickjs fires the false
+// case synchronously at rejection time even when a handler is attached in the
+// same turn, so instead of reporting immediately we record the rejection and
+// report it at the microtask checkpoint (end of RunPendingJobs) only if it is
+// still unhandled then — matching browsers' unhandledrejection timing.
+void PromiseRejectionTracker(
+    JSContext* ctx, JSValueConst promise, JSValueConst reason, bool is_handled, void* opaque);
+
 // Owns the JSRuntime + JSContext.  One per ScriptEngine; shared with the
 // ScriptValues it produces so a value keeps the runtime alive.
-struct RuntimeCore {
+struct RuntimeCore
+{
   JSRuntime* rt = nullptr;
   JSContext* ctx = nullptr;
   ScriptEngine::ConsoleSink console_sink;
   std::chrono::steady_clock::time_point deadline{};
   bool interrupted = false;
+  // Promises whose rejections are currently unreported: (promise, reason),
+  // both Dup'd.  Cleared at each microtask checkpoint (see RunPendingJobs).
+  std::vector<std::pair<JSValue, JSValue>> pending_rejections;
 
-  RuntimeCore() {
+  RuntimeCore()
+  {
     rt = JS_NewRuntime();
-    if (rt == nullptr) return;
+    if (rt == nullptr)
+      return;
     ctx = JS_NewContext(rt);
     if (ctx == nullptr) {
       JS_FreeRuntime(rt);
@@ -45,15 +60,26 @@ struct RuntimeCore {
     }
     JS_SetContextOpaque(ctx, this);
     JS_SetInterruptHandler(rt, &InterruptHandler, this);
+    JS_SetHostPromiseRejectionTracker(rt, &PromiseRejectionTracker, this);
   }
 
-  ~RuntimeCore() {
-    if (ctx != nullptr) JS_FreeContext(ctx);
-    if (rt != nullptr) JS_FreeRuntime(rt);
+  ~RuntimeCore()
+  {
+    if (ctx != nullptr) {
+      for (auto& p : pending_rejections) {
+        JS_FreeValue(ctx, p.first);
+        JS_FreeValue(ctx, p.second);
+      }
+      pending_rejections.clear();
+      JS_FreeContext(ctx);
+    }
+    if (rt != nullptr)
+      JS_FreeRuntime(rt);
   }
 };
 
-int InterruptHandler(JSRuntime* /*rt*/, void* opaque) {
+int InterruptHandler(JSRuntime* /*rt*/, void* opaque)
+{
   auto* core = static_cast<RuntimeCore*>(opaque);
   if (std::chrono::steady_clock::now() >= core->deadline) {
     core->interrupted = true;
@@ -62,14 +88,35 @@ int InterruptHandler(JSRuntime* /*rt*/, void* opaque) {
   return 0;
 }
 
+void PromiseRejectionTracker(
+    JSContext* ctx, JSValueConst promise, JSValueConst reason, bool is_handled, void* opaque)
+{
+  auto* core = static_cast<RuntimeCore*>(opaque);
+  if (core == nullptr)
+    return;
+  if (is_handled) {
+    // A handler was attached: drop any pending report for this promise.
+    for (auto it = core->pending_rejections.begin(); it != core->pending_rejections.end(); ++it) {
+      if (JS_IsStrictEqual(ctx, it->first, promise)) {
+        JS_FreeValue(ctx, it->first);
+        JS_FreeValue(ctx, it->second);
+        core->pending_rejections.erase(it);
+        break;
+      }
+    }
+    return;
+  }
+  core->pending_rejections.emplace_back(JS_DupValue(ctx, promise), JS_DupValue(ctx, reason));
+}
+
 namespace {
 
-constexpr std::size_t kDefaultMemoryLimit = 128u * 1024u * 1024u;  // 128 MiB
-
+constexpr std::size_t kDefaultMemoryLimit = 128u * 1024u * 1024u; // 128 MiB
 
 // Appends the string form of |v| to |out| (console.log-style formatting:
 // strings as-is, objects as JSON, everything else via JS ToString).
-void AppendConsoleArg(JSContext* ctx, std::string& out, JSValueConst v) {
+void AppendConsoleArg(JSContext* ctx, std::string& out, JSValueConst v)
+{
   if (JS_IsObject(v)) {
     JSValue json = JS_JSONStringify(ctx, v, JS_UNDEFINED, JS_UNDEFINED);
     if (JS_IsException(json)) {
@@ -79,13 +126,14 @@ void AppendConsoleArg(JSContext* ctx, std::string& out, JSValueConst v) {
     }
     const char* s = JS_ToCString(ctx, json);
     out += s != nullptr ? s : "[object]";
-    if (s != nullptr) JS_FreeCString(ctx, s);
+    if (s != nullptr)
+      JS_FreeCString(ctx, s);
     JS_FreeValue(ctx, json);
     return;
   }
   const char* s = JS_ToCString(ctx, v);
   if (s == nullptr) {
-    JS_FreeValue(ctx, JS_GetException(ctx));  // e.g. Symbol -> ToString throws
+    JS_FreeValue(ctx, JS_GetException(ctx)); // e.g. Symbol -> ToString throws
     out += "[value]";
     return;
   }
@@ -94,15 +142,18 @@ void AppendConsoleArg(JSContext* ctx, std::string& out, JSValueConst v) {
 }
 
 // console.log/info/warn/error binding.  The magic argument selects the level.
-JSValue JsConsole(JSContext* ctx, JSValueConst /*this_val*/, int argc,
-                  JSValueConst* argv, int magic) {
+JSValue
+JsConsole(JSContext* ctx, JSValueConst /*this_val*/, int argc, JSValueConst* argv, int magic)
+{
   auto* core = static_cast<RuntimeCore*>(JS_GetContextOpaque(ctx));
-  if (core == nullptr || !core->console_sink) return JS_UNDEFINED;
+  if (core == nullptr || !core->console_sink)
+    return JS_UNDEFINED;
   static constexpr const char* kLevels[] = {"log", "info", "warning", "error"};
   const char* level = (magic >= 0 && magic < 4) ? kLevels[magic] : "log";
   std::string text;
   for (int i = 0; i < argc; ++i) {
-    if (i > 0) text += ' ';
+    if (i > 0)
+      text += ' ';
     AppendConsoleArg(ctx, text, argv[i]);
   }
   core->console_sink(level, text);
@@ -111,7 +162,8 @@ JSValue JsConsole(JSContext* ctx, JSValueConst /*this_val*/, int argc,
 
 // Converts a pending JS exception into a project Error.  Syntax errors are
 // reported as Error::Parse; everything else as Error::Javascript.
-base::Error MakeErrorFromException(JSContext* ctx, bool interrupted) {
+base::Error MakeErrorFromException(JSContext* ctx, bool interrupted)
+{
   if (interrupted) {
     return base::Error::Javascript("script execution interrupted (limit exceeded)");
   }
@@ -132,7 +184,8 @@ base::Error MakeErrorFromException(JSContext* ctx, bool interrupted) {
   if (JS_IsString(stack)) {
     const char* ss = JS_ToCString(ctx, stack);
     if (ss != nullptr) {
-      if (!message.empty()) message += '\n';
+      if (!message.empty())
+        message += '\n';
       message += ss;
       JS_FreeCString(ctx, ss);
     }
@@ -145,30 +198,31 @@ base::Error MakeErrorFromException(JSContext* ctx, bool interrupted) {
   return base::Error::Javascript(std::move(message));
 }
 
-}  // namespace
+} // namespace
 
-std::string_view ToString(ValueKind kind) {
+std::string_view ToString(ValueKind kind)
+{
   switch (kind) {
-    case ValueKind::kInvalid:
-      return "invalid";
-    case ValueKind::kUndefined:
-      return "undefined";
-    case ValueKind::kNull:
-      return "null";
-    case ValueKind::kBoolean:
-      return "boolean";
-    case ValueKind::kNumber:
-      return "number";
-    case ValueKind::kString:
-      return "string";
-    case ValueKind::kObject:
-      return "object";
-    case ValueKind::kFunction:
-      return "function";
-    case ValueKind::kSymbol:
-      return "symbol";
-    case ValueKind::kBigInt:
-      return "bigint";
+  case ValueKind::kInvalid:
+    return "invalid";
+  case ValueKind::kUndefined:
+    return "undefined";
+  case ValueKind::kNull:
+    return "null";
+  case ValueKind::kBoolean:
+    return "boolean";
+  case ValueKind::kNumber:
+    return "number";
+  case ValueKind::kString:
+    return "string";
+  case ValueKind::kObject:
+    return "object";
+  case ValueKind::kFunction:
+    return "function";
+  case ValueKind::kSymbol:
+    return "symbol";
+  case ValueKind::kBigInt:
+    return "bigint";
   }
   return "invalid";
 }
@@ -183,17 +237,20 @@ std::string_view ToString(ValueKind kind) {
 ScriptValue::ScriptValue() = default;
 
 ScriptValue::ScriptValue(std::shared_ptr<RuntimeCore> core, void* js_value)
-    : core_(std::move(core)), js_value_(js_value) {}
+    : core_(std::move(core)), js_value_(js_value)
+{}
 
-ScriptValue::ScriptValue(const ScriptValue& other)
-    : core_(other.core_), js_value_(nullptr) {
+ScriptValue::ScriptValue(const ScriptValue& other) : core_(other.core_), js_value_(nullptr)
+{
   if (other.js_value_ != nullptr && core_ != nullptr && core_->ctx != nullptr) {
     js_value_ = new JSValue(JS_DupValue(core_->ctx, *static_cast<JSValue*>(other.js_value_)));
   }
 }
 
-ScriptValue& ScriptValue::operator=(const ScriptValue& other) {
-  if (this == &other) return *this;
+ScriptValue& ScriptValue::operator=(const ScriptValue& other)
+{
+  if (this == &other)
+    return *this;
   Reset();
   core_ = other.core_;
   if (other.js_value_ != nullptr && core_ != nullptr && core_->ctx != nullptr) {
@@ -203,12 +260,15 @@ ScriptValue& ScriptValue::operator=(const ScriptValue& other) {
 }
 
 ScriptValue::ScriptValue(ScriptValue&& other) noexcept
-    : core_(std::move(other.core_)), js_value_(other.js_value_) {
+    : core_(std::move(other.core_)), js_value_(other.js_value_)
+{
   other.js_value_ = nullptr;
 }
 
-ScriptValue& ScriptValue::operator=(ScriptValue&& other) noexcept {
-  if (this == &other) return *this;
+ScriptValue& ScriptValue::operator=(ScriptValue&& other) noexcept
+{
+  if (this == &other)
+    return *this;
   Reset();
   core_ = std::move(other.core_);
   js_value_ = other.js_value_;
@@ -216,9 +276,13 @@ ScriptValue& ScriptValue::operator=(ScriptValue&& other) noexcept {
   return *this;
 }
 
-ScriptValue::~ScriptValue() { Reset(); }
+ScriptValue::~ScriptValue()
+{
+  Reset();
+}
 
-void ScriptValue::Reset() {
+void ScriptValue::Reset()
+{
   if (js_value_ != nullptr) {
     if (core_ != nullptr && core_->ctx != nullptr) {
       JS_FreeValue(core_->ctx, *static_cast<JSValue*>(js_value_));
@@ -229,27 +293,41 @@ void ScriptValue::Reset() {
   core_.reset();
 }
 
-bool ScriptValue::IsValid() const {
+bool ScriptValue::IsValid() const
+{
   return js_value_ != nullptr && core_ != nullptr && core_->ctx != nullptr;
 }
 
-ValueKind ScriptValue::Kind() const {
-  if (!IsValid()) return ValueKind::kInvalid;
+ValueKind ScriptValue::Kind() const
+{
+  if (!IsValid())
+    return ValueKind::kInvalid;
   const JSValue& v = *static_cast<JSValue*>(js_value_);
-  if (JS_IsUndefined(v)) return ValueKind::kUndefined;
-  if (JS_IsNull(v)) return ValueKind::kNull;
-  if (JS_IsBool(v)) return ValueKind::kBoolean;
-  if (JS_IsNumber(v)) return ValueKind::kNumber;
-  if (JS_IsString(v)) return ValueKind::kString;
-  if (JS_IsSymbol(v)) return ValueKind::kSymbol;
-  if (JS_IsBigInt(v)) return ValueKind::kBigInt;
-  if (JS_IsFunction(core_->ctx, v)) return ValueKind::kFunction;
-  if (JS_IsObject(v)) return ValueKind::kObject;
+  if (JS_IsUndefined(v))
+    return ValueKind::kUndefined;
+  if (JS_IsNull(v))
+    return ValueKind::kNull;
+  if (JS_IsBool(v))
+    return ValueKind::kBoolean;
+  if (JS_IsNumber(v))
+    return ValueKind::kNumber;
+  if (JS_IsString(v))
+    return ValueKind::kString;
+  if (JS_IsSymbol(v))
+    return ValueKind::kSymbol;
+  if (JS_IsBigInt(v))
+    return ValueKind::kBigInt;
+  if (JS_IsFunction(core_->ctx, v))
+    return ValueKind::kFunction;
+  if (JS_IsObject(v))
+    return ValueKind::kObject;
   return ValueKind::kInvalid;
 }
 
-base::Result<std::string> ScriptValue::ToString() const {
-  if (!IsValid()) return base::Err(base::Error::InvalidArgument("invalid script value"));
+base::Result<std::string> ScriptValue::ToString() const
+{
+  if (!IsValid())
+    return base::Err(base::Error::InvalidArgument("invalid script value"));
   const char* s = JS_ToCString(core_->ctx, *static_cast<JSValue*>(js_value_));
   if (s == nullptr) {
     JS_FreeValue(core_->ctx, JS_GetException(core_->ctx));
@@ -260,8 +338,10 @@ base::Result<std::string> ScriptValue::ToString() const {
   return out;
 }
 
-base::Result<double> ScriptValue::ToNumber() const {
-  if (!IsValid()) return base::Err(base::Error::InvalidArgument("invalid script value"));
+base::Result<double> ScriptValue::ToNumber() const
+{
+  if (!IsValid())
+    return base::Err(base::Error::InvalidArgument("invalid script value"));
   double d = 0;
   if (JS_ToFloat64(core_->ctx, &d, *static_cast<JSValue*>(js_value_)) != 0) {
     JS_FreeValue(core_->ctx, JS_GetException(core_->ctx));
@@ -270,13 +350,17 @@ base::Result<double> ScriptValue::ToNumber() const {
   return d;
 }
 
-base::Result<bool> ScriptValue::ToBoolean() const {
-  if (!IsValid()) return base::Err(base::Error::InvalidArgument("invalid script value"));
+base::Result<bool> ScriptValue::ToBoolean() const
+{
+  if (!IsValid())
+    return base::Err(base::Error::InvalidArgument("invalid script value"));
   return JS_ToBool(core_->ctx, *static_cast<JSValue*>(js_value_)) != 0;
 }
 
-base::Result<std::string> ScriptValue::JsonStringify() const {
-  if (!IsValid()) return base::Err(base::Error::InvalidArgument("invalid script value"));
+base::Result<std::string> ScriptValue::JsonStringify() const
+{
+  if (!IsValid())
+    return base::Err(base::Error::InvalidArgument("invalid script value"));
   JSValue json =
       JS_JSONStringify(core_->ctx, *static_cast<JSValue*>(js_value_), JS_UNDEFINED, JS_UNDEFINED);
   if (JS_IsException(json)) {
@@ -290,12 +374,13 @@ base::Result<std::string> ScriptValue::JsonStringify() const {
       JS_FreeValue(core_->ctx, JS_GetException(core_->ctx));
     }
     JS_FreeValue(core_->ctx, exc);
-    return base::Err(base::Error::Javascript(
-        message.empty() ? "value cannot be serialized to JSON" : std::move(message)));
+    return base::Err(base::Error::Javascript(message.empty() ? "value cannot be serialized to JSON"
+                                                             : std::move(message)));
   }
   const char* s = JS_ToCString(core_->ctx, json);
   std::string out = s != nullptr ? s : "";
-  if (s != nullptr) JS_FreeCString(core_->ctx, s);
+  if (s != nullptr)
+    JS_FreeCString(core_->ctx, s);
   JS_FreeValue(core_->ctx, json);
   return out;
 }
@@ -303,9 +388,10 @@ base::Result<std::string> ScriptValue::JsonStringify() const {
 // ---------------------------------------------------------------------------
 // ScriptEngine
 // ---------------------------------------------------------------------------
-ScriptEngine::ScriptEngine()
-    : core_(std::make_shared<RuntimeCore>()) {
-  if (core_->ctx == nullptr) return;
+ScriptEngine::ScriptEngine() : core_(std::make_shared<RuntimeCore>())
+{
+  if (core_->ctx == nullptr)
+    return;
   SetMemoryLimit(kDefaultMemoryLimit);
 
   // Install the project-provided `console` binding on the global object.
@@ -317,30 +403,36 @@ ScriptEngine::ScriptEngine()
       JS_CFUNC_MAGIC_DEF("warn", 0, JsConsole, 2),
       JS_CFUNC_MAGIC_DEF("error", 0, JsConsole, 3),
   };
-  JS_SetPropertyFunctionList(core_->ctx, console, kConsoleFuncs,
+  JS_SetPropertyFunctionList(core_->ctx,
+                             console,
+                             kConsoleFuncs,
                              static_cast<int>(sizeof(kConsoleFuncs) / sizeof(kConsoleFuncs[0])));
-  JS_SetPropertyStr(core_->ctx, global, "console", console);  // steals the reference
+  JS_SetPropertyStr(core_->ctx, global, "console", console); // steals the reference
   JS_FreeValue(core_->ctx, global);
 }
 
 ScriptEngine::~ScriptEngine() = default;
 
-void ScriptEngine::SetConsoleSink(ConsoleSink sink) {
+void ScriptEngine::SetConsoleSink(ConsoleSink sink)
+{
   core_->console_sink = std::move(sink);
 }
 
-void ScriptEngine::SetExecutionLimit(std::chrono::milliseconds limit) {
+void ScriptEngine::SetExecutionLimit(std::chrono::milliseconds limit)
+{
   execution_limit_ = limit;
 }
 
-void ScriptEngine::SetMemoryLimit(std::size_t bytes) {
-  if (core_->rt == nullptr) return;
+void ScriptEngine::SetMemoryLimit(std::size_t bytes)
+{
+  if (core_->rt == nullptr)
+    return;
   // 0 disables the limit; JS_SetMemoryLimit takes -1 for "no limit".
   JS_SetMemoryLimit(core_->rt, bytes == 0 ? static_cast<std::size_t>(-1) : bytes);
 }
 
-base::Result<ScriptValue> ScriptEngine::Evaluate(std::string_view source,
-                                                 std::string_view filename) {
+base::Result<ScriptValue> ScriptEngine::Evaluate(std::string_view source, std::string_view filename)
+{
   if (core_->ctx == nullptr) {
     return base::Err(base::Error::Javascript("script runtime failed to initialize"));
   }
@@ -350,13 +442,56 @@ base::Result<ScriptValue> ScriptEngine::Evaluate(std::string_view source,
   JSValue result =
       JS_Eval(core_->ctx, source.data(), source.size(), name.c_str(), JS_EVAL_TYPE_GLOBAL);
   if (JS_IsException(result)) {
-    return base::Err(MakeErrorFromException(core_->ctx, core_->interrupted));
+    const base::Error err = MakeErrorFromException(core_->ctx, core_->interrupted);
+    // Async work scheduled by the failing script still runs (a rejected
+    // promise's handlers, for example) before the error is reported.
+    RunPendingJobs();
+    return base::Err(std::move(err));
   }
+  // Drain the job queue so async functions started by the script progress
+  // (e.g. an `async function` invoked at top level with an `await` chain).
+  RunPendingJobs();
   return ScriptValue(core_, new JSValue(result));
 }
 
+void ScriptEngine::RunPendingJobs()
+{
+  if (core_->rt == nullptr)
+    return;
+  core_->deadline = std::chrono::steady_clock::now() + execution_limit_;
+  core_->interrupted = false;
+  while (JS_IsJobPending(core_->rt) && !core_->interrupted) {
+    JSContext* job_ctx = core_->ctx;
+    if (JS_ExecutePendingJob(core_->rt, &job_ctx) < 0) {
+      // An exception escaped a job.  Report it and keep draining.
+      const std::string message = MakeErrorFromException(job_ctx, false).message();
+      if (core_->console_sink) {
+        core_->console_sink("error", message);
+      }
+    }
+  }
+  // Microtask checkpoint: report rejections that are still unhandled.
+  for (auto& p : core_->pending_rejections) {
+    if (core_->console_sink) {
+      std::string message = "Uncaught (in promise) ";
+      const char* s = JS_ToCString(core_->ctx, p.second);
+      if (s != nullptr) {
+        message += s;
+        JS_FreeCString(core_->ctx, s);
+      } else {
+        JS_FreeValue(core_->ctx, JS_GetException(core_->ctx));
+      }
+      core_->console_sink("error", message);
+    }
+    JS_FreeValue(core_->ctx, p.first);
+    JS_FreeValue(core_->ctx, p.second);
+  }
+  core_->pending_rejections.clear();
+}
+
 base::Result<ScriptValue> ScriptEngine::CallGlobal(const std::string& name,
-                                                   const std::vector<ScriptValue>& args) {
+                                                   const std::vector<ScriptValue>& args)
+{
   if (core_->ctx == nullptr) {
     return base::Err(base::Error::Javascript("script runtime failed to initialize"));
   }
@@ -376,8 +511,7 @@ base::Result<ScriptValue> ScriptEngine::CallGlobal(const std::string& name,
     }
     if (arg.core_ != core_) {
       JS_FreeValue(core_->ctx, fn);
-      return base::Err(
-          base::Error::InvalidArgument("argument belongs to a different engine"));
+      return base::Err(base::Error::InvalidArgument("argument belongs to a different engine"));
     }
     argv.push_back(*static_cast<JSValue*>(arg.js_value_));
   }
@@ -387,12 +521,16 @@ base::Result<ScriptValue> ScriptEngine::CallGlobal(const std::string& name,
       JS_Call(core_->ctx, fn, JS_UNDEFINED, static_cast<int>(args.size()), argv.data());
   JS_FreeValue(core_->ctx, fn);
   if (JS_IsException(result)) {
-    return base::Err(MakeErrorFromException(core_->ctx, core_->interrupted));
+    const base::Error err = MakeErrorFromException(core_->ctx, core_->interrupted);
+    RunPendingJobs();
+    return base::Err(std::move(err));
   }
+  RunPendingJobs();
   return ScriptValue(core_, new JSValue(result));
 }
 
-base::Result<ScriptValue> ScriptEngine::GetGlobal(const std::string& name) {
+base::Result<ScriptValue> ScriptEngine::GetGlobal(const std::string& name)
+{
   if (core_->ctx == nullptr) {
     return base::Err(base::Error::Javascript("script runtime failed to initialize"));
   }
@@ -406,7 +544,8 @@ base::Result<ScriptValue> ScriptEngine::GetGlobal(const std::string& name) {
   return ScriptValue(core_, new JSValue(v));
 }
 
-base::Result<void> ScriptEngine::SetGlobal(const std::string& name, const ScriptValue& value) {
+base::Result<void> ScriptEngine::SetGlobal(const std::string& name, const ScriptValue& value)
+{
   if (core_->ctx == nullptr) {
     return base::Err(base::Error::Javascript("script runtime failed to initialize"));
   }
@@ -415,7 +554,7 @@ base::Result<void> ScriptEngine::SetGlobal(const std::string& name, const Script
   }
   JSValue global = JS_GetGlobalObject(core_->ctx);
   JSValue dup = JS_DupValue(core_->ctx, *static_cast<JSValue*>(value.js_value_));
-  const int rc = JS_SetPropertyStr(core_->ctx, global, name.c_str(), dup);  // steals |dup|
+  const int rc = JS_SetPropertyStr(core_->ctx, global, name.c_str(), dup); // steals |dup|
   JS_FreeValue(core_->ctx, global);
   if (rc < 0) {
     JS_FreeValue(core_->ctx, JS_GetException(core_->ctx));
@@ -424,28 +563,32 @@ base::Result<void> ScriptEngine::SetGlobal(const std::string& name, const Script
   return base::Ok();
 }
 
-base::Result<ScriptValue> ScriptEngine::MakeUndefined() {
+base::Result<ScriptValue> ScriptEngine::MakeUndefined()
+{
   if (core_->ctx == nullptr) {
     return base::Err(base::Error::Javascript("script runtime failed to initialize"));
   }
   return ScriptValue(core_, new JSValue(JS_UNDEFINED));
 }
 
-base::Result<ScriptValue> ScriptEngine::MakeNull() {
+base::Result<ScriptValue> ScriptEngine::MakeNull()
+{
   if (core_->ctx == nullptr) {
     return base::Err(base::Error::Javascript("script runtime failed to initialize"));
   }
   return ScriptValue(core_, new JSValue(JS_NULL));
 }
 
-base::Result<ScriptValue> ScriptEngine::MakeBoolean(bool b) {
+base::Result<ScriptValue> ScriptEngine::MakeBoolean(bool b)
+{
   if (core_->ctx == nullptr) {
     return base::Err(base::Error::Javascript("script runtime failed to initialize"));
   }
   return ScriptValue(core_, new JSValue(b ? JS_TRUE : JS_FALSE));
 }
 
-base::Result<ScriptValue> ScriptEngine::MakeNumber(double d) {
+base::Result<ScriptValue> ScriptEngine::MakeNumber(double d)
+{
   if (core_->ctx == nullptr) {
     return base::Err(base::Error::Javascript("script runtime failed to initialize"));
   }
@@ -459,22 +602,28 @@ base::Result<ScriptValue> ScriptEngine::MakeNumber(double d) {
   return ScriptValue(core_, new JSValue(v));
 }
 
-base::Result<ScriptValue> ScriptEngine::MakeString(std::string_view s) {
+base::Result<ScriptValue> ScriptEngine::MakeString(std::string_view s)
+{
   if (core_->ctx == nullptr) {
     return base::Err(base::Error::Javascript("script runtime failed to initialize"));
   }
   return ScriptValue(core_, new JSValue(JS_NewStringLen(core_->ctx, s.data(), s.size())));
 }
 
-std::string ScriptEngine::RuntimeName() { return "QuickJS"; }
+std::string ScriptEngine::RuntimeName()
+{
+  return "QuickJS";
+}
 
-std::string ScriptEngine::Version() {
+std::string ScriptEngine::Version()
+{
   return std::to_string(QJS_VERSION_MAJOR) + "." + std::to_string(QJS_VERSION_MINOR) + "." +
          std::to_string(QJS_VERSION_PATCH);
 }
 
-void* ScriptEngineContext(ScriptEngine& engine) {
+void* ScriptEngineContext(ScriptEngine& engine)
+{
   return engine.core_ != nullptr ? engine.core_->ctx : nullptr;
 }
 
-}  // namespace neko::javascript
+} // namespace neko::javascript

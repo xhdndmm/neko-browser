@@ -16,8 +16,10 @@
 | HTML parser | Tested | HTML 套件 | 插入模式子集（无 table 容错）；隐含 p 闭合按 button 作用域判定 |
 | DOM | Tested | DOM 套件 | 树操作、querySelector 子集 |
 | CSS tokenizer/parser | Tested | CSS 套件 | 规则、声明、!important、@media |
-| 选择器匹配 | Tested | CSS 套件 | 属性/伪类/组合器子集 |
+| 选择器匹配 | Tested | CSS 套件 | 属性/伪类(:first-child/:last-child/:nth-child/:root)/组合器子集 |
 | 级联 / 计算样式 | Tested | Style 套件 | 特异性、继承、内联样式 |
+| CSS 自定义属性 | Partial | 4 Style 单元测试 | `--name` 定义 + `var()` 引用（含 fallback）、默认继承、var() 无法解析时声明无效；无嵌套 var()/同元素链式引用 |
+| 逻辑属性 | Partial | 3 Style 单元测试 | inline/block-size、margin/padding-inline/block（1–2 值）、-start/end 长手属性、border-block-start/end、place-items→align-items；无 inline 轴 justify |
 | Block layout | Tested | Layout 套件 | 盒模型、堆叠、宽度填充 |
 | Inline layout | Tested | Layout 套件 | 文字换行、行盒 |
 | inline-block | Partial | Layout + Style + Paint 套件 | 行内原子块盒：显式/shrink-to-fit 宽度、内部块格式化上下文、background/border/padding、vertical-align 与行高参与行盒；精确基线对齐（多行内块按自身最后一行盒基线）未做 |

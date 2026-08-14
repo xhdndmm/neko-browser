@@ -81,6 +81,117 @@ std::vector<std::string> SplitWhitespace(std::string_view value)
   return parts;
 }
 
+// Maps a declaration to the physical (property, value) pairs it contributes
+// to.  CSS Logical Properties (CSS Logical Properties 1) are translated to
+// their physical equivalents; inline/block two-axis shorthands expand into
+// both sides.  place-items collapses to align-items (the inline axis is not
+// implemented).  Everything else passes through unchanged.
+std::vector<std::pair<std::string, std::string>> NormalizeDeclaration(const css::Declaration& decl)
+{
+  const std::string& p = decl.property;
+  if (p == "inline-size")
+    return {{"width", decl.value}};
+  if (p == "block-size")
+    return {{"height", decl.value}};
+  if (p == "min-inline-size")
+    return {{"min-width", decl.value}};
+  if (p == "max-inline-size")
+    return {{"max-width", decl.value}};
+  if (p == "min-block-size")
+    return {{"min-height", decl.value}};
+  if (p == "max-block-size")
+    return {{"max-height", decl.value}};
+  if (p == "margin-inline-start")
+    return {{"margin-left", decl.value}};
+  if (p == "margin-inline-end")
+    return {{"margin-right", decl.value}};
+  if (p == "margin-block-start")
+    return {{"margin-top", decl.value}};
+  if (p == "margin-block-end")
+    return {{"margin-bottom", decl.value}};
+  if (p == "padding-inline-start")
+    return {{"padding-left", decl.value}};
+  if (p == "padding-inline-end")
+    return {{"padding-right", decl.value}};
+  if (p == "padding-block-start")
+    return {{"padding-top", decl.value}};
+  if (p == "padding-block-end")
+    return {{"padding-bottom", decl.value}};
+  if (p == "border-block-start")
+    return {{"border-top", decl.value}};
+  if (p == "border-block-end")
+    return {{"border-bottom", decl.value}};
+  if (p == "border-inline-start")
+    return {{"border-left", decl.value}};
+  if (p == "border-inline-end")
+    return {{"border-right", decl.value}};
+  if (p == "place-items") {
+    // The inline (justify) value is not implemented; keep align-items only.
+    const std::vector<std::string> parts = SplitWhitespace(decl.value);
+    return {{"align-items", parts.empty() ? "" : parts[0]}};
+  }
+  // Two-axis shorthands: one value applies to both axes; two values are
+  // start/end (inline) or block-start/block-end (block) — i.e. left/right or
+  // top/bottom in a horizontal LTR writing mode.
+  auto two_axis = [&](const char* first, const char* second) {
+    const std::vector<std::string> parts = SplitWhitespace(decl.value);
+    if (parts.size() >= 2) {
+      return std::vector<std::pair<std::string, std::string>>{{first, parts[0]},
+                                                              {second, parts[1]}};
+    }
+    const std::string value = parts.empty() ? std::string() : parts[0];
+    return std::vector<std::pair<std::string, std::string>>{{first, value}, {second, value}};
+  };
+  if (p == "margin-inline")
+    return two_axis("margin-left", "margin-right");
+  if (p == "margin-block")
+    return two_axis("margin-top", "margin-bottom");
+  if (p == "padding-inline")
+    return two_axis("padding-left", "padding-right");
+  if (p == "padding-block")
+    return two_axis("padding-top", "padding-bottom");
+  return {{p, decl.value}};
+}
+
+// Substitutes var(--name[, fallback]) references in a value using
+// |custom_properties| (CSS Custom Properties for Cascading Variables Level 1
+// §3.1).  Returns nullopt when a var() reference cannot be resolved and has
+// no fallback — per spec the declaration is then invalid at computed-value
+// time (treated as unset).  Nested var() inside a fallback is not supported
+// (documented limitation).
+std::optional<std::string> ResolveVars(const std::string& value,
+                                       const std::map<std::string, std::string>& custom_properties)
+{
+  std::string out;
+  out.reserve(value.size());
+  std::size_t pos = 0;
+  while (pos < value.size()) {
+    const std::size_t start = value.find("var(", pos);
+    if (start == std::string::npos) {
+      out.append(value, pos, std::string::npos);
+      break;
+    }
+    out.append(value, pos, start - pos);
+    const std::size_t close = value.find(')', start + 4);
+    if (close == std::string::npos) {
+      return std::nullopt;
+    }
+    const std::string body = value.substr(start + 4, close - start - 4);
+    const std::size_t comma = body.find(',');
+    const std::string name = std::string(neko::base::Trim(body.substr(0, comma)));
+    const auto it = custom_properties.find(name);
+    if (it != custom_properties.end()) {
+      out += it->second;
+    } else if (comma != std::string::npos) {
+      out += std::string(neko::base::Trim(body.substr(comma + 1)));
+    } else {
+      return std::nullopt;
+    }
+    pos = close + 1;
+  }
+  return out;
+}
+
 // Parses a single value into a SizeSpec (resolving em/rem against font sizes).
 std::optional<SizeSpec> ParseSize(const std::string& text, float font_size, float root_font_size)
 {
@@ -548,30 +659,45 @@ void StyleEngine::ComputeElement(dom::Element& element,
     candidates.push_back(Candidate{&declaration, kInlineSpecificity, order++});
   }
 
-  // Cascade: importance > specificity > order.
-  std::map<std::string, Candidate> winners;
+  // Cascade: importance > specificity > order.  Declarations are normalized
+  // to their physical properties first (logical properties expanded, see
+  // NormalizeDeclaration), and the winning value per property is stored so
+  // var() references can be resolved after the custom properties are known.
+  struct Winner
+  {
+    const css::Declaration* declaration; // for the !important flag
+    css::Specificity specificity;
+    int order;
+    std::string value; // physical (normalized) value text
+  };
+  std::map<std::string, Winner> winners;
   for (const Candidate& candidate : candidates) {
-    const std::string& property = candidate.declaration->property;
     const bool important = candidate.declaration->important;
-    auto existing = winners.find(property);
-    if (existing == winners.end()) {
-      winners.emplace(property, candidate);
-      continue;
-    }
-    const Candidate& current = existing->second;
-    const bool current_important = current.declaration->important;
-    bool replace = false;
-    if (important != current_important) {
-      replace = important;
-    } else if (candidate.specificity.a != current.specificity.a ||
-               candidate.specificity.b != current.specificity.b ||
-               candidate.specificity.c != current.specificity.c) {
-      replace = current.specificity < candidate.specificity;
-    } else {
-      replace = candidate.order > current.order;
-    }
-    if (replace) {
-      existing->second = candidate;
+    for (auto& normalized : NormalizeDeclaration(*candidate.declaration)) {
+      const std::string& property = normalized.first;
+      const std::string& value = normalized.second;
+      auto existing = winners.find(property);
+      if (existing == winners.end()) {
+        winners.emplace(
+            property, Winner{candidate.declaration, candidate.specificity, candidate.order, value});
+        continue;
+      }
+      const Winner& current = existing->second;
+      const bool current_important = current.declaration->important;
+      bool replace = false;
+      if (important != current_important) {
+        replace = important;
+      } else if (candidate.specificity.a != current.specificity.a ||
+                 candidate.specificity.b != current.specificity.b ||
+                 candidate.specificity.c != current.specificity.c) {
+        replace = current.specificity < candidate.specificity;
+      } else {
+        replace = candidate.order > current.order;
+      }
+      if (replace) {
+        existing->second =
+            Winner{candidate.declaration, candidate.specificity, candidate.order, value};
+      }
     }
   }
 
@@ -585,10 +711,49 @@ void StyleEngine::ComputeElement(dom::Element& element,
   out.line_height = inherited.line_height;
   out.text_align = inherited.text_align;
   out.text_decoration_underline = inherited.text_decoration_underline;
+  out.custom_properties = inherited.custom_properties;
+
+  // CSS custom properties (CSS Custom Properties for Cascading Variables
+  // Level 1 §2): inherited by default, then overridden by this element's
+  // winning declarations.  var() inside a custom property value resolves
+  // against the inherited set (approximation: a reference to a property
+  // defined on this same element resolves only if it sorts earlier in the
+  // map; chained custom properties on one element are a documented
+  // limitation).
+  for (const auto& entry : winners) {
+    if (entry.first.rfind("--", 0) != 0) {
+      continue;
+    }
+    if (const std::optional<std::string> resolved =
+            ResolveVars(entry.second.value, out.custom_properties)) {
+      out.custom_properties[entry.first] = *resolved;
+    }
+  }
+
+  // Per-element resolved declarations: physical property names with var()
+  // substituted.  find() returns pointers into this map, so the resolution is
+  // transparent to the property handlers below.  A declaration whose var()
+  // could not be resolved is dropped (invalid at computed-value time).
+  std::map<std::string, css::Declaration> resolved_decls;
+  for (const auto& entry : winners) {
+    if (entry.first.rfind("--", 0) == 0) {
+      continue; // custom properties are not applied to ComputedStyle directly
+    }
+    const std::optional<std::string> resolved =
+        ResolveVars(entry.second.value, out.custom_properties);
+    if (!resolved.has_value()) {
+      continue;
+    }
+    css::Declaration decl;
+    decl.property = entry.first;
+    decl.value = *resolved;
+    decl.important = entry.second.declaration->important;
+    resolved_decls.emplace(entry.first, std::move(decl));
+  }
 
   auto find = [&](std::string_view property) -> const css::Declaration* {
-    const auto it = winners.find(std::string(property));
-    return it == winners.end() ? nullptr : it->second.declaration;
+    const auto it = resolved_decls.find(std::string(property));
+    return it == resolved_decls.end() ? nullptr : &it->second;
   };
 
   const bool font_size_set = find("font-size") != nullptr;
@@ -897,7 +1062,7 @@ void StyleEngine::ComputeElement(dom::Element& element,
     // Reset to initial values first so omitted components are restored.
     out.flex_grow = 1;
     out.flex_shrink = 1;
-    out.flex_basis = std::nullopt;  // auto
+    out.flex_basis = std::nullopt; // auto
 
     if (parts.size() == 1 && parts[0] == "none") {
       // none = 0 0 auto

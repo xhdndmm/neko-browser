@@ -26,8 +26,8 @@
 #include "neko/javascript/script_engine_internal.h"
 
 #include <algorithm>
-#include <chrono>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -36,6 +36,7 @@
 #include <quickjs.h>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -117,6 +118,19 @@ int32_t NodeTypeNumber(dom::NodeType type)
     return 11;
   }
   return 0;
+}
+
+// The engine's reported platform string (navigator.platform), matching what
+// mainstream browsers report per OS.
+const char* NavigatorPlatform()
+{
+#if defined(_WIN32)
+  return "Win32";
+#elif defined(__APPLE__)
+  return "MacIntel";
+#else
+  return "Linux";
+#endif
 }
 
 std::string NodeNameOf(const dom::Node& node)
@@ -394,10 +408,13 @@ struct Impl
   std::vector<Timer> timers;
   int64_t next_timer_id = 1;
 
-  // Event listeners: element -> (type -> callbacks).  Callbacks are Dup'd;
-  // elements stay alive through |wrappers|/|retained| for the binder's life.
+  // Event listeners: node -> (type -> callbacks).  Keyed by node (elements
+  // and the document; window-level listeners are stored under the document,
+  // since the window and the document are the same event target here).
+  // Callbacks are Dup'd; nodes stay alive through |wrappers|/|retained| for
+  // the binder's life.
   using ListenerMap = std::unordered_map<std::string, std::vector<JSValue>>;
-  std::unordered_map<const dom::Element*, ListenerMap> listeners;
+  std::unordered_map<const dom::Node*, ListenerMap> listeners;
 
   explicit Impl(dom::Document& doc);
   ~Impl();
@@ -415,7 +432,9 @@ struct Impl
 
   int RunPendingTimers();
   std::optional<std::chrono::steady_clock::time_point> NextTimerDeadline() const;
+  void DispatchToNode(dom::Node* node, std::string_view type);
   void DispatchEvent(dom::Element& element, std::string_view type);
+  void DispatchDocumentEvent(std::string_view type);
 };
 
 namespace {
@@ -457,6 +476,55 @@ JSValue NodeAppendChild(JSContext* ctx, JSValueConst this_val, int argc, JSValue
   }
   parent->AppendChild(std::move(owned));
   return impl->WrapNode(child);
+}
+
+// DOM Node.append(...children): appends each argument as the last child, in
+// order.  Node arguments go through the same validated/adopting path as
+// appendChild; string arguments are not converted to text nodes yet
+// (documented limitation) and are skipped.
+JSValue NodeAppend(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* parent = UnwrapNode(this_val);
+  if (impl == nullptr || parent == nullptr) {
+    return JS_ThrowTypeError(ctx, "append: detached node");
+  }
+  for (int i = 0; i < argc; ++i) {
+    if (UnwrapNode(argv[i]) == nullptr) {
+      continue; // non-node argument (string): not supported, skip
+    }
+    JSValue result = NodeAppendChild(ctx, this_val, 1, &argv[i]);
+    if (JS_IsException(result)) {
+      return result;
+    }
+    JS_FreeValue(ctx, result);
+  }
+  return JS_UNDEFINED;
+}
+
+// DOM Node.replaceChildren(...children): removes every current child, then
+// appends the given children (none when called with no arguments).  Removed
+// nodes stay alive in the binder's registry, so JS references remain valid.
+JSValue NodeReplaceChildren(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr) {
+    return JS_ThrowTypeError(ctx, "replaceChildren: detached node");
+  }
+  while (node->first_child() != nullptr) {
+    dom::Node* child = node->first_child();
+    std::unique_ptr<dom::Node> removed = node->RemoveChild(child);
+    impl->TakeOwnership(child, std::move(removed));
+  }
+  if (argc > 0) {
+    JSValue result = NodeAppend(ctx, this_val, argc, argv);
+    if (JS_IsException(result)) {
+      return result;
+    }
+    JS_FreeValue(ctx, result);
+  }
+  return JS_UNDEFINED;
 }
 
 JSValue NodeInsertBefore(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
@@ -544,9 +612,9 @@ JSValue NodeCloneNode(JSContext* ctx, JSValueConst this_val, int argc, JSValueCo
 JSValue NodeAddEventListener(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
-  if (impl == nullptr || element == nullptr) {
-    return JS_ThrowTypeError(ctx, "addEventListener: requires an element");
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr) {
+    return JS_ThrowTypeError(ctx, "addEventListener: requires a node");
   }
   if (argc < 2 || !JS_IsFunction(ctx, argv[1])) {
     return JS_ThrowTypeError(ctx, "addEventListener requires (type, callback)");
@@ -556,16 +624,16 @@ JSValue NodeAddEventListener(JSContext* ctx, JSValueConst this_val, int argc, JS
   if (!ok) {
     return JS_EXCEPTION;
   }
-  impl->listeners[element][type].push_back(JS_DupValue(ctx, argv[1]));
+  impl->listeners[node][type].push_back(JS_DupValue(ctx, argv[1]));
   return JS_UNDEFINED;
 }
 
 JSValue NodeRemoveEventListener(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
-  if (impl == nullptr || element == nullptr) {
-    return JS_ThrowTypeError(ctx, "removeEventListener: requires an element");
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr) {
+    return JS_ThrowTypeError(ctx, "removeEventListener: requires a node");
   }
   if (argc < 2) {
     return JS_UNDEFINED;
@@ -575,7 +643,7 @@ JSValue NodeRemoveEventListener(JSContext* ctx, JSValueConst this_val, int argc,
   if (!ok) {
     return JS_EXCEPTION;
   }
-  const auto el_it = impl->listeners.find(element);
+  const auto el_it = impl->listeners.find(node);
   if (el_it == impl->listeners.end()) {
     return JS_UNDEFINED;
   }
@@ -600,9 +668,9 @@ JSValue NodeRemoveEventListener(JSContext* ctx, JSValueConst this_val, int argc,
 JSValue NodeDispatchEvent(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
-  if (impl == nullptr || element == nullptr) {
-    return JS_ThrowTypeError(ctx, "dispatchEvent: requires an element");
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr) {
+    return JS_ThrowTypeError(ctx, "dispatchEvent: requires a node");
   }
   if (argc < 1 || !JS_IsObject(argv[0])) {
     return JS_ThrowTypeError(ctx, "dispatchEvent requires an event object");
@@ -615,12 +683,12 @@ JSValue NodeDispatchEvent(JSContext* ctx, JSValueConst this_val, int argc, JSVal
     return JS_EXCEPTION;
   }
   // Populate target/currentTarget on the caller's event object.
-  JSValue target = impl->WrapNode(element);
+  JSValue target = impl->WrapNode(node);
   JS_SetPropertyStr(ctx, argv[0], "target", JS_DupValue(ctx, target));
   JS_SetPropertyStr(ctx, argv[0], "currentTarget", JS_DupValue(ctx, target));
   JS_FreeValue(ctx, target);
 
-  const auto el_it = impl->listeners.find(element);
+  const auto el_it = impl->listeners.find(node);
   if (el_it != impl->listeners.end()) {
     const auto type_it = el_it->second.find(type);
     if (type_it != el_it->second.end()) {
@@ -631,7 +699,7 @@ JSValue NodeDispatchEvent(JSContext* ctx, JSValueConst this_val, int argc, JSVal
       for (JSValue cb : type_it->second) {
         callbacks.push_back(JS_DupValue(ctx, cb));
       }
-      JSValue this_wrap = impl->WrapNode(element);
+      JSValue this_wrap = impl->WrapNode(node);
       for (JSValue cb : callbacks) {
         JSValue result = JS_Call(ctx, cb, this_wrap, 1, argv);
         if (JS_IsException(result)) {
@@ -1199,6 +1267,29 @@ JSValue DocGetBody(JSContext* ctx, JSValueConst this_val)
   return JS_NULL;
 }
 
+JSValue DocGetHead(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr || node->node_type() != dom::NodeType::kDocument) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  dom::Element* head = FindElementByTag(*node, "head");
+  return head != nullptr ? impl->WrapNode(head) : JS_NULL;
+}
+
+JSValue DocGetReadyState(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr || node->node_type() != dom::NodeType::kDocument) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  // Scripts run after parsing completes, so the document is always fully
+  // loaded by the time any page script can observe it.
+  return JS_NewString(ctx, "complete");
+}
+
 JSValue DocGetTitle(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
@@ -1559,13 +1650,61 @@ TimerClear(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, 
 }
 
 // ---------------------------------------------------------------------------
+// Window-level event functions.
+//
+// The window is a plain object (not a node), but in this minimal model the
+// window and the document share one event target set: window-level listeners
+// are stored under the document node.  So window.addEventListener(...) (and
+// the bare global addEventListener(...) aliases) forward to the document.
+// ---------------------------------------------------------------------------
+
+JSValue WindowAddEventListener(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  JSValue doc_wrap = impl->WrapNode(&impl->document);
+  JSValue result = NodeAddEventListener(ctx, doc_wrap, argc, argv);
+  JS_FreeValue(ctx, doc_wrap);
+  return result;
+}
+
+JSValue
+WindowRemoveEventListener(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  JSValue doc_wrap = impl->WrapNode(&impl->document);
+  JSValue result = NodeRemoveEventListener(ctx, doc_wrap, argc, argv);
+  JS_FreeValue(ctx, doc_wrap);
+  return result;
+}
+
+JSValue WindowDispatchEvent(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  JSValue doc_wrap = impl->WrapNode(&impl->document);
+  JSValue result = NodeDispatchEvent(ctx, doc_wrap, argc, argv);
+  JS_FreeValue(ctx, doc_wrap);
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Prototype construction.
 // ---------------------------------------------------------------------------
 
 void DefineNodePrototype(JSContext* ctx, Impl& impl)
 {
-  static const std::array<JSCFunctionListEntry, 8> kMethods = {{
+  static const std::array<JSCFunctionListEntry, 10> kMethods = {{
       JS_CFUNC_DEF("appendChild", 1, NodeAppendChild),
+      JS_CFUNC_DEF("append", 0, NodeAppend),
+      JS_CFUNC_DEF("replaceChildren", 0, NodeReplaceChildren),
       JS_CFUNC_DEF("insertBefore", 2, NodeInsertBefore),
       JS_CFUNC_DEF("removeChild", 1, NodeRemoveChild),
       JS_CFUNC_DEF("hasChildNodes", 0, NodeHasChildNodes),
@@ -1652,6 +1791,9 @@ void DefineDocumentPrototype(JSContext* ctx, Impl& impl)
                "documentElement",
                MakeGetter(ctx, "documentElement", DocGetDocumentElement));
   DefineGetter(ctx, impl.document_proto, "body", MakeGetter(ctx, "body", DocGetBody));
+  DefineGetter(ctx, impl.document_proto, "head", MakeGetter(ctx, "head", DocGetHead));
+  DefineGetter(
+      ctx, impl.document_proto, "readyState", MakeGetter(ctx, "readyState", DocGetReadyState));
   DefineAccessor(ctx,
                  impl.document_proto,
                  "title",
@@ -1689,6 +1831,39 @@ void DefineStylePrototype(JSContext* ctx, Impl& impl)
                    MakeGetterMagic(ctx, camel.c_str(), StyleGetProperty, magic),
                    MakeSetterMagic(ctx, camel.c_str(), StyleSetPropertyDirect, magic));
   }
+}
+
+// ---------------------------------------------------------------------------
+// Web IDL-style interface constructors.
+//
+// Browsers expose the DOM interfaces as global constructors (Node, Element,
+// ...).  Real pages rely on this in two ways: `x instanceof Element` and
+// prototype extension (`Element.prototype.foo = ...`).  We expose each name
+// as a constructor whose .prototype is the live prototype used by wrappers,
+// so both work.  Constructing an interface directly is an error, matching
+// browsers' "Illegal constructor".
+// ---------------------------------------------------------------------------
+
+JSValue IllegalConstructor(JSContext* ctx,
+                           JSValueConst /*new_target*/,
+                           int /*argc*/,
+                           JSValueConst* /*argv*/)
+{
+  return JS_ThrowTypeError(ctx, "Illegal constructor");
+}
+
+void DefineInterface(
+    JSContext* ctx, JSValue global, const char* name, JSValue proto, bool set_constructor = true)
+{
+  // JS_CFUNC_constructor: the constructor is only constructable, so calling
+  // it without `new` throws "must be called with new" and `new X()` reaches
+  // IllegalConstructor (browsers' "Illegal constructor").
+  JSValue ctor = JS_NewCFunction2(ctx, IllegalConstructor, name, 0, JS_CFUNC_constructor, 0);
+  JS_SetPropertyStr(ctx, ctor, "prototype", JS_DupValue(ctx, proto)); // steals dup
+  if (set_constructor) {
+    JS_SetPropertyStr(ctx, proto, "constructor", JS_DupValue(ctx, ctor)); // steals dup
+  }
+  JS_SetPropertyStr(ctx, global, name, ctor); // steals ctor
 }
 
 } // namespace
@@ -1736,7 +1911,7 @@ Impl::Impl(dom::Document& doc) : document(doc)
   DefineDocumentPrototype(ctx, *this);
   DefineStylePrototype(ctx, *this);
 
-  // Global scope: document, window, timers.
+  // Global scope: document, window, timers, DOM interface constructors.
   JSValue global = JS_GetGlobalObject(ctx);
   JSValue doc_wrap = WrapNode(&document);
   JSValue doc_for_window = JS_DupValue(ctx, doc_wrap);
@@ -1755,6 +1930,72 @@ Impl::Impl(dom::Document& doc) : document(doc)
     JSValue fn = JS_GetPropertyStr(ctx, window, name);
     JS_SetPropertyStr(ctx, global, name, fn); // steals fn
   }
+
+  // Window-level event functions (and bare global aliases) forward to the
+  // document, which owns the page's listener storage.
+  static const std::array<JSCFunctionListEntry, 3> kWindowEvents = {{
+      JS_CFUNC_DEF("addEventListener", 2, WindowAddEventListener),
+      JS_CFUNC_DEF("removeEventListener", 2, WindowRemoveEventListener),
+      JS_CFUNC_DEF("dispatchEvent", 1, WindowDispatchEvent),
+  }};
+  JS_SetPropertyFunctionList(
+      ctx, window, kWindowEvents.data(), static_cast<int>(kWindowEvents.size()));
+  for (const char* name : {"addEventListener", "removeEventListener", "dispatchEvent"}) {
+    JSValue fn = JS_GetPropertyStr(ctx, window, name);
+    JS_SetPropertyStr(ctx, global, name, fn); // steals fn
+  }
+
+  // DOM interface constructors backed by the live prototypes (see
+  // DefineInterface above).  HTMLElement shares Element's prototype but does
+  // not overwrite Element.prototype.constructor.
+  DefineInterface(ctx, global, "Node", node_proto);
+  DefineInterface(ctx, global, "Document", document_proto);
+  DefineInterface(ctx, global, "Text", text_proto);
+  DefineInterface(ctx, global, "Comment", comment_proto);
+  DefineInterface(ctx, global, "DocumentFragment", fragment_proto);
+  DefineInterface(ctx, global, "CSSStyleDeclaration", style_proto);
+  DefineInterface(ctx, global, "Element", element_proto);
+  DefineInterface(ctx, global, "HTMLElement", element_proto, /*set_constructor=*/false);
+
+  // navigator: engine identity.  The UA matches what the network stack sends;
+  // the rest are documented defaults (the browser UI language is not wired
+  // yet).  Exposed on both the global scope and the window.
+  JSValue navigator = JS_NewObject(ctx);
+  JS_SetPropertyStr(ctx, navigator, "userAgent", JS_NewString(ctx, "neko-browser/0.1.0"));
+  JS_SetPropertyStr(ctx, navigator, "platform", JS_NewString(ctx, NavigatorPlatform()));
+  JS_SetPropertyStr(ctx, navigator, "language", JS_NewString(ctx, "en-US"));
+  JSValue languages = JS_NewArray(ctx);
+  JS_SetPropertyUint32(ctx, languages, 0, JS_NewString(ctx, "en-US")); // steals
+  JS_SetPropertyStr(ctx, navigator, "languages", languages);           // steals
+  JS_SetPropertyStr(ctx, navigator, "onLine", JS_TRUE);
+  JS_SetPropertyStr(ctx, navigator, "cookieEnabled", JS_TRUE);
+  const unsigned cores = std::thread::hardware_concurrency();
+  JS_SetPropertyStr(ctx,
+                    navigator,
+                    "hardwareConcurrency",
+                    JS_NewInt32(ctx, static_cast<int>(std::max(1u, cores))));
+  JS_SetPropertyStr(ctx, navigator, "vendor", JS_NewString(ctx, ""));
+  JS_SetPropertyStr(ctx, window, "navigator", JS_DupValue(ctx, navigator)); // steals dup
+  JS_SetPropertyStr(ctx, global, "navigator", navigator);                   // steals
+
+  // screen: the engine's default viewport (matches renderer::Page's default
+  // layout width).  Wiring real window dimensions is future work, so scripts
+  // see these defaults.
+  JSValue screen = JS_NewObject(ctx);
+  JS_SetPropertyStr(ctx, screen, "width", JS_NewInt32(ctx, 800));
+  JS_SetPropertyStr(ctx, screen, "height", JS_NewInt32(ctx, 600));
+  JS_SetPropertyStr(ctx, screen, "availWidth", JS_NewInt32(ctx, 800));
+  JS_SetPropertyStr(ctx, screen, "availHeight", JS_NewInt32(ctx, 600));
+  JS_SetPropertyStr(ctx, screen, "colorDepth", JS_NewInt32(ctx, 24));
+  JS_SetPropertyStr(ctx, screen, "pixelDepth", JS_NewInt32(ctx, 24));
+  JS_SetPropertyStr(ctx, window, "screen", JS_DupValue(ctx, screen)); // steals dup
+  JS_SetPropertyStr(ctx, global, "screen", screen);                   // steals
+
+  // Window viewport geometry (engine defaults, see screen above).
+  JS_SetPropertyStr(ctx, window, "innerWidth", JS_NewInt32(ctx, 800));
+  JS_SetPropertyStr(ctx, window, "innerHeight", JS_NewInt32(ctx, 600));
+  JS_SetPropertyStr(ctx, window, "devicePixelRatio", JS_NewInt32(ctx, 1));
+
   JS_SetPropertyStr(ctx, global, "window", JS_DupValue(ctx, window)); // steals
   JS_FreeValue(ctx, global);
 }
@@ -1801,8 +2042,25 @@ Impl::~Impl()
   // be torn down by the runtime without running their finalizers, leaking the
   // NodeWrapper payloads).
   JSValue global = JS_GetGlobalObject(ctx);
-  for (const char* name :
-       {"document", "window", "setTimeout", "setInterval", "clearTimeout", "clearInterval"}) {
+  for (const char* name : {"document",
+                           "window",
+                           "setTimeout",
+                           "setInterval",
+                           "clearTimeout",
+                           "clearInterval",
+                           "addEventListener",
+                           "removeEventListener",
+                           "dispatchEvent",
+                           "Node",
+                           "Document",
+                           "Text",
+                           "Comment",
+                           "DocumentFragment",
+                           "CSSStyleDeclaration",
+                           "Element",
+                           "HTMLElement",
+                           "navigator",
+                           "screen"}) {
     JSAtom atom = JS_NewAtom(ctx, name);
     JS_DeleteProperty(ctx, global, atom, JS_PROP_THROW);
     JS_FreeAtom(ctx, atom);
@@ -1970,6 +2228,9 @@ int Impl::RunPendingTimers()
       JS_FreeValue(ctx, result);
     }
     JS_FreeValue(ctx, timer.callback);
+    // Promise continuations created by the callback make progress before the
+    // next timer runs.
+    engine.RunPendingJobs();
     ++ran;
   }
   return ran;
@@ -1986,9 +2247,11 @@ std::optional<std::chrono::steady_clock::time_point> Impl::NextTimerDeadline() c
   return next;
 }
 
-void Impl::DispatchEvent(dom::Element& element, std::string_view type)
+// Shared dispatch: runs the listeners registered on |node| for |type| with a
+// fresh event object (no bubbling).
+void Impl::DispatchToNode(dom::Node* node, std::string_view type)
 {
-  const auto el_it = listeners.find(&element);
+  const auto el_it = listeners.find(node);
   if (el_it == listeners.end()) {
     return;
   }
@@ -2004,11 +2267,11 @@ void Impl::DispatchEvent(dom::Element& element, std::string_view type)
   }
   JSValue event = JS_NewObject(ctx);
   JS_SetPropertyStr(ctx, event, "type", JS_NewStringLen(ctx, type.data(), type.size()));
-  JSValue target = WrapNode(&element);
+  JSValue target = WrapNode(node);
   JS_SetPropertyStr(ctx, event, "target", JS_DupValue(ctx, target));
   JS_SetPropertyStr(ctx, event, "currentTarget", JS_DupValue(ctx, target));
   JS_FreeValue(ctx, target);
-  JSValue this_wrap = WrapNode(&element);
+  JSValue this_wrap = WrapNode(node);
   for (JSValue cb : callbacks) {
     JSValue result = JS_Call(ctx, cb, this_wrap, 1, &event);
     if (JS_IsException(result)) {
@@ -2018,8 +2281,20 @@ void Impl::DispatchEvent(dom::Element& element, std::string_view type)
     }
     JS_FreeValue(ctx, cb);
   }
+  // Promise continuations created by the listeners make progress.
+  engine.RunPendingJobs();
   JS_FreeValue(ctx, this_wrap);
   JS_FreeValue(ctx, event);
+}
+
+void Impl::DispatchEvent(dom::Element& element, std::string_view type)
+{
+  DispatchToNode(&element, type);
+}
+
+void Impl::DispatchDocumentEvent(std::string_view type)
+{
+  DispatchToNode(&document, type);
 }
 
 // ---------------------------------------------------------------------------
@@ -2053,6 +2328,11 @@ std::optional<std::chrono::steady_clock::time_point> DomBinder::NextTimerDeadlin
 void DomBinder::DispatchEvent(dom::Element& element, std::string_view type)
 {
   impl_->DispatchEvent(element, type);
+}
+
+void DomBinder::DispatchDocumentEvent(std::string_view type)
+{
+  impl_->DispatchDocumentEvent(type);
 }
 
 ScriptEngine& DomBinder::engine()

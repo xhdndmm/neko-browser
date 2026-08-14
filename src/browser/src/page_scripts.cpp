@@ -142,6 +142,14 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     }
   }
 
+  // Fire the document lifecycle events now that every script has run:
+  // parsing is complete, so DOMContentLoaded then load fire on the document
+  // (window-level listeners were registered on the document, so they run
+  // too).  Approximation: real browsers fire load only after all subresources
+  // finish, which this synchronous model has no signal for.
+  binder->DispatchDocumentEvent("DOMContentLoaded");
+  binder->DispatchDocumentEvent("load");
+
   // Scripts may have mutated the DOM; re-run the cascade so layout reflects
   // the new state.
   page.ReapplyStyles();

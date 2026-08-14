@@ -136,10 +136,11 @@ TEST(StyleTest, FlexShorthandKeywords)
   const ComputedStyle& p = Style(engine, *doc, "p");
   EXPECT_FLOAT_EQ(p.flex_grow, 0.0f);
   EXPECT_FLOAT_EQ(p.flex_shrink, 0.0f);
-  EXPECT_FALSE(p.flex_basis.has_value());  // auto
+  EXPECT_FALSE(p.flex_basis.has_value()); // auto
 
   // flex: auto == flex: 1 1 auto.
-  auto doc2 = MakeDoc("<body><div style=\"display:flex\"><p style=\"flex:auto\">x</p></div></body>");
+  auto doc2 =
+      MakeDoc("<body><div style=\"display:flex\"><p style=\"flex:auto\">x</p></div></body>");
   StyleEngine engine2;
   engine2.ApplyStyles(*doc2);
   const ComputedStyle& p2 = Style(engine2, *doc2, "p");
@@ -151,7 +152,8 @@ TEST(StyleTest, FlexShorthandKeywords)
 TEST(StyleTest, FlexShorthandTwoAndThreeValues)
 {
   // flex: 2 30px -> grow 2, shrink 1 (default), basis 30px.
-  auto doc = MakeDoc("<body><div style=\"display:flex\"><p style=\"flex:2 30px\">x</p></div></body>");
+  auto doc =
+      MakeDoc("<body><div style=\"display:flex\"><p style=\"flex:2 30px\">x</p></div></body>");
   StyleEngine engine;
   engine.ApplyStyles(*doc);
   const ComputedStyle& p = Style(engine, *doc, "p");
@@ -171,7 +173,8 @@ TEST(StyleTest, FlexShorthandTwoAndThreeValues)
   EXPECT_FLOAT_EQ(p2.flex_basis.value().value, 0.0f);
 
   // flex: 2 1 40px.
-  auto doc3 = MakeDoc("<body><div style=\"display:flex\"><p style=\"flex:2 1 40px\">x</p></div></body>");
+  auto doc3 =
+      MakeDoc("<body><div style=\"display:flex\"><p style=\"flex:2 1 40px\">x</p></div></body>");
   StyleEngine engine3;
   engine3.ApplyStyles(*doc3);
   const ComputedStyle& p3 = Style(engine3, *doc3, "p");
@@ -487,7 +490,8 @@ TEST(StyleTest, MediaQueryPrintSkipped)
   EXPECT_FALSE(Style(engine, *doc, "p").color.has_value());
 }
 
-TEST(StyleTest, ButtonUaDefaultAppearance) {
+TEST(StyleTest, ButtonUaDefaultAppearance)
+{
   // WHATWG rendering §15.5.4: <button> is an inline-block with a native
   // (appearance:auto) look, centered text and a UA border/padding.
   auto doc = MakeDoc("<body><button>OK</button></body>");
@@ -507,14 +511,14 @@ TEST(StyleTest, ButtonUaDefaultAppearance) {
   EXPECT_EQ(Style(engine2, *doc2, "button").appearance, Appearance::kNone);
 }
 
-TEST(StyleTest, AppearanceParsesNoneAutoButton) {
-  auto doc = MakeDoc(
-      "<body>"
-      "<button id=\"a\">a</button>"
-      "<div id=\"b\" style=\"appearance: auto\">b</div>"
-      "<div id=\"c\" style=\"appearance: button\">c</div>"
-      "<div id=\"d\" style=\"appearance: checkbox\">d</div>"
-      "</body>");
+TEST(StyleTest, AppearanceParsesNoneAutoButton)
+{
+  auto doc = MakeDoc("<body>"
+                     "<button id=\"a\">a</button>"
+                     "<div id=\"b\" style=\"appearance: auto\">b</div>"
+                     "<div id=\"c\" style=\"appearance: button\">c</div>"
+                     "<div id=\"d\" style=\"appearance: checkbox\">d</div>"
+                     "</body>");
   StyleEngine engine;
   engine.ApplyStyles(*doc);
   // UA default for button; explicit auto on a plain div; forced button.
@@ -525,15 +529,151 @@ TEST(StyleTest, AppearanceParsesNoneAutoButton) {
   EXPECT_EQ(Style(engine, *doc, "#d").appearance, Appearance::kNone);
 }
 
-TEST(StyleTest, AuthorAppearanceOverridesUa) {
-  auto doc = MakeDoc(
-      "<body><button id=\"x\" style=\"appearance: none\">a</button>"
-      "<button id=\"y\" style=\"appearance: button\">b</button></body>");
+TEST(StyleTest, AuthorAppearanceOverridesUa)
+{
+  auto doc = MakeDoc("<body><button id=\"x\" style=\"appearance: none\">a</button>"
+                     "<button id=\"y\" style=\"appearance: button\">b</button></body>");
   StyleEngine engine;
   engine.ApplyStyles(*doc);
   EXPECT_EQ(Style(engine, *doc, "#x").appearance, Appearance::kNone);
   EXPECT_EQ(Style(engine, *doc, "#y").appearance, Appearance::kButton);
 }
 
-}  // namespace
-}  // namespace neko::style
+TEST(StyleTest, RootPseudoClassMatchesDocumentElement)
+{
+  auto doc = MakeDoc("<style>:root { background-color: rgb(1, 2, 3); }</style>"
+                     "<body><p>x</p></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  // The <html> element (document element) matches :root; <p> does not.
+  ASSERT_TRUE(Style(engine, *doc, "html").background_color.has_value());
+  EXPECT_EQ(Style(engine, *doc, "html").background_color.value(), (css::Color{1, 2, 3, 255}));
+  EXPECT_FALSE(Style(engine, *doc, "p").background_color.has_value());
+}
+
+TEST(StyleTest, CustomPropertiesDefineAndInherit)
+{
+  auto doc = MakeDoc("<style>:root { --bg: #123456; --text: rgb(10, 20, 30); }</style>"
+                     "<body><p style=\"background: var(--bg); color: var(--text)\">x</p></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& root = Style(engine, *doc, "html");
+  ASSERT_NE(root.custom_properties.find("--bg"), root.custom_properties.end());
+  EXPECT_EQ(root.custom_properties.at("--bg"), "#123456");
+
+  const ComputedStyle& p = Style(engine, *doc, "p");
+  // Custom properties inherit from :root.
+  EXPECT_EQ(p.custom_properties.at("--bg"), "#123456");
+  EXPECT_EQ(p.custom_properties.at("--text"), "rgb(10, 20, 30)");
+  // var() in a used property resolves to the inherited value.
+  ASSERT_TRUE(p.background_color.has_value());
+  EXPECT_EQ(p.background_color.value(), (css::Color{0x12, 0x34, 0x56, 255}));
+  ASSERT_TRUE(p.color.has_value());
+  EXPECT_EQ(p.color.value(), (css::Color{10, 20, 30, 255}));
+}
+
+TEST(StyleTest, VarFallbackUsedWhenUndefined)
+{
+  auto doc = MakeDoc("<body><p style=\"color: var(--missing, rgb(1, 2, 3))\">x</p></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& p = Style(engine, *doc, "p");
+  ASSERT_TRUE(p.color.has_value());
+  EXPECT_EQ(p.color.value(), (css::Color{1, 2, 3, 255}));
+}
+
+TEST(StyleTest, UnresolvedVarDropsDeclaration)
+{
+  auto doc =
+      MakeDoc("<body><p style=\"color: var(--missing); background-color: red\">x</p></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& p = Style(engine, *doc, "p");
+  // The unresolved var() declaration is invalid at computed-value time; the
+  // unrelated declaration still applies.
+  EXPECT_FALSE(p.color.has_value());
+  ASSERT_TRUE(p.background_color.has_value());
+  EXPECT_EQ(p.background_color.value(), (css::Color{255, 0, 0, 255}));
+}
+
+TEST(StyleTest, ElementCustomPropertyOverridesInherited)
+{
+  auto doc = MakeDoc("<style>:root { --c: red; } p { --c: blue; }</style>"
+                     "<body><p style=\"color: var(--c)\">x</p></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& p = Style(engine, *doc, "p");
+  EXPECT_EQ(p.custom_properties.at("--c"), "blue");
+  ASSERT_TRUE(p.color.has_value());
+  EXPECT_EQ(p.color.value(), (css::Color{0, 0, 255, 255}));
+}
+
+TEST(StyleTest, LogicalPropertiesAliases)
+{
+  auto doc = MakeDoc("<style>.box { inline-size: 200px; min-block-size: 40px; "
+                     "margin-inline: auto; padding-block: 8px 12px; "
+                     "max-inline-size: 300px; }</style>"
+                     "<body><div class=\"box\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& box = Style(engine, *doc, ".box");
+  ASSERT_TRUE(box.width.has_value());
+  EXPECT_FLOAT_EQ(box.width.value().value, 200.0f);
+  ASSERT_TRUE(box.min_height.has_value());
+  EXPECT_FLOAT_EQ(box.min_height.value().value, 40.0f);
+  ASSERT_TRUE(box.max_width.has_value());
+  EXPECT_FLOAT_EQ(box.max_width.value().value, 300.0f);
+  EXPECT_TRUE(box.margin_left_auto);
+  EXPECT_TRUE(box.margin_right_auto);
+  EXPECT_FLOAT_EQ(box.padding_top.value, 8.0f);
+  EXPECT_FLOAT_EQ(box.padding_bottom.value, 12.0f);
+}
+
+TEST(StyleTest, LogicalBlockSizeAndBorderEnd)
+{
+  auto doc = MakeDoc("<style>.line { block-size: 12px; border-block-end: 1px solid #000; "
+                     "margin-block-end: 5px; padding-block-start: 3px; }</style>"
+                     "<body><div class=\"line\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& line = Style(engine, *doc, ".line");
+  ASSERT_TRUE(line.height.has_value());
+  EXPECT_FLOAT_EQ(line.height.value().value, 12.0f);
+  EXPECT_FLOAT_EQ(line.border_bottom.value, 1.0f);
+  EXPECT_EQ(line.border_style, BorderStyle::kSolid);
+  EXPECT_FLOAT_EQ(line.margin_bottom.value, 5.0f);
+  EXPECT_FLOAT_EQ(line.padding_top.value, 3.0f);
+}
+
+TEST(StyleTest, PlaceItemsAliasesAlignItems)
+{
+  auto doc = MakeDoc("<body><div style=\"display: grid; place-items: center\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  EXPECT_EQ(Style(engine, *doc, "div").align_items, AlignItems::kCenter);
+}
+
+TEST(StyleTest, LogicalAndPhysicalCascadeTogether)
+{
+  // width and inline-size target the same physical property; the later rule
+  // wins regardless of which spelling it uses.
+  auto doc = MakeDoc("<style>.a { width: 100px; } .b { inline-size: 200px; }</style>"
+                     "<body><div class=\"a b\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& div = Style(engine, *doc, "div");
+  ASSERT_TRUE(div.width.has_value());
+  EXPECT_FLOAT_EQ(div.width.value().value, 200.0f);
+}
+
+} // namespace
+} // namespace neko::style
