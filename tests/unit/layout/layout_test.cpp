@@ -1909,12 +1909,14 @@ TEST(LayoutTest, TableCaptionLaidOutAboveRows)
   // The caption widened the table to hold it (wider than the two columns
   // alone, which measure only ~32px with the monospace fallback).
   EXPECT_GT(table->width, 40.0f);
-  // The caption's text is laid out inside the caption box at the table's
-  // content origin -- not at the viewport origin or detached from the box.
+  // The caption's text is laid out inside the caption box above the rows,
+  // centered over the table (UA caption { text-align: center }).
   ASSERT_GE(caption->lines.size(), 1u);
   ASSERT_GE(caption->lines[0].runs.size(), 1u);
-  EXPECT_FLOAT_EQ(caption->lines[0].runs[0].x, caption->content_x());
   EXPECT_GE(caption->lines[0].runs[0].y, caption->content_y());
+  // The text's center coincides with the table's center.
+  const float text_center = caption->lines[0].runs[0].x + caption->lines[0].runs[0].width / 2.0f;
+  EXPECT_NEAR(text_center, table->x + table->width / 2.0f, 0.01f);
 }
 
 // <li> is display:list-item and its first line carries a marker run (the
@@ -1994,6 +1996,31 @@ TEST(LayoutTest, DlDtDdLayout)
   EXPECT_GT(dt2->y, dd1->y);
   EXPECT_GT(dd2->y, dt2->y);
   EXPECT_GT(dd3->y, dd2->y);
+}
+
+// text-align: center / right shift the line's content within the available
+// width (CSS Text 3 §5).  Used by the UA rule caption { text-align: center }.
+TEST(LayoutTest, TextAlignCenterAndRight)
+{
+  Page center = Build("<body><div style=\"text-align:center\">centered</div></body>");
+  const LayoutBox* cdiv = FindBox(*center.root, "div", *center.doc);
+  ASSERT_NE(cdiv, nullptr);
+  ASSERT_GE(cdiv->lines.size(), 1u);
+  ASSERT_GE(cdiv->lines[0].runs.size(), 1u);
+  const float c_text_center = cdiv->lines[0].runs[0].x + cdiv->lines[0].runs[0].width / 2.0f;
+  EXPECT_NEAR(c_text_center, cdiv->content_x() + cdiv->content_width() / 2.0f, 0.01f);
+
+  Page right = Build("<body><div style=\"text-align:right\">righty</div></body>");
+  const LayoutBox* rdiv = FindBox(*right.root, "div", *right.doc);
+  ASSERT_NE(rdiv, nullptr);
+  ASSERT_GE(rdiv->lines.size(), 1u);
+  ASSERT_GE(rdiv->lines[0].runs.size(), 1u);
+  // The last run's right edge meets the content box's right edge.
+  float right_edge = 0;
+  for (const auto& run : rdiv->lines[0].runs) {
+    right_edge = run.x + run.width;
+  }
+  EXPECT_NEAR(right_edge, rdiv->content_x() + rdiv->content_width(), 0.01f);
 }
 
 } // namespace

@@ -408,6 +408,31 @@ void LayoutLines(std::vector<InlineItem>& items,
     }
     line.height = row_height;
 
+    // Text alignment (CSS Text 3 §5): shift the line's content within the
+    // available width.  The line's content spans [line_left, content_right]
+    // in the line's local coordinates (relative to origin_x); the alignment
+    // fills the leftover space.  Left alignment leaves the content as-is;
+    // justify is not implemented (words would need to be spread), so it also
+    // leaves the content as-is.
+    float align_offset = 0;
+    if (container_style.text_align == style::TextAlign::kCenter ||
+        container_style.text_align == style::TextAlign::kRight) {
+      float content_right = 0;
+      for (const TextRun& run : line.runs) {
+        content_right = std::max(content_right, run.x + run.width);
+      }
+      for (const InlineBox& b : line.boxes) {
+        content_right = std::max(content_right, b.x + b.width);
+      }
+      const float used = std::max(0.0f, content_right - line_left);
+      const float leftover = std::max(0.0f, line_right - line_left - used);
+      if (container_style.text_align == style::TextAlign::kRight) {
+        align_offset = leftover;
+      } else {
+        align_offset = leftover / 2.0f;
+      }
+    }
+
     // Baseline absolute within the line.
     const float baseline = origin_y + line_top + baseline_off;
     line.baseline = baseline;
@@ -416,7 +441,7 @@ void LayoutLines(std::vector<InlineItem>& items,
       float asc = 0, desc = 0;
       run_metrics(run, asc, desc);
       run.y = baseline - asc;
-      run.x = origin_x + run.x;
+      run.x = origin_x + run.x + align_offset;
     }
 
     // Position atomic inline boxes per vertical-align.
@@ -442,7 +467,7 @@ void LayoutLines(std::vector<InlineItem>& items,
         break;
       }
       b.y = y;
-      b.x = origin_x + b.x;
+      b.x = origin_x + b.x + align_offset;
       // The inline-block's inner block was laid out at a local origin; move it
       // into the line's coordinate space with the positioned atomic box.
       if (b.block_box != nullptr) {

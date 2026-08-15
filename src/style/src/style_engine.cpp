@@ -32,7 +32,7 @@ h1, h2, h3, h4, h5, h6,
 address, blockquote, pre, figure, figcaption, form, fieldset, details,
 summary, hr, dl, dt, dd, ul, ol { display: block; }
 table { display: table; }
-caption { display: table-caption; }
+caption { display: table-caption; text-align: center; }
 thead, tbody, tfoot { display: table-row-group; }
 tr { display: table-row; }
 td, th { display: table-cell; }

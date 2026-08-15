@@ -8,6 +8,9 @@
 - 盒模型（margin/border/padding，百分比按包含块宽度解析）
 - block layout（垂直堆叠、宽度填充/显式/百分比、内容高度/显式高度）
 - inline layout（词级换行 → 行盒 → 文本游程，inline 元素样式作用于文本）
+- **text-align**（CSS Text 3 §5）：`left`（默认）/`center`/`right` 在行内把内容
+  移到可用宽度内的对应位置；`justify` 已解析但未实现（词间不分散）；UA 样式
+  `caption { text-align: center }` 使表格标题居中
 - inline-block（`display:inline-block`）：行内级原子盒，内部为块格式化上下文
   （块子元素垂直堆叠），宽度显式或 shrink-to-fit（CSS2.1 10.3.9），background/
   border/padding、vertical-align/行高参与行盒，嵌套于任意行内元素中亦可
