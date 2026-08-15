@@ -21,6 +21,12 @@
   区间收缩可用宽度以环绕；宽 shrink-to-fit 或显式、显式高支持
 - table layout（table/tr/td/th 网格、colspan/rowspan、显式列宽 px/%、auto 列按
   max-content 比例分配剩余宽度、行高按内容）
+- **表格宽度**：`width:auto` 按 **shrink-to-fit**（CSS2.1 17.5.2：
+  max(min-content, min(max-content, available))），表格不撑满包含块、列间不产生
+  过大空隙；显式 `width` 仍按指定值
+- **`<caption>` 布局**：`display:table-caption` 的 caption 作为表格首个子框渲染在
+  行上方、宽度与表格一致；其自然宽度计入表格 max-content（caption 比列宽时表格
+  相应加宽）
 - span 解析按 WHATWG tables.html：非负整数解析（尾随文本忽略）、colspan>1000 截断
   到 1000、rowspan>65534 截断到 65534、rowspan=0 表示跨到**所在行组**末尾（保留
   thead/tbody/tfoot 与连续匿名 `<tr>` 的隐式行组边界）
@@ -48,9 +54,9 @@
 - fixed/sticky、margin 折叠、z-index、百分比 offset
   （fixed 暂按 absolute 处理）
 - float：`clear`、多个浮动盒相交的 BFC 排布
-- 表格：border-collapse/border-spacing、`vertical-align`、`<caption>` 定位、
-  显式 `height`/`rowspan` 的完全行高分配（overflow 只加到最后一个跨行行）、
-  auto 表格宽度按 shrink-to-fit（当前按 100% 填满包含块）
+- 表格：border-collapse/border-spacing、`vertical-align`、caption 的
+  `caption-side: bottom`/定位样式、显式 `height`/`rowspan` 的完全行高分配
+  （overflow 只加到最后一个跨行行）
 
 ## 架构
 

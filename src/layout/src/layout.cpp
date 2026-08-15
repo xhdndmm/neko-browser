@@ -2570,10 +2570,14 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       table->style = styles.StyleFor(element);
       ResolveBoxEdges(*table, containing_width);
 
-      // Table width: explicit, or fill the containing block (auto is treated as
-      // 100% rather than CSS shrink-to-fit; documented limitation).
+      // Table width.  An explicit width is honored directly; with width:auto
+      // the table shrink-wraps its content (CSS2.1 17.5.2): the width is
+      // max(min-content, min(max-content, available)).  The final value for
+      // auto tables is computed below after the columns are measured.
       const float border_padding_w =
           table->border_left + table->border_right + table->padding_left + table->padding_right;
+      const float available_content =
+          containing_width - table->margin_left - table->margin_right - border_padding_w;
       float content_width;
       if (table->style.width.has_value()) {
         content_width = SpecToContent(table->style.width.value(),
@@ -2581,11 +2585,7 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
                                       border_padding_w,
                                       table->style.box_sizing);
       } else {
-        content_width =
-            containing_width - table->margin_left - table->margin_right - border_padding_w;
-        if (content_width < 0) {
-          content_width = 0;
-        }
+        content_width = std::max(0.0f, available_content);
       }
       table->width = content_width + border_padding_w;
       table->x = origin_x + table->margin_left - table->border_left - table->padding_left;
@@ -2745,6 +2745,93 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
         cell.max_width = w.max;
       }
 
+      // width:auto tables shrink to fit their content (CSS2.1 17.5.2):
+      // table width = max(min-content, min(max-content, available)).  This
+      // keeps a small table from being stretched across the full containing
+      // block, which would spread its columns with large gaps.
+      if (!table->style.width.has_value()) {
+        float min_content = 0; // widest single column content per column
+        float max_content = 0; // natural (unwrapped) content width per column
+        // Sum the per-column extrema of the non-spanning cells.
+        std::vector<float> col_min(ncols, 0.0f);
+        std::vector<float> col_max(ncols, 0.0f);
+        for (const CellInfo& cell : cells) {
+          if (cell.colspan != 1) {
+            continue;
+          }
+          const std::size_t c = static_cast<std::size_t>(cell.col);
+          if (c < col_min.size()) {
+            col_min[c] = std::max(col_min[c], cell.min_width);
+            col_max[c] = std::max(col_max[c], cell.max_width);
+          }
+        }
+        for (const float w : col_min) {
+          min_content += w;
+        }
+        for (const float w : col_max) {
+          max_content += w;
+        }
+        // A caption's natural width also contributes to the table's
+        // max-content width (the table must be wide enough to hold it).
+        for (dom::Node* child : element.ChildNodes()) {
+          if (child->node_type() != dom::NodeType::kElement) {
+            continue;
+          }
+          const dom::Element& child_el = static_cast<const dom::Element&>(*child);
+          if (styles.StyleFor(child_el).display == style::Display::kTableCaption) {
+            max_content = std::max(max_content, MeasureContent(child_el, styles, registry).max);
+            break;
+          }
+        }
+        const float fit = std::min(std::max(min_content, available_content), max_content);
+        content_width = std::max(0.0f, fit);
+        table->width = content_width + border_padding_w;
+      }
+
+      // The table's caption (display: table-caption), if any, is laid out as a
+      // block above the rows at the table's final content width and becomes
+      // the table box's first child.
+      std::unique_ptr<LayoutBox> caption_box;
+      float caption_height = 0;
+      for (dom::Node* child : element.ChildNodes()) {
+        if (child->node_type() != dom::NodeType::kElement) {
+          continue;
+        }
+        dom::Element& child_el = static_cast<dom::Element&>(*child);
+        if (styles.StyleFor(child_el).display != style::Display::kTableCaption) {
+          continue;
+        }
+        caption_box = std::make_unique<LayoutBox>();
+        caption_box->element = &child_el;
+        caption_box->style = styles.StyleFor(child_el);
+        ResolveBoxEdges(*caption_box, content_width);
+        caption_box->width = content_width + caption_box->border_left + caption_box->border_right +
+                             caption_box->padding_left + caption_box->padding_right;
+        const float caption_avail = caption_box->width - caption_box->border_left -
+                                    caption_box->border_right - caption_box->padding_left -
+                                    caption_box->padding_right;
+        std::vector<dom::Element*> caption_absolute;
+        caption_height = LayoutBlockContent(*caption_box,
+                                            child_el,
+                                            caption_avail,
+                                            cb_x,
+                                            cb_y,
+                                            cb_w,
+                                            cb_h,
+                                            kNoFloats,
+                                            caption_absolute);
+        caption_box->x = table_x - caption_box->border_left - caption_box->padding_left;
+        caption_box->y = table_y - caption_box->border_top - caption_box->padding_top;
+        caption_box->height = caption_height + caption_box->border_top +
+                              caption_box->border_bottom + caption_box->padding_top +
+                              caption_box->padding_bottom;
+        for (dom::Element* child : caption_absolute) {
+          caption_box->positioned_children.push_back(
+              BuildAbsolute(*child, table_x, table_y, cb_w, cb_h, kNoFloats));
+        }
+        break; // only the first caption participates in the table model
+      }
+
       const std::vector<float> col_widths = ComputeColumnWidths(cells, ncols, content_width);
 
       // Lay out each cell (at a local origin) and derive row heights.
@@ -2779,8 +2866,16 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
         }
       }
 
-      // Build the box tree (table -> rows -> cells) with grid positions.
+      // Build the box tree (table -> [caption] -> rows -> cells) with grid
+      // positions.  The caption sits above the rows.
       float y = 0;
+      if (caption_box != nullptr) {
+        const float caption_outer = caption_height + caption_box->border_top +
+                                    caption_box->border_bottom + caption_box->padding_top +
+                                    caption_box->padding_bottom;
+        table->children.push_back(std::move(caption_box));
+        y += caption_outer;
+      }
       for (std::size_t r = 0; r < rows.size(); ++r) {
         auto row_box = std::make_unique<LayoutBox>();
         row_box->element = rows[r].element;

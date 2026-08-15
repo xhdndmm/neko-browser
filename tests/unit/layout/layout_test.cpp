@@ -128,7 +128,7 @@ TEST(LayoutTest, BorderBoxWidthIncludesPaddingAndBorder)
                     "padding: 10px; border: 2px solid\">x</div></body>");
   const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
   ASSERT_NE(div, nullptr);
-  EXPECT_FLOAT_EQ(div->width, 200.0f); // border box == specified width
+  EXPECT_FLOAT_EQ(div->width, 200.0f);           // border box == specified width
   EXPECT_FLOAT_EQ(div->content_width(), 176.0f); // 200 - 2*10 - 2*2
 }
 
@@ -183,9 +183,8 @@ TEST(LayoutTest, NowrapKeepsWordsOnOneLine)
 {
   // white-space: nowrap — multiple words stay on a single line even when
   // they overflow the narrow box (the run is one unbreakable word).
-  Page page =
-      Build("<body><div style=\"width: 60px\"><span style=\"white-space: nowrap\">"
-            "alpha beta gamma</span></div></body>");
+  Page page = Build("<body><div style=\"width: 60px\"><span style=\"white-space: nowrap\">"
+                    "alpha beta gamma</span></div></body>");
   const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
   ASSERT_NE(div, nullptr);
   // The <span>'s content flows into the div's line box; all three words must
@@ -194,7 +193,8 @@ TEST(LayoutTest, NowrapKeepsWordsOnOneLine)
   std::string joined;
   for (const TextRun& run : div->lines[0].runs) {
     joined += run.text;
-    if (&run != &div->lines[0].runs.back()) joined += ' ';
+    if (&run != &div->lines[0].runs.back())
+      joined += ' ';
   }
   EXPECT_EQ(joined, "alpha beta gamma");
 }
@@ -210,7 +210,8 @@ TEST(LayoutTest, NowrapCollapsesWhitespace)
   std::string joined;
   for (const TextRun& run : div->lines[0].runs) {
     joined += run.text;
-    if (&run != &div->lines[0].runs.back()) joined += ' ';
+    if (&run != &div->lines[0].runs.back())
+      joined += ' ';
   }
   EXPECT_EQ(joined, "alpha beta gamma");
 }
@@ -1856,6 +1857,58 @@ TEST(GridLayoutTest, MixedFrAndFixedColumns)
   EXPECT_FLOAT_EQ(grid->children[0]->width, 100.0f);
   EXPECT_NEAR(grid->children[1]->width, 684.0f, 0.01f);
   EXPECT_FLOAT_EQ(grid->children[1]->x, 8.0f + 100.0f);
+}
+
+// A table with width:auto shrink-wraps its content instead of stretching
+// across the full containing block (CSS2.1 17.5.2).  This prevents its
+// columns from being spread apart with large gaps.
+TEST(LayoutTest, TableAutoWidthShrinkToFit)
+{
+  Page page = Build("<body><table><tr><td>Name</td><td>Age</td></tr>"
+                    "<tr><td>Alice</td><td>30</td></tr></table></body>");
+  const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
+  ASSERT_NE(table, nullptr);
+  // Two short columns must not be stretched to the body's content width
+  // (784px); they shrink to the measured content (~Name/Alice/30 wide).
+  EXPECT_LT(table->width, 200.0f);
+  const LayoutBox* row = table->children[0].get();
+  ASSERT_EQ(row->children.size(), 2u);
+  // Columns sit tightly side by side with no oversized gap.
+  EXPECT_FLOAT_EQ(row->children[1]->x, row->children[0]->x + row->children[0]->width);
+  // The first column is as wide as its content (Name is the widest cell).
+  EXPECT_GT(row->children[0]->width, row->children[1]->width);
+}
+
+// An explicit table width is still honored.
+TEST(LayoutTest, TableExplicitWidthIsNotShrunk)
+{
+  Page page =
+      Build("<body><table style=\"width: 400px\"><tr><td>A</td><td>B</td></tr></table></body>");
+  const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
+  ASSERT_NE(table, nullptr);
+  EXPECT_FLOAT_EQ(table->width, 400.0f);
+}
+
+// The table's caption is laid out above the rows at the table width and its
+// natural width widens the table when larger than the columns (CSS2.1 table
+// model; the caption participates in the table's intrinsic width).
+TEST(LayoutTest, TableCaptionLaidOutAboveRows)
+{
+  Page page = Build("<body><table><caption>My Caption</caption>"
+                    "<tr><td>A</td><td>B</td></tr></table></body>");
+  const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
+  ASSERT_NE(table, nullptr);
+  ASSERT_GE(table->children.size(), 1u);
+  const LayoutBox* caption = table->children[0].get();
+  ASSERT_NE(caption, nullptr);
+  EXPECT_EQ(caption->element->tag_name(), "caption");
+  // The caption sits above the first row and spans the table width.
+  EXPECT_FLOAT_EQ(caption->y, table->y);
+  EXPECT_GT(table->children[1]->y, caption->y);
+  EXPECT_FLOAT_EQ(caption->width, table->width);
+  // The table widened to hold the caption (wider than the two columns alone,
+  // which measure only ~32px with the monospace fallback).
+  EXPECT_GT(table->width, 100.0f);
 }
 
 } // namespace
