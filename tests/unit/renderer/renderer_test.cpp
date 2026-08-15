@@ -1,5 +1,5 @@
-#include "neko/dom/query.h"
 #include "neko/base/thread_pool.h"
+#include "neko/dom/query.h"
 #include "neko/html/parser.h"
 #include "neko/image/image.h"
 #include "neko/paint/rasterizer.h"
@@ -632,6 +632,36 @@ TEST(PageTest, HoverStateRestylesAndKeepsLayout)
   page.SetHoveredElement(nullptr);
   EXPECT_GT(page.layout_version(), after);
   EXPECT_NE(page.layout_root(), nullptr);
+}
+
+// Regression: when a script removes the hovered element from the DOM (the
+// document pointer stays the same, so the UI's hover cache is not reset), the
+// stale :hover pointer must not be dereferenced during the next cascade pass.
+// This would be a use-after-free in IsSelfOrAncestor while matching :hover.
+TEST(PageTest, HoveredElementRemovedFromDomDoesNotDangle)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body><style>*:hover { color: red; }</style>"
+                            "<a id=\"x\" href=\"https://example.com/\">x</a></body>")
+                  .has_value());
+  page.Layout(400);
+
+  dom::Element* a = dom::QuerySelector(*page.document(), "a");
+  ASSERT_NE(a, nullptr);
+  page.SetHoveredElement(a); // Page stores the pointer as hovered
+
+  // A script replaces the body's content, destroying the hovered <a>.
+  dom::Element* body = dom::QuerySelector(*page.document(), "body");
+  ASSERT_NE(body, nullptr);
+  while (body->first_child() != nullptr) {
+    body->RemoveChild(body->first_child());
+  }
+
+  // The cascade must drop the dangling hovered pointer instead of matching
+  // :hover against freed memory (no crash under ASan).
+  EXPECT_NO_FATAL_FAILURE(page.ReapplyStyles());
+  // The page stays usable; a now-empty document simply has no layout tree.
+  EXPECT_EQ(page.layout_root(), nullptr);
 }
 
 TEST(PageTest, ScrollBlitMatchesFullRasterize)

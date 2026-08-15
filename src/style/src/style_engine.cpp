@@ -16,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -882,6 +883,33 @@ void StyleEngine::ApplyStyles(dom::Document& document)
   dom::Element* root = document.document_element();
   if (root == nullptr) {
     return;
+  }
+
+  // Collect every element currently in the document.  :hover / :active match
+  // against the hovered/active element; those pointers can dangle if a script
+  // removed the element from the DOM (the document pointer itself is stable
+  // across such mutations, so Page cannot tell a hovered element went away).
+  // Comparing pointer values in the set is safe even for a freed pointer; only
+  // matching/dereferencing would be unsafe, which is what this guard prevents.
+  std::unordered_set<const dom::Element*> alive;
+  {
+    std::vector<dom::Element*> stack{root};
+    while (!stack.empty()) {
+      dom::Element* element = stack.back();
+      stack.pop_back();
+      alive.insert(element);
+      for (dom::Node* child : element->ChildNodes()) {
+        if (child->node_type() == dom::NodeType::kElement) {
+          stack.push_back(static_cast<dom::Element*>(child));
+        }
+      }
+    }
+  }
+  if (hovered_ != nullptr && alive.find(hovered_) == alive.end()) {
+    hovered_ = nullptr;
+  }
+  if (active_ != nullptr && alive.find(active_) == alive.end()) {
+    active_ = nullptr;
   }
 
   ComputedStyle root_style;
