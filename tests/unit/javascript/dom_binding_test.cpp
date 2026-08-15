@@ -1369,5 +1369,32 @@ TEST(DomBinderGeometryTest, GeometryGettersUseCallback)
             "null");
 }
 
+// Element.insertAdjacentHTML parses the fragment and inserts at each position;
+// the inserted nodes are reachable through the DOM.
+TEST_F(DomBinderTest, InsertAdjacentHTML)
+{
+  // beforeend: append as the last child.
+  EvalString("document.getElementById('main').insertAdjacentHTML('beforeend','<span id=\"x\">X</span>');");
+  ASSERT_TRUE(EvalBool("document.getElementById('x')!==null"));
+  EXPECT_EQ(EvalString("document.getElementById('x').tagName"), "SPAN");
+  EXPECT_EQ(EvalString("document.getElementById('x').textContent"), "X");
+
+  // afterbegin: insert as the first child.
+  EvalString("document.getElementById('main').insertAdjacentHTML('afterbegin','<span id=\"y\">Y</span>');");
+  ASSERT_TRUE(EvalBool("document.getElementById('y')!==null"));
+  EXPECT_EQ(EvalString("document.getElementById('main').firstChild.id"), "y");
+
+  // beforebegin: sibling before the element.
+  EvalString("var p=document.createElement('p');p.id='p1';document.body.appendChild(p);"
+             "p.insertAdjacentHTML('beforebegin','<b id=\"b1\">B</b>');");
+  ASSERT_TRUE(EvalBool("document.getElementById('b1')!==null"));
+  EXPECT_EQ(EvalString("document.getElementById('b1').tagName"), "B");
+
+  // afterend: sibling after the element.
+  EvalString("document.getElementById('p1').insertAdjacentHTML('afterend','<i id=\"i1\">I</i>');");
+  ASSERT_TRUE(EvalBool("document.getElementById('i1')!==null"));
+  EXPECT_EQ(EvalString("document.getElementById('p1').nextSibling.id"), "i1");
+}
+
 } // namespace
 } // namespace neko::javascript
