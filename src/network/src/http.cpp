@@ -384,6 +384,8 @@ base::Result<HttpResponse> ParseHttpResponse(std::string_view raw)
 // as a complete body).
 template <typename Transport> struct ResponseReader
 {
+  explicit ResponseReader(Transport& t) : transport(t) {}
+
   Transport& transport;
   std::string buffer; // bytes read but not yet consumed
 

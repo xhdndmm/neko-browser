@@ -588,8 +588,8 @@ std::vector<PathCmd> ParsePathData(std::string_view d)
       }
       break;
     case 'C': {
-      PathCmd c;
-      c.cmd = 'C';
+      PathCmd curve;
+      curve.cmd = 'C';
       for (std::size_t k = 0; k + 5 < args.size(); k += 6) {
         double c1x, c1y, c2x, c2y, x, y;
         num(k, c1x);
@@ -598,10 +598,10 @@ std::vector<PathCmd> ParsePathData(std::string_view d)
         num(k + 3, c2y);
         num(k + 4, x);
         num(k + 5, y);
-        c.args.insert(c.args.end(), {c1x, c1y, c2x, c2y, x, y});
+        curve.args.insert(curve.args.end(), {c1x, c1y, c2x, c2y, x, y});
         current = {x, y};
       }
-      commands.push_back(std::move(c));
+      commands.push_back(std::move(curve));
       break;
     }
     case 'S': {
