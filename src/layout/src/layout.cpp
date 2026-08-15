@@ -19,6 +19,11 @@ namespace {
 // (inline-block, table cells, floats, absolute boxes start a fresh BFC).
 const std::vector<const LayoutBox*> kNoFloats;
 
+// Width of the marker gutter reserved on the left of every <li> content box.
+// The marker (bullet / number) is drawn in this gutter, inside the list's
+// padding-left (the UA stylesheet gives <ul>/<ol> a 40px padding).
+constexpr float kListMarkerGap = 24.0f;
+
 // A unit of inline content (a text chunk with its style).
 struct InlineItem
 {
@@ -690,6 +695,7 @@ IntrinsicWidths MeasureContent(const dom::Element& element,
       continue;
     }
     const bool block_level = child_style.display == style::Display::kBlock ||
+                             child_style.display == style::Display::kListItem ||
                              child_style.display == style::Display::kTable ||
                              child_style.display == style::Display::kFlex ||
                              child_style.display == style::Display::kTableRowGroup ||
@@ -929,6 +935,87 @@ float SumColumns(const std::vector<float>& widths, int start, int count)
     sum += widths[i];
   }
   return sum;
+}
+
+// The ordinal position (1-based) of an <li> within its nearest <ol>/<ul>
+// ancestor: the number of preceding <li> siblings at the same level.  Returns
+// 0 when the element is not inside a list.
+int ListItemOrdinal(const dom::Element& element)
+{
+  const dom::Node* parent = element.parent();
+  if (parent == nullptr || parent->node_type() != dom::NodeType::kElement) {
+    return 0;
+  }
+  const dom::Element& parent_el = *static_cast<const dom::Element*>(parent);
+  const std::string_view parent_tag = parent_el.tag_name();
+  if (parent_tag != "ol" && parent_tag != "ul") {
+    return 0;
+  }
+  int ordinal = 0;
+  for (dom::Node* child : parent_el.ChildNodes()) {
+    if (child == &element) {
+      break;
+    }
+    if (child->node_type() == dom::NodeType::kElement &&
+        static_cast<const dom::Element*>(child)->tag_name() == "li") {
+      ++ordinal;
+    }
+  }
+  return ordinal + 1;
+}
+
+// The marker text for an <li> given its list-style-type and ordinal.  Bullet
+// types return a glyph; the numbering types return the number (followed by a
+// period).  Returns empty for list-style-type: none.
+std::string ListMarkerText(style::ListStyleType type, int ordinal)
+{
+  switch (type) {
+  case style::ListStyleType::kDisc:
+    return "\xE2\x80\xA2 "; // U+2022 BULLET + space
+  case style::ListStyleType::kCircle:
+    return "\xE2\x97\x8B "; // U+25CB WHITE CIRCLE + space
+  case style::ListStyleType::kSquare:
+    return "\xE2\x96\xAA "; // U+25AA BLACK SMALL SQUARE + space
+  case style::ListStyleType::kDecimal:
+    return std::to_string(std::max(ordinal, 1)) + ". ";
+  case style::ListStyleType::kLowerAlpha: {
+    const int n = std::max(ordinal, 1);
+    std::string out;
+    out.push_back(static_cast<char>('a' + ((n - 1) % 26)));
+    out += ". ";
+    return out;
+  }
+  case style::ListStyleType::kUpperAlpha: {
+    const int n = std::max(ordinal, 1);
+    std::string out;
+    out.push_back(static_cast<char>('A' + ((n - 1) % 26)));
+    out += ". ";
+    return out;
+  }
+  case style::ListStyleType::kLowerRoman:
+  case style::ListStyleType::kUpperRoman: {
+    // Roman numerals up to 3999 (beyond that, the value repeats modulo).
+    static constexpr const char* kUnits[] = {
+        "", "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix"};
+    static constexpr const char* kTens[] = {
+        "", "x", "xx", "xxx", "xl", "l", "lx", "lxx", "lxxx", "xc"};
+    static constexpr const char* kHundreds[] = {
+        "", "c", "cc", "ccc", "cd", "d", "dc", "dcc", "dccc", "cm"};
+    static constexpr const char* kThousands[] = {"", "m", "mm", "mmm"};
+    int n = std::max(ordinal, 1);
+    std::string roman = std::string(kThousands[(n / 1000) % 4]) + kHundreds[(n / 100) % 10] +
+                        kTens[(n / 10) % 10] + kUnits[n % 10];
+    if (type == style::ListStyleType::kUpperRoman) {
+      for (char& c : roman) {
+        c = static_cast<char>(c - 32); // to uppercase ASCII
+      }
+    }
+    return roman + ". ";
+  }
+  case style::ListStyleType::kNone:
+    break;
+  }
+  return std::string();
 }
 
 } // namespace
@@ -1192,6 +1279,15 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       }
       float cursor_y = 0;
       std::vector<InlineItem> inline_items;
+      // Block-level (and table) children are laid out after the inline content
+      // so that their vertical position accounts for the preceding text lines.
+      struct BlockChild
+      {
+        dom::Element* element;
+        style::ComputedStyle style;
+        bool table = false;
+      };
+      std::vector<BlockChild> block_children;
       for (dom::Node* child : element.ChildNodes()) {
         if (child->node_type() == dom::NodeType::kText) {
           CollectText(static_cast<dom::Text*>(child)->data(), box.style, &element, inline_items);
@@ -1220,36 +1316,12 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
           continue;
         }
         if (child_style.display == style::Display::kBlock ||
+            child_style.display == style::Display::kListItem ||
             child_style.display == style::Display::kFlex ||
             child_style.display == style::Display::kGrid) {
-          // Floats declared before this block in the source still affect its
-          // line boxes, so pass the parent's plus this box's own floats.
-          std::vector<const LayoutBox*> cur = parent_floats;
-          for (const auto& f : box.floats) {
-            cur.push_back(f.get());
-          }
-          std::unique_ptr<LayoutBox> child_box = BuildBlock(child_element,
-                                                            avail_width,
-                                                            box.content_x(),
-                                                            box.content_y() + cursor_y,
-                                                            cb_x,
-                                                            cb_y,
-                                                            cb_w,
-                                                            cb_h,
-                                                            cur);
-          cursor_y += child_box->margin_top + child_box->height + child_box->margin_bottom;
-          box.children.push_back(std::move(child_box));
+          block_children.push_back(BlockChild{&child_element, child_style, /*table=*/false});
         } else if (child_style.display == style::Display::kTable) {
-          std::unique_ptr<LayoutBox> child_box = BuildTable(child_element,
-                                                            avail_width,
-                                                            box.content_x(),
-                                                            box.content_y() + cursor_y,
-                                                            cb_x,
-                                                            cb_y,
-                                                            cb_w,
-                                                            cb_h);
-          cursor_y += child_box->margin_top + child_box->height + child_box->margin_bottom;
-          box.children.push_back(std::move(child_box));
+          block_children.push_back(BlockChild{&child_element, child_style, /*table=*/true});
         } else {
           // Inline element: its text (and atomic <img>/inline-block boxes)
           // flows into this box's lines.
@@ -1273,12 +1345,80 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
                   all_floats,
                   box.lines,
                   lines_height);
+      // Block-level children come after the inline content.
+      cursor_y += lines_height;
+      for (const BlockChild& bc : block_children) {
+        std::vector<const LayoutBox*> cur = parent_floats;
+        for (const auto& f : box.floats) {
+          cur.push_back(f.get());
+        }
+        std::unique_ptr<LayoutBox> child_box;
+        if (bc.table) {
+          child_box = BuildTable(*bc.element,
+                                 avail_width,
+                                 box.content_x(),
+                                 box.content_y() + cursor_y,
+                                 cb_x,
+                                 cb_y,
+                                 cb_w,
+                                 cb_h);
+        } else {
+          child_box = BuildBlock(*bc.element,
+                                 avail_width,
+                                 box.content_x(),
+                                 box.content_y() + cursor_y,
+                                 cb_x,
+                                 cb_y,
+                                 cb_w,
+                                 cb_h,
+                                 cur);
+        }
+        cursor_y += child_box->margin_top + child_box->height + child_box->margin_bottom;
+        box.children.push_back(std::move(child_box));
+      }
       // Floats expand the containing block: its height reaches at least the
       // bottom of every float it holds (the float is out of flow, so its
       // height is not otherwise counted here).
-      float bottom = cursor_y + lines_height;
+      float bottom = cursor_y;
       for (const auto& f : box.floats) {
         bottom = std::max(bottom, (f->y - box.content_y()) + f->height);
+      }
+
+      // A list item paints its marker (bullet / ordinal) in the reserved
+      // gutter at the start of its first line.  The marker is a text run in
+      // the gutter between the list's padding and the content.
+      if (box.style.display == style::Display::kListItem &&
+          box.style.list_style_type != style::ListStyleType::kNone) {
+        const std::string marker =
+            ListMarkerText(box.style.list_style_type, ListItemOrdinal(element));
+        if (!marker.empty()) {
+          TextRun run;
+          run.text = marker;
+          run.font_family = box.style.font_family;
+          run.font_weight = box.style.font_weight;
+          run.font_italic = box.style.font_italic;
+          run.font_size = box.style.font_size;
+          run.color = box.style.color.value_or(css::Color{0, 0, 0, 255});
+          run.element = &element;
+          run.width = MeasureTextWidth(
+              registry, run.font_family, run.font_weight, run.font_italic, run.text, run.font_size);
+          // Align the marker's top with the first line of content.
+          float marker_y = box.content_y() + box.style.line_height * 0.15f;
+          for (const Line& line : box.lines) {
+            if (!line.runs.empty()) {
+              marker_y = line.runs.front().y;
+              break;
+            }
+          }
+          run.x = box.content_x() - kListMarkerGap;
+          run.y = marker_y;
+          if (box.lines.empty()) {
+            Line empty;
+            empty.height = box.style.line_height;
+            box.lines.push_back(std::move(empty));
+          }
+          box.lines.front().runs.insert(box.lines.front().runs.begin(), std::move(run));
+        }
       }
       return bottom;
     }
@@ -1297,6 +1437,13 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       box->element = &element;
       box->style = styles.StyleFor(element);
       ResolveBoxEdges(*box, containing_width);
+
+      // A list item reserves space for its marker on the left: the marker box
+      // is placed in the gap between the list's padding and the item content.
+      if (box->style.display == style::Display::kListItem &&
+          box->style.list_style_type != style::ListStyleType::kNone) {
+        box->padding_left += kListMarkerGap;
+      }
 
       // Width: explicit (px or %) or fill the containing block.
       const float border_padding_w =

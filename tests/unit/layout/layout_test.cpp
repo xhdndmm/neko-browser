@@ -1917,5 +1917,36 @@ TEST(LayoutTest, TableCaptionLaidOutAboveRows)
   EXPECT_GE(caption->lines[0].runs[0].y, caption->content_y());
 }
 
+// <li> is display:list-item and its first line carries a marker run (the
+// bullet/ordinal) in the gutter left of the content.
+TEST(LayoutTest, ListItemHasMarkerRun)
+{
+  Page page = Build("<body><ul><li>one</li><li>two</li></ul></body>");
+  const LayoutBox* ul = FindBox(*page.root, "ul", *page.doc);
+  ASSERT_NE(ul, nullptr);
+  ASSERT_EQ(ul->children.size(), 2u);
+  const LayoutBox* li = ul->children[0].get();
+  EXPECT_EQ(li->style.display, style::Display::kListItem);
+  // The item reserved a gutter for the marker (UA <ul> padding + marker gap).
+  EXPECT_GT(li->padding_left, 0.0f);
+  // The first line's first run is the marker, to the left of the content.
+  ASSERT_GE(li->lines.size(), 1u);
+  ASSERT_GE(li->lines[0].runs.size(), 2u);
+  EXPECT_EQ(li->lines[0].runs[0].text, "\xE2\x80\xA2 ");
+  EXPECT_LT(li->lines[0].runs[0].x, li->lines[0].runs[1].x);
+}
+
+// <ol> items are numbered (decimal) in order.
+TEST(LayoutTest, OrderedListItemsAreNumbered)
+{
+  Page page = Build("<body><ol><li>a</li><li>b</li><li>c</li></ol></body>");
+  const LayoutBox* ol = FindBox(*page.root, "ol", *page.doc);
+  ASSERT_NE(ol, nullptr);
+  ASSERT_EQ(ol->children.size(), 3u);
+  EXPECT_EQ(ol->children[0]->lines[0].runs[0].text, "1. ");
+  EXPECT_EQ(ol->children[1]->lines[0].runs[0].text, "2. ");
+  EXPECT_EQ(ol->children[2]->lines[0].runs[0].text, "3. ");
+}
+
 } // namespace
 } // namespace neko::layout
