@@ -1,33 +1,37 @@
 #pragma once
 
-#include <memory>
-#include <optional>
-#include <string_view>
-#include <vector>
-
 #include "neko/dom/element.h"
 #include "neko/html/token.h"
 #include "neko/html/tokenizer.h"
+
+#include <memory>
+#include <optional>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace neko::html {
 
 // HTML tree construction (WHATWG 13.2.6-inspired).
 //
-// Implements the common insertion modes: initial, before html, before head,
-// in head, after head, in body, text, after body, after after body.  Active
-// formatting elements and the adoption agency algorithm are implemented.
-// Tables are treated as ordinary blocks (no foster parenting), and markers in
-// the active formatting element list are not yet used; see docs/html/README.md.
-class Parser {
- public:
+// Implements the insertion modes: initial, before html, before head, in head,
+// after head, in body, text, in table, in table text, in caption, in column
+// group, in table body, in row, in cell, after body, after after body.  Active
+// formatting elements and the adoption agency algorithm are implemented,
+// including markers.  Table content uses foster parenting (13.2.6.1); see
+// docs/html/README.md.
+class Parser
+{
+public:
   explicit Parser(std::string_view html);
 
   // Parses the document.  Never returns null; malformed HTML produces a
   // best-effort DOM.
   std::unique_ptr<dom::Document> Parse();
 
- private:
-  enum class Mode {
+private:
+  enum class Mode
+  {
     kInitial,
     kBeforeHtml,
     kBeforeHead,
@@ -35,6 +39,13 @@ class Parser {
     kAfterHead,
     kInBody,
     kText,
+    kInTable,
+    kInTableText,
+    kInCaption,
+    kInColumnGroup,
+    kInTableBody,
+    kInRow,
+    kInCell,
     kAfterBody,
     kAfterAfterBody,
   };
@@ -44,6 +55,8 @@ class Parser {
   void ProcessEndTag(Token token);
   void ProcessCharacter(Token token);
   void ProcessComment(Token token);
+  void ProcessStartTagInTable(Token token);
+  void ProcessEndTagInTable(Token token);
 
   void InsertElement(dom::Element* element);
   void AppendNode(std::unique_ptr<dom::Node> node);
@@ -56,12 +69,33 @@ class Parser {
 
   bool InScope(std::string_view tag) const;
   bool InButtonScope(std::string_view tag) const;
+  bool InTableScope(std::string_view tag) const;
+  bool InListItemScope(std::string_view tag) const;
   dom::Element* FindInStack(std::string_view tag) const;
   void ClosePElement();
   bool IsVoidElement(std::string_view tag) const;
   bool IsBlockElement(std::string_view tag) const;
+  bool IsRawTextElement(std::string_view tag) const;
 
-  // Maximum element nesting depth while building the DOM.  Over-deep
+  void GenerateImpliedEndTags(std::optional<std::string_view> except = std::nullopt);
+  void ClearStackBackToTableContext();
+  void ClearStackBackToTableBodyContext();
+  void ClearStackBackToTableRowContext();
+  void CloseTableCell();
+  void ResetInsertionMode();
+  void PushFormattingMarker();
+  void ClearActiveFormattingToMarker();
+
+  // The adjusted insertion location (13.2.6.1): a (parent, before) pair.
+  // |before| is null to append.  Honors foster parenting.
+  std::pair<dom::Node*, dom::Node*> AdjustedInsertionLocation() const;
+  void AppendTextAt(dom::Node* parent, dom::Node* before, std::string_view text);
+  void InsertNodeAt(dom::Node* parent, dom::Node* before, std::unique_ptr<dom::Node> node);
+
+  // Processes |token| with the rules for the "in head" insertion mode, used
+  // when after-head content must be appended to the head element.
+  void
+  ProcessInHead(Token token); // Maximum element nesting depth while building the DOM.  Over-deep
   // subtrees are dropped so that pathological HTML (e.g. hundreds of
   // thousands of nested <div>s) cannot overflow the stack in the style,
   // layout or paint stages that recursively walk the tree.
@@ -71,8 +105,7 @@ class Parser {
   std::size_t skip_depth_ = 0;
 
   // Active formatting elements (WHATWG 13.2.4.3) and the adoption agency
-  // algorithm (13.2.6.4.7).  Markers are not implemented yet (tables are
-  // treated as blocks), so the list holds only element pointers.
+  // algorithm (13.2.6.4.7).  Markers are represented by null entries.
   void PushActiveFormatting(dom::Element* element);
   void RemoveFromActiveFormatting(dom::Element* element);
   bool InActiveFormatting(dom::Element* element) const;
@@ -89,7 +122,12 @@ class Parser {
   std::vector<dom::Element*> stack_;
   std::vector<dom::Element*> active_formatting_;
   Mode mode_ = Mode::kInitial;
+  Mode original_mode_ = Mode::kInBody;
+  dom::Element* head_element_ = nullptr;
+  bool foster_parenting_ = false;
+  // Pending character tokens for the "in table text" insertion mode.
+  std::vector<Token> pending_table_chars_;
   Mode mode_before_text_ = Mode::kInBody;
 };
 
-}  // namespace neko::html
+} // namespace neko::html
