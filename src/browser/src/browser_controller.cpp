@@ -502,9 +502,8 @@ void BrowserController::FetchAndLoad(Tab& tab, const url::Url& url)
   const std::string content_type = response.value().GetHeader("content-type");
   // Use the final URL (after redirects) so relative hrefs/srcs in the page
   // resolve against the real document URL, not the pre-redirect request URL.
-  const std::string& final_url = response.value().final_url.empty()
-                                     ? url.Serialize()
-                                     : response.value().final_url;
+  const std::string& final_url =
+      response.value().final_url.empty() ? url.Serialize() : response.value().final_url;
   LoadBytes(tab, response.value().body, content_type, final_url);
 }
 
@@ -522,9 +521,9 @@ void BrowserController::LoadBytes(Tab& tab,
   // under the same lock (see ToSnapshot), so every Tab field write must be
   // locked even on the worker thread.
   const auto parsed = url::Url::Parse(final_url);
-  const std::string origin =
-      parsed.has_value() ? security::Origin::FromUrl(parsed.value()).Serialize()
-                         : std::string("null");
+  const std::string origin = parsed.has_value()
+                                 ? security::Origin::FromUrl(parsed.value()).Serialize()
+                                 : std::string("null");
   {
     std::lock_guard<std::mutex> lock(mutex_);
     tab.origin = origin;
@@ -557,14 +556,19 @@ void BrowserController::LoadBytes(Tab& tab,
     // external src=) with DOM bindings, fetching external scripts through the
     // same fetch path (with cookies).  Scripts may mutate the DOM;
     // RunPageScripts re-applies styles inside.  Console output from scripts
-    // goes to DevTools' console log.
+    // goes to DevTools' console log.  Phase 8 M3: the page's JS also gets
+    // localStorage (scoped to the page origin) and fetch.
+    browser::PageScriptServices services;
+    services.local_storage = &local_storage_;
+    services.origin = origin;
     tab.script_runtime = RunPageScripts(
         *new_page,
         final_url,
         [this](const url::Url& script_url) {
           return fetch_(script_url, CookieHeader(script_url, NowUnix()));
         },
-        [this](std::string_view level, std::string_view text) { LogConsole(level, text); });
+        [this](std::string_view level, std::string_view text) { LogConsole(level, text); },
+        services);
     // Fetch and decode the page's <img> subresources before publishing.
     FetchPageImages(*new_page, final_url, fetch_);
     std::string title = new_page->document()->Title();

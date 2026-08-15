@@ -44,7 +44,8 @@ void CollectScripts(const dom::Node& root, std::vector<dom::Element*>& out)
 std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
                                                       const std::string& base_url,
                                                       ScriptFetcher fetch,
-                                                      javascript::ScriptEngine::ConsoleSink sink)
+                                                      javascript::ScriptEngine::ConsoleSink sink,
+                                                      const PageScriptServices& services)
 {
   dom::Document* document = page.document();
   if (document == nullptr) {
@@ -59,7 +60,63 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
   // Keep a local copy of the sink for script-error reporting; the binder's
   // engine takes its own copy for console.log etc.
   javascript::ScriptEngine::ConsoleSink error_sink = sink;
-  auto binder = std::make_shared<javascript::DomBinder>(*document);
+
+  // Phase 8 M3: wire the browser services (localStorage + fetch) into the
+  // page's runtime when the caller provided them.
+  javascript::PageApis apis;
+  if (services.local_storage != nullptr) {
+    storage::LocalStorage* store = services.local_storage;
+    const std::string origin = services.origin;
+    apis.storage_get = [store, origin](std::string_view key) {
+      return store->GetItem(origin, key);
+    };
+    apis.storage_set = [store, origin](std::string_view key, std::string_view value) {
+      store->SetItem(origin, key, value);
+    };
+    apis.storage_remove = [store, origin](std::string_view key) {
+      return store->RemoveItem(origin, key);
+    };
+    apis.storage_clear = [store, origin]() { store->Clear(origin); };
+    apis.storage_keys = [store, origin]() {
+      std::vector<std::string> keys;
+      for (const auto& entry : store->All(origin)) {
+        keys.push_back(entry.first);
+      }
+      return keys;
+    };
+  }
+  if (fetch != nullptr) {
+    // Resolve relative URLs against the page's base URL, then fetch through
+    // the same network path used for external scripts.
+    const base::Result<url::Url> base = url::Url::Parse(base_url);
+    apis.resolve_url = [base](const std::string& raw) -> std::string {
+      const base::Result<url::Url> parsed =
+          base.has_value() ? url::Url::Parse(raw, base.value()) : url::Url::Parse(raw);
+      return parsed.has_value() ? parsed.value().Serialize() : std::string();
+    };
+    apis.fetch = [fetch](const std::string& url) -> base::Result<javascript::FetchResponse> {
+      const base::Result<url::Url> parsed = url::Url::Parse(url);
+      if (!parsed.has_value()) {
+        return base::Err(base::Error::InvalidArgument("invalid URL"));
+      }
+      const base::Result<network::HttpResponse> response = fetch(parsed.value());
+      if (!response.has_value()) {
+        return base::Err(response.error());
+      }
+      javascript::FetchResponse out;
+      out.status = response.value().status_code;
+      out.status_text = response.value().reason;
+      out.final_url = response.value().final_url;
+      out.headers.reserve(response.value().headers.size());
+      for (const network::HttpHeader& header : response.value().headers) {
+        out.headers.emplace_back(header.name, header.value);
+      }
+      out.body = response.value().body;
+      return base::Ok(std::move(out));
+    };
+  }
+
+  auto binder = std::make_shared<javascript::DomBinder>(*document, apis);
   binder->SetConsoleSink(std::move(sink));
 
   const base::Result<url::Url> base = url::Url::Parse(base_url);

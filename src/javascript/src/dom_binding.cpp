@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -416,7 +417,10 @@ struct Impl
   using ListenerMap = std::unordered_map<std::string, std::vector<JSValue>>;
   std::unordered_map<const dom::Node*, ListenerMap> listeners;
 
-  explicit Impl(dom::Document& doc);
+  // Optional browser Web APIs (localStorage/fetch) wired by the browser layer.
+  PageApis apis;
+
+  explicit Impl(dom::Document& doc, const PageApis& page_apis);
   ~Impl();
 
   Impl(const Impl&) = delete;
@@ -1866,13 +1870,265 @@ void DefineInterface(
   JS_SetPropertyStr(ctx, global, name, ctor); // steals ctor
 }
 
+// ---------------------------------------------------------------------------
+// Page Web APIs: window.localStorage + window.fetch (Phase 8 M3 subset).
+//
+// localStorage is a synchronous per-origin key-value store wired from the
+// browser layer through PageApis callbacks.  fetch(url) returns a Promise
+// resolved with a minimal Response object (status/ok/statusText/url/headers
+// with get(), text() and json()); network errors reject the promise.  The
+// synchronous network call resolves the promise immediately, and the
+// microtask pump makes `await fetch(...)` continuations progress.
+// ---------------------------------------------------------------------------
+
+// Returns a promise resolved with |value| (|value|'s reference is consumed).
+JSValue ResolvePromise(JSContext* ctx, JSValue value)
+{
+  JSValue global = JS_GetGlobalObject(ctx);
+  JSValue ctor = JS_GetPropertyStr(ctx, global, "Promise");
+  JSValue resolve_fn = JS_GetPropertyStr(ctx, ctor, "resolve");
+  JSValue argv[] = {value};
+  // Promise.resolve must be called with the Promise constructor as |this|.
+  JSValue result = JS_Call(ctx, resolve_fn, ctor, 1, argv);
+  JS_FreeValue(ctx, argv[0]);
+  JS_FreeValue(ctx, resolve_fn);
+  JS_FreeValue(ctx, ctor);
+  JS_FreeValue(ctx, global);
+  return result;
+}
+
+// Returns a promise rejected with an Error carrying |message|.
+JSValue RejectPromise(JSContext* ctx, const std::string& message)
+{
+  JSValue global = JS_GetGlobalObject(ctx);
+  JSValue ctor = JS_GetPropertyStr(ctx, global, "Promise");
+  JSValue reject_fn = JS_GetPropertyStr(ctx, ctor, "reject");
+  JSValue err = JS_NewError(ctx);
+  JS_SetPropertyStr(ctx, err, "message", JS_NewString(ctx, message.c_str()));
+  JSValue argv[] = {err};
+  // Promise.reject must be called with the Promise constructor as |this|.
+  JSValue result = JS_Call(ctx, reject_fn, ctor, 1, argv);
+  JS_FreeValue(ctx, err);
+  JS_FreeValue(ctx, reject_fn);
+  JS_FreeValue(ctx, ctor);
+  JS_FreeValue(ctx, global);
+  return result;
+}
+
+// ---- localStorage ----------------------------------------------------------
+
+JSValue LocalStorageGetItem(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.storage_get) {
+    return JS_ThrowTypeError(ctx, "localStorage is not available");
+  }
+  bool ok = false;
+  const std::string key = ArgString(ctx, argc >= 1 ? argv[0] : JS_UNDEFINED, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  const std::optional<std::string> value = impl->apis.storage_get(key);
+  return value.has_value() ? JS_NewString(ctx, value->c_str()) : JS_NULL;
+}
+
+JSValue LocalStorageSetItem(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.storage_set) {
+    return JS_ThrowTypeError(ctx, "localStorage is not available");
+  }
+  bool ok = false;
+  const std::string key = ArgString(ctx, argc >= 1 ? argv[0] : JS_UNDEFINED, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  const std::string value = ArgString(ctx, argc >= 2 ? argv[1] : JS_UNDEFINED, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  impl->apis.storage_set(key, value);
+  return JS_UNDEFINED;
+}
+
+JSValue LocalStorageRemoveItem(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.storage_remove) {
+    return JS_ThrowTypeError(ctx, "localStorage is not available");
+  }
+  bool ok = false;
+  const std::string key = ArgString(ctx, argc >= 1 ? argv[0] : JS_UNDEFINED, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  impl->apis.storage_remove(key);
+  return JS_UNDEFINED;
+}
+
+JSValue
+LocalStorageClear(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.storage_clear) {
+    return JS_ThrowTypeError(ctx, "localStorage is not available");
+  }
+  impl->apis.storage_clear();
+  return JS_UNDEFINED;
+}
+
+JSValue LocalStorageKey(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.storage_keys) {
+    return JS_ThrowTypeError(ctx, "localStorage is not available");
+  }
+  int64_t index = 0;
+  if (argc >= 1 && JS_ToInt64(ctx, &index, argv[0]) != 0) {
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return JS_NULL;
+  }
+  const std::vector<std::string> keys = impl->apis.storage_keys();
+  if (index < 0 || static_cast<std::size_t>(index) >= keys.size()) {
+    return JS_NULL;
+  }
+  return JS_NewString(ctx, keys[static_cast<std::size_t>(index)].c_str());
+}
+
+JSValue LocalStorageLength(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.storage_keys) {
+    return JS_NewInt32(ctx, 0);
+  }
+  return JS_NewInt32(ctx, static_cast<int32_t>(impl->apis.storage_keys().size()));
+}
+
+// ---- fetch -----------------------------------------------------------------
+
+// Response.text(): a promise resolved with the body (func_data[0]).
+JSValue FetchResponseText(JSContext* ctx,
+                          JSValueConst /*this_val*/,
+                          int /*argc*/,
+                          JSValueConst* /*argv*/,
+                          int /*magic*/,
+                          JSValueConst* func_data)
+{
+  return ResolvePromise(ctx, JS_DupValue(ctx, func_data[0]));
+}
+
+// Response.json(): parses the body (func_data[0]) as JSON; rejects on error.
+JSValue FetchResponseJson(JSContext* ctx,
+                          JSValueConst /*this_val*/,
+                          int /*argc*/,
+                          JSValueConst* /*argv*/,
+                          int /*magic*/,
+                          JSValueConst* func_data)
+{
+  const char* s = JS_ToCString(ctx, func_data[0]);
+  if (s == nullptr) {
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return RejectPromise(ctx, "Failed to parse JSON response");
+  }
+  JSValue parsed = JS_ParseJSON(ctx, s, std::strlen(s), "<fetch>");
+  JS_FreeCString(ctx, s);
+  if (JS_IsException(parsed)) {
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return RejectPromise(ctx, "Failed to parse JSON response");
+  }
+  return ResolvePromise(ctx, parsed);
+}
+
+// Headers.get(name): case-insensitive lookup over func_data[0], an object of
+// lowercased header names.
+JSValue FetchHeadersGet(JSContext* ctx,
+                        JSValueConst /*this_val*/,
+                        int argc,
+                        JSValueConst* argv,
+                        int /*magic*/,
+                        JSValueConst* func_data)
+{
+  bool ok = false;
+  const std::string name = ArgString(ctx, argc >= 1 ? argv[0] : JS_UNDEFINED, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  std::string lower;
+  for (const char c : name) {
+    lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+  }
+  JSValue value = JS_GetPropertyStr(ctx, func_data[0], lower.c_str());
+  if (JS_IsUndefined(value)) {
+    JS_FreeValue(ctx, value);
+    return JS_NULL;
+  }
+  return value;
+}
+
+JSValue JsFetch(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  if (!impl->apis.fetch) {
+    return JS_ThrowTypeError(ctx, "fetch is not available");
+  }
+  bool ok = false;
+  const std::string raw_url = ArgString(ctx, argc >= 1 ? argv[0] : JS_UNDEFINED, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  std::string url = impl->apis.resolve_url ? impl->apis.resolve_url(raw_url) : raw_url;
+  if (url.empty()) {
+    return RejectPromise(ctx, "Failed to parse URL: " + raw_url);
+  }
+  const base::Result<FetchResponse> response = impl->apis.fetch(url);
+  if (!response.has_value()) {
+    return RejectPromise(ctx, "Network error: " + response.error().message());
+  }
+  const FetchResponse& r = response.value();
+
+  JSValue resp = JS_NewObject(ctx);
+  JS_SetPropertyStr(ctx, resp, "status", JS_NewInt32(ctx, r.status));
+  JS_SetPropertyStr(ctx, resp, "ok", JS_NewBool(ctx, r.status >= 200 && r.status < 300));
+  JS_SetPropertyStr(ctx, resp, "statusText", JS_NewString(ctx, r.status_text.c_str()));
+  JS_SetPropertyStr(
+      ctx, resp, "url", JS_NewString(ctx, r.final_url.empty() ? url.c_str() : r.final_url.c_str()));
+
+  // headers: { get(name) } backed by an object of lowercased names.
+  JSValue headers_map = JS_NewObject(ctx);
+  for (const auto& header : r.headers) {
+    std::string lower;
+    for (const char c : header.first) {
+      lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+    JS_SetPropertyStr(ctx, headers_map, lower.c_str(), JS_NewString(ctx, header.second.c_str()));
+  }
+  JSValue headers = JS_NewObject(ctx);
+  JSValue headers_get = JS_NewCFunctionData(ctx, FetchHeadersGet, 1, 0, 1, &headers_map);
+  JS_SetPropertyStr(ctx, headers, "get", headers_get); // steals headers_get
+  JS_SetPropertyStr(ctx, resp, "headers", headers);    // steals headers
+  JS_FreeValue(ctx, headers_map);                      // the function dup'd it
+
+  // text()/json(): closures over the body.
+  JSValue body = JS_NewString(ctx, r.body.c_str());
+  JSValue text_fn = JS_NewCFunctionData(ctx, FetchResponseText, 0, 0, 1, &body);
+  JS_SetPropertyStr(ctx, resp, "text", text_fn); // steals text_fn
+  JSValue json_fn = JS_NewCFunctionData(ctx, FetchResponseJson, 0, 0, 1, &body);
+  JS_SetPropertyStr(ctx, resp, "json", json_fn); // steals json_fn
+  JS_FreeValue(ctx, body);                       // the functions dup'd it
+
+  return ResolvePromise(ctx, resp);
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
 // Impl definition.
 // ---------------------------------------------------------------------------
 
-Impl::Impl(dom::Document& doc) : document(doc)
+Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(page_apis)
 {
   ctx = static_cast<JSContext*>(ScriptEngineContext(engine));
   if (ctx == nullptr) {
@@ -1996,6 +2252,30 @@ Impl::Impl(dom::Document& doc) : document(doc)
   JS_SetPropertyStr(ctx, window, "innerHeight", JS_NewInt32(ctx, 600));
   JS_SetPropertyStr(ctx, window, "devicePixelRatio", JS_NewInt32(ctx, 1));
 
+  // Page Web APIs (Phase 8 M3 subset): window.localStorage and window.fetch
+  // are installed only when the browser layer wired the callbacks.
+  if (apis.storage_get || apis.storage_set || apis.storage_remove || apis.storage_clear ||
+      apis.storage_keys) {
+    JSValue local_storage = JS_NewObject(ctx);
+    static const std::array<JSCFunctionListEntry, 5> kStorage = {{
+        JS_CFUNC_DEF("getItem", 1, LocalStorageGetItem),
+        JS_CFUNC_DEF("setItem", 2, LocalStorageSetItem),
+        JS_CFUNC_DEF("removeItem", 1, LocalStorageRemoveItem),
+        JS_CFUNC_DEF("clear", 0, LocalStorageClear),
+        JS_CFUNC_DEF("key", 1, LocalStorageKey),
+    }};
+    JS_SetPropertyFunctionList(
+        ctx, local_storage, kStorage.data(), static_cast<int>(kStorage.size()));
+    DefineGetter(ctx, local_storage, "length", MakeGetter(ctx, "length", LocalStorageLength));
+    JS_SetPropertyStr(ctx, window, "localStorage", JS_DupValue(ctx, local_storage)); // steals
+    JS_SetPropertyStr(ctx, global, "localStorage", local_storage);                   // steals
+  }
+  if (apis.fetch) {
+    JSValue fetch_fn = JS_NewCFunction(ctx, JsFetch, "fetch", 1);
+    JS_SetPropertyStr(ctx, window, "fetch", JS_DupValue(ctx, fetch_fn)); // steals
+    JS_SetPropertyStr(ctx, global, "fetch", fetch_fn);                   // steals
+  }
+
   JS_SetPropertyStr(ctx, global, "window", JS_DupValue(ctx, window)); // steals
   JS_FreeValue(ctx, global);
 }
@@ -2060,7 +2340,9 @@ Impl::~Impl()
                            "Element",
                            "HTMLElement",
                            "navigator",
-                           "screen"}) {
+                           "screen",
+                           "localStorage",
+                           "fetch"}) {
     JSAtom atom = JS_NewAtom(ctx, name);
     JS_DeleteProperty(ctx, global, atom, JS_PROP_THROW);
     JS_FreeAtom(ctx, atom);
@@ -2301,7 +2583,12 @@ void Impl::DispatchDocumentEvent(std::string_view type)
 // DomBinder (public API).
 // ---------------------------------------------------------------------------
 
-DomBinder::DomBinder(dom::Document& document) : impl_(std::make_unique<Impl>(document)) {}
+DomBinder::DomBinder(dom::Document& document) : impl_(std::make_unique<Impl>(document, PageApis{}))
+{}
+
+DomBinder::DomBinder(dom::Document& document, const PageApis& apis)
+    : impl_(std::make_unique<Impl>(document, apis))
+{}
 
 DomBinder::~DomBinder() = default;
 

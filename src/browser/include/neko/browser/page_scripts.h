@@ -4,6 +4,7 @@
 #include "neko/javascript/script_engine.h"
 #include "neko/network/http.h"
 #include "neko/renderer/page.h"
+#include "neko/storage/local_storage.h"
 #include "neko/url/url.h"
 
 #include <functional>
@@ -15,6 +16,15 @@ namespace neko::browser {
 // Fetches an external script by URL.  Production uses the network stack with
 // the page's cookies; tests inject a fake.  Called on the worker thread.
 using ScriptFetcher = std::function<base::Result<network::HttpResponse>(const url::Url& url)>;
+
+// Optional browser services exposed to the page's scripts (Phase 8 M3):
+// per-origin localStorage and the JS fetch() API.
+struct PageScriptServices
+{
+  // When non-null, window.localStorage is installed, scoped to |origin|.
+  storage::LocalStorage* local_storage = nullptr;
+  std::string origin;
+};
 
 // Executes the page's <script> elements (inline text or external src=) through
 // a fresh JavaScript runtime with DOM bindings, then re-applies the style
@@ -41,6 +51,7 @@ using ScriptFetcher = std::function<base::Result<network::HttpResponse>(const ur
 std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
                                                       const std::string& base_url,
                                                       ScriptFetcher fetch,
-                                                      javascript::ScriptEngine::ConsoleSink sink);
+                                                      javascript::ScriptEngine::ConsoleSink sink,
+                                                      const PageScriptServices& services = {});
 
 } // namespace neko::browser

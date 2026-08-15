@@ -5,15 +5,51 @@
 #include "neko/javascript/script_engine.h"
 
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace neko::javascript {
 
 // Opaque per-document binding state (defined in dom_binding.cpp).
 struct Impl;
+
+// The result of a JS fetch(): a minimal subset of the network response, kept
+// here so the javascript layer does not depend on the network types.
+struct FetchResponse
+{
+  int status = 0;
+  std::string status_text;
+  std::string final_url;
+  std::vector<std::pair<std::string, std::string>> headers;
+  std::string body;
+};
+
+// Optional browser Web APIs exposed to page scripts (Phase 8 M3 subset:
+// window.localStorage + window.fetch).  Callbacks keep the binder decoupled
+// from the storage/network implementations; the browser layer wires them
+// (see browser::RunPageScripts).
+struct PageApis
+{
+  // Resolves a (possibly relative) URL against the page base to an absolute
+  // URL, or returns empty when it cannot be parsed.
+  std::function<std::string(const std::string&)> resolve_url;
+
+  // window.localStorage (per-origin; the caller scopes keys by origin).
+  std::function<std::optional<std::string>(std::string_view)> storage_get;
+  std::function<void(std::string_view, std::string_view)> storage_set;
+  std::function<bool(std::string_view)> storage_remove;
+  std::function<void()> storage_clear;
+  std::function<std::vector<std::string>()> storage_keys;
+
+  // window.fetch: performs the request for the (absolute) URL string; an Err
+  // result rejects the returned promise (network error).
+  std::function<base::Result<FetchResponse>(const std::string&)> fetch;
+};
 
 // Binds a DOM document into a JavaScript runtime, exposing a practical subset
 // of the DOM APIs (Web IDL-inspired) plus a minimal event loop.
@@ -83,6 +119,9 @@ class DomBinder
 {
 public:
   explicit DomBinder(dom::Document& document);
+  // Constructs a binder with optional browser Web APIs (localStorage/fetch)
+  // installed as globals when the corresponding callbacks are provided.
+  DomBinder(dom::Document& document, const PageApis& apis);
   ~DomBinder();
 
   DomBinder(const DomBinder&) = delete;

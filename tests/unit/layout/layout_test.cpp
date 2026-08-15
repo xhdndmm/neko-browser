@@ -137,6 +137,71 @@ TEST(LayoutTest, PercentWidth)
   EXPECT_FLOAT_EQ(div->width, 392.0f);
 }
 
+TEST(LayoutTest, CalcWidthResolves)
+{
+  // calc(100% - 32px) against the body content width (784).
+  Page page = Build("<body><div style=\"width: calc(100% - 32px)\">x</div></body>");
+  const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(div, nullptr);
+  EXPECT_FLOAT_EQ(div->width, 752.0f);
+}
+
+TEST(LayoutTest, MinWidthClampsToSmaller)
+{
+  // min(200px, calc(100% - 40px)): the calc term is 744, so 200 wins.
+  Page page = Build("<body><div style=\"width: min(200px, calc(100% - 40px))\">x</div></body>");
+  const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(div, nullptr);
+  EXPECT_FLOAT_EQ(div->width, 200.0f);
+}
+
+TEST(LayoutTest, MinWidthClampsToLarger)
+{
+  // min(1200px, calc(100% - 32px)): the calc term (752) is smaller, so it wins.
+  Page page = Build("<body><div style=\"width: min(1200px, calc(100% - 32px))\">x</div></body>");
+  const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(div, nullptr);
+  EXPECT_FLOAT_EQ(div->width, 752.0f);
+}
+
+TEST(LayoutTest, ClampWidth)
+{
+  // clamp(100px, 50%, 500px): 50% of 784 = 392, within [100, 500].
+  Page page = Build("<body><div style=\"width: clamp(100px, 50%, 500px)\">x</div></body>");
+  const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(div, nullptr);
+  EXPECT_FLOAT_EQ(div->width, 392.0f);
+}
+
+TEST(LayoutTest, AspectRatioDerivesHeight)
+{
+  // Definite width + auto height + aspect-ratio: 1 -> a square.
+  Page page = Build("<body><div style=\"width: 150px; aspect-ratio: 1\">x</div></body>");
+  const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(div, nullptr);
+  EXPECT_FLOAT_EQ(div->width, 150.0f);
+  EXPECT_FLOAT_EQ(div->height, 150.0f);
+}
+
+TEST(LayoutTest, AspectRatioRatioNonSquare)
+{
+  // aspect-ratio: 16/9 with a definite 160px width -> 90px height.
+  Page page = Build("<body><div style=\"width: 160px; aspect-ratio: 16/9\">x</div></body>");
+  const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(div, nullptr);
+  EXPECT_FLOAT_EQ(div->height, 90.0f);
+}
+
+TEST(LayoutTest, ExplicitHeightBeatsAspectRatio)
+{
+  // An explicit height wins over aspect-ratio.
+  Page page = Build("<body><div style=\"width: 150px; height: 40px; aspect-ratio: 1\">x</div>"
+                    "</body>");
+  const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(div, nullptr);
+  EXPECT_FLOAT_EQ(div->height, 40.0f);
+}
+
 TEST(LayoutTest, InlineTextCreatesLines)
 {
   Page page = Build("<body><p>hello world</p></body>");
@@ -1017,15 +1082,15 @@ TEST(LayoutTest, FloatRightHugsContainingBlockRightEdge)
   EXPECT_FLOAT_EQ(f->width, 80.0f);
 }
 
-TEST(LayoutTest, FloatLeftWithPaddingStaysAtContentEdge) {
+TEST(LayoutTest, FloatLeftWithPaddingStaysAtContentEdge)
+{
   // A float:left with padding must sit its margin box at the containing
   // block's content left edge; its border box (and thus padding) extends
   // rightward from there and must not shift left out of the block.
-  auto doc = html::Parser(
-                  "<body><div style=\"width:400px\">"
-                  "<span style=\"float:left;width:100px;height:50px;padding:10px\">L</span>"
-                  "text</div></body>")
-                  .Parse();
+  auto doc = html::Parser("<body><div style=\"width:400px\">"
+                          "<span style=\"float:left;width:100px;height:50px;padding:10px\">L</span>"
+                          "text</div></body>")
+                 .Parse();
   style::StyleEngine styles;
   styles.ApplyStyles(*doc);
   layout::LayoutEngine engine(styles);
@@ -1041,15 +1106,16 @@ TEST(LayoutTest, FloatLeftWithPaddingStaysAtContentEdge) {
   EXPECT_FLOAT_EQ(f->width, 120.0f);
 }
 
-TEST(LayoutTest, FloatRightWithMarginKeepsRightEdge) {
+TEST(LayoutTest, FloatRightWithMarginKeepsRightEdge)
+{
   // A float:right with a left margin must still align its right margin box
   // with the containing block's content right edge; the margin is taken out
   // of the space between, not by shifting the whole box left.
-  auto doc = html::Parser(
-                  "<body><div style=\"width:400px\">"
-                  "<span style=\"float:right;width:80px;height:50px;margin-left:20px\">R</span>"
-                  "text</div></body>")
-                  .Parse();
+  auto doc =
+      html::Parser("<body><div style=\"width:400px\">"
+                   "<span style=\"float:right;width:80px;height:50px;margin-left:20px\">R</span>"
+                   "text</div></body>")
+          .Parse();
   style::StyleEngine styles;
   styles.ApplyStyles(*doc);
   layout::LayoutEngine engine(styles);
@@ -1064,16 +1130,16 @@ TEST(LayoutTest, FloatRightWithMarginKeepsRightEdge) {
   EXPECT_FLOAT_EQ(f->x + f->width, div->content_x() + div->content_width());
 }
 
-TEST(LayoutTest, FloatInsideTranslatedInlineBlockKeepsPosition) {
+TEST(LayoutTest, FloatInsideTranslatedInlineBlockKeepsPosition)
+{
   // A float inside an inline-block is laid out at a local origin and then the
   // whole inline-block (including its floats) is translated to its final
   // position.  The float must move with its container.
-  auto doc = html::Parser(
-                  "<body><div style=\"width:400px;padding-top:100px\">"
-                  "<span style=\"display:inline-block\">"
-                  "<span style=\"float:left;width:50px;height:30px\">L</span>"
-                  "</span></div></body>")
-                  .Parse();
+  auto doc = html::Parser("<body><div style=\"width:400px;padding-top:100px\">"
+                          "<span style=\"display:inline-block\">"
+                          "<span style=\"float:left;width:50px;height:30px\">L</span>"
+                          "</span></div></body>")
+                 .Parse();
   style::StyleEngine styles;
   styles.ApplyStyles(*doc);
   layout::LayoutEngine engine(styles);
@@ -1153,18 +1219,19 @@ TEST(LayoutTest, CjkTextWrapsInsideFloatHeight)
   }
 }
 
-TEST(LayoutTest, FullwidthPunctuationBreaksCjkLines) {
+TEST(LayoutTest, FullwidthPunctuationBreaksCjkLines)
+{
   // A paragraph that starts with a fullwidth comma (U+FF0C) — which used to be
   // treated as a non-CJK character — was measured as one unbreakable word and
   // overflowed its narrow container.  Fullwidth punctuation must break like
   // CJK so the text wraps inside the container.
   Page page = Build("<body><div style=\"width:120px\">"
-                    "\xEF\xBC\x8C"  // ，fullwidth comma
-                    "\xE4\xB8\xAD\xE6\x96\x87\xE6\x96\x87\xE5\xAD\x97"  // 中文文字
-                    "\xE4\xB8\xAD\xE6\x96\x87\xE6\x96\x87\xE5\xAD\x97"  // 中文文字
-                    "\xE4\xB8\xAD\xE6\x96\x87\xE6\x96\x87\xE5\xAD\x97"  // 中文文字
-                    "\xE4\xB8\xAD\xE6\x96\x87\xE6\x96\x87\xE5\xAD\x97"  // 中文文字
-                    "\xE4\xB8\xAD\xE6\x96\x87\xE6\x96\x87\xE5\xAD\x97"  // 中文文字
+                    "\xEF\xBC\x8C"                                     // ，fullwidth comma
+                    "\xE4\xB8\xAD\xE6\x96\x87\xE6\x96\x87\xE5\xAD\x97" // 中文文字
+                    "\xE4\xB8\xAD\xE6\x96\x87\xE6\x96\x87\xE5\xAD\x97" // 中文文字
+                    "\xE4\xB8\xAD\xE6\x96\x87\xE6\x96\x87\xE5\xAD\x97" // 中文文字
+                    "\xE4\xB8\xAD\xE6\x96\x87\xE6\x96\x87\xE5\xAD\x97" // 中文文字
+                    "\xE4\xB8\xAD\xE6\x96\x87\xE6\x96\x87\xE5\xAD\x97" // 中文文字
                     "</div></body>");
   const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
   ASSERT_NE(div, nullptr);
@@ -1172,8 +1239,7 @@ TEST(LayoutTest, FullwidthPunctuationBreaksCjkLines) {
   const float right_edge = div->x + div->width;
   for (const Line& line : div->lines) {
     for (const TextRun& run : line.runs) {
-      EXPECT_LE(run.x + run.width, right_edge + 0.01f)
-          << "CJK run must not overflow its container";
+      EXPECT_LE(run.x + run.width, right_edge + 0.01f) << "CJK run must not overflow its container";
     }
   }
 }

@@ -12,7 +12,7 @@
 | HTTP/1.1 | Tested | 8 单元测试 | GET、chunked、重定向、Content-Length |
 | HTTPS / TLS | Tested | 3 单元测试（本地 TLS 服务器 + 自签名 CA） | OpenSSL 封装（ADR 0010），证书+主机名校验、SNI、TLS≥1.2；gzip/deflate 协商 |
 | gzip/deflate | Tested | 12 单元测试（含链式编码、raw deflate、服务器往返） | RFC 7231 内容编码解码，64 MiB 输出上限 |
-| HTML tokenizer | Tested | HTML 套件 | 字符引用子集、RAWTEXT/RCDATA |
+| HTML tokenizer | Tested | HTML 套件 | 完整 WHATWG 命名字符引用表（2125 项，含双码点，生成代码）+ RAWTEXT/RCDATA |
 | HTML parser | Tested | HTML 套件 | 插入模式子集（无 table 容错）；隐含 p 闭合按 button 作用域判定 |
 | DOM | Tested | DOM 套件 | 树操作、querySelector 子集 |
 | CSS tokenizer/parser | Tested | CSS 套件 | 规则、声明、!important、@media |
@@ -20,6 +20,9 @@
 | 级联 / 计算样式 | Tested | Style 套件 | 特异性、继承、内联样式 |
 | CSS 自定义属性 | Partial | 4 Style 单元测试 | `--name` 定义 + `var()` 引用（含 fallback）、默认继承、var() 无法解析时声明无效；无嵌套 var()/同元素链式引用 |
 | 逻辑属性 | Partial | 3 Style 单元测试 | inline/block-size、margin/padding-inline/block（1–2 值）、-start/end 长手属性、border-block-start/end、place-items→align-items；无 inline 轴 justify |
+| CSS 数学函数 | Partial | 5 Style + 4 Layout 单元测试 | `calc()`（+/- 线性组合）、`min()`/`max()`/`clamp()`（可嵌套 calc 与 var()）、vw/vh/vmin/vmax 单位，布局时对包含块求值；无 calc * /、嵌套 min/max |
+| aspect-ratio | Partial | 2 Style + 2 Layout 单元测试 | `1`/`16/9` 形式；宽度确定+高度 auto 时推导高度；显式高度优先；双 auto 忽略 |
+| border-radius | Partial | 1 Style 单元测试 | 单一圆角（长度/百分比），背景按圆角绘制；无多值/椭圆/圆角边框 |
 | Block layout | Tested | Layout 套件 | 盒模型、堆叠、宽度填充 |
 | Inline layout | Tested | Layout 套件 | 文字换行、行盒 |
 | inline-block | Partial | Layout + Style + Paint 套件 | 行内原子块盒：显式/shrink-to-fit 宽度、内部块格式化上下文、background/border/padding、vertical-align 与行高参与行盒；精确基线对齐（多行内块按自身最后一行盒基线）未做 |
@@ -47,7 +50,7 @@
 | 下载器 | Tested | Browser 套件 | Content-Disposition/URL 文件名、原子写入 |
 | 绘制 / 光栅化 | Tested | Paint 套件 | 纯色、边框、文字、PPM |
 | 合成器 | Not Started | — | — |
-| JavaScript（runtime，QuickJS） | Partial | 48 JS 单元测试 + 10 浏览器集成测试 + CLI/GUI 集成 | ES2025 核心语言、console、执行时限/内存上限、**DOM 绑定子集**（document/Node/Element/style/timers/events）、**页内 `<script>` 执行（内联 + 外部 src=、async/defer）**、**最小事件循环**（setTimeout/setInterval 同步泵）；无完整 Web IDL、无 fetch/XHR、无 microtask 完整对接、module 脚本不执行 |
+| JavaScript（runtime，QuickJS） | Partial | 66 JS 单元测试 + 浏览器集成测试 + CLI/GUI 集成 | ES2025 核心语言、console、执行时限/内存上限、**DOM 绑定子集**（document/Node/Element/style/timers/events/navigator/screen）、**页内 `<script>` 执行（内联 + 外部 src=、async/defer）**、**最小事件循环**（setTimeout/setInterval 同步泵）、**microtask 泵送**（async/.then 推进、未处理 rejection 报告）、**localStorage/fetch（Phase 8 M3 子集）**；无完整 Web IDL、无 WebSocket/XHR/sessionStorage、module 脚本不执行 |
 | Fetch（浏览器 API） | Not Started | — | — |
 | IndexedDB | Not Started | — | — |
 | 多线程 | Partial | 7 base 单元测试 + TSan 通过 | `base::ThreadPool`（固定 worker、Post/Submit、WaitIdle、析构排空）、页内多 `<img>` 并行解码（抓取串行、解码并行）；无多进程（Phase 12） |

@@ -9,7 +9,9 @@
 
 #include <chrono>
 #include <gtest/gtest.h>
+#include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -467,6 +469,140 @@ TEST_F(DomBinderTest, ReplaceChildren)
                        "e.replaceChildren(); "
                        "return e.children.length === 0 "
                        "       && d.getElementById('first') === null; })()"));
+}
+
+namespace {
+
+// A tiny in-memory store backing the localStorage callbacks.
+class FakeStorage
+{
+public:
+  std::optional<std::string> Get(std::string_view key) const
+  {
+    const auto it = entries_.find(std::string(key));
+    return it == entries_.end() ? std::nullopt : std::optional<std::string>(it->second);
+  }
+  void Set(std::string_view key, std::string_view value)
+  {
+    entries_[std::string(key)] = std::string(value);
+  }
+  bool Remove(std::string_view key)
+  {
+    return entries_.erase(std::string(key)) > 0;
+  }
+  void Clear()
+  {
+    entries_.clear();
+  }
+  std::vector<std::string> Keys() const
+  {
+    std::vector<std::string> keys;
+    for (const auto& entry : entries_) {
+      keys.push_back(entry.first);
+    }
+    return keys;
+  }
+
+private:
+  std::map<std::string, std::string> entries_;
+};
+
+} // namespace
+
+TEST_F(DomBinderTest, LocalStorageApis)
+{
+  FakeStorage store;
+  PageApis apis;
+  apis.storage_get = [&store](std::string_view k) { return store.Get(k); };
+  apis.storage_set = [&store](std::string_view k, std::string_view v) { store.Set(k, v); };
+  apis.storage_remove = [&store](std::string_view k) { return store.Remove(k); };
+  apis.storage_clear = [&store]() { store.Clear(); };
+  apis.storage_keys = [&store]() { return store.Keys(); };
+
+  DomBinder binder(*document_, apis);
+  ASSERT_TRUE(binder
+                  .Evaluate("localStorage.setItem('a', '1');"
+                            "localStorage.setItem('b', '2');")
+                  .has_value());
+  auto len = binder.Evaluate("localStorage.length");
+  ASSERT_TRUE(len.has_value());
+  ASSERT_TRUE(len.value().ToNumber().has_value());
+  EXPECT_DOUBLE_EQ(len.value().ToNumber().value(), 2.0);
+  auto a = binder.Evaluate("localStorage.getItem('a')");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(a.value().ToString().has_value());
+  EXPECT_EQ(a.value().ToString().value(), "1");
+  ASSERT_TRUE(binder.Evaluate("localStorage.getItem('missing') === null").has_value());
+  ASSERT_TRUE(binder
+                  .Evaluate("localStorage.removeItem('a');"
+                            "localStorage.getItem('a') === null")
+                  .has_value());
+  // key(i) enumerates stored keys; clear() empties the store.
+  ASSERT_TRUE(binder.Evaluate("localStorage.key(0) === 'b'").has_value());
+  ASSERT_TRUE(binder.Evaluate("localStorage.clear(); localStorage.length === 0").has_value());
+}
+
+TEST_F(DomBinderTest, FetchResolvesResponseAndBody)
+{
+  PageApis apis;
+  apis.resolve_url = [](const std::string& raw) { return raw; };
+  apis.fetch = [](const std::string& url) -> base::Result<FetchResponse> {
+    FetchResponse response;
+    response.status = 200;
+    response.status_text = "OK";
+    response.final_url = url;
+    response.headers = {{"content-type", "text/plain"}};
+    response.body = "hello body";
+    return base::Ok(std::move(response));
+  };
+
+  DomBinder binder(*document_, apis);
+  // The .then chain runs through the drained microtask queue after Evaluate.
+  const auto ev =
+      binder.Evaluate("window._done = false;"
+                      "fetch('http://example.com/data').then(function(res){"
+                      "  window._status = res.status;"
+                      "  window._ok = res.ok;"
+                      "  window._ct = res.headers.get('Content-Type');"
+                      "  return res.text();"
+                      "}).then(function(t){ window._body = t; window._done = true; });");
+  ASSERT_TRUE(ev.has_value()) << ev.error().message();
+  auto done = binder.Evaluate("window._done");
+  ASSERT_TRUE(done.has_value());
+  ASSERT_TRUE(done.value().ToBoolean().has_value());
+  EXPECT_TRUE(done.value().ToBoolean().value());
+  auto status = binder.Evaluate("window._status");
+  ASSERT_TRUE(status.has_value());
+  ASSERT_TRUE(status.value().ToNumber().has_value());
+  EXPECT_DOUBLE_EQ(status.value().ToNumber().value(), 200.0);
+  auto ct = binder.Evaluate("window._ct");
+  ASSERT_TRUE(ct.has_value());
+  ASSERT_TRUE(ct.value().ToString().has_value());
+  EXPECT_EQ(ct.value().ToString().value(), "text/plain");
+  auto body = binder.Evaluate("window._body");
+  ASSERT_TRUE(body.has_value());
+  ASSERT_TRUE(body.value().ToString().has_value());
+  EXPECT_EQ(body.value().ToString().value(), "hello body");
+}
+
+TEST_F(DomBinderTest, FetchRejectsOnNetworkError)
+{
+  PageApis apis;
+  apis.resolve_url = [](const std::string& raw) { return raw; };
+  apis.fetch = [](const std::string&) -> base::Result<FetchResponse> {
+    return base::Err(base::Error::Network("connection refused"));
+  };
+  DomBinder binder(*document_, apis);
+  ASSERT_TRUE(binder
+                  .Evaluate("window._caught = false;"
+                            "fetch('http://example.com/').catch(function(e){"
+                            "  window._caught = true;"
+                            "});")
+                  .has_value());
+  auto caught = binder.Evaluate("window._caught");
+  ASSERT_TRUE(caught.has_value());
+  ASSERT_TRUE(caught.value().ToBoolean().has_value());
+  EXPECT_TRUE(caught.value().ToBoolean().value());
 }
 
 } // namespace

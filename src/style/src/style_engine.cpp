@@ -10,6 +10,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <cstdlib>
 #include <map>
 #include <optional>
 #include <string>
@@ -192,9 +194,305 @@ std::optional<std::string> ResolveVars(const std::string& value,
   return out;
 }
 
-// Parses a single value into a SizeSpec (resolving em/rem against font sizes).
-std::optional<SizeSpec> ParseSize(const std::string& text, float font_size, float root_font_size)
+// Context for resolving a CSS length: font-relative (em/rem) and viewport-
+// relative (vw/vh/vmin/vmax) units resolve here.  The viewport defaults match
+// the engine's documented viewport (800x600 — the same values
+// window.innerWidth/Height report); wiring the real window size is future
+// work.
+struct SizeContext
 {
+  float font_size = 16;
+  float root_font_size = 16;
+  float viewport_width = 800;
+  float viewport_height = 600;
+};
+
+// A tiny recursive-descent parser for calc() expressions, which are linear
+// combinations of lengths and percentages:
+//   <sum>  := <term> (('+' | '-') <term>)*
+//   <term> := number[unit] | '(' <sum> ')'
+//   unit   := px | em | rem | % | vw | vh | vmin | vmax | (none)
+// Multiplication/division inside calc() are not implemented (documented
+// limitation).
+struct CalcParser
+{
+  std::string_view s;
+  std::size_t i = 0;
+  const SizeContext& ctx;
+
+  explicit CalcParser(std::string_view text, const SizeContext& c) : s(text), ctx(c) {}
+
+  void SkipWs()
+  {
+    while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) {
+      ++i;
+    }
+  }
+
+  bool IsDigit(char c) const
+  {
+    return c >= '0' && c <= '9';
+  }
+
+  std::optional<CalcTerm> ParseSum()
+  {
+    SkipWs();
+    const std::optional<CalcTerm> first = ParseTerm();
+    if (!first.has_value()) {
+      return std::nullopt;
+    }
+    CalcTerm acc = first.value();
+    for (;;) {
+      SkipWs();
+      if (i >= s.size()) {
+        break;
+      }
+      const char op = s[i];
+      if (op != '+' && op != '-') {
+        break;
+      }
+      ++i;
+      const std::optional<CalcTerm> rhs = ParseTerm();
+      if (!rhs.has_value()) {
+        return std::nullopt;
+      }
+      if (op == '+') {
+        acc.offset += rhs->offset;
+        acc.percent += rhs->percent;
+      } else {
+        acc.offset -= rhs->offset;
+        acc.percent -= rhs->percent;
+      }
+    }
+    return acc;
+  }
+
+  std::optional<CalcTerm> ParseTerm()
+  {
+    SkipWs();
+    // An optional "calc" keyword: "calc(expr)" is equivalent to "(expr)" and
+    // appears when min()/max()/clamp() arguments are themselves calc() calls.
+    if (i + 4 <= s.size()) {
+      const char a = s[i];
+      const char b = s[i + 1];
+      const char c = s[i + 2];
+      const char d = s[i + 3];
+      if ((a == 'c' || a == 'C') && (b == 'a' || b == 'A') && (c == 'l' || c == 'L') &&
+          (d == 'c' || d == 'C') && i + 4 < s.size() && s[i + 4] == '(') {
+        i += 4;
+      }
+    }
+    if (i < s.size() && s[i] == '(') {
+      ++i;
+      const std::optional<CalcTerm> inner = ParseSum();
+      SkipWs();
+      if (!inner.has_value() || i >= s.size() || s[i] != ')') {
+        return std::nullopt;
+      }
+      ++i;
+      return inner;
+    }
+    return ParseNumber();
+  }
+
+  std::optional<CalcTerm> ParseNumber()
+  {
+    SkipWs();
+    const std::size_t start = i;
+    if (i < s.size() && (s[i] == '+' || s[i] == '-')) {
+      ++i;
+    }
+    bool digits = false;
+    while (i < s.size() && IsDigit(s[i])) {
+      digits = true;
+      ++i;
+    }
+    if (i < s.size() && s[i] == '.') {
+      ++i;
+      while (i < s.size() && IsDigit(s[i])) {
+        digits = true;
+        ++i;
+      }
+    }
+    if (!digits) {
+      return std::nullopt;
+    }
+    const float number = std::strtof(std::string(s.substr(start, i - start)).c_str(), nullptr);
+    const std::size_t unit_start = i;
+    while (i < s.size() &&
+           (s[i] == '%' || (s[i] >= 'a' && s[i] <= 'z') || (s[i] >= 'A' && s[i] <= 'Z'))) {
+      ++i;
+    }
+    std::string unit(s.substr(unit_start, i - unit_start));
+    for (char& c : unit) {
+      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    CalcTerm term;
+    if (unit == "%") {
+      term.percent = number;
+    } else if (unit == "px") {
+      term.offset = number;
+    } else if (unit == "em") {
+      term.offset = number * ctx.font_size;
+    } else if (unit == "rem") {
+      term.offset = number * ctx.root_font_size;
+    } else if (unit == "vw") {
+      term.offset = number * ctx.viewport_width / 100.0f;
+    } else if (unit == "vh") {
+      term.offset = number * ctx.viewport_height / 100.0f;
+    } else if (unit == "vmin") {
+      term.offset = number * std::min(ctx.viewport_width, ctx.viewport_height) / 100.0f;
+    } else if (unit == "vmax") {
+      term.offset = number * std::max(ctx.viewport_width, ctx.viewport_height) / 100.0f;
+    } else if (unit.empty()) {
+      term.offset = number; // unitless (valid inside calc for 0 etc.)
+    } else {
+      return std::nullopt; // unknown unit
+    }
+    return term;
+  }
+};
+
+// Parses the comma-separated arguments of min()/max()/clamp(), each of which
+// is a calc expression.  Commas inside parentheses do not split.
+std::optional<std::vector<CalcTerm>> ParseCalcArguments(std::string_view text,
+                                                        const SizeContext& ctx)
+{
+  std::vector<std::string_view> parts;
+  std::size_t begin = 0;
+  int depth = 0;
+  for (std::size_t pos = 0; pos < text.size(); ++pos) {
+    const char c = text[pos];
+    if (c == '(') {
+      ++depth;
+    } else if (c == ')') {
+      if (depth > 0) {
+        --depth;
+      }
+    } else if (c == ',' && depth == 0) {
+      parts.push_back(text.substr(begin, pos - begin));
+      begin = pos + 1;
+    }
+  }
+  parts.push_back(text.substr(begin));
+  std::vector<CalcTerm> args;
+  args.reserve(parts.size());
+  for (const std::string_view part : parts) {
+    CalcParser parser(part, ctx);
+    const std::optional<CalcTerm> term = parser.ParseSum();
+    parser.SkipWs();
+    if (!term.has_value() || parser.i != part.size()) {
+      return std::nullopt;
+    }
+    args.push_back(term.value());
+  }
+  return args;
+}
+
+// Parses calc(...)/min(...)/max(...)/clamp(...) into a SizeSpec whose
+// resolution against the containing block happens at layout time.  Returns
+// nullopt when the expression cannot be parsed.
+std::optional<SizeSpec> ParseMathFunction(const std::string& text, const SizeContext& ctx)
+{
+  const std::string lower = neko::base::ToLower(text);
+  const bool is_calc = lower.rfind("calc(", 0) == 0;
+  const bool is_min = lower.rfind("min(", 0) == 0;
+  const bool is_max = lower.rfind("max(", 0) == 0;
+  const bool is_clamp = lower.rfind("clamp(", 0) == 0;
+  if (!is_calc && !is_min && !is_max && !is_clamp) {
+    return std::nullopt;
+  }
+  const std::size_t open = text.find('(');
+  const std::size_t close = text.rfind(')');
+  if (open == std::string::npos || close == std::string::npos || close < open) {
+    return std::nullopt;
+  }
+  const std::string_view inner(text.data() + open + 1, close - open - 1);
+
+  if (is_calc) {
+    CalcParser parser(inner, ctx);
+    const std::optional<CalcTerm> term = parser.ParseSum();
+    parser.SkipWs();
+    if (!term.has_value() || parser.i != inner.size()) {
+      return std::nullopt;
+    }
+    SizeSpec spec;
+    spec.is_calc = true;
+    spec.calc = term.value();
+    return spec;
+  }
+  const std::optional<std::vector<CalcTerm>> args = ParseCalcArguments(inner, ctx);
+  if (!args.has_value()) {
+    return std::nullopt;
+  }
+  if (is_clamp) {
+    if (args->size() != 3) {
+      return std::nullopt;
+    }
+    SizeSpec spec;
+    spec.is_clamp = true;
+    spec.extremum_args = args.value();
+    return spec;
+  }
+  if (args->size() < 2) {
+    return std::nullopt;
+  }
+  SizeSpec spec;
+  spec.is_extremum = true;
+  spec.extremum_is_max = is_max;
+  spec.extremum_args = args.value();
+  return spec;
+}
+
+// Resolves a SizeSpec to an absolute length against a containing value.
+// Percentages resolve against |containing|; calc()/min()/max()/clamp()
+// combinations resolve against it too.  Used where a resolved px value is
+// needed at style time (e.g. font-size, where percentages are relative to the
+// inherited size).
+float ResolveSpec(const SizeSpec& spec, float containing)
+{
+  if (spec.is_clamp) {
+    const auto resolve = [&](const CalcTerm& t) {
+      return containing * t.percent / 100.0f + t.offset;
+    };
+    if (spec.extremum_args.size() != 3) {
+      return 0;
+    }
+    return std::max(resolve(spec.extremum_args[0]),
+                    std::min(resolve(spec.extremum_args[1]), resolve(spec.extremum_args[2])));
+  }
+  if (spec.is_extremum) {
+    float best = 0;
+    for (std::size_t i = 0; i < spec.extremum_args.size(); ++i) {
+      const float v =
+          containing * spec.extremum_args[i].percent / 100.0f + spec.extremum_args[i].offset;
+      if (i == 0) {
+        best = v;
+      } else if (spec.extremum_is_max) {
+        best = std::max(best, v);
+      } else {
+        best = std::min(best, v);
+      }
+    }
+    return best;
+  }
+  if (spec.is_calc) {
+    return containing * spec.calc.percent / 100.0f + spec.calc.offset;
+  }
+  if (spec.percent) {
+    return containing * spec.value / 100.0f;
+  }
+  return spec.value;
+}
+
+// Parses a single value into a SizeSpec (resolving em/rem against font sizes
+// and vw/vh against the viewport; calc()/min()/max()/clamp() are kept for
+// layout-time resolution).
+std::optional<SizeSpec> ParseSize(const std::string& text, const SizeContext& ctx)
+{
+  if (const std::optional<SizeSpec> math = ParseMathFunction(text, ctx)) {
+    return math;
+  }
   const css::CssValue value = css::ParseCssValue(text);
   if (value.type != css::CssValue::Type::kLength && value.type != css::CssValue::Type::kNumber) {
     return std::nullopt;
@@ -206,9 +504,17 @@ std::optional<SizeSpec> ParseSize(const std::string& text, float font_size, floa
     return spec;
   }
   if (value.unit == "em") {
-    spec.value = value.value * font_size;
+    spec.value = value.value * ctx.font_size;
   } else if (value.unit == "rem") {
-    spec.value = value.value * root_font_size;
+    spec.value = value.value * ctx.root_font_size;
+  } else if (value.unit == "vw") {
+    spec.value = value.value * ctx.viewport_width / 100.0f;
+  } else if (value.unit == "vh") {
+    spec.value = value.value * ctx.viewport_height / 100.0f;
+  } else if (value.unit == "vmin") {
+    spec.value = value.value * std::min(ctx.viewport_width, ctx.viewport_height) / 100.0f;
+  } else if (value.unit == "vmax") {
+    spec.value = value.value * std::max(ctx.viewport_width, ctx.viewport_height) / 100.0f;
   } else {
     spec.value = value.value;
   }
@@ -217,13 +523,12 @@ std::optional<SizeSpec> ParseSize(const std::string& text, float font_size, floa
 
 // Applies a 1-4 value shorthand to the four sides.
 void ApplyBoxShorthand(const std::string& value,
-                       float font_size,
-                       float root_font_size,
+                       const SizeContext& ctx,
                        std::array<SizeSpec, 4>& sides)
 {
   const std::vector<std::string> parts = SplitWhitespace(value);
   auto parse = [&](const std::string& text) -> SizeSpec {
-    if (const std::optional<SizeSpec> spec = ParseSize(text, font_size, root_font_size)) {
+    if (const std::optional<SizeSpec> spec = ParseSize(text, ctx)) {
       return spec.value();
     }
     return SizeSpec{};
@@ -250,8 +555,7 @@ void ApplyBoxShorthand(const std::string& value,
 // 1-4 value rules).  Each token may be a length/percentage or "auto"; the
 // per-side auto flags mirror the resolved sizes.
 void ApplyMarginShorthand(const std::string& value,
-                          float font_size,
-                          float root_font_size,
+                          const SizeContext& ctx,
                           std::array<SizeSpec, 4>& sides,
                           std::array<bool, 4>& auto_flags)
 {
@@ -264,7 +568,7 @@ void ApplyMarginShorthand(const std::string& value,
       return;
     }
     is_auto = false;
-    if (const std::optional<SizeSpec> spec = ParseSize(text, font_size, root_font_size)) {
+    if (const std::optional<SizeSpec> spec = ParseSize(text, ctx)) {
       out = spec.value();
     } else {
       out = SizeSpec{};
@@ -308,8 +612,7 @@ void ApplyMarginShorthand(const std::string& value,
 
 // Extracts width/color/style from a border value ("1px solid #000").
 void ParseBorderValue(const std::string& value,
-                      float font_size,
-                      float root_font_size,
+                      const SizeContext& ctx,
                       float& width,
                       std::optional<css::Color>& color,
                       BorderStyle& style)
@@ -322,7 +625,7 @@ void ParseBorderValue(const std::string& value,
     const css::CssValue parsed = css::ParseCssValue(part);
     if (parsed.type == css::CssValue::Type::kLength ||
         parsed.type == css::CssValue::Type::kNumber) {
-      if (const std::optional<SizeSpec> spec = ParseSize(part, font_size, root_font_size)) {
+      if (const std::optional<SizeSpec> spec = ParseSize(part, ctx)) {
         width = spec.value().value;
       }
       continue;
@@ -382,8 +685,7 @@ std::vector<std::string> SplitGridList(std::string_view text)
 // Parses a single grid track token ("100px", "25%", "1fr", "auto",
 // "min-content", "max-content", "repeat(2, 40px 1fr)").
 void ParseGridTrackToken(const std::string& token,
-                         float font_size,
-                         float root_font_size,
+                         const SizeContext& ctx,
                          std::vector<GridTrack>& out)
 {
   const std::string lower = neko::base::ToLower(token);
@@ -415,7 +717,7 @@ void ParseGridTrackToken(const std::string& token,
         const std::vector<std::string> inner_tracks = SplitGridList(inner.substr(comma + 1));
         for (int r = 0; r < count; ++r) {
           for (const std::string& track : inner_tracks) {
-            ParseGridTrackToken(track, font_size, root_font_size, out);
+            ParseGridTrackToken(track, ctx, out);
           }
         }
       }
@@ -432,7 +734,7 @@ void ParseGridTrackToken(const std::string& token,
     return;
   }
   // Length / percentage.
-  if (const std::optional<SizeSpec> spec = ParseSize(token, font_size, root_font_size)) {
+  if (const std::optional<SizeSpec> spec = ParseSize(token, ctx)) {
     GridTrack track;
     track.kind = GridTrack::Kind::kFixed;
     if (spec.value().percent) {
@@ -447,12 +749,11 @@ void ParseGridTrackToken(const std::string& token,
   out.push_back(GridTrack{GridTrack::Kind::kAuto, 0, 0, 0});
 }
 
-std::vector<GridTrack>
-ParseGridTrackList(const std::string& value, float font_size, float root_font_size)
+std::vector<GridTrack> ParseGridTrackList(const std::string& value, const SizeContext& ctx)
 {
   std::vector<GridTrack> tracks;
   for (const std::string& token : SplitGridList(value)) {
-    ParseGridTrackToken(token, font_size, root_font_size, tracks);
+    ParseGridTrackToken(token, ctx, tracks);
   }
   return tracks;
 }
@@ -759,37 +1060,53 @@ void StyleEngine::ComputeElement(dom::Element& element,
   const bool font_size_set = find("font-size") != nullptr;
   const bool line_height_set = find("line-height") != nullptr;
 
-  // font-size first (em/rem depend on it).
+  // font-size first (em/rem depend on it).  Percentages are relative to the
+  // inherited size; viewport units to the engine viewport; calc()/min()/max()/
+  // clamp() resolve at style time (all arguments are absolute once units are
+  // applied, so the containing value is only used for percentages).
   if (const css::Declaration* d = find("font-size")) {
-    const css::CssValue v = css::ParseCssValue(d->value);
-    if (v.type == css::CssValue::Type::kLength) {
-      if (v.is_percent) {
-        out.font_size = inherited.font_size * v.value / 100.0f;
-      } else if (v.unit == "em") {
-        out.font_size = inherited.font_size * v.value;
-      } else if (v.unit == "rem") {
-        out.font_size = root_font_size * v.value;
-      } else {
-        out.font_size = v.value;
-      }
-    } else if (v.type == css::CssValue::Type::kKeyword) {
-      static const std::map<std::string, float> kSizes = {{"xx-small", 9.0f},
-                                                          {"x-small", 10.0f},
-                                                          {"small", 13.0f},
-                                                          {"medium", 16.0f},
-                                                          {"large", 18.0f},
-                                                          {"x-large", 24.0f},
-                                                          {"xx-large", 32.0f}};
-      const auto it = kSizes.find(v.text);
-      if (it != kSizes.end()) {
-        out.font_size = it->second;
-      } else if (v.text == "smaller") {
-        out.font_size = inherited.font_size * 0.8f;
-      } else if (v.text == "larger") {
-        out.font_size = inherited.font_size * 1.2f;
+    const SizeContext inherited_ctx{inherited.font_size, root_font_size};
+    if (const std::optional<SizeSpec> math = ParseMathFunction(d->value, inherited_ctx)) {
+      out.font_size = ResolveSpec(math.value(), inherited.font_size);
+    } else {
+      const css::CssValue v = css::ParseCssValue(d->value);
+      if (v.type == css::CssValue::Type::kLength) {
+        if (v.is_percent) {
+          out.font_size = inherited.font_size * v.value / 100.0f;
+        } else if (v.unit == "em") {
+          out.font_size = inherited.font_size * v.value;
+        } else if (v.unit == "rem") {
+          out.font_size = root_font_size * v.value;
+        } else if (v.unit == "vw") {
+          out.font_size = v.value * inherited_ctx.viewport_width / 100.0f;
+        } else if (v.unit == "vh") {
+          out.font_size = v.value * inherited_ctx.viewport_height / 100.0f;
+        } else {
+          out.font_size = v.value;
+        }
+      } else if (v.type == css::CssValue::Type::kKeyword) {
+        static const std::map<std::string, float> kSizes = {{"xx-small", 9.0f},
+                                                            {"x-small", 10.0f},
+                                                            {"small", 13.0f},
+                                                            {"medium", 16.0f},
+                                                            {"large", 18.0f},
+                                                            {"x-large", 24.0f},
+                                                            {"xx-large", 32.0f}};
+        const auto it = kSizes.find(v.text);
+        if (it != kSizes.end()) {
+          out.font_size = it->second;
+        } else if (v.text == "smaller") {
+          out.font_size = inherited.font_size * 0.8f;
+        } else if (v.text == "larger") {
+          out.font_size = inherited.font_size * 1.2f;
+        }
       }
     }
   }
+
+  // Length context for the remaining properties: font size is final now, so
+  // em/rem and viewport units resolve against it.
+  const SizeContext size_ctx{out.font_size, root_font_size};
 
   // font-weight.
   if (const css::Declaration* d = find("font-weight")) {
@@ -1041,8 +1358,7 @@ void StyleEngine::ComputeElement(dom::Element& element,
     const css::CssValue v = css::ParseCssValue(d->value);
     if (v.type == css::CssValue::Type::kKeyword && v.text == "auto") {
       out.flex_basis = std::nullopt;
-    } else if (const std::optional<SizeSpec> spec =
-                   ParseSize(d->value, out.font_size, root_font_size)) {
+    } else if (const std::optional<SizeSpec> spec = ParseSize(d->value, size_ctx)) {
       out.flex_basis = spec.value();
     }
   }
@@ -1100,8 +1416,7 @@ void StyleEngine::ComputeElement(dom::Element& element,
       if (next < parts.size()) {
         const std::string& basis = parts[next];
         if (basis != "auto") {
-          if (const std::optional<SizeSpec> spec =
-                  ParseSize(basis, out.font_size, root_font_size)) {
+          if (const std::optional<SizeSpec> spec = ParseSize(basis, size_ctx)) {
             out.flex_basis = spec.value();
           }
         } else {
@@ -1147,7 +1462,7 @@ void StyleEngine::ComputeElement(dom::Element& element,
   // gap (row-gap / column-gap / shorthand).  The shorthand is applied first
   // so an explicit longhand declared later overrides its component.
   auto parse_gap = [&](const std::string& text) -> float {
-    if (const std::optional<SizeSpec> spec = ParseSize(text, out.font_size, root_font_size)) {
+    if (const std::optional<SizeSpec> spec = ParseSize(text, size_ctx)) {
       return spec.value().value;
     }
     return 0.0f;
@@ -1170,10 +1485,10 @@ void StyleEngine::ComputeElement(dom::Element& element,
 
   // Grid (CSS Grid Layout 1).  Track templates and item placement.
   if (const css::Declaration* d = find("grid-template-columns")) {
-    out.grid_template_columns = ParseGridTrackList(d->value, out.font_size, root_font_size);
+    out.grid_template_columns = ParseGridTrackList(d->value, size_ctx);
   }
   if (const css::Declaration* d = find("grid-template-rows")) {
-    out.grid_template_rows = ParseGridTrackList(d->value, out.font_size, root_font_size);
+    out.grid_template_rows = ParseGridTrackList(d->value, size_ctx);
   }
   if (const css::Declaration* d = find("grid-column")) {
     ParseGridPlacementShorthand(d->value, out.grid_column_start, out.grid_column_end);
@@ -1238,10 +1553,10 @@ void StyleEngine::ComputeElement(dom::Element& element,
 
   // width / height.
   if (const css::Declaration* d = find("width")) {
-    out.width = ParseSize(d->value, out.font_size, root_font_size);
+    out.width = ParseSize(d->value, size_ctx);
   }
   if (const css::Declaration* d = find("height")) {
-    out.height = ParseSize(d->value, out.font_size, root_font_size);
+    out.height = ParseSize(d->value, size_ctx);
   }
 
   // min-width / min-height / max-width / max-height (CSS 2.2 §10.4).
@@ -1253,7 +1568,7 @@ void StyleEngine::ComputeElement(dom::Element& element,
       if (v.type == css::CssValue::Type::kKeyword && v.text == "none") {
         return std::nullopt;
       }
-      return ParseSize(d->value, out.font_size, root_font_size);
+      return ParseSize(d->value, size_ctx);
     }
     return std::nullopt;
   };
@@ -1272,8 +1587,7 @@ void StyleEngine::ComputeElement(dom::Element& element,
       if (v.type == css::CssValue::Type::kKeyword && v.text == "auto") {
         target = SizeSpec{};
         auto_flag = true;
-      } else if (const std::optional<SizeSpec> spec =
-                     ParseSize(d->value, out.font_size, root_font_size)) {
+      } else if (const std::optional<SizeSpec> spec = ParseSize(d->value, size_ctx)) {
         target = spec.value();
         auto_flag = false;
       }
@@ -1285,7 +1599,7 @@ void StyleEngine::ComputeElement(dom::Element& element,
   set_margin("margin-left", out.margin_left, out.margin_left_auto);
   auto set_padding = [&](const char* name, SizeSpec& target) {
     if (const css::Declaration* d = find(name)) {
-      if (const std::optional<SizeSpec> spec = ParseSize(d->value, out.font_size, root_font_size)) {
+      if (const std::optional<SizeSpec> spec = ParseSize(d->value, size_ctx)) {
         target = spec.value();
       }
     }
@@ -1300,7 +1614,7 @@ void StyleEngine::ComputeElement(dom::Element& element,
         out.margin_top, out.margin_right, out.margin_bottom, out.margin_left};
     std::array<bool, 4> auto_flags = {
         out.margin_top_auto, out.margin_right_auto, out.margin_bottom_auto, out.margin_left_auto};
-    ApplyMarginShorthand(d->value, out.font_size, root_font_size, sides, auto_flags);
+    ApplyMarginShorthand(d->value, size_ctx, sides, auto_flags);
     out.margin_top = sides[0];
     out.margin_right = sides[1];
     out.margin_bottom = sides[2];
@@ -1313,7 +1627,7 @@ void StyleEngine::ComputeElement(dom::Element& element,
   if (const css::Declaration* d = find("padding")) {
     std::array<SizeSpec, 4> sides = {
         out.padding_top, out.padding_right, out.padding_bottom, out.padding_left};
-    ApplyBoxShorthand(d->value, out.font_size, root_font_size, sides);
+    ApplyBoxShorthand(d->value, size_ctx, sides);
     out.padding_top = sides[0];
     out.padding_right = sides[1];
     out.padding_bottom = sides[2];
@@ -1324,7 +1638,7 @@ void StyleEngine::ComputeElement(dom::Element& element,
   auto set_border_side = [&](std::string_view side, SizeSpec& width) {
     const std::string suffix(side);
     if (const css::Declaration* d = find(std::string("border-") + suffix + "-width")) {
-      if (const std::optional<SizeSpec> spec = ParseSize(d->value, out.font_size, root_font_size)) {
+      if (const std::optional<SizeSpec> spec = ParseSize(d->value, size_ctx)) {
         width = spec.value();
       }
     }
@@ -1332,7 +1646,7 @@ void StyleEngine::ComputeElement(dom::Element& element,
       float w = 0;
       std::optional<css::Color> color;
       BorderStyle style = BorderStyle::kNone;
-      ParseBorderValue(d->value, out.font_size, root_font_size, w, color, style);
+      ParseBorderValue(d->value, size_ctx, w, color, style);
       if (w > 0) {
         width.value = w;
         width.percent = false;
@@ -1354,7 +1668,7 @@ void StyleEngine::ComputeElement(dom::Element& element,
     float w = 0;
     std::optional<css::Color> color;
     BorderStyle style = BorderStyle::kNone;
-    ParseBorderValue(d->value, out.font_size, root_font_size, w, color, style);
+    ParseBorderValue(d->value, size_ctx, w, color, style);
     if (w > 0) {
       out.border_top.value = out.border_right.value = out.border_bottom.value =
           out.border_left.value = w;
@@ -1371,7 +1685,7 @@ void StyleEngine::ComputeElement(dom::Element& element,
     float w = 0;
     std::optional<css::Color> color;
     BorderStyle style = BorderStyle::kNone;
-    ParseBorderValue(d->value, out.font_size, root_font_size, w, color, style);
+    ParseBorderValue(d->value, size_ctx, w, color, style);
     if (w > 0) {
       out.border_top.value = out.border_right.value = out.border_bottom.value =
           out.border_left.value = w;
@@ -1400,11 +1714,54 @@ void StyleEngine::ComputeElement(dom::Element& element,
     }
   }
 
+  // aspect-ratio (CSS Box Sizing 4): "1", "16 / 9" or "1 / 1" (single number
+  // means N / 1).  Stored as the width/height ratio.
+  if (const css::Declaration* d = find("aspect-ratio")) {
+    std::string cleaned;
+    cleaned.reserve(d->value.size());
+    for (const char c : d->value) {
+      if (c != ' ' && c != '\t') {
+        cleaned.push_back(c);
+      }
+    }
+    const std::size_t slash = cleaned.find('/');
+    float w = 0;
+    float h = 1;
+    bool ok = false;
+    if (slash == std::string::npos) {
+      const css::CssValue v = css::ParseCssValue(cleaned);
+      if (v.type == css::CssValue::Type::kNumber) {
+        w = v.number;
+        ok = true;
+      }
+    } else {
+      const css::CssValue v1 = css::ParseCssValue(cleaned.substr(0, slash));
+      const css::CssValue v2 = css::ParseCssValue(cleaned.substr(slash + 1));
+      if (v1.type == css::CssValue::Type::kNumber && v2.type == css::CssValue::Type::kNumber) {
+        w = v1.number;
+        h = v2.number;
+        ok = true;
+      }
+    }
+    if (ok && w > 0 && h > 0) {
+      out.aspect_ratio = w / h;
+    }
+  }
+
+  // border-radius (CSS Backgrounds and Borders 3 §5): a single radius for
+  // all corners (length or percentage; 1-4 value / elliptical variants are
+  // not implemented).
+  if (const css::Declaration* d = find("border-radius")) {
+    if (const std::optional<SizeSpec> spec = ParseSize(d->value, size_ctx)) {
+      out.border_radius = spec.value();
+    }
+  }
+
   // offsets.
   auto set_offset = [&](const char* name, float& target, bool& auto_flag) {
     if (const css::Declaration* d = find(name)) {
-      if (const std::optional<SizeSpec> spec = ParseSize(d->value, out.font_size, root_font_size)) {
-        if (!spec.value().percent) {
+      if (const std::optional<SizeSpec> spec = ParseSize(d->value, size_ctx)) {
+        if (!spec.value().percent && !spec.value().is_calc && !spec.value().is_extremum) {
           target = spec.value().value;
           auto_flag = false;
         }

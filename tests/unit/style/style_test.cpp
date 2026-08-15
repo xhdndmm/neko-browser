@@ -674,6 +674,128 @@ TEST(StyleTest, LogicalAndPhysicalCascadeTogether)
   ASSERT_TRUE(div.width.has_value());
   EXPECT_FLOAT_EQ(div.width.value().value, 200.0f);
 }
+TEST(StyleTest, ViewportUnitsResolveAgainstEngineViewport)
+{
+  // Default viewport is 800x600 (the engine's documented viewport).
+  auto doc = MakeDoc("<body><div style=\"width: 50vw; height: 25vh\">x</div>"
+                     "<p style=\"width: 10vmin\">y</p></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
 
+  const ComputedStyle& div = Style(engine, *doc, "div");
+  ASSERT_TRUE(div.width.has_value());
+  EXPECT_FLOAT_EQ(div.width.value().value, 400.0f); // 50vw = 400
+  ASSERT_TRUE(div.height.has_value());
+  EXPECT_FLOAT_EQ(div.height.value().value, 150.0f); // 25vh = 150
+  const ComputedStyle& p = Style(engine, *doc, "p");
+  ASSERT_TRUE(p.width.has_value());
+  EXPECT_FLOAT_EQ(p.width.value().value, 60.0f); // 10vmin = min(800,600)*0.1
+}
+
+TEST(StyleTest, CalcFunctionParses)
+{
+  auto doc = MakeDoc("<body><div style=\"width: calc(100% - 32px)\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& div = Style(engine, *doc, "div");
+  ASSERT_TRUE(div.width.has_value());
+  const SizeSpec& w = div.width.value();
+  EXPECT_TRUE(w.is_calc);
+  EXPECT_FLOAT_EQ(w.calc.percent, 100.0f);
+  EXPECT_FLOAT_EQ(w.calc.offset, -32.0f);
+}
+
+TEST(StyleTest, MinMaxClampParse)
+{
+  auto doc = MakeDoc("<style>#a { width: min(1200px, calc(100% - 32px)); }"
+                     "#b { width: max(200px, 50%); }"
+                     "#c { width: clamp(10px, 5vw, 100px); }</style>"
+                     "<body><div id=\"a\">x</div><div id=\"b\">y</div>"
+                     "<div id=\"c\">z</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& a = Style(engine, *doc, "#a");
+  ASSERT_TRUE(a.width.has_value());
+  EXPECT_TRUE(a.width.value().is_extremum);
+  EXPECT_FALSE(a.width.value().extremum_is_max);
+  ASSERT_EQ(a.width.value().extremum_args.size(), 2u);
+  EXPECT_FLOAT_EQ(a.width.value().extremum_args[0].offset, 1200.0f);
+  EXPECT_FLOAT_EQ(a.width.value().extremum_args[1].percent, 100.0f);
+  EXPECT_FLOAT_EQ(a.width.value().extremum_args[1].offset, -32.0f);
+
+  const ComputedStyle& b = Style(engine, *doc, "#b");
+  ASSERT_TRUE(b.width.has_value());
+  EXPECT_TRUE(b.width.value().is_extremum);
+  EXPECT_TRUE(b.width.value().extremum_is_max);
+
+  const ComputedStyle& c = Style(engine, *doc, "#c");
+  ASSERT_TRUE(c.width.has_value());
+  EXPECT_TRUE(c.width.value().is_clamp);
+  ASSERT_EQ(c.width.value().extremum_args.size(), 3u);
+}
+
+TEST(StyleTest, ClampFontSize)
+{
+  // clamp(2rem, 5vw, 3.5rem): 2rem=32, 5vw=40, 3.5rem=56 at the default
+  // 16px root font size and 800px viewport.
+  auto doc = MakeDoc("<body><div style=\"font-size: clamp(2rem, 5vw, 3.5rem)\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  EXPECT_FLOAT_EQ(Style(engine, *doc, "div").font_size, 40.0f);
+}
+
+TEST(StyleTest, VarInsideCalcResolves)
+{
+  auto doc = MakeDoc("<style>:root { --gutter: 20px; }</style>"
+                     "<body><div style=\"width: calc(100% - var(--gutter))\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& div = Style(engine, *doc, "div");
+  ASSERT_TRUE(div.width.has_value());
+  EXPECT_TRUE(div.width.value().is_calc);
+  EXPECT_FLOAT_EQ(div.width.value().calc.percent, 100.0f);
+  EXPECT_FLOAT_EQ(div.width.value().calc.offset, -20.0f);
+}
+
+TEST(StyleTest, AspectRatioParses)
+{
+  auto doc = MakeDoc("<body><div id=\"a\" style=\"aspect-ratio: 1\">x</div>"
+                     "<div id=\"b\" style=\"aspect-ratio: 16 / 9\">y</div>"
+                     "<div id=\"c\" style=\"aspect-ratio: 4/3\">z</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& a = Style(engine, *doc, "#a");
+  ASSERT_TRUE(a.aspect_ratio.has_value());
+  EXPECT_FLOAT_EQ(a.aspect_ratio.value(), 1.0f);
+  const ComputedStyle& b = Style(engine, *doc, "#b");
+  ASSERT_TRUE(b.aspect_ratio.has_value());
+  EXPECT_NEAR(b.aspect_ratio.value(), 16.0f / 9.0f, 1e-5f);
+  const ComputedStyle& c = Style(engine, *doc, "#c");
+  ASSERT_TRUE(c.aspect_ratio.has_value());
+  EXPECT_NEAR(c.aspect_ratio.value(), 4.0f / 3.0f, 1e-5f);
+}
+
+TEST(StyleTest, BorderRadiusParses)
+{
+  auto doc = MakeDoc("<body><div id=\"a\" style=\"border-radius: 14px\">x</div>"
+                     "<div id=\"b\" style=\"border-radius: 50%\">y</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& a = Style(engine, *doc, "#a");
+  ASSERT_TRUE(a.border_radius.has_value());
+  EXPECT_FLOAT_EQ(a.border_radius.value().value, 14.0f);
+  EXPECT_FALSE(a.border_radius.value().percent);
+
+  const ComputedStyle& b = Style(engine, *doc, "#b");
+  ASSERT_TRUE(b.border_radius.has_value());
+  EXPECT_TRUE(b.border_radius.value().percent);
+  EXPECT_FLOAT_EQ(b.border_radius.value().value, 50.0f);
+}
 } // namespace
 } // namespace neko::style

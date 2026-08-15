@@ -138,11 +138,31 @@ enum class Appearance
   kButton
 };
 
-// A length that may be a percentage (resolved against the containing block).
+// A calc() term: `percent% of the containing block + offset px`.  min()/max()
+// and clamp() arguments are also linear combinations of this form.
+struct CalcTerm
+{
+  float offset = 0;  // px component
+  float percent = 0; // percentage coefficient
+};
+
+// A length that may be a percentage (resolved against the containing block),
+// a calc() linear combination, or an extremum (min/max/clamp) over
+// linear-combination arguments.  All forms resolve against the containing
+// block at layout time (see layout::ResolveSize).
 struct SizeSpec
 {
   float value = 0;
   bool percent = false;
+  // calc(expr): the resolved length is calc.percent% of the containing block
+  // plus calc.offset px.
+  bool is_calc = false;
+  CalcTerm calc;
+  // min()/max()/clamp(): an extremum over the linear-combination arguments.
+  bool is_extremum = false;
+  bool extremum_is_max = false; // max() vs min()
+  bool is_clamp = false;        // clamp(MIN, VAL, MAX) = max(MIN, min(VAL, MAX))
+  std::vector<CalcTerm> extremum_args;
 };
 
 // Grid layout (CSS Grid Layout 1).  One grid track definition.
@@ -217,6 +237,15 @@ struct ComputedStyle
   std::optional<css::Color> border_color;
 
   std::optional<css::Color> background_color;
+
+  // aspect-ratio (CSS Box Sizing 4): width / height ratio (e.g. 1 for a
+  // square, 16/9 for 16:9).  With a definite width (or height) and the other
+  // axis auto, layout derives the auto axis from the ratio.  nullopt = auto.
+  std::optional<float> aspect_ratio;
+
+  // border-radius: a single radius applied to all corners (a percentage
+  // resolves against the box width at paint time).  nullopt = square corners.
+  std::optional<SizeSpec> border_radius;
 
   // Native widget look (CSS-UI-4 §7.2).  Initial value: none.
   Appearance appearance = Appearance::kNone;

@@ -19,6 +19,15 @@
   margin/padding-block(-start/end)、border-block-start/end、
   border-inline-start/end；margin/padding-inline/block 支持 1–2 值展开；
   place-items 折叠为 align-items。
+- **数学函数与视口单位**：`calc()`（+/- 线性组合）、`min()`/`max()`/`clamp()`
+  （参数可为 calc 表达式，支持嵌套 calc 与 var()）、`vw`/`vh`/`vmin`/`vmax`
+  单位。解析为线性组合（`percent% × 包含块 + offset px`），在布局时对包含块
+  求值；`font-size` 的数学函数在样式时解析（百分比相对继承字号）。限制：
+  calc 内不支持 * / 与嵌套 min/max 参数。
+- **aspect-ratio**（CSS Box Sizing 4）：`1`、`16/9`、`1 / 1` 形式；宽度确定、
+  高度 auto 时由布局推导高度（显式高度优先）。
+- **border-radius**：单一圆角（长度或百分比），背景填充按圆角矩形绘制
+  （百分比相对盒宽）。限制：1–4 值/椭圆变体、圆角边框未实现。
 - flex 属性解析：display:flex/inline-flex、flex-direction/flex-wrap/
   justify-content/align-items/align-content、flex-grow/flex-shrink/flex-basis、
   flex 简写、gap/row-gap/column-gap
@@ -30,9 +39,9 @@
 
 - transform/动画/过渡、媒体查询完整求值（prefers-color-scheme 等按匹配
   处理，仅 print/speech 不匹配）
-- 数学函数：calc()/min()/max()/clamp()、vw/vh 单位
-- aspect-ratio、border-radius、box-shadow、place-items 的 inline（justify）
-  分量、逻辑边框颜色/样式分量
+- calc 内的 * / 运算、嵌套 min/max/clamp 参数
+- border-radius 多值/椭圆/圆角边框；box-shadow；place-items 的 inline
+  （justify）分量
 - grid：minmax()、repeat(auto-fit/auto-fill)、命名线/区域
 - 完整伪类集（:hover 等按不匹配处理）
 

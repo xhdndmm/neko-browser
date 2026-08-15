@@ -60,6 +60,18 @@
   （C++ 侧）同步派发。window 与 document 共享同一事件目标集：window 级
   监听器存储在 document 节点下。
 
+**页面 Web API（Phase 8 M3 子集）**：`browser::RunPageScripts` 通过
+`PageScriptServices` 接线后，页面脚本可使用：
+
+- `window.localStorage`（按页面 origin 分区）：`getItem`/`setItem`/
+  `removeItem`/`clear`/`key(i)`/`length`。数据由 C++ `storage::LocalStorage`
+  持久化到 profile（跨导航保留）。无 sessionStorage/storage 事件。
+- `window.fetch(url)`：返回 Promise，解析为最小 Response 对象
+  （`status`/`ok`/`statusText`/`url`/`headers.get(name)`/`text()`/`json()`）；
+  相对 URL 按页面 base 解析；网络错误 reject。同步网络调用立即 resolve，
+  由 microtask 泵送推进 `await`/`.then` 链。无 Request/AbortController/
+  FormData。
+
 **Promise / 微任务**：`ScriptEngine::Evaluate`/`CallGlobal` 在求值后泵送
 QuickJS 的 job 队列（promise 的 `.then` 延续、async 函数），因此顶层启动的
 `async` 函数能推进到完成；定时器回调和事件派发后同样泵送。未处理的
@@ -84,9 +96,10 @@ CLI `--url` 路径同样执行脚本。
   （不抢占管线，无法先于更早的 classic 运行）。
 - 外部脚本经同一网络栈（生产带 Cookie）抓取；module 与动态 import 不支持。
 
-**测试**：63 个 JS 单元测试 + 浏览器集成测试（脚本执行/console/错误/
+**测试**：66 个 JS 单元测试 + 浏览器集成测试（脚本执行/console/错误/
 定时器/外部脚本/文档序/defer/async/失败不中断/生命周期事件/promise 泵送/
-未处理 rejection/多图并行解码/页面 origin）。ASan 无泄漏、TSan 无数据竞争。
+未处理 rejection/localStorage/fetch/多图并行解码/页面 origin）。ASan 无泄漏、
+TSan 无数据竞争。
 
 ## 所有权与生命周期
 
@@ -95,14 +108,18 @@ CLI `--url` 路径同样执行脚本。
   由 binder 保留（`retained`），JS 可安全重新插入；`createElement` 创建的
   节点在插入文档前由 binder 持有。
 - `document` 必须比 binder 活得久（binder 在页面加载时创建、随页面销毁）。
+- `PageApis` 回调由浏览器层持有（`LocalStorage*`/网络栈），必须比 binder
+  活得久（binder 随页面销毁，先于 controller）。
 - 线程约束：与 `ScriptEngine` 一致，单个 binder 同一时刻只能在一个线程使用。
 
 ## 未实现（诚实标注）
 
 - 属性 getter 仅覆盖上述子集；`childNodes`/`querySelectorAll` 返回快照数组
   （非活 NodeList）；无事件冒泡/捕获/默认行为；**module 脚本与动态 import**
-  不执行；无 fetch/XHR；无 storage 事件。
+  不执行；无 storage 事件。
 - `append`/`replaceChildren` 只接受节点参数（字符串参数不转为文本节点）。
+- Web API 子集：无 `sessionStorage`、`fetch` 无 Request/AbortController/
+  FormData/取消；无 WebSocket/XHR。
 - `Intl` 未编译进 quickjs-ng v0.16.1（需要升级引擎或引入 ICU 依赖，见
   依赖政策）；`navigator`/`screen`/`window.innerWidth` 等为引擎默认值
   （UA `neko-browser/0.1.0`、语言 "en-US"、视口 800×600@1x），真实窗口

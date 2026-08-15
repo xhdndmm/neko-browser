@@ -7,7 +7,8 @@
 namespace neko::css {
 namespace {
 
-std::string_view TrimView(std::string_view text) {
+std::string_view TrimView(std::string_view text)
+{
   while (!text.empty() && (text.front() == ' ' || text.front() == '\t' || text.front() == '\n' ||
                            text.front() == '\r')) {
     text.remove_prefix(1);
@@ -19,9 +20,13 @@ std::string_view TrimView(std::string_view text) {
   return text;
 }
 
-bool IsDigit(char c) { return c >= '0' && c <= '9'; }
+bool IsDigit(char c)
+{
+  return c >= '0' && c <= '9';
+}
 
-std::string ToLower(std::string_view s) {
+std::string ToLower(std::string_view s)
+{
   std::string out;
   out.reserve(s.size());
   for (const char c : s) {
@@ -30,9 +35,10 @@ std::string ToLower(std::string_view s) {
   return out;
 }
 
-}  // namespace
+} // namespace
 
-CssValue ParseCssValue(std::string_view text) {
+CssValue ParseCssValue(std::string_view text)
+{
   CssValue out;
   const std::string_view t = TrimView(text);
   if (t.empty()) {
@@ -73,7 +79,8 @@ CssValue ParseCssValue(std::string_view text) {
       return out;
     }
     const std::string unit = ToLower(rest);
-    if (unit == "px" || unit == "em" || unit == "rem") {
+    if (unit == "px" || unit == "em" || unit == "rem" || unit == "vw" || unit == "vh" ||
+        unit == "vmin" || unit == "vmax") {
       out.type = CssValue::Type::kLength;
       out.value = number;
       out.unit = unit;
@@ -99,8 +106,9 @@ CssValue ParseCssValue(std::string_view text) {
   return out;
 }
 
-bool IsKeyword(const CssValue& value, std::string_view keyword) {
+bool IsKeyword(const CssValue& value, std::string_view keyword)
+{
   return value.type == CssValue::Type::kKeyword && value.text == keyword;
 }
 
-}  // namespace neko::css
+} // namespace neko::css

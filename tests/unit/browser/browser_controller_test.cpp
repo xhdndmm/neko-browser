@@ -532,6 +532,90 @@ TEST(BrowserControllerTest, LifecycleEventsFireAfterScripts)
   EXPECT_DOUBLE_EQ(bare.value().ToNumber().value(), 0.0);
 }
 
+// The page's scripts can use window.localStorage (scoped to the page origin),
+// persisting across navigations to the same origin.
+TEST(BrowserControllerTest, PageScriptLocalStoragePersists)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<script>"
+                               "localStorage.setItem('key', 'value-1');"
+                               "window._stored = localStorage.getItem('key');"
+                               "</script>"
+                               "</body></html>"});
+  fetch.Add("http://example.com/other",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body><p>other</p>"
+                               "<script>window._read = localStorage.getItem('key');</script>"
+                               "</body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  ASSERT_NE(tab->script_runtime, nullptr);
+  auto stored = tab->script_runtime->Evaluate("window._stored");
+  ASSERT_TRUE(stored.has_value());
+  ASSERT_TRUE(stored.value().ToString().has_value());
+  EXPECT_EQ(stored.value().ToString().value(), "value-1");
+
+  // A later page on the same origin reads the persisted value.
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/other").has_value());
+  Tab* tab2 = controller.ActiveTab();
+  ASSERT_NE(tab2, nullptr);
+  ASSERT_NE(tab2->script_runtime, nullptr);
+  auto read = tab2->script_runtime->Evaluate("window._read");
+  ASSERT_TRUE(read.has_value());
+  ASSERT_TRUE(read.value().ToString().has_value());
+  EXPECT_EQ(read.value().ToString().value(), "value-1");
+}
+
+// window.fetch resolves relative URLs and surfaces the response to the page.
+TEST(BrowserControllerTest, PageScriptFetch)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<script>"
+                               "fetch('/data.json').then(function(r){"
+                               "  window._status = r.status;"
+                               "  return r.json();"
+                               "}).then(function(d){"
+                               "  window._name = d.name;"
+                               "});"
+                               "</script>"
+                               "</body></html>"});
+  fetch.Add(
+      "http://example.com/data.json",
+      FakeFetcher::Route{200, {{"content-type", "application/json"}}, "{\"name\": \"neko\"}"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  ASSERT_NE(tab->script_runtime, nullptr);
+  auto status = tab->script_runtime->Evaluate("window._status");
+  ASSERT_TRUE(status.has_value());
+  ASSERT_TRUE(status.value().ToNumber().has_value());
+  EXPECT_DOUBLE_EQ(status.value().ToNumber().value(), 200.0);
+  auto name = tab->script_runtime->Evaluate("window._name");
+  ASSERT_TRUE(name.has_value());
+  ASSERT_TRUE(name.value().ToString().has_value());
+  EXPECT_EQ(name.value().ToString().value(), "neko");
+}
+
 // A failed external fetch is logged and does not stop the remaining scripts.
 TEST(BrowserControllerTest, FailedExternalScriptDoesNotStopOthers)
 {

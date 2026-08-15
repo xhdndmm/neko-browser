@@ -126,6 +126,37 @@ std::string CollapseWhitespace(std::string_view text)
 
 float ResolveSize(const style::SizeSpec& spec, float containing)
 {
+  if (spec.is_clamp) {
+    // clamp(MIN, VAL, MAX) = max(MIN, min(VAL, MAX)).
+    const auto resolve = [&](const style::CalcTerm& t) {
+      return containing * t.percent / 100.0f + t.offset;
+    };
+    if (spec.extremum_args.size() != 3) {
+      return 0;
+    }
+    const float min_val = resolve(spec.extremum_args[0]);
+    const float val = resolve(spec.extremum_args[1]);
+    const float max_val = resolve(spec.extremum_args[2]);
+    return std::max(min_val, std::min(val, max_val));
+  }
+  if (spec.is_extremum) {
+    float best = 0;
+    for (std::size_t i = 0; i < spec.extremum_args.size(); ++i) {
+      const float v =
+          containing * spec.extremum_args[i].percent / 100.0f + spec.extremum_args[i].offset;
+      if (i == 0) {
+        best = v;
+      } else if (spec.extremum_is_max) {
+        best = std::max(best, v);
+      } else {
+        best = std::min(best, v);
+      }
+    }
+    return best;
+  }
+  if (spec.is_calc) {
+    return containing * spec.calc.percent / 100.0f + spec.calc.offset;
+  }
   if (spec.percent) {
     return containing * spec.value / 100.0f;
   }
@@ -554,7 +585,10 @@ IntrinsicWidths MeasureContent(const dom::Element& element,
                         element.tag_name() == "textarea" || element.tag_name() == "select";
   if (replaced) {
     IntrinsicWidths w;
-    if (style.width.has_value() && !style.width.value().percent) {
+    // Only a definite plain length (not a percentage / calc / extremum) is a
+    // fixed intrinsic size.
+    if (style.width.has_value() && !style.width.value().percent && !style.width.value().is_calc &&
+        !style.width.value().is_extremum) {
       w.min = w.max = style.width.value().value;
     }
     return w;
@@ -792,9 +826,7 @@ ComputeColumnWidths(const std::vector<CellInfo>& cells, int ncols, float table_w
     }
     const std::size_t c = static_cast<std::size_t>(cell.col);
     if (cell.style.width.has_value()) {
-      const float w = cell.style.width.value().percent
-                          ? cell.style.width.value().value / 100.0f * table_width
-                          : cell.style.width.value().value;
+      const float w = ResolveSize(cell.style.width.value(), table_width);
       fixed[c] = std::max(fixed[c], w);
     } else {
       auto_max[c] = std::max(auto_max[c], cell.max_width);
@@ -908,6 +940,9 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
           *box, element, avail_width, 0, 0, avail_width, 0, kNoFloats, absolute_children);
       if (box->style.height.has_value() && !box->style.height.value().percent) {
         content_height = box->style.height.value().value; // specified height wins (10.6.2)
+      } else if (box->style.aspect_ratio.has_value() && box->style.width.has_value()) {
+        // aspect-ratio (CSS Box Sizing 4): definite width, auto height.
+        content_height = content_width / box->style.aspect_ratio.value();
       }
       box->height = content_height + box->border_top + box->border_bottom + box->padding_top +
                     box->padding_bottom;
@@ -971,6 +1006,8 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
                                                 absolute_children);
       if (box->style.height.has_value() && !box->style.height.value().percent) {
         content_height = box->style.height.value().value;
+      } else if (box->style.aspect_ratio.has_value() && box->style.width.has_value()) {
+        content_height = content_width / box->style.aspect_ratio.value();
       }
       box->height = content_height + box->border_top + box->border_bottom + box->padding_top +
                     box->padding_bottom;
@@ -1248,6 +1285,8 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
 
       if (box->style.height.has_value() && !box->style.height.value().percent) {
         content_height = std::max(content_height, box->style.height.value().value);
+      } else if (box->style.aspect_ratio.has_value() && box->style.width.has_value()) {
+        content_height = content_width / box->style.aspect_ratio.value();
       }
       box->height = content_height + box->border_top + box->border_bottom + box->padding_top +
                     box->padding_bottom;
@@ -1846,7 +1885,8 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
           const style::AlignItems eff_align = it->style->align_self.value_or(cs.align_items);
           // The item's effective main margin includes its share of the free
           // space distributed to auto margins.
-          const float eff_margin_main = it->margin_main + auto_main_share * static_cast<float>(it->auto_main_margins);
+          const float eff_margin_main =
+              it->margin_main + auto_main_share * static_cast<float>(it->auto_main_margins);
           // Cross size: stretch items fill the line (auto cross margins
           // override stretch, CSS Flexbox 1 §8.1).
           if (it->auto_cross_margins == 0 && eff_align == style::AlignItems::kStretch &&
@@ -2112,18 +2152,21 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       std::vector<float> col_sizes(static_cast<std::size_t>(grid_cols), 0.0f);
       // Phase 1: fixed tracks.
       for (int c = 0; c < grid_cols; ++c) {
-        const style::GridTrack* t =
-            c < static_cast<int>(explicit_cols) ? &cs.grid_template_columns[static_cast<std::size_t>(c)] : nullptr;
+        const style::GridTrack* t = c < static_cast<int>(explicit_cols)
+                                        ? &cs.grid_template_columns[static_cast<std::size_t>(c)]
+                                        : nullptr;
         if (t != nullptr && t->kind == style::GridTrack::Kind::kFixed) {
-          col_sizes[static_cast<std::size_t>(c)] = t->percent > 0 ? container_width * t->percent / 100.0f : t->length;
+          col_sizes[static_cast<std::size_t>(c)] =
+              t->percent > 0 ? container_width * t->percent / 100.0f : t->length;
         }
       }
       // Phase 2: content tracks (auto/min-content/max-content and implicit
       // tracks) sized to the items starting in each column (a spanning item
       // contributes to its start column only — documented simplification).
       for (int c = 0; c < grid_cols; ++c) {
-        const style::GridTrack* t =
-            c < static_cast<int>(explicit_cols) ? &cs.grid_template_columns[static_cast<std::size_t>(c)] : nullptr;
+        const style::GridTrack* t = c < static_cast<int>(explicit_cols)
+                                        ? &cs.grid_template_columns[static_cast<std::size_t>(c)]
+                                        : nullptr;
         style::GridTrack::Kind kind = t != nullptr ? t->kind : style::GridTrack::Kind::kAuto;
         if (kind == style::GridTrack::Kind::kFixed || kind == style::GridTrack::Kind::kFr) {
           continue;
@@ -2134,7 +2177,8 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
           }
           const IntrinsicWidths w = MeasureContent(*item.element, styles, registry);
           col_sizes[static_cast<std::size_t>(c)] =
-              std::max(col_sizes[static_cast<std::size_t>(c)], kind == style::GridTrack::Kind::kMinContent ? w.min : w.max);
+              std::max(col_sizes[static_cast<std::size_t>(c)],
+                       kind == style::GridTrack::Kind::kMinContent ? w.min : w.max);
         }
       }
       // Phase 3: fr tracks share the leftover space.
@@ -2146,8 +2190,9 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
         used += column_gap * static_cast<float>(std::max(0, grid_cols - 1));
         float total_fr = 0;
         for (int c = 0; c < grid_cols; ++c) {
-          const style::GridTrack* t =
-              c < static_cast<int>(explicit_cols) ? &cs.grid_template_columns[static_cast<std::size_t>(c)] : nullptr;
+          const style::GridTrack* t = c < static_cast<int>(explicit_cols)
+                                          ? &cs.grid_template_columns[static_cast<std::size_t>(c)]
+                                          : nullptr;
           if (t != nullptr && t->kind == style::GridTrack::Kind::kFr) {
             total_fr += t->fr;
           }
@@ -2155,8 +2200,9 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
         if (total_fr > 0) {
           const float leftover = std::max(0.0f, container_width - used);
           for (int c = 0; c < grid_cols; ++c) {
-            const style::GridTrack* t =
-                c < static_cast<int>(explicit_cols) ? &cs.grid_template_columns[static_cast<std::size_t>(c)] : nullptr;
+            const style::GridTrack* t = c < static_cast<int>(explicit_cols)
+                                            ? &cs.grid_template_columns[static_cast<std::size_t>(c)]
+                                            : nullptr;
             if (t != nullptr && t->kind == style::GridTrack::Kind::kFr) {
               col_sizes[static_cast<std::size_t>(c)] = leftover * t->fr / total_fr;
             }
@@ -2186,16 +2232,19 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       // ---- Row track sizing ----
       std::vector<float> row_sizes(static_cast<std::size_t>(grid_rows), 0.0f);
       for (int r = 0; r < grid_rows; ++r) {
-        const style::GridTrack* t =
-            r < static_cast<int>(explicit_rows) ? &cs.grid_template_rows[static_cast<std::size_t>(r)] : nullptr;
+        const style::GridTrack* t = r < static_cast<int>(explicit_rows)
+                                        ? &cs.grid_template_rows[static_cast<std::size_t>(r)]
+                                        : nullptr;
         if (t != nullptr && t->kind == style::GridTrack::Kind::kFixed) {
-          row_sizes[static_cast<std::size_t>(r)] = t->percent > 0 && height_definite ? container_height * t->percent / 100.0f
-                                                           : t->length;
+          row_sizes[static_cast<std::size_t>(r)] = t->percent > 0 && height_definite
+                                                       ? container_height * t->percent / 100.0f
+                                                       : t->length;
         }
       }
       for (int r = 0; r < grid_rows; ++r) {
-        const style::GridTrack* t =
-            r < static_cast<int>(explicit_rows) ? &cs.grid_template_rows[static_cast<std::size_t>(r)] : nullptr;
+        const style::GridTrack* t = r < static_cast<int>(explicit_rows)
+                                        ? &cs.grid_template_rows[static_cast<std::size_t>(r)]
+                                        : nullptr;
         style::GridTrack::Kind kind = t != nullptr ? t->kind : style::GridTrack::Kind::kAuto;
         if (kind == style::GridTrack::Kind::kFixed || kind == style::GridTrack::Kind::kFr) {
           continue;
@@ -2206,7 +2255,8 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
           }
           const float outer =
               item.layout->margin_top + item.layout->height + item.layout->margin_bottom;
-          row_sizes[static_cast<std::size_t>(r)] = std::max(row_sizes[static_cast<std::size_t>(r)], outer);
+          row_sizes[static_cast<std::size_t>(r)] =
+              std::max(row_sizes[static_cast<std::size_t>(r)], outer);
         }
       }
       if (height_definite) {
@@ -2217,8 +2267,9 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
         used += row_gap * static_cast<float>(std::max(0, grid_rows - 1));
         float total_fr = 0;
         for (int r = 0; r < grid_rows; ++r) {
-          const style::GridTrack* t =
-              r < static_cast<int>(explicit_rows) ? &cs.grid_template_rows[static_cast<std::size_t>(r)] : nullptr;
+          const style::GridTrack* t = r < static_cast<int>(explicit_rows)
+                                          ? &cs.grid_template_rows[static_cast<std::size_t>(r)]
+                                          : nullptr;
           if (t != nullptr && t->kind == style::GridTrack::Kind::kFr) {
             total_fr += t->fr;
           }
@@ -2226,8 +2277,9 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
         if (total_fr > 0) {
           const float leftover = std::max(0.0f, container_height - used);
           for (int r = 0; r < grid_rows; ++r) {
-            const style::GridTrack* t =
-                r < static_cast<int>(explicit_rows) ? &cs.grid_template_rows[static_cast<std::size_t>(r)] : nullptr;
+            const style::GridTrack* t = r < static_cast<int>(explicit_rows)
+                                            ? &cs.grid_template_rows[static_cast<std::size_t>(r)]
+                                            : nullptr;
             if (t != nullptr && t->kind == style::GridTrack::Kind::kFr) {
               row_sizes[static_cast<std::size_t>(r)] = leftover * t->fr / total_fr;
             }

@@ -1,25 +1,28 @@
 #include "neko/dom/query.h"
 #include "neko/html/parser.h"
 
+#include <gtest/gtest.h>
 #include <memory>
 #include <string>
-
-#include <gtest/gtest.h>
 
 namespace neko::html {
 namespace {
 
-std::unique_ptr<dom::Document> ParseDoc(std::string_view html) {
+std::unique_ptr<dom::Document> ParseDoc(std::string_view html)
+{
   Parser parser(html);
   return parser.Parse();
 }
 
-dom::Element* Body(dom::Document& doc) { return dom::QuerySelector(doc, "body"); }
+dom::Element* Body(dom::Document& doc)
+{
+  return dom::QuerySelector(doc, "body");
+}
 
-TEST(HtmlTest, FullDocumentStructure) {
-  auto doc = ParseDoc(
-      "<!DOCTYPE html><html><head><title>Hi</title></head>"
-      "<body><p>Hello</p></body></html>");
+TEST(HtmlTest, FullDocumentStructure)
+{
+  auto doc = ParseDoc("<!DOCTYPE html><html><head><title>Hi</title></head>"
+                      "<body><p>Hello</p></body></html>");
   dom::Element* html = doc->document_element();
   ASSERT_NE(html, nullptr);
   EXPECT_EQ(html->tag_name(), "html");
@@ -32,18 +35,20 @@ TEST(HtmlTest, FullDocumentStructure) {
   EXPECT_EQ(p->TextContent(), "Hello");
 }
 
-TEST(HtmlTest, ImpliedHtmlHeadBody) {
+TEST(HtmlTest, ImpliedHtmlHeadBody)
+{
   auto doc = ParseDoc("hello");
   dom::Element* html = doc->document_element();
   ASSERT_NE(html, nullptr);
   EXPECT_EQ(html->tag_name(), "html");
-  EXPECT_EQ(html->child_count(), 2u);  // head + body
+  EXPECT_EQ(html->child_count(), 2u); // head + body
   dom::Element* body = Body(*doc);
   ASSERT_NE(body, nullptr);
   EXPECT_EQ(body->TextContent(), "hello");
 }
 
-TEST(HtmlTest, ImpliedPEndTag) {
+TEST(HtmlTest, ImpliedPEndTag)
+{
   auto doc = ParseDoc("<p>a<p>b");
   const auto ps = dom::QuerySelectorAll(*doc, "p");
   ASSERT_EQ(ps.size(), 2u);
@@ -56,7 +61,8 @@ TEST(HtmlTest, ImpliedPEndTag) {
 // shielded by a <button>.  Here the <p> is still open when <div> starts, but a
 // <button> sits between it and the top of the stack, so per spec the <p> must
 // NOT be closed: <div> becomes a child of the <button> (still inside the <p>).
-TEST(HtmlTest, ButtonScopeShieldsPFromBreakoutDiv) {
+TEST(HtmlTest, ButtonScopeShieldsPFromBreakoutDiv)
+{
   auto doc = ParseDoc("<p>a<button>b<div>c");
   dom::Element* p = dom::QuerySelector(*doc, "p");
   ASSERT_NE(p, nullptr);
@@ -76,7 +82,8 @@ TEST(HtmlTest, ButtonScopeShieldsPFromBreakoutDiv) {
 // <ol>/<ul>/<li> are NOT button-scope boundaries, so an open <p> inside one is
 // still closed by a break-out <div> (the <p> is NOT shielded).  The <div>
 // becomes a sibling of the <p> inside that list item.
-TEST(HtmlTest, ListItemScopeDoesNotShieldP) {
+TEST(HtmlTest, ListItemScopeDoesNotShieldP)
+{
   auto doc = ParseDoc("<li><p>a<div>b");
   const auto ps = dom::QuerySelectorAll(*doc, "p");
   ASSERT_EQ(ps.size(), 1u);
@@ -91,7 +98,8 @@ TEST(HtmlTest, ListItemScopeDoesNotShieldP) {
   EXPECT_EQ(div->TextContent(), "b");
 }
 
-TEST(HtmlTest, VoidElements) {
+TEST(HtmlTest, VoidElements)
+{
   auto doc = ParseDoc("<div>a<br><img src=\"x.png\">b</div>");
   dom::Element* div = dom::QuerySelector(*doc, "div");
   ASSERT_NE(div, nullptr);
@@ -104,7 +112,8 @@ TEST(HtmlTest, VoidElements) {
   EXPECT_EQ(img->GetAttribute("src").value(), "x.png");
 }
 
-TEST(HtmlTest, RawTextScript) {
+TEST(HtmlTest, RawTextScript)
+{
   auto doc = ParseDoc("<script>var a = \"</p>\"; if (a < b) {}</script><p>after</p>");
   dom::Element* script = dom::QuerySelector(*doc, "script");
   ASSERT_NE(script, nullptr);
@@ -117,21 +126,24 @@ TEST(HtmlTest, RawTextScript) {
   EXPECT_EQ(p->TextContent(), "after");
 }
 
-TEST(HtmlTest, RawTextStyle) {
+TEST(HtmlTest, RawTextStyle)
+{
   auto doc = ParseDoc("<style>p { color: red; }</style><p>x</p>");
   dom::Element* style = dom::QuerySelector(*doc, "style");
   ASSERT_NE(style, nullptr);
   EXPECT_EQ(style->TextContent(), "p { color: red; }");
 }
 
-TEST(HtmlTest, CharacterReferences) {
+TEST(HtmlTest, CharacterReferences)
+{
   auto doc = ParseDoc("<p>&amp; &lt; &gt; &copy; &#65; &#x42; &nbsp;x</p>");
   dom::Element* p = dom::QuerySelector(*doc, "p");
   ASSERT_NE(p, nullptr);
   EXPECT_EQ(p->TextContent(), "& < > \xC2\xA9 A B \xC2\xA0x");
 }
 
-TEST(HtmlTest, NamedReferenceDoesNotSwallowFollowingText) {
+TEST(HtmlTest, NamedReferenceDoesNotSwallowFollowingText)
+{
   // A named reference that is a prefix of a longer alnum run must be emitted
   // literally, keeping the trailing characters (WHATWG named character
   // reference state).
@@ -139,12 +151,34 @@ TEST(HtmlTest, NamedReferenceDoesNotSwallowFollowingText) {
   dom::Element* p = dom::QuerySelector(*doc, "p");
   ASSERT_NE(p, nullptr);
   // &ampfoo; -> literal "&ampfoo;"; &ltx -> literal "&ltx";
-  // &notin; -> literal "&notin;" (notin is not in the table);
-  // &apos; -> single quote.
-  EXPECT_EQ(p->TextContent(), "&ampfoo; &ltx &notin; '");
+  // &notin; -> U+2209 (∉); &apos; -> single quote.
+  EXPECT_EQ(p->TextContent(), "&ampfoo; &ltx \xE2\x88\x89 '");
 }
 
-TEST(HtmlTest, RcdataRawtextEndTagClosesWithWhitespace) {
+TEST(HtmlTest, FullEntityTableLookups)
+{
+  // Entities beyond the old common subset resolve against the full WHATWG
+  // table: &rArr; (U+21D2), &Implies; (U+21D2), &hellip; (U+2026),
+  // &NotEqualTilde; is a two-codepoint sequence (U+2242 U+0338).
+  auto doc = ParseDoc("<p>&rArr; &Implies; &hellip; &NotEqualTilde;</p>");
+  dom::Element* p = dom::QuerySelector(*doc, "p");
+  ASSERT_NE(p, nullptr);
+  EXPECT_EQ(p->TextContent(), "\xE2\x87\x92 \xE2\x87\x92 \xE2\x80\xA6 \xE2\x89\x82\xCC\xB8");
+}
+
+TEST(HtmlTest, LegacyNoSemicolonEntities)
+{
+  // Legacy names resolve without a trailing semicolon when not followed by an
+  // alnum; &AElig, &copy and &amp keep the following text.
+  auto doc = ParseDoc("<p>&copy x &copyx &AElig &amp;x</p>");
+  dom::Element* p = dom::QuerySelector(*doc, "p");
+  ASSERT_NE(p, nullptr);
+  // &copy x -> ©x; &copyx -> literal (alnum follows); &AElig -> Æ; &amp;x -> &x.
+  EXPECT_EQ(p->TextContent(), "\xC2\xA9 x &copyx \xC3\x86 &x");
+}
+
+TEST(HtmlTest, RcdataRawtextEndTagClosesWithWhitespace)
+{
   // A RCDATA/RAWTEXT end tag may be followed by whitespace or a slash before
   // '>' (attributes / self-closing); the element must still close instead of
   // swallowing the rest of the document as text.
@@ -165,14 +199,15 @@ TEST(HtmlTest, RcdataRawtextEndTagClosesWithWhitespace) {
   EXPECT_EQ(p2->TextContent(), "x");
 }
 
-TEST(HtmlTest, BeforeHeadEndTagDoesNotPopHtmlRoot) {
+TEST(HtmlTest, BeforeHeadEndTagDoesNotPopHtmlRoot)
+{
   // In the "before head" insertion mode an end tag is a parse error and must
   // be ignored; popping the html root here would make body a sibling of html.
   auto doc = ParseDoc("<html></head><body>x</body></html>");
   dom::Element* html = doc->document_element();
   ASSERT_NE(html, nullptr);
   EXPECT_EQ(html->tag_name(), "html");
-  EXPECT_EQ(html->child_count(), 2u);  // head + body
+  EXPECT_EQ(html->child_count(), 2u); // head + body
   dom::Element* head = dom::QuerySelector(*doc, "head");
   ASSERT_NE(head, nullptr);
   EXPECT_EQ(head->parent(), html);
@@ -182,7 +217,8 @@ TEST(HtmlTest, BeforeHeadEndTagDoesNotPopHtmlRoot) {
   EXPECT_EQ(body->TextContent(), "x");
 }
 
-TEST(HtmlTest, SelfClosingSlashDoesNotCreateEmptyAttribute) {
+TEST(HtmlTest, SelfClosingSlashDoesNotCreateEmptyAttribute)
+{
   // `<div />` must not produce an empty-named attribute (the '/' routes to
   // the after-attribute-name state, not a new attribute).
   auto doc = ParseDoc("<div />x");
@@ -199,10 +235,11 @@ TEST(HtmlTest, SelfClosingSlashDoesNotCreateEmptyAttribute) {
   EXPECT_EQ(div2->attributes()[0].value, "b");
 }
 
-TEST(HtmlTest, Comments) {
+TEST(HtmlTest, Comments)
+{
   auto doc = ParseDoc("<!-- hello --><p>x</p><!-- done -->");
   // A comment before <html> is attached to the Document.
-  EXPECT_EQ(doc->child_count(), 2u);  // comment + html
+  EXPECT_EQ(doc->child_count(), 2u); // comment + html
   EXPECT_EQ(doc->first_child()->node_type(), dom::NodeType::kComment);
   EXPECT_EQ(static_cast<dom::Comment*>(doc->first_child())->data(), " hello ");
   // A trailing comment inside <body> is attached to the body.
@@ -211,7 +248,8 @@ TEST(HtmlTest, Comments) {
   EXPECT_EQ(body->last_child()->node_type(), dom::NodeType::kComment);
 }
 
-TEST(HtmlTest, AttributesQuotingStyles) {
+TEST(HtmlTest, AttributesQuotingStyles)
+{
   auto doc = ParseDoc("<div id=\"double\" class='single' data-z=unquoted></div>");
   dom::Element* div = dom::QuerySelector(*doc, "div");
   ASSERT_NE(div, nullptr);
@@ -220,7 +258,8 @@ TEST(HtmlTest, AttributesQuotingStyles) {
   EXPECT_EQ(div->GetAttribute("data-z").value(), "unquoted");
 }
 
-TEST(HtmlTest, UnorderedListItems) {
+TEST(HtmlTest, UnorderedListItems)
+{
   auto doc = ParseDoc("<ul><li>one<li>two</ul>");
   const auto items = dom::QuerySelectorAll(*doc, "li");
   ASSERT_EQ(items.size(), 2u);
@@ -228,7 +267,8 @@ TEST(HtmlTest, UnorderedListItems) {
   EXPECT_EQ(items[1]->TextContent(), "two");
 }
 
-TEST(HtmlTest, HeadingsCloseEachOther) {
+TEST(HtmlTest, HeadingsCloseEachOther)
+{
   auto doc = ParseDoc("<h1>a<h2>b<h3>c");
   const auto h1 = dom::QuerySelectorAll(*doc, "h1");
   const auto h2 = dom::QuerySelectorAll(*doc, "h2");
@@ -238,7 +278,8 @@ TEST(HtmlTest, HeadingsCloseEachOther) {
   EXPECT_EQ(h3.size(), 1u);
 }
 
-TEST(HtmlTest, MalformedInput) {
+TEST(HtmlTest, MalformedInput)
+{
   auto doc = ParseDoc("<div><span>unclosed<div>other</div></span>");
   dom::Element* div = dom::QuerySelector(*doc, "div");
   ASSERT_NE(div, nullptr);
@@ -246,14 +287,16 @@ TEST(HtmlTest, MalformedInput) {
   EXPECT_NE(dom::QuerySelector(*doc, "div div"), nullptr);
 }
 
-TEST(HtmlTest, StrayEndTagIgnored) {
+TEST(HtmlTest, StrayEndTagIgnored)
+{
   auto doc = ParseDoc("</div><p>ok</p>");
   dom::Element* p = dom::QuerySelector(*doc, "p");
   ASSERT_NE(p, nullptr);
   EXPECT_EQ(p->TextContent(), "ok");
 }
 
-TEST(HtmlTest, NestedInlineElements) {
+TEST(HtmlTest, NestedInlineElements)
+{
   auto doc = ParseDoc("<p>a <em>b <strong>c</strong> d</em> e</p>");
   dom::Element* em = dom::QuerySelector(*doc, "em");
   ASSERT_NE(em, nullptr);
@@ -263,36 +306,39 @@ TEST(HtmlTest, NestedInlineElements) {
   EXPECT_EQ(dom::QuerySelector(*doc, "p")->TextContent(), "a b c d e");
 }
 
-TEST(HtmlTest, EmptyDocument) {
+TEST(HtmlTest, EmptyDocument)
+{
   auto doc = ParseDoc("");
   EXPECT_NE(doc->document_element(), nullptr);
   EXPECT_EQ(doc->document_element()->tag_name(), "html");
 }
 
-TEST(HtmlTest, WhitespacePreserved) {
+TEST(HtmlTest, WhitespacePreserved)
+{
   auto doc = ParseDoc("<p>  spaced  </p>");
   dom::Element* p = dom::QuerySelector(*doc, "p");
   ASSERT_NE(p, nullptr);
   EXPECT_EQ(p->TextContent(), "  spaced  ");
 }
 
-TEST(HtmlTest, AdoptionAgencyReconstructsFormatting) {
+TEST(HtmlTest, AdoptionAgencyReconstructsFormatting)
+{
   auto doc = ParseDoc("<b>1<i>2</b>3</i>");
-  EXPECT_EQ(doc->ToString(),
-            "<html><head></head><body><b>1<i>2</i></b><i>3</i></body></html>");
+  EXPECT_EQ(doc->ToString(), "<html><head></head><body><b>1<i>2</i></b><i>3</i></body></html>");
 }
 
-TEST(HtmlTest, AdoptionAgencyCanonical) {
+TEST(HtmlTest, AdoptionAgencyCanonical)
+{
   auto doc = ParseDoc("<p>1<b>2<i>3</b>4</i>5</p>");
   EXPECT_EQ(doc->ToString(),
             "<html><head></head><body><p>1<b>2<i>3</i></b><i>4</i>5</p></body></html>");
 }
 
-TEST(HtmlTest, AdoptionAgencyWithFurthestBlock) {
+TEST(HtmlTest, AdoptionAgencyWithFurthestBlock)
+{
   // WHATWG 13.2.10.2: a special element (p) inside the formatting element.
   auto doc = ParseDoc("<b>1<p>2</b>3</p>");
-  EXPECT_EQ(doc->ToString(),
-            "<html><head></head><body><b>1</b><p><b>2</b>3</p></body></html>");
+  EXPECT_EQ(doc->ToString(), "<html><head></head><body><b>1</b><p><b>2</b>3</p></body></html>");
 }
 
 // Regression: the adoption agency inner loop used to re-index the current node
@@ -300,33 +346,39 @@ TEST(HtmlTest, AdoptionAgencyWithFurthestBlock) {
 // stack_[-2] (overflow) -- for inputs with a non-formatting element (e.g.
 // <span>) between the formatting element and the furthest block this looped
 // forever.  These all parsed to a well-formed tree instead of hanging.
-TEST(HtmlTest, AdoptionAgencySpanBetweenFormattingAndBlock) {
+TEST(HtmlTest, AdoptionAgencySpanBetweenFormattingAndBlock)
+{
   auto doc = ParseDoc("<b><span>x<div>y</b>");
   EXPECT_EQ(doc->ToString(),
             "<html><head></head><body><b><span>x</span></b><div><b>y</b></div></body></html>");
 }
 
-TEST(HtmlTest, AdoptionAgencyEmSpanDiv) {
+TEST(HtmlTest, AdoptionAgencyEmSpanDiv)
+{
   auto doc = ParseDoc("<em><span>a<div>b</em>");
   EXPECT_EQ(doc->ToString(),
             "<html><head></head><body><em><span>a</span></em><div><em>b</em></div></body></html>");
 }
 
-TEST(HtmlTest, AdoptionAgencyBoldDivParagraph) {
+TEST(HtmlTest, AdoptionAgencyBoldDivParagraph)
+{
   auto doc = ParseDoc("<b><div><p>x</b>");
   EXPECT_EQ(doc->ToString(),
             "<html><head></head><body><b></b><div><b><p>x</p></b></div></body></html>");
 }
 
-TEST(HtmlTest, NoahsArkBoundsFormattingElements) {
+TEST(HtmlTest, NoahsArkBoundsFormattingElements)
+{
   // Four nested <b> elements (same tag + attributes) trigger the Noah's Ark
   // clause; the DOM must still nest correctly.
   auto doc = ParseDoc("<b class=\"x\"><b><b class=\"x\"><b>y</b></b></b></b>");
   EXPECT_EQ(doc->ToString(),
-            "<html><head></head><body><b class=\"x\"><b><b class=\"x\"><b>y</b></b></b></b></body></html>");
+            "<html><head></head><body><b class=\"x\"><b><b "
+            "class=\"x\"><b>y</b></b></b></b></body></html>");
 }
 
-TEST(HtmlTest, ScriptDataEscapedComment) {
+TEST(HtmlTest, ScriptDataEscapedComment)
+{
   auto doc = ParseDoc("<script>a<!--b-->c</script><p>x</p>");
   dom::Element* script = dom::QuerySelector(*doc, "script");
   ASSERT_NE(script, nullptr);
@@ -336,7 +388,8 @@ TEST(HtmlTest, ScriptDataEscapedComment) {
   EXPECT_EQ(p->TextContent(), "x");
 }
 
-TEST(HtmlTest, ScriptDataDoubleEscape) {
+TEST(HtmlTest, ScriptDataDoubleEscape)
+{
   // A nested <script> inside an HTML-comment-like <!-- --> region must not
   // close the outer script; it enters the double-escaped state instead.
   auto doc = ParseDoc("<script><!--<script></script>--></script><p>x</p>");
@@ -349,7 +402,8 @@ TEST(HtmlTest, ScriptDataDoubleEscape) {
 }
 
 // Returns the nesting depth of the deepest element under |node|.
-int MaxDepth(const dom::Node* node) {
+int MaxDepth(const dom::Node* node)
+{
   int deepest = 1;
   for (dom::Node* child : node->ChildNodes()) {
     if (child->node_type() == dom::NodeType::kElement) {
@@ -359,28 +413,34 @@ int MaxDepth(const dom::Node* node) {
   return deepest;
 }
 
-TEST(HtmlTest, ShallowNestingIsPreserved) {
+TEST(HtmlTest, ShallowNestingIsPreserved)
+{
   // Normal pages well under the depth cap must be kept intact.  The count
   // includes the implied html/body skeleton, so it exceeds 100.
   std::string html;
-  for (int i = 0; i < 100; ++i) html += "<div>";
-  for (int i = 0; i < 100; ++i) html += "</div>";
+  for (int i = 0; i < 100; ++i)
+    html += "<div>";
+  for (int i = 0; i < 100; ++i)
+    html += "</div>";
   auto doc = ParseDoc(html);
   EXPECT_GE(MaxDepth(doc.get()), 100);
 }
 
-TEST(HtmlTest, OverDeepNestingIsCapped) {
+TEST(HtmlTest, OverDeepNestingIsCapped)
+{
   // Pathological nesting must not produce a DOM deep enough to overflow the
   // stack in the recursive style/layout walks; the parser drops the
   // over-deep subtree.
   std::string html;
-  for (int i = 0; i < 10000; ++i) html += "<div>";
-  for (int i = 0; i < 10000; ++i) html += "</div>";
+  for (int i = 0; i < 10000; ++i)
+    html += "<div>";
+  for (int i = 0; i < 10000; ++i)
+    html += "</div>";
   auto doc = ParseDoc(html);
   // The depth cap is internal; assert the result stays far below the input
   // nesting so the recursive downstream walks cannot overflow.
   EXPECT_LT(MaxDepth(doc.get()), 1000);
 }
 
-}  // namespace
-}  // namespace neko::html
+} // namespace
+} // namespace neko::html
