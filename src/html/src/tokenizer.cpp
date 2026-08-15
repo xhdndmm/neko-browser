@@ -69,7 +69,28 @@ int HexDigitValue(char c)
 
 } // namespace
 
-Tokenizer::Tokenizer(std::string_view input) : input_(input) {}
+Tokenizer::Tokenizer(std::string_view input)
+{
+  // Preprocess the input stream by normalizing newlines (WHATWG 13.2.3.5):
+  // CRLF and CR become LF so that U+000D never reaches the tokenization stage.
+  if (input.find('\r') == std::string_view::npos) {
+    input_ = input;
+  } else {
+    owned_input_.reserve(input.size());
+    for (std::size_t i = 0; i < input.size(); ++i) {
+      const char c = input[i];
+      if (c == '\r') {
+        owned_input_.push_back('\n');
+        if (i + 1 < input.size() && input[i + 1] == '\n') {
+          ++i; // CRLF -> LF
+        }
+      } else {
+        owned_input_.push_back(c);
+      }
+    }
+    input_ = owned_input_;
+  }
+}
 
 void Tokenizer::StartRawText(std::string_view tag_name)
 {
@@ -81,6 +102,11 @@ void Tokenizer::StartRawText(std::string_view tag_name)
   } else {
     state_ = State::kRawtext;
   }
+}
+
+void Tokenizer::StartPlaintext()
+{
+  state_ = State::kPlaintext;
 }
 
 std::string_view Tokenizer::Peek(std::size_t offset) const
@@ -135,7 +161,19 @@ void Tokenizer::FlushCharacterRun()
   char_run_.clear();
 }
 
-std::string Tokenizer::ConsumeCharacterReference()
+void Tokenizer::EmitDoctype()
+{
+  Token token = Token::MakeDoctype(doctype_name_, doctype_force_quirks_);
+  if (doctype_public_set_) {
+    token.public_id = doctype_public_id_;
+  }
+  if (doctype_system_set_) {
+    token.system_id = doctype_system_id_;
+  }
+  Emit(std::move(token));
+}
+
+std::string Tokenizer::ConsumeCharacterReference(bool in_attribute)
 {
   // pos_ points just past '&'.
   const std::string_view rest = Peek(0);
@@ -183,9 +221,10 @@ std::string Tokenizer::ConsumeCharacterReference()
 
   // Named reference: scan [a-zA-Z0-9]* and take the longest table match.
   // The reference is only consumed if the character after the matched name
-  // is ';' (or a legacy no-semicolon name not followed by a name char); if
-  // the name is a prefix of a longer alnum run (e.g. "amp" in "&ampfoo;")
-  // the whole sequence is emitted literally.
+  // is ';' (or a legacy no-semicolon name not followed by a name char or, in
+  // an attribute, not followed by '='); if the name is a prefix of a longer
+  // alnum run (e.g. "amp" in "&ampfoo;") the whole sequence is emitted
+  // literally (WHATWG 13.2.5.78).
   const std::size_t start = pos_;
   while (pos_ < input_.size() && IsAsciiAlnum(input_[pos_])) {
     ++pos_;
@@ -200,6 +239,7 @@ std::string Tokenizer::ConsumeCharacterReference()
     const std::size_t after = start + len;
     const bool followed_by_semicolon = after < input_.size() && input_[after] == ';';
     const bool followed_by_alnum = after < input_.size() && IsAsciiAlnum(input_[after]);
+    const bool followed_by_equals = after < input_.size() && input_[after] == '=';
     auto encode = [&]() {
       std::string out;
       for (int i = 0; i < entry->count; ++i) {
@@ -211,7 +251,10 @@ std::string Tokenizer::ConsumeCharacterReference()
       pos_ = after + 1;
       return encode();
     }
-    if (IsLegacyNoSemicolon(candidate) && !followed_by_alnum) {
+    // In an attribute, a legacy name directly followed by '=' or an ASCII
+    // alnum is not a reference (13.2.5.78 "for historical reasons").
+    if (IsLegacyNoSemicolon(candidate) && !followed_by_alnum &&
+        !(in_attribute && followed_by_equals)) {
       pos_ = after;
       return encode();
     }
@@ -251,6 +294,17 @@ void Tokenizer::ProcessEof()
   case State::kScriptDataDoubleEscapedDashDash:
   case State::kScriptDataDoubleEscapedLessThanSign:
   case State::kScriptDataDoubleEscapeEnd:
+  case State::kPlaintext:
+    break;
+  case State::kTagOpen:
+    // eof-before-tag-name: emit the literal '<' and then EOF.
+    char_run_.push_back('<');
+    FlushCharacterRun();
+    break;
+  case State::kEndTagOpen:
+    // eof-before-tag-name: emit the literal '</' and then EOF.
+    char_run_.append("</");
+    FlushCharacterRun();
     break;
   case State::kTagName:
   case State::kBeforeAttributeName:
@@ -262,12 +316,7 @@ void Tokenizer::ProcessEof()
   case State::kAttributeValueUnquoted:
   case State::kAfterAttributeValueQuoted:
   case State::kSelfClosingStartTag:
-    // Emit whatever tag we have (start or end) then move on.
-    if (!tag_name_.empty() || state_ == State::kTagName) {
-      // Start-tag unless we are in an end-tag context; for milestone we
-      // always emit a start tag here.
-      Emit(Token::MakeStartTag(std::move(tag_name_), std::move(attributes_), self_closing_));
-    }
+    // eof-in-tag: the tag is ignored entirely (13.2.5.6-8, 13.2.5.32-40).
     break;
   case State::kCommentStart:
   case State::kCommentStartDash:
@@ -281,7 +330,20 @@ void Tokenizer::ProcessEof()
   case State::kBeforeDoctypeName:
   case State::kDoctypeName:
   case State::kAfterDoctypeName:
-    Emit(Token::MakeDoctype(std::move(doctype_name_), doctype_name_ != "html"));
+  case State::kAfterDoctypePublicKeyword:
+  case State::kBeforeDoctypePublicIdentifier:
+  case State::kDoctypePublicIdentifierDoubleQuoted:
+  case State::kDoctypePublicIdentifierSingleQuoted:
+  case State::kAfterDoctypePublicIdentifier:
+  case State::kBetweenDoctypePublicAndSystemIdentifiers:
+  case State::kAfterDoctypeSystemKeyword:
+  case State::kBeforeDoctypeSystemIdentifier:
+  case State::kDoctypeSystemIdentifierDoubleQuoted:
+  case State::kDoctypeSystemIdentifierSingleQuoted:
+  case State::kAfterDoctypeSystemIdentifier:
+  case State::kBogusDoctype:
+    doctype_force_quirks_ = true; // eof-in-doctype
+    EmitDoctype();
     break;
   default:
     break;
@@ -326,7 +388,7 @@ void Tokenizer::ProcessChar(char c)
       FlushCharacterRun();
       state_ = State::kTagOpen;
     } else if (c == '&') {
-      char_run_ += ConsumeCharacterReference();
+      char_run_ += ConsumeCharacterReference(/*in_attribute=*/false);
     } else {
       char_run_.push_back(c);
     }
@@ -475,7 +537,7 @@ void Tokenizer::ProcessChar(char c)
       attribute_name_.clear();
       state_ = State::kAfterAttributeValueQuoted;
     } else if (c == '&') {
-      attribute_value_ += ConsumeCharacterReference();
+      attribute_value_ += ConsumeCharacterReference(/*in_attribute=*/true);
     } else {
       attribute_value_.push_back(c);
     }
@@ -487,7 +549,7 @@ void Tokenizer::ProcessChar(char c)
       attribute_name_.clear();
       state_ = State::kAfterAttributeValueQuoted;
     } else if (c == '&') {
-      attribute_value_ += ConsumeCharacterReference();
+      attribute_value_ += ConsumeCharacterReference(/*in_attribute=*/true);
     } else {
       attribute_value_.push_back(c);
     }
@@ -509,6 +571,8 @@ void Tokenizer::ProcessChar(char c)
       self_closing_ = false;
       is_end_tag_ = false;
       state_ = State::kData;
+    } else if (c == '&') {
+      attribute_value_ += ConsumeCharacterReference(/*in_attribute=*/true);
     } else {
       attribute_value_.push_back(c);
     }
@@ -657,10 +721,16 @@ void Tokenizer::ProcessChar(char c)
     if (IsAsciiWhitespace(c)) {
       // stay
     } else if (c == '>') {
-      Emit(Token::MakeDoctype(std::string(), /*force_quirks=*/true));
+      doctype_force_quirks_ = true; // missing-doctype-name
+      EmitDoctype();
       state_ = State::kData;
     } else {
       doctype_name_.clear();
+      doctype_public_id_.clear();
+      doctype_system_id_.clear();
+      doctype_public_set_ = false;
+      doctype_system_set_ = false;
+      doctype_force_quirks_ = false;
       doctype_name_.push_back((c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c);
       state_ = State::kDoctypeName;
     }
@@ -670,7 +740,7 @@ void Tokenizer::ProcessChar(char c)
     if (IsAsciiWhitespace(c)) {
       state_ = State::kAfterDoctypeName;
     } else if (c == '>') {
-      Emit(Token::MakeDoctype(std::move(doctype_name_), doctype_name_ != "html"));
+      EmitDoctype();
       doctype_name_.clear();
       state_ = State::kData;
     } else {
@@ -682,12 +752,230 @@ void Tokenizer::ProcessChar(char c)
     if (IsAsciiWhitespace(c)) {
       // stay
     } else if (c == '>') {
-      Emit(Token::MakeDoctype(std::move(doctype_name_), doctype_name_ != "html"));
+      EmitDoctype();
+      doctype_name_.clear();
+      state_ = State::kData;
+    } else if ((c == 'p' || c == 'P') && MatchIgnoreCase("UBLIC")) {
+      Skip(5);
+      state_ = State::kAfterDoctypePublicKeyword;
+    } else if ((c == 's' || c == 'S') && MatchIgnoreCase("YSTEM")) {
+      Skip(5);
+      state_ = State::kAfterDoctypeSystemKeyword;
+    } else {
+      // invalid-character-sequence-after-doctype-name
+      doctype_force_quirks_ = true;
+      ReconsumeIn(State::kBogusDoctype);
+    }
+    break;
+
+  case State::kAfterDoctypePublicKeyword:
+    if (IsAsciiWhitespace(c)) {
+      state_ = State::kBeforeDoctypePublicIdentifier;
+    } else if (c == '"') {
+      doctype_public_set_ = true;
+      doctype_public_id_.clear();
+      state_ = State::kDoctypePublicIdentifierDoubleQuoted;
+    } else if (c == '\'') {
+      doctype_public_set_ = true;
+      doctype_public_id_.clear();
+      state_ = State::kDoctypePublicIdentifierSingleQuoted;
+    } else if (c == '>') {
+      doctype_force_quirks_ = true; // missing-doctype-public-identifier
+      EmitDoctype();
+      state_ = State::kData;
+    } else {
+      doctype_force_quirks_ = true;
+      ReconsumeIn(State::kBogusDoctype);
+    }
+    break;
+
+  case State::kBeforeDoctypePublicIdentifier:
+    if (IsAsciiWhitespace(c)) {
+      // stay
+    } else if (c == '"') {
+      doctype_public_set_ = true;
+      doctype_public_id_.clear();
+      state_ = State::kDoctypePublicIdentifierDoubleQuoted;
+    } else if (c == '\'') {
+      doctype_public_set_ = true;
+      doctype_public_id_.clear();
+      state_ = State::kDoctypePublicIdentifierSingleQuoted;
+    } else if (c == '>') {
+      doctype_force_quirks_ = true; // missing-doctype-public-identifier
+      EmitDoctype();
+      state_ = State::kData;
+    } else {
+      doctype_force_quirks_ = true;
+      ReconsumeIn(State::kBogusDoctype);
+    }
+    break;
+
+  case State::kDoctypePublicIdentifierDoubleQuoted:
+    if (c == '"') {
+      state_ = State::kAfterDoctypePublicIdentifier;
+    } else if (c == '\0') {
+      doctype_public_id_ += "\xEF\xBF\xBD";
+    } else if (c == '>') {
+      doctype_force_quirks_ = true; // abrupt-doctype-public-identifier
+      EmitDoctype();
+      state_ = State::kData;
+    } else {
+      doctype_public_id_.push_back(c);
+    }
+    break;
+
+  case State::kDoctypePublicIdentifierSingleQuoted:
+    if (c == '\'') {
+      state_ = State::kAfterDoctypePublicIdentifier;
+    } else if (c == '\0') {
+      doctype_public_id_ += "\xEF\xBF\xBD";
+    } else if (c == '>') {
+      doctype_force_quirks_ = true; // abrupt-doctype-public-identifier
+      EmitDoctype();
+      state_ = State::kData;
+    } else {
+      doctype_public_id_.push_back(c);
+    }
+    break;
+
+  case State::kAfterDoctypePublicIdentifier:
+    if (IsAsciiWhitespace(c)) {
+      state_ = State::kBetweenDoctypePublicAndSystemIdentifiers;
+    } else if (c == '>') {
+      EmitDoctype();
+      doctype_name_.clear();
+      state_ = State::kData;
+    } else if (c == '"') {
+      doctype_system_set_ = true;
+      doctype_system_id_.clear();
+      state_ = State::kDoctypeSystemIdentifierDoubleQuoted;
+    } else if (c == '\'') {
+      doctype_system_set_ = true;
+      doctype_system_id_.clear();
+      state_ = State::kDoctypeSystemIdentifierSingleQuoted;
+    } else {
+      doctype_force_quirks_ = true;
+      ReconsumeIn(State::kBogusDoctype);
+    }
+    break;
+
+  case State::kBetweenDoctypePublicAndSystemIdentifiers:
+    if (IsAsciiWhitespace(c)) {
+      // stay
+    } else if (c == '>') {
+      EmitDoctype();
+      doctype_name_.clear();
+      state_ = State::kData;
+    } else if (c == '"') {
+      doctype_system_set_ = true;
+      doctype_system_id_.clear();
+      state_ = State::kDoctypeSystemIdentifierDoubleQuoted;
+    } else if (c == '\'') {
+      doctype_system_set_ = true;
+      doctype_system_id_.clear();
+      state_ = State::kDoctypeSystemIdentifierSingleQuoted;
+    } else {
+      doctype_force_quirks_ = true;
+      ReconsumeIn(State::kBogusDoctype);
+    }
+    break;
+
+  case State::kAfterDoctypeSystemKeyword:
+    if (IsAsciiWhitespace(c)) {
+      state_ = State::kBeforeDoctypeSystemIdentifier;
+    } else if (c == '"') {
+      doctype_system_set_ = true;
+      doctype_system_id_.clear();
+      state_ = State::kDoctypeSystemIdentifierDoubleQuoted;
+    } else if (c == '\'') {
+      doctype_system_set_ = true;
+      doctype_system_id_.clear();
+      state_ = State::kDoctypeSystemIdentifierSingleQuoted;
+    } else if (c == '>') {
+      doctype_force_quirks_ = true; // missing-doctype-system-identifier
+      EmitDoctype();
+      state_ = State::kData;
+    } else {
+      doctype_force_quirks_ = true;
+      ReconsumeIn(State::kBogusDoctype);
+    }
+    break;
+
+  case State::kBeforeDoctypeSystemIdentifier:
+    if (IsAsciiWhitespace(c)) {
+      // stay
+    } else if (c == '"') {
+      doctype_system_set_ = true;
+      doctype_system_id_.clear();
+      state_ = State::kDoctypeSystemIdentifierDoubleQuoted;
+    } else if (c == '\'') {
+      doctype_system_set_ = true;
+      doctype_system_id_.clear();
+      state_ = State::kDoctypeSystemIdentifierSingleQuoted;
+    } else if (c == '>') {
+      doctype_force_quirks_ = true; // missing-doctype-system-identifier
+      EmitDoctype();
+      state_ = State::kData;
+    } else {
+      doctype_force_quirks_ = true;
+      ReconsumeIn(State::kBogusDoctype);
+    }
+    break;
+
+  case State::kDoctypeSystemIdentifierDoubleQuoted:
+    if (c == '"') {
+      state_ = State::kAfterDoctypeSystemIdentifier;
+    } else if (c == '\0') {
+      doctype_system_id_ += "\xEF\xBF\xBD";
+    } else if (c == '>') {
+      doctype_force_quirks_ = true; // abrupt-doctype-system-identifier
+      EmitDoctype();
+      state_ = State::kData;
+    } else {
+      doctype_system_id_.push_back(c);
+    }
+    break;
+
+  case State::kDoctypeSystemIdentifierSingleQuoted:
+    if (c == '\'') {
+      state_ = State::kAfterDoctypeSystemIdentifier;
+    } else if (c == '\0') {
+      doctype_system_id_ += "\xEF\xBF\xBD";
+    } else if (c == '>') {
+      doctype_force_quirks_ = true; // abrupt-doctype-system-identifier
+      EmitDoctype();
+      state_ = State::kData;
+    } else {
+      doctype_system_id_.push_back(c);
+    }
+    break;
+
+  case State::kAfterDoctypeSystemIdentifier:
+    if (IsAsciiWhitespace(c)) {
+      // stay
+    } else if (c == '>') {
+      EmitDoctype();
       doctype_name_.clear();
       state_ = State::kData;
     } else {
-      // Public/system identifiers are not parsed yet; skip to '>'.
-      state_ = State::kAfterDoctypeName;
+      ReconsumeIn(State::kBogusDoctype);
+    }
+    break;
+
+  case State::kBogusDoctype:
+    if (c == '>') {
+      EmitDoctype();
+      doctype_name_.clear();
+      state_ = State::kData;
+    }
+    // Anything else (including NUL) is ignored.
+    break;
+
+  case State::kPlaintext:
+    if (c == '\0') {
+      char_run_ += "\xEF\xBF\xBD";
+    } else {
+      char_run_.push_back(c);
     }
     break;
 
@@ -977,7 +1265,7 @@ void Tokenizer::ProcessChar(char c)
       FlushCharacterRun();
       state_ = State::kRcdataLessThanSign;
     } else if (c == '&') {
-      char_run_ += ConsumeCharacterReference();
+      char_run_ += ConsumeCharacterReference(/*in_attribute=*/false);
     } else {
       char_run_.push_back(c);
     }
