@@ -10,9 +10,7 @@
 
 namespace neko::style {
 
-// Display values.  flex/inline-flex are laid out by the flex layout
-// algorithm; grid by the grid layout algorithm.  Table display values are
-// laid out by the table layout algorithm.
+// display: table etc. laid out by the table layout algorithm.
 enum class Display
 {
   kBlock,
@@ -27,6 +25,24 @@ enum class Display
   kTableRow,      // tr
   kTableCell,     // td/th
   kTableCaption,  // caption
+  kListItem,      // li (CSS2.2 9.2.1.3): block container with a marker box
+};
+
+// list-style-type (CSS Lists 3 §4.1): the marker glyph/numbering for a
+// display:list-item element.  disc/circle/square are the bullet types for
+// <ul>; decimal/lower-alpha/upper-alpha/lower-roman/upper-roman number <ol>
+// items.  kNone suppresses the marker.
+enum class ListStyleType
+{
+  kNone,
+  kDisc,
+  kCircle,
+  kSquare,
+  kDecimal,
+  kLowerAlpha,
+  kUpperAlpha,
+  kLowerRoman,
+  kUpperRoman,
 };
 
 // position.  Layout currently honors static and relative; absolute/fixed are
@@ -310,6 +326,10 @@ struct ComputedStyle
   TextAlign text_align = TextAlign::kLeft;
   std::optional<css::Color> color;
   bool text_decoration_underline = false;
+
+  // List marker (CSS Lists 3 §4.1).  Only meaningful for display:list-item.
+  // Inherited, so a <ul>/<ol> sets the marker type for its <li> descendants.
+  ListStyleType list_style_type = ListStyleType::kNone;
 
   // Offsets (used by position: relative / absolute).  *_auto records whether
   // the offset was left at its initial value (auto), which absolute

@@ -30,7 +30,7 @@ body { display: block; margin: 8px; }
 div, p, section, article, aside, header, footer, nav, main, hgroup,
 h1, h2, h3, h4, h5, h6,
 address, blockquote, pre, figure, figcaption, form, fieldset, details,
-summary, hr, dl, dt, dd, ul, ol, li { display: block; }
+summary, hr, dl, dt, dd, ul, ol { display: block; }
 table { display: table; }
 caption { display: table-caption; }
 thead, tbody, tfoot { display: table-row-group; }
@@ -48,7 +48,12 @@ h4 { font-size: 1em; font-weight: bold; margin-top: 1.33em; margin-bottom: 1.33e
 h5 { font-size: 0.83em; font-weight: bold; margin-top: 1.67em; margin-bottom: 1.67em; }
 h6 { font-size: 0.67em; font-weight: bold; margin-top: 2.33em; margin-bottom: 2.33em; }
 ul, ol { margin-top: 1em; margin-bottom: 1em; padding-left: 40px; }
-li { display: block; }
+li { display: list-item; }
+ul { list-style-type: disc; }
+ol { list-style-type: decimal; }
+ul ul, ul ol, ol ul, ol ol { margin-top: 0; margin-bottom: 0; }
+ul ul, ol ul { list-style-type: circle; }
+ul ul ul, ol ul ul { list-style-type: square; }
 pre { font-family: monospace; }
 code { font-family: monospace; }
 b, strong { font-weight: bold; }
@@ -1100,6 +1105,7 @@ void StyleEngine::ComputeElement(dom::Element& element,
   out.line_height = inherited.line_height;
   out.text_align = inherited.text_align;
   out.text_decoration_underline = inherited.text_decoration_underline;
+  out.list_style_type = inherited.list_style_type;
   out.white_space = inherited.white_space;
   out.custom_properties = inherited.custom_properties;
 
@@ -1334,6 +1340,35 @@ void StyleEngine::ComputeElement(dom::Element& element,
         out.display = Display::kTableCell;
       } else if (v.text == "table-caption") {
         out.display = Display::kTableCaption;
+      } else if (v.text == "list-item") {
+        out.display = Display::kListItem;
+      }
+    }
+  }
+
+  // list-style-type (CSS Lists 3 §4.1).  Inherited, so it applies to the
+  // marker boxes of the element's <li> descendants.
+  if (const css::Declaration* d = find("list-style-type")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kKeyword) {
+      if (v.text == "none") {
+        out.list_style_type = ListStyleType::kNone;
+      } else if (v.text == "disc") {
+        out.list_style_type = ListStyleType::kDisc;
+      } else if (v.text == "circle") {
+        out.list_style_type = ListStyleType::kCircle;
+      } else if (v.text == "square") {
+        out.list_style_type = ListStyleType::kSquare;
+      } else if (v.text == "decimal") {
+        out.list_style_type = ListStyleType::kDecimal;
+      } else if (v.text == "lower-alpha" || v.text == "lower-latin") {
+        out.list_style_type = ListStyleType::kLowerAlpha;
+      } else if (v.text == "upper-alpha" || v.text == "upper-latin") {
+        out.list_style_type = ListStyleType::kUpperAlpha;
+      } else if (v.text == "lower-roman") {
+        out.list_style_type = ListStyleType::kLowerRoman;
+      } else if (v.text == "upper-roman") {
+        out.list_style_type = ListStyleType::kUpperRoman;
       }
     }
   }
