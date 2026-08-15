@@ -20,9 +20,17 @@ class StyleEngine {
   StyleEngine() = default;
 
   // Computes styles for every element in |document|.  Author sheets are
-  // collected from <style> elements; inline styles come from the style
-  // attribute.  Idempotent for a fresh document.
+  // collected from <style> elements plus any stylesheets registered via
+  // SetExternalStylesheets (fetched from <link rel=stylesheet> by the browser
+  // layer); inline styles come from the style attribute.  Idempotent for a
+  // fresh document.
   void ApplyStyles(dom::Document& document);
+
+  // Registers author stylesheets loaded from external <link rel=stylesheet>
+  // resources.  They are applied after the document's <style> elements and
+  // persist across ApplyStyles/ReapplyStyles calls.  The browser layer fetches
+  // and parses the CSS, then hands the parsed sheets here.
+  void SetExternalStylesheets(std::vector<css::StyleSheet> sheets);
 
   // Returns the computed style for |element|.  The element must belong to a
   // document that ApplyStyles() was called on; otherwise a default style is
@@ -34,6 +42,7 @@ class StyleEngine {
 
   std::unordered_map<const dom::Element*, ComputedStyle> styles_;
   std::vector<css::StyleSheet> author_sheets_;
+  std::vector<css::StyleSheet> external_sheets_;
 };
 
 }  // namespace neko::style

@@ -69,6 +69,16 @@ void Page::ReapplyStyles() {
   root_.reset();
 }
 
+void Page::SetExternalStylesheets(std::vector<css::StyleSheet> sheets) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  styles_.SetExternalStylesheets(std::move(sheets));
+  if (document_ == nullptr) {
+    return;
+  }
+  styles_.ApplyStyles(*document_);
+  root_.reset();
+}
+
 base::Result<void> Page::LoadFile(std::string_view path) {
   std::ifstream in(std::string(path), std::ios::binary);
   if (!in.is_open()) {

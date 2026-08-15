@@ -70,6 +70,11 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
       if (!r) {
         return r;
       }
+      // Fetch and apply external <link rel=stylesheet> sheets before scripts.
+      neko::browser::FetchExternalStylesheets(
+          page, url.Serialize(), [](const neko::url::Url& u, std::string_view) {
+            return neko::network::HttpGet(u);
+          });
       // Phase 8 M2: execute the page's scripts (inline + external src=,
       // async/defer); scripts may mutate the DOM and RunPageScripts
       // re-applies styles inside.

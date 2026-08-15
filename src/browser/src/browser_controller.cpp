@@ -1,8 +1,10 @@
 #include "neko/browser/browser_controller.h"
 
 #include "neko/base/logging.h"
+#include "neko/base/string_util.h"
 #include "neko/base/thread_pool.h"
 #include "neko/browser/page_scripts.h"
+#include "neko/css/parser.h"
 #include "neko/dom/element.h"
 #include "neko/image/image.h"
 #include "neko/network/http.h"
@@ -590,6 +592,9 @@ void BrowserController::LoadBytes(Tab& tab,
     browser::PageScriptServices services;
     services.local_storage = &local_storage_;
     services.origin = origin;
+    // Fetch and apply the page's external <link rel=stylesheet> sheets before
+    // scripts run, so scripts see the fully styled cascade.
+    FetchExternalStylesheets(*new_page, final_url, fetch_);
     browser::ScriptRequestedNavigation requested;
     tab.script_runtime = RunPageScripts(
         *new_page,
@@ -851,6 +856,110 @@ std::string BrowserController::DumpNetworkLog() const
     out += '\n';
   }
   return out;
+}
+
+// Fetches the page's external stylesheets (<link rel="stylesheet" href=...>)
+// in parallel on a thread pool, parses each body, and registers the parsed
+// sheets on the page (re-running the cascade).  The fetch hook must be
+// thread-safe (see FetchPageImages).  Only https/http stylesheet URLs are
+// fetched; data: and empty hrefs are skipped.
+void FetchExternalStylesheets(renderer::Page& page,
+                              const std::string& base_url,
+                              const BrowserController::FetchFn& fetch)
+{
+  dom::Document* doc = page.document();
+  if (doc == nullptr) {
+    return;
+  }
+  const base::Result<url::Url> base = url::Url::Parse(base_url);
+
+  // Collect <link rel=stylesheet> in document order (pre-order traversal).
+  std::vector<dom::Element*> links;
+  std::vector<dom::Node*> stack;
+  for (dom::Node* child : doc->ChildNodes()) {
+    stack.push_back(child);
+  }
+  while (!stack.empty()) {
+    dom::Node* node = stack.back();
+    stack.pop_back();
+    if (node->node_type() != dom::NodeType::kElement) {
+      continue;
+    }
+    dom::Element* element = static_cast<dom::Element*>(node);
+    if (element->tag_name() == "link" && element->HasAttribute("rel") &&
+        element->HasAttribute("href")) {
+      const std::optional<std::string_view> rel = element->GetAttribute("rel");
+      if (rel.has_value() && base::AsciiEqualsIgnoreCase(*rel, "stylesheet")) {
+        links.push_back(element);
+      }
+    }
+    for (dom::Node* child : node->ChildNodes()) {
+      stack.push_back(child);
+    }
+  }
+  if (links.empty()) {
+    return;
+  }
+
+  // Resolve hrefs (document order preserved).
+  std::vector<std::string> urls;
+  urls.reserve(links.size());
+  for (dom::Element* element : links) {
+    const std::optional<std::string_view> href = element->GetAttribute("href");
+    base::Result<url::Url> target = url::Url::Parse(*href);
+    if (base.has_value()) {
+      target = url::Url::Parse(*href, base.value());
+    }
+    if (!target.has_value() ||
+        (target.value().scheme() != "http" && target.value().scheme() != "https")) {
+      continue;
+    }
+    urls.push_back(target.value().Serialize());
+  }
+  if (urls.empty()) {
+    return;
+  }
+
+  auto fetch_and_parse = [&fetch](const std::string& url) -> base::Result<css::StyleSheet> {
+    const base::Result<url::Url> parsed = url::Url::Parse(url);
+    if (!parsed.has_value()) {
+      return base::Err(base::Error::InvalidArgument("invalid stylesheet URL"));
+    }
+    const auto response = fetch(parsed.value(), {});
+    if (!response) {
+      return base::Err(response.error());
+    }
+    return base::Ok(css::ParseStyleSheet(response.value().body));
+  };
+
+  std::vector<css::StyleSheet> sheets;
+  if (urls.size() == 1) {
+    auto sheet = fetch_and_parse(urls[0]);
+    if (!sheet) {
+      NEKO_LOG_WARNING("css: fetch/parse failed for " + urls[0]);
+      return;
+    }
+    sheets.push_back(std::move(sheet.value()));
+  } else {
+    base::ThreadPool pool;
+    std::vector<std::future<base::Result<css::StyleSheet>>> futures;
+    futures.reserve(urls.size());
+    for (const std::string& url : urls) {
+      futures.push_back(pool.Submit([&fetch_and_parse, url]() { return fetch_and_parse(url); }));
+    }
+    for (std::size_t i = 0; i < urls.size(); ++i) {
+      auto sheet = futures[i].get();
+      if (!sheet) {
+        NEKO_LOG_WARNING("css: fetch/parse failed for " + urls[i]);
+        continue;
+      }
+      sheets.push_back(std::move(sheet.value()));
+    }
+  }
+  if (!sheets.empty()) {
+    NEKO_LOG_INFO("css: applied " + std::to_string(sheets.size()) + " external stylesheet(s)");
+    page.SetExternalStylesheets(std::move(sheets));
+  }
 }
 
 void FetchPageImages(renderer::Page& page,

@@ -762,6 +762,70 @@ TEST(BrowserControllerTest, InjectsMultiplePageImages)
   }
 }
 
+// External <link rel=stylesheet> sheets are fetched, parsed and applied before
+// the page is published (real pages put most of their CSS in external files).
+TEST(BrowserControllerTest, FetchesAndAppliesExternalStylesheets)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head>"
+                               "<link rel=\"stylesheet\" href=\"/style.css\">"
+                               "<link rel=\"icon\" href=\"/favicon.ico\">"
+                               "</head><body><p id=\"t\">x</p></body></html>"});
+  fetch.Add("http://example.com/style.css",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/css"}},
+                               "#t { color: rgb(255, 0, 0); font-size: 24px; }"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  // The stylesheet (and only it — the icon link is not a stylesheet) was
+  // fetched alongside the page.
+  EXPECT_NE(std::find(fetch.requests_.begin(), fetch.requests_.end(), "http://example.com/style.css"),
+            fetch.requests_.end());
+  EXPECT_EQ(std::find(fetch.requests_.begin(), fetch.requests_.end(), "http://example.com/favicon.ico"),
+            fetch.requests_.end());
+
+  // The computed style reflects the external sheet (red text, 24px).
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  dom::Element* target = dom::QuerySelector(*tab->page->document(), "#t");
+  ASSERT_NE(target, nullptr);
+  const style::ComputedStyle& style = tab->page->styles().StyleFor(*target);
+  ASSERT_TRUE(style.color.has_value());
+  EXPECT_EQ(style.color.value().r, 255);
+  EXPECT_EQ(style.color.value().g, 0);
+  EXPECT_EQ(style.color.value().b, 0);
+  EXPECT_FLOAT_EQ(style.font_size, 24.0f);
+}
+
+// A failing external stylesheet is skipped without stopping the page.
+TEST(BrowserControllerTest, MissingExternalStylesheetIsSkipped)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head>"
+                               "<link rel=\"stylesheet\" href=\"/missing.css\">"
+                               "</head><body><p>ok</p></body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  EXPECT_EQ(tab->content_type, ContentType::kHtml);
+  EXPECT_NE(tab->page, nullptr);
+}
+
 TEST(BrowserControllerTest, ExtractsCookiesAndSendsThemNextRequest)
 {
   TempProfile tp;

@@ -304,4 +304,12 @@ void FetchPageImages(renderer::Page& page,
                      const std::string& base_url,
                      const BrowserController::FetchFn& fetch);
 
+// Fetches and applies the page's external stylesheets (<link rel="stylesheet">
+// href=...): each sheet is fetched and parsed, then registered on |page|
+// (re-running the cascade).  |base_url| resolves relative href attributes.
+// Used by both the controller (GUI) and the headless CLI.
+void FetchExternalStylesheets(renderer::Page& page,
+                              const std::string& base_url,
+                              const BrowserController::FetchFn& fetch);
+
 } // namespace neko::browser

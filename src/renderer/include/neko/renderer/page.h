@@ -33,6 +33,11 @@ class Page : public layout::ImageProvider {
   // reflects the new state.
   void ReapplyStyles();
 
+  // Registers parsed external stylesheets (<link rel=stylesheet> content
+  // fetched and parsed by the browser application layer) and re-runs the
+  // cascade so layout reflects them.
+  void SetExternalStylesheets(std::vector<css::StyleSheet> sheets);
+
   // Reads a UTF-8 file and loads it as HTML.
   base::Result<void> LoadFile(std::string_view path);
 

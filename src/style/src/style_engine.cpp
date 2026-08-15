@@ -837,7 +837,9 @@ bool MediaQueryMatches(std::string_view prelude)
 
 void StyleEngine::ApplyStyles(dom::Document& document)
 {
-  // Collect author sheets from <style> elements.
+  // Collect author sheets from <style> elements.  Externally loaded
+  // <link rel=stylesheet> sheets (registered via SetExternalStylesheets) are
+  // iterated directly by the cascade in ComputeElement — no per-Apply copy.
   author_sheets_.clear();
   for (dom::Element* style : dom::QuerySelectorAll(document, "style")) {
     css::StyleSheet sheet = css::ParseStyleSheet(style->TextContent());
@@ -856,6 +858,11 @@ void StyleEngine::ApplyStyles(dom::Document& document)
   root_style.font_size = 16;
   root_style.line_height = 19.2f;
   ComputeElement(*root, root_style, root_style.font_size);
+}
+
+void StyleEngine::SetExternalStylesheets(std::vector<css::StyleSheet> sheets)
+{
+  external_sheets_ = std::move(sheets);
 }
 
 const ComputedStyle& StyleEngine::StyleFor(const dom::Element& element) const
@@ -944,6 +951,10 @@ void StyleEngine::ComputeElement(dom::Element& element,
   };
   collect(ua);
   for (const css::StyleSheet& sheet : author_sheets_) {
+    collect(sheet);
+  }
+  // External <link rel=stylesheet> sheets, applied after <style> elements.
+  for (const css::StyleSheet& sheet : external_sheets_) {
     collect(sheet);
   }
 
