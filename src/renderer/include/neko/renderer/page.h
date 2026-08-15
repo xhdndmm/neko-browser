@@ -1,5 +1,6 @@
 #pragma once
 
+#include "neko/base/encoding.h"
 #include "neko/base/status.h"
 #include "neko/dom/element.h"
 #include "neko/graphics/font_registry.h"
@@ -8,11 +9,17 @@
 #include "neko/paint/rasterizer.h"
 #include "neko/style/style_engine.h"
 
+#include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+
+namespace neko::base {
+class ThreadPool;
+}
 
 namespace neko::renderer {
 
@@ -21,13 +28,25 @@ namespace neko::renderer {
 // Lifecycle: LoadHtml() -> Layout(viewport) -> Rasterize(w, h).
 // Headless by design: network fetching happens in the browser application
 // (which injects decoded <img> data via SetElementImage).
+//
+// Performance: the display list is cached and only rebuilt when the document,
+// style or layout actually change (tracked by a monotonically increasing
+// version).  Rasterize can additionally run on a thread pool (parallel
+// horizontal bands); the font caches are thread-safe for that purpose.
 class Page : public layout::ImageProvider
 {
 public:
   Page();
 
-  // Parses |html| into a DOM document and computes styles.
+  // Parses |html| into a DOM document and computes styles.  |html| is treated
+  // as raw bytes: the character encoding is detected per WHATWG (BOM, then
+  // <meta charset> / http-equiv prescan, defaulting to windows-1252) and the
+  // bytes are transcoded to UTF-8 before parsing.
   base::Result<void> LoadHtml(std::string_view html);
+
+  // Like LoadHtml but takes the HTTP Content-Type hint (the sniffing
+  // algorithm gives the transport-layer encoding priority over the prescan).
+  base::Result<void> LoadHtml(std::string_view bytes, base::encoding::Charset http_hint);
 
   // Re-runs the style cascade over the document.  Needed after page scripts
   // mutate the DOM (attribute/style changes, node insertion) so the layout
@@ -39,15 +58,34 @@ public:
   // cascade so layout reflects them.
   void SetExternalStylesheets(std::vector<css::StyleSheet> sheets);
 
-  // Reads a UTF-8 file and loads it as HTML.
+  // Reads a UTF-8 file and loads it as HTML (encoding sniffing still applies).
   base::Result<void> LoadFile(std::string_view path);
 
   // Builds the layout tree at the given viewport width.
   void Layout(float viewport_width);
 
   // Rasterizes the laid-out page into a |width| x |height| image.  |y_offset|
-  // scrolls the visible region (see paint::Rasterizer::SetScrollOffset).
-  paint::Rasterizer Rasterize(int width, int height, float y_offset = 0) const;
+  // scrolls the visible region (see paint::Rasterizer::SetScrollOffset).  When
+  // |pool| is non-null and the viewport is large enough the viewport is
+  // rasterized in parallel horizontal bands.
+  paint::Rasterizer
+  Rasterize(int width, int height, float y_offset = 0, base::ThreadPool* pool = nullptr) const;
+
+  // Rasterizes the full viewport into an existing rasterizer (its buffer is
+  // reused; the font registry and scroll offset are set here).  |pool|
+  // enables parallel band rasterization.  Used by the UI's cached repaint.
+  void
+  RasterizeFull(paint::Rasterizer& raster, float y_offset, base::ThreadPool* pool = nullptr) const;
+
+  // Rasterizes only screen rows [band_y0, band_y1) of an existing rasterizer
+  // (same buffer size), used by the UI's scroll blit: the buffer's content was
+  // already shifted and only the newly exposed band is redrawn.  Clears the
+  // band to the canvas background first.  |y_offset| is the new scroll offset.
+  void RasterizeInto(paint::Rasterizer& raster, int band_y0, int band_y1, float y_offset) const;
+
+  // Monotonic counter bumped whenever the document/style/layout/image content
+  // changes.  The UI compares it against its cached rasterization.
+  std::uint64_t layout_version() const;
 
   // Total content height in px after Layout(); 0 before Layout().
   float ContentHeight() const;
@@ -86,6 +124,16 @@ private:
   // background, else white.  Paints the whole viewport.
   css::Color CanvasBackgroundColor() const;
 
+  // Rebuilds (if stale) and returns the cached display list.  Caller must hold
+  // mutex_.
+  const paint::DisplayList& EnsureDisplayList() const;
+
+  void LoadHtmlImpl(std::string_view bytes, base::encoding::Charset charset);
+  void BumpVersion()
+  {
+    ++version_;
+  }
+
   std::unique_ptr<dom::Document> document_;
   style::StyleEngine styles_;
   std::unique_ptr<layout::LayoutBox> root_;
@@ -93,6 +141,13 @@ private:
 
   graphics::FontRegistry fonts_;
   std::unordered_map<const dom::Element*, image::Image> images_;
+
+  // Cached paint output: rebuilt only when version_ changes.
+  mutable std::optional<paint::DisplayList> display_list_;
+  mutable std::uint64_t display_list_version_ = 0;
+
+  // Bumped on every content mutation (load, style, layout, image).
+  std::uint64_t version_ = 0;
 
   // Guards document_/styles_/root_/images_ across the GUI (paint, hit-test)
   // and worker (navigation, image injection) threads.

@@ -21,6 +21,10 @@
 #include <string_view>
 #include <vector>
 
+namespace neko::base {
+class ThreadPool;
+}
+
 namespace neko::browser {
 
 // What kind of content a tab is currently showing.
@@ -264,6 +268,14 @@ public:
     return profile_dir_;
   }
 
+  // The controller's shared worker pool: parallel subresource fetching
+  // (stylesheets/images) and, when rendering, parallel band rasterization.
+  // Thread-safe; outlives the controller.
+  base::ThreadPool& pool()
+  {
+    return *pool_;
+  }
+
 private:
   void FetchAndLoad(Tab& tab, const url::Url& url);
   void LoadBytes(Tab& tab,
@@ -276,6 +288,7 @@ private:
 
   std::string profile_dir_;
   FetchFn fetch_;
+  std::unique_ptr<base::ThreadPool> pool_;
 
   // Guards every member the GUI can observe through the Snapshot* accessors:
   // tabs_/active_tab_/next_tab_id_, network_log_/console_log_ and the store
@@ -303,7 +316,8 @@ private:
 // controller (GUI) and the headless CLI.
 void FetchPageImages(renderer::Page& page,
                      const std::string& base_url,
-                     const BrowserController::FetchFn& fetch);
+                     const BrowserController::FetchFn& fetch,
+                     base::ThreadPool& pool);
 
 // Fetches and applies the page's external stylesheets (<link rel="stylesheet">
 // href=...): each sheet is fetched and parsed, then registered on |page|
@@ -311,6 +325,7 @@ void FetchPageImages(renderer::Page& page,
 // Used by both the controller (GUI) and the headless CLI.
 void FetchExternalStylesheets(renderer::Page& page,
                               const std::string& base_url,
-                              const BrowserController::FetchFn& fetch);
+                              const BrowserController::FetchFn& fetch,
+                              base::ThreadPool& pool);
 
 } // namespace neko::browser

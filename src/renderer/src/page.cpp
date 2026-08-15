@@ -2,6 +2,7 @@
 
 #include "neko/base/logging.h"
 #include "neko/base/status.h"
+#include "neko/base/thread_pool.h"
 #include "neko/css/color.h"
 #include "neko/html/parser.h"
 #include "neko/paint/painter.h"
@@ -52,14 +53,32 @@ Page::Page()
   fonts_.SelectorFor("sans-serif");
 }
 
-base::Result<void> Page::LoadHtml(std::string_view html)
+void Page::LoadHtmlImpl(std::string_view bytes, base::encoding::Charset charset)
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  document_ = html::Parser(html).Parse();
+  // The HTML tokenizer consumes UTF-8; transcode the raw bytes (per WHATWG
+  // the BOM, if present, overrides the label) before parsing.
+  const std::string utf8 = base::encoding::DecodeToUtf8(bytes, charset);
+  document_ = html::Parser(utf8).Parse();
   styles_.ApplyStyles(*document_);
   root_.reset();
   // The old DOM is gone; image entries keyed by element address are stale.
   images_.clear();
+  display_list_.reset();
+  BumpVersion();
+}
+
+base::Result<void> Page::LoadHtml(std::string_view html)
+{
+  const base::encoding::Charset detected = base::encoding::DetectHtmlCharset(html, std::nullopt);
+  LoadHtmlImpl(html, detected);
+  return base::Ok();
+}
+
+base::Result<void> Page::LoadHtml(std::string_view bytes, base::encoding::Charset http_hint)
+{
+  const base::encoding::Charset detected = base::encoding::DetectHtmlCharset(bytes, http_hint);
+  LoadHtmlImpl(bytes, detected);
   return base::Ok();
 }
 
@@ -71,6 +90,8 @@ void Page::ReapplyStyles()
   }
   styles_.ApplyStyles(*document_);
   root_.reset();
+  display_list_.reset();
+  BumpVersion();
 }
 
 void Page::SetExternalStylesheets(std::vector<css::StyleSheet> sheets)
@@ -82,6 +103,8 @@ void Page::SetExternalStylesheets(std::vector<css::StyleSheet> sheets)
   }
   styles_.ApplyStyles(*document_);
   root_.reset();
+  display_list_.reset();
+  BumpVersion();
 }
 
 base::Result<void> Page::LoadFile(std::string_view path)
@@ -103,6 +126,8 @@ void Page::Layout(float viewport_width)
   viewport_width_ = viewport_width;
   layout::LayoutEngine engine(styles_, &fonts_, this);
   root_ = engine.BuildLayoutTree(*document_, viewport_width);
+  display_list_.reset();
+  BumpVersion();
 }
 
 void Page::SetElementImage(const dom::Element& element, image::Image image)
@@ -110,6 +135,8 @@ void Page::SetElementImage(const dom::Element& element, image::Image image)
   std::lock_guard<std::mutex> lock(mutex_);
   images_[&element] = std::move(image);
   root_.reset(); // the replaced box's intrinsic size may have changed
+  display_list_.reset();
+  BumpVersion();
 }
 
 // NOTE: called only from LayoutEngine while Layout() holds the mutex, so this
@@ -120,7 +147,18 @@ const image::Image* Page::Find(const dom::Element& element) const
   return it != images_.end() ? &it->second : nullptr;
 }
 
-paint::Rasterizer Page::Rasterize(int width, int height, float y_offset) const
+const paint::DisplayList& Page::EnsureDisplayList() const
+{
+  if (!display_list_.has_value() || display_list_version_ != version_) {
+    const paint::Painter painter(root_.get());
+    display_list_ = painter.Paint();
+    display_list_version_ = version_;
+  }
+  return *display_list_;
+}
+
+paint::Rasterizer
+Page::Rasterize(int width, int height, float y_offset, base::ThreadPool* pool) const
 {
   std::lock_guard<std::mutex> lock(mutex_);
   paint::Rasterizer image(width, height);
@@ -129,10 +167,51 @@ paint::Rasterizer Page::Rasterize(int width, int height, float y_offset) const
   if (root_ == nullptr) {
     return image;
   }
+  const paint::DisplayList& list = EnsureDisplayList();
   image.SetScrollOffset(y_offset);
-  const paint::Painter painter(root_.get());
-  image.Rasterize(painter.Paint());
+  if (pool != nullptr) {
+    image.RasterizeParallel(list, *pool);
+  } else {
+    image.Rasterize(list);
+  }
   return image;
+}
+
+void Page::RasterizeFull(paint::Rasterizer& raster, float y_offset, base::ThreadPool* pool) const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  raster.SetFontRegistry(&fonts_);
+  raster.Clear(CanvasBackgroundColor());
+  if (root_ == nullptr) {
+    return;
+  }
+  const paint::DisplayList& list = EnsureDisplayList();
+  raster.SetScrollOffset(y_offset);
+  if (pool != nullptr) {
+    raster.RasterizeParallel(list, *pool);
+  } else {
+    raster.Rasterize(list);
+  }
+}
+
+void Page::RasterizeInto(paint::Rasterizer& raster, int band_y0, int band_y1, float y_offset) const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (root_ == nullptr) {
+    return;
+  }
+  const css::Color background = CanvasBackgroundColor();
+  raster.ClearBand(band_y0, band_y1, background);
+  raster.SetVisibleBand(band_y0, band_y1);
+  raster.SetScrollOffset(y_offset);
+  raster.Rasterize(EnsureDisplayList());
+  raster.ResetVisibleBand();
+}
+
+std::uint64_t Page::layout_version() const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  return version_;
 }
 
 css::Color Page::CanvasBackgroundColor() const

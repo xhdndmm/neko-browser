@@ -8,6 +8,7 @@
 
 #include "neko/base/logging.h"
 #include "neko/base/status.h"
+#include "neko/base/thread_pool.h"
 #include "neko/base/version.h"
 #include "neko/browser/browser_controller.h"
 #include "neko/browser/browser_options.h"
@@ -65,15 +66,21 @@ LoadTarget(neko::renderer::Page& page, const std::string& target, int depth = 0)
       }
       NEKO_LOG_INFO("HTTP " + std::to_string(response.value().status_code) + " (" +
                     std::to_string(response.value().body.size()) + " bytes)");
-      const auto r = page.LoadHtml(response.value().body);
+      // Transcode the body per the HTTP charset and in-document declarations.
+      const std::optional<neko::base::encoding::Charset> http_charset =
+          neko::base::encoding::CharsetFromHttpHeader(response.value().GetHeader("content-type"));
+      const auto r = page.LoadHtml(response.value().body,
+                                   http_charset.value_or(neko::base::encoding::Charset::kUnknown));
       if (!r) {
         return r;
       }
+      neko::base::ThreadPool pool;
       // Fetch and apply external <link rel=stylesheet> sheets before scripts.
       neko::browser::FetchExternalStylesheets(
-          page, url.Serialize(), [](const neko::url::Url& u, std::string_view) {
-            return neko::network::HttpGet(u);
-          });
+          page,
+          url.Serialize(),
+          [](const neko::url::Url& u, std::string_view) { return neko::network::HttpGet(u); },
+          pool);
       // Phase 8 M2: execute the page's scripts (inline + external src=,
       // async/defer); scripts may mutate the DOM and RunPageScripts
       // re-applies styles inside.
@@ -98,9 +105,10 @@ LoadTarget(neko::renderer::Page& page, const std::string& target, int depth = 0)
       }
       // Fetch and decode the page's <img> subresources (headless path).
       neko::browser::FetchPageImages(
-          page, url.Serialize(), [](const neko::url::Url& u, std::string_view) {
-            return neko::network::HttpGet(u);
-          });
+          page,
+          url.Serialize(),
+          [](const neko::url::Url& u, std::string_view) { return neko::network::HttpGet(u); },
+          pool);
       return neko::base::Ok();
     }
     if (url.scheme() == "file") {
@@ -123,10 +131,12 @@ LoadTarget(neko::renderer::Page& page, const std::string& target, int depth = 0)
         return LoadTarget(page, requested.url, depth + 1);
       }
       // Local pages may still reference absolute http(s) images; fetch those.
+      neko::base::ThreadPool pool;
       neko::browser::FetchPageImages(
-          page, /*base_url=*/"", [](const neko::url::Url& u, std::string_view) {
-            return neko::network::HttpGet(u);
-          });
+          page,
+          /*base_url=*/"",
+          [](const neko::url::Url& u, std::string_view) { return neko::network::HttpGet(u); },
+          pool);
       return neko::base::Ok();
     }
     return neko::base::Err(

@@ -1,32 +1,34 @@
-#include "neko/renderer/page.h"
+#include "neko/dom/query.h"
+#include "neko/html/parser.h"
+#include "neko/image/image.h"
 #include "neko/paint/rasterizer.h"
+#include "neko/renderer/page.h"
 
 #include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <gtest/gtest.h>
 #include <string>
 #include <thread>
 #include <tuple>
 
-#include "neko/dom/query.h"
-#include "neko/html/parser.h"
-#include "neko/image/image.h"
-#include <gtest/gtest.h>
-
 namespace neko::renderer {
 namespace {
 
-TEST(PageTest, LoadAndDumpDom) {
+TEST(PageTest, LoadAndDumpDom)
+{
   Page page;
-  const auto result = page.LoadHtml("<html><head><title>T</title></head><body><p>hi</p></body></html>");
+  const auto result =
+      page.LoadHtml("<html><head><title>T</title></head><body><p>hi</p></body></html>");
   ASSERT_TRUE(result.has_value());
   ASSERT_NE(page.document(), nullptr);
   EXPECT_EQ(page.document()->Title(), "T");
   EXPECT_NE(page.DumpDom().find("<p>hi</p>"), std::string::npos);
 }
 
-TEST(PageTest, LayoutAndDump) {
+TEST(PageTest, LayoutAndDump)
+{
   Page page;
   ASSERT_TRUE(page.LoadHtml("<body><div>text</div></body>").has_value());
   page.Layout(800);
@@ -36,13 +38,14 @@ TEST(PageTest, LayoutAndDump) {
   EXPECT_NE(dump.find("<div>"), std::string::npos);
 }
 
-TEST(PageTest, RasterizeProducesImage) {
+TEST(PageTest, RasterizeProducesImage)
+{
   Page page;
-  ASSERT_TRUE(page.LoadHtml(
-                          "<body style=\"background-color:#ffffff\">"
-                          "<div style=\"background-color:#ff0000;width:100px;height:50px\">x</div>"
-                          "</body>")
-                  .has_value());
+  ASSERT_TRUE(
+      page.LoadHtml("<body style=\"background-color:#ffffff\">"
+                    "<div style=\"background-color:#ff0000;width:100px;height:50px\">x</div>"
+                    "</body>")
+          .has_value());
   page.Layout(400);
   paint::Rasterizer image = page.Rasterize(400, 300);
   EXPECT_EQ(image.width(), 400);
@@ -55,12 +58,12 @@ TEST(PageTest, RasterizeProducesImage) {
   EXPECT_EQ(image.pixels()[offset + 2], 0);
 }
 
-TEST(PageTest, BodyBackgroundPropagatesToCanvas) {
+TEST(PageTest, BodyBackgroundPropagatesToCanvas)
+{
   // CSS canvas background: a <body> background paints the whole viewport when
   // <html> has none (e.g. example.com's #f0f0f2 page background).
   Page page;
-  ASSERT_TRUE(page.LoadHtml(
-                          "<html><body style=\"background-color:#ff0000\"><p>x</p></body></html>")
+  ASSERT_TRUE(page.LoadHtml("<html><body style=\"background-color:#ff0000\"><p>x</p></body></html>")
                   .has_value());
   page.Layout(400);
   paint::Rasterizer image = page.Rasterize(400, 300);
@@ -73,10 +76,10 @@ TEST(PageTest, BodyBackgroundPropagatesToCanvas) {
   EXPECT_EQ(image.pixels()[offset + 2], 0);
 }
 
-TEST(PageTest, HtmlBackgroundPaintsCanvas) {
+TEST(PageTest, HtmlBackgroundPaintsCanvas)
+{
   Page page;
-  ASSERT_TRUE(page.LoadHtml(
-                          "<html style=\"background-color:#0000ff\"><body><p>x</p></body></html>")
+  ASSERT_TRUE(page.LoadHtml("<html style=\"background-color:#0000ff\"><body><p>x</p></body></html>")
                   .has_value());
   page.Layout(400);
   paint::Rasterizer image = page.Rasterize(400, 300);
@@ -86,7 +89,8 @@ TEST(PageTest, HtmlBackgroundPaintsCanvas) {
   EXPECT_EQ(image.pixels()[offset + 2], 255);
 }
 
-TEST(PageTest, NoBackgroundStaysWhite) {
+TEST(PageTest, NoBackgroundStaysWhite)
+{
   Page page;
   ASSERT_TRUE(page.LoadHtml("<html><body><p>x</p></body></html>").has_value());
   page.Layout(400);
@@ -98,17 +102,17 @@ TEST(PageTest, NoBackgroundStaysWhite) {
 }
 
 // A 2x2 solid-color image helper.
-image::Image SolidImage(int w, int h, uint8_t r, uint8_t g, uint8_t b) {
+image::Image SolidImage(int w, int h, uint8_t r, uint8_t g, uint8_t b)
+{
   image::Image img;
   img.width = w;
   img.height = h;
   img.rgba.assign(static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 4, 255);
   for (int y = 0; y < h; ++y) {
     for (int x = 0; x < w; ++x) {
-      const std::size_t o =
-          (static_cast<std::size_t>(y) * static_cast<std::size_t>(w) +
-           static_cast<std::size_t>(x)) *
-          4;
+      const std::size_t o = (static_cast<std::size_t>(y) * static_cast<std::size_t>(w) +
+                             static_cast<std::size_t>(x)) *
+                            4;
       img.rgba[o] = r;
       img.rgba[o + 1] = g;
       img.rgba[o + 2] = b;
@@ -117,10 +121,10 @@ image::Image SolidImage(int w, int h, uint8_t r, uint8_t g, uint8_t b) {
   return img;
 }
 
-TEST(PageTest, RendersElementImageAtIntrinsicSize) {
+TEST(PageTest, RendersElementImageAtIntrinsicSize)
+{
   Page page;
-  ASSERT_TRUE(page.LoadHtml(
-                          "<html><body style=\"background-color:#ffffff\"><img></body></html>")
+  ASSERT_TRUE(page.LoadHtml("<html><body style=\"background-color:#ffffff\"><img></body></html>")
                   .has_value());
   dom::Element* img_el = dom::QuerySelector(*page.document(), "img");
   ASSERT_NE(img_el, nullptr);
@@ -137,7 +141,8 @@ TEST(PageTest, RendersElementImageAtIntrinsicSize) {
   EXPECT_EQ(image.pixels()[o + 2], 0);
 }
 
-TEST(PageTest, LoadHtmlClearsStaleElementImages) {
+TEST(PageTest, LoadHtmlClearsStaleElementImages)
+{
   // Image entries are keyed by element address.  After a navigation the old
   // DOM (and its element addresses) is gone; a stale entry could be reused by
   // a new element at the same address and render the previous page's image.
@@ -163,11 +168,11 @@ TEST(PageTest, LoadHtmlClearsStaleElementImages) {
   EXPECT_FALSE(saw_red);
 }
 
-TEST(PageTest, ImageWithExplicitWidthScalesAndFills) {
+TEST(PageTest, ImageWithExplicitWidthScalesAndFills)
+{
   Page page;
-  ASSERT_TRUE(page.LoadHtml(
-                          "<html><body style=\"background-color:#ffffff\">"
-                          "<img style=\"width: 100px\"></body></html>")
+  ASSERT_TRUE(page.LoadHtml("<html><body style=\"background-color:#ffffff\">"
+                            "<img style=\"width: 100px\"></body></html>")
                   .has_value());
   dom::Element* img_el = dom::QuerySelector(*page.document(), "img");
   ASSERT_NE(img_el, nullptr);
@@ -183,15 +188,15 @@ TEST(PageTest, ImageWithExplicitWidthScalesAndFills) {
   EXPECT_EQ(image.pixels()[o + 2], 255);
 }
 
-TEST(PageTest, ConcurrentRasterizeAndImageInjection) {
+TEST(PageTest, ConcurrentRasterizeAndImageInjection)
+{
   // Regression: the GUI paints on the main thread while the worker thread
   // injects decoded images (SetElementImage + Layout).  Page must serialize
   // these; without the mutex the rasterizer reads a destroyed image entry and
   // crashes in DrawImage.
   Page page;
-  ASSERT_TRUE(page.LoadHtml(
-                          "<html><body style=\"background-color:#ffffff\">"
-                          "<img><img><img><p>text</p></body></html>")
+  ASSERT_TRUE(page.LoadHtml("<html><body style=\"background-color:#ffffff\">"
+                            "<img><img><img><p>text</p></body></html>")
                   .has_value());
   std::vector<dom::Element*> imgs;
   std::vector<dom::Node*> stack;
@@ -236,25 +241,27 @@ TEST(PageTest, ConcurrentRasterizeAndImageInjection) {
   writer.join();
 }
 
-TEST(PageTest, ContentHeight) {
+TEST(PageTest, ContentHeight)
+{
   Page page;
-  EXPECT_EQ(page.ContentHeight(), 0.0f);  // no layout yet
+  EXPECT_EQ(page.ContentHeight(), 0.0f); // no layout yet
 
   ASSERT_TRUE(page.LoadHtml("<body><div style=\"height:500px\">x</div></body>").has_value());
-  EXPECT_EQ(page.ContentHeight(), 0.0f);  // loaded but not laid out yet
+  EXPECT_EQ(page.ContentHeight(), 0.0f); // loaded but not laid out yet
 
   page.Layout(400);
   // body default margin (8px top + 8px bottom) plus the 500px div.
   EXPECT_FLOAT_EQ(page.ContentHeight(), 516.0f);
 }
 
-TEST(PageTest, RasterizeScrollsContent) {
+TEST(PageTest, RasterizeScrollsContent)
+{
   Page page;
-  ASSERT_TRUE(page.LoadHtml(
-                          "<body style=\"background-color:#ffffff\">"
-                          "<div style=\"background-color:#ff0000;width:100px;height:50px\">x</div>"
-                          "</body>")
-                  .has_value());
+  ASSERT_TRUE(
+      page.LoadHtml("<body style=\"background-color:#ffffff\">"
+                    "<div style=\"background-color:#ff0000;width:100px;height:50px\">x</div>"
+                    "</body>")
+          .has_value());
   page.Layout(400);
 
   const auto pixel = [](const paint::Rasterizer& image, int x, int y) {
@@ -262,8 +269,10 @@ TEST(PageTest, RasterizeScrollsContent) {
         (static_cast<std::size_t>(y) * static_cast<std::size_t>(image.width()) +
          static_cast<std::size_t>(x)) *
         4;
-    return css::Color{image.pixels()[offset], image.pixels()[offset + 1],
-                      image.pixels()[offset + 2], image.pixels()[offset + 3]};
+    return css::Color{image.pixels()[offset],
+                      image.pixels()[offset + 1],
+                      image.pixels()[offset + 2],
+                      image.pixels()[offset + 3]};
   };
 
   const paint::Rasterizer top = page.Rasterize(400, 300, 0);
@@ -278,17 +287,18 @@ TEST(PageTest, RasterizeScrollsContent) {
   EXPECT_EQ(pixel(scrolled, 50, 0), (css::Color{255, 0, 0, 255}));
 }
 
-TEST(PageTest, LoadMissingFile) {
+TEST(PageTest, LoadMissingFile)
+{
   Page page;
   const auto result = page.LoadFile("/nonexistent/neko_missing_file.html");
   ASSERT_FALSE(result.has_value());
   EXPECT_EQ(result.error().category(), base::ErrorCategory::kIo);
 }
 
-TEST(PageTest, ElementAtHitTestsInlineContent) {
+TEST(PageTest, ElementAtHitTestsInlineContent)
+{
   Page page;
-  ASSERT_TRUE(page.LoadHtml(
-      "<body><p>plain <a href=\"https://example.com/x\">link</a></p></body>")
+  ASSERT_TRUE(page.LoadHtml("<body><p>plain <a href=\"https://example.com/x\">link</a></p></body>")
                   .has_value());
   page.Layout(400);
 
@@ -326,7 +336,8 @@ TEST(PageTest, ElementAtHitTestsInlineContent) {
   EXPECT_EQ(hit_plain, static_cast<const dom::Element*>(p));
 }
 
-TEST(PageTest, ElementAtOutsideContentReturnsNull) {
+TEST(PageTest, ElementAtOutsideContentReturnsNull)
+{
   Page page;
   ASSERT_TRUE(page.LoadHtml("<body><p>hi</p></body>").has_value());
   page.Layout(400);
@@ -339,7 +350,8 @@ TEST(PageTest, ElementAtOutsideContentReturnsNull) {
   EXPECT_EQ(empty.ElementAt(10.0f, 20.0f), nullptr);
 }
 
-TEST(PageTest, LoadFile) {
+TEST(PageTest, LoadFile)
+{
   namespace fs = std::filesystem;
   const fs::path dir = fs::temp_directory_path() / "neko_renderer_test";
   fs::create_directories(dir);
@@ -358,13 +370,14 @@ TEST(PageTest, LoadFile) {
 // --- button / appearance rendering ---------------------------------------
 
 // Reads the RGB triple at (x, y) of a 400x300 raster.
-std::tuple<int, int, int> RgbAt(const paint::Rasterizer& image, int x, int y) {
-  const std::size_t offset =
-      (static_cast<std::size_t>(y) * 400 + static_cast<std::size_t>(x)) * 4;
+std::tuple<int, int, int> RgbAt(const paint::Rasterizer& image, int x, int y)
+{
+  const std::size_t offset = (static_cast<std::size_t>(y) * 400 + static_cast<std::size_t>(x)) * 4;
   return {image.pixels()[offset], image.pixels()[offset + 1], image.pixels()[offset + 2]};
 }
 
-bool HasColor(const paint::Rasterizer& image, int r, int g, int b) {
+bool HasColor(const paint::Rasterizer& image, int r, int g, int b)
+{
   for (std::size_t i = 0; i + 2 < image.pixels().size(); i += 4) {
     if (image.pixels()[i] == r && image.pixels()[i + 1] == g && image.pixels()[i + 2] == b) {
       return true;
@@ -373,7 +386,8 @@ bool HasColor(const paint::Rasterizer& image, int r, int g, int b) {
   return false;
 }
 
-TEST(PageTest, ButtonRendersNativeAppearance) {
+TEST(PageTest, ButtonRendersNativeAppearance)
+{
   // A <button> defaults to appearance:auto (WHATWG rendering §15.5.4) and
   // paints a native buttonface with an outset border.
   Page page;
@@ -386,12 +400,12 @@ TEST(PageTest, ButtonRendersNativeAppearance) {
   EXPECT_TRUE(HasColor(image, 0xec, 0xec, 0xec));
 }
 
-TEST(PageTest, ButtonAppearanceNoneDisablesNativeLook) {
+TEST(PageTest, ButtonAppearanceNoneDisablesNativeLook)
+{
   // appearance:none drops the native face; the UA border (black) remains.
   Page page;
   ASSERT_TRUE(
-      page.LoadHtml("<body><button style=\"appearance: none\">OK</button></body>")
-          .has_value());
+      page.LoadHtml("<body><button style=\"appearance: none\">OK</button></body>").has_value());
   page.Layout(400);
   const paint::Rasterizer image = page.Rasterize(400, 300);
   EXPECT_FALSE(HasColor(image, 0xec, 0xec, 0xec));
@@ -399,14 +413,14 @@ TEST(PageTest, ButtonAppearanceNoneDisablesNativeLook) {
   EXPECT_EQ((RgbAt(image, 8, 8)), (std::make_tuple(0, 0, 0)));
 }
 
-TEST(PageTest, ButtonAutoUsesAuthorBackground) {
+TEST(PageTest, ButtonAutoUsesAuthorBackground)
+{
   // With a definite appearance (button, auto) author background-color still
   // wins over the native face (browser behavior for e.g. styled dropdown
   // buttons); the native buttonface is only the no-style fallback.
   Page page;
-  ASSERT_TRUE(page.LoadHtml(
-                          "<body><button style=\"background-color:#ff0000;"
-                          "width:100px;height:30px\">B</button></body>")
+  ASSERT_TRUE(page.LoadHtml("<body><button style=\"background-color:#ff0000;"
+                            "width:100px;height:30px\">B</button></body>")
                   .has_value());
   page.Layout(400);
   const paint::Rasterizer image = page.Rasterize(400, 300);
@@ -414,24 +428,24 @@ TEST(PageTest, ButtonAutoUsesAuthorBackground) {
   EXPECT_FALSE(HasColor(image, 0xec, 0xec, 0xec));
 }
 
-TEST(PageTest, ButtonNoneUsesAuthorBackground) {
+TEST(PageTest, ButtonNoneUsesAuthorBackground)
+{
   // appearance:none -> plain CSS box: the author's background paints.
   Page page;
-  ASSERT_TRUE(page.LoadHtml(
-                          "<body><button style=\"appearance:none;background-color:#ff0000;"
-                          "width:100px;height:30px\">B</button></body>")
+  ASSERT_TRUE(page.LoadHtml("<body><button style=\"appearance:none;background-color:#ff0000;"
+                            "width:100px;height:30px\">B</button></body>")
                   .has_value());
   page.Layout(400);
   const paint::Rasterizer image = page.Rasterize(400, 300);
   EXPECT_EQ((RgbAt(image, 20, 15)), (std::make_tuple(255, 0, 0)));
 }
 
-TEST(PageTest, AppearanceButtonForcesNativeLookOnDiv) {
+TEST(PageTest, AppearanceButtonForcesNativeLookOnDiv)
+{
   // appearance:button forces the button look on any element.
   Page page;
-  ASSERT_TRUE(page.LoadHtml(
-                          "<body><div style=\"appearance:button;width:80px;height:30px\">"
-                          "D</div></body>")
+  ASSERT_TRUE(page.LoadHtml("<body><div style=\"appearance:button;width:80px;height:30px\">"
+                            "D</div></body>")
                   .has_value());
   page.Layout(400);
   const paint::Rasterizer image = page.Rasterize(400, 300);
@@ -441,17 +455,17 @@ TEST(PageTest, AppearanceButtonForcesNativeLookOnDiv) {
   EXPECT_TRUE(HasColor(image, 0xec, 0xec, 0xec));
 }
 
-TEST(PageTest, FloatPaintsAboveBlockChildBackground) {
+TEST(PageTest, FloatPaintsAboveBlockChildBackground)
+{
   // A float paints above in-flow block children but below inline content
   // (CSS2.1 Appendix E).  A red float followed by a block element with a
   // background must not be covered by that background where they overlap.
   Page page;
-  ASSERT_TRUE(page.LoadHtml(
-                          "<body><div style=\"width:300px\">"
-                          "<span style=\"float:left;background:red;width:100px;height:50px\">"
-                          "L</span>"
-                          "<p style=\"background:gray\">after</p>"
-                          "</div></body>")
+  ASSERT_TRUE(page.LoadHtml("<body><div style=\"width:300px\">"
+                            "<span style=\"float:left;background:red;width:100px;height:50px\">"
+                            "L</span>"
+                            "<p style=\"background:gray\">after</p>"
+                            "</div></body>")
                   .has_value());
   page.Layout(400);
   const paint::Rasterizer image = page.Rasterize(400, 300);
@@ -462,7 +476,135 @@ TEST(PageTest, FloatPaintsAboveBlockChildBackground) {
   EXPECT_EQ((RgbAt(image, 20, 40)), (std::make_tuple(255, 0, 0)));
 }
 
-}  // namespace
+// ---------------------------------------------------------------------------
+// Character encoding + renderer performance
+// ---------------------------------------------------------------------------
 
-}  // namespace neko::renderer
+TEST(PageTest, LoadHtmlTranscodesGbkDocument)
+{
+  // A GBK document whose <meta charset=gb2312> declaration must trigger the
+  // transcoder before the tokenizer runs.  The title text "中文" is GBK bytes
+  // 0xD6D0 0xCEC4.
+  const std::string gbk = "<html><head><meta charset=\"gb2312\">"
+                          "<title>\xD6\xD0\xCE\xC4</title></head>"
+                          "<body><p>\xD6\xD0\xCE\xC4\xD1\xA7\xCF\xB0</p></body></html>";
+  Page page;
+  ASSERT_TRUE(page.LoadHtml(gbk).has_value());
+  EXPECT_EQ(page.document()->Title(), "\xE4\xB8\xAD\xE6\x96\x87"); // 中文
+  EXPECT_NE(page.DumpDom().find("\xE4\xB8\xAD\xE6\x96\x87\xE5\xAD\xA6\xE4\xB9\xA0"),
+            std::string::npos);
+}
 
+TEST(PageTest, HttpCharsetHintUsedForGbkBody)
+{
+  // No <meta> declaration: the HTTP charset hint must drive the decode.
+  const std::string gbk = "<html><head><title>\xD6\xD0\xCE\xC4</title></head><body>x</body></html>";
+  Page page;
+  ASSERT_TRUE(page.LoadHtml(gbk, base::encoding::Charset::kGb18030).has_value());
+  EXPECT_EQ(page.document()->Title(), "\xE4\xB8\xAD\xE6\x96\x87");
+}
+
+TEST(PageTest, Utf8BomOverridesHint)
+{
+  // A UTF-8 BOM is more authoritative than the HTTP hint.
+  const std::string doc = "\xEF\xBB\xBF<html><head><title>ok</title></head></html>";
+  Page page;
+  ASSERT_TRUE(page.LoadHtml(doc, base::encoding::Charset::kGb18030).has_value());
+  EXPECT_EQ(page.document()->Title(), "ok");
+}
+
+TEST(PageTest, LayoutVersionTracksContentMutations)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body><p>hi</p></body>").has_value());
+  const std::uint64_t v0 = page.layout_version();
+  page.Layout(400);
+  const std::uint64_t v1 = page.layout_version();
+  EXPECT_GT(v1, v0);
+  page.ReapplyStyles();
+  EXPECT_GT(page.layout_version(), v1);
+  // Rasterizing does not change the version (display list cache is stable).
+  const std::uint64_t v2 = page.layout_version();
+  (void)page.Rasterize(400, 300);
+  EXPECT_EQ(page.layout_version(), v2);
+}
+
+TEST(PageTest, ScrollBlitBandMatchesFullRasterization)
+{
+  // The UI scroll-blit path must reproduce the full rasterization at the new
+  // scroll offset: shift the cached buffer, then re-rasterize only the exposed
+  // band (RasterizeInto), and compare against a from-scratch rasterize.
+  Page page;
+  ASSERT_TRUE(
+      page.LoadHtml("<body style=\"background-color:#ffffff\">"
+                    "<div style=\"background-color:#ff0000;width:300px;height:60px\">a</div>"
+                    "<div style=\"background-color:#00ff00;width:300px;height:80px\">b</div>"
+                    "<div style=\"background-color:#0000ff;width:300px;height:60px\">c</div>"
+                    "</body>")
+          .has_value());
+  page.Layout(400);
+
+  constexpr int kWidth = 400;
+  constexpr int kHeight = 300;
+  const int from = 30;
+  const int to = 110; // scroll down by 80px
+
+  const paint::Rasterizer full_old = page.Rasterize(kWidth, kHeight, static_cast<float>(from));
+  paint::Rasterizer blit = full_old; // cached buffer at scroll=from
+  const int delta = from - to;       // negative: content moves up
+  blit.ShiftRows(delta);
+  const int band_y0 = kHeight + delta;
+  const int band_y1 = kHeight;
+  page.RasterizeInto(blit, band_y0, band_y1, static_cast<float>(to));
+
+  const paint::Rasterizer full_new = page.Rasterize(kWidth, kHeight, static_cast<float>(to));
+  ASSERT_EQ(blit.pixels().size(), full_new.pixels().size());
+  EXPECT_EQ(blit.pixels(), full_new.pixels());
+}
+
+TEST(PageTest, ScrollUpBlitBandMatchesFullRasterization)
+{
+  Page page;
+  ASSERT_TRUE(
+      page.LoadHtml("<body style=\"background-color:#ffffff\">"
+                    "<div style=\"background-color:#ff0000;width:300px;height:60px\">a</div>"
+                    "<div style=\"background-color:#00ff00;width:300px;height:80px\">b</div>"
+                    "<div style=\"background-color:#0000ff;width:300px;height:60px\">c</div>"
+                    "</body>")
+          .has_value());
+  page.Layout(400);
+
+  constexpr int kWidth = 400;
+  constexpr int kHeight = 300;
+  const int from = 110;
+  const int to = 30; // scroll up by 80px
+
+  const paint::Rasterizer full_old = page.Rasterize(kWidth, kHeight, static_cast<float>(from));
+  paint::Rasterizer blit = full_old;
+  const int delta = from - to; // positive: content moves down
+  blit.ShiftRows(delta);
+  page.RasterizeInto(blit, 0, delta, static_cast<float>(to));
+
+  const paint::Rasterizer full_new = page.Rasterize(kWidth, kHeight, static_cast<float>(to));
+  EXPECT_EQ(blit.pixels(), full_new.pixels());
+}
+
+TEST(PageTest, RasterizeFullReusesBuffer)
+{
+  Page page;
+  ASSERT_TRUE(
+      page.LoadHtml("<body style=\"background-color:#ffffff\">"
+                    "<div style=\"background-color:#ff0000;width:100px;height:40px\">x</div>"
+                    "</body>")
+          .has_value());
+  page.Layout(400);
+  paint::Rasterizer raster(400, 300);
+  page.RasterizeFull(raster, 0.0f, nullptr);
+  const std::size_t offset = (static_cast<std::size_t>(20) * 400 + 50) * 4;
+  EXPECT_EQ(raster.pixels()[offset], 255);
+  EXPECT_EQ(raster.pixels()[offset + 1], 0);
+}
+
+} // namespace
+
+} // namespace neko::renderer

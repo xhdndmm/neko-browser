@@ -145,6 +145,7 @@ BrowserController::BrowserController(std::string profile_dir, FetchFn fetch)
       history_(profile_dir_), bookmarks_(profile_dir_), local_storage_(profile_dir_),
       downloads_(profile_dir_ + "/downloads")
 {
+  pool_ = std::make_unique<base::ThreadPool>();
   // Default fetch: network::HttpGet with the controller-provided cookie
   // header.
   if (!fetch_) {
@@ -589,7 +590,12 @@ void BrowserController::LoadBytes(Tab& tab,
     // worker afterwards, so the GUI can safely hold a shared handle and
     // Layout/Rasterize/hit-test it at any time.
     auto new_page = std::make_shared<renderer::Page>();
-    auto r = new_page->LoadHtml(bytes);
+    // The HTTP Content-Type charset (if any) is the sniffing algorithm's
+    // transport-layer hint; the BOM and <meta charset> still take precedence
+    // inside Page::LoadHtml.
+    const std::optional<base::encoding::Charset> http_charset =
+        base::encoding::CharsetFromHttpHeader(content_type);
+    auto r = new_page->LoadHtml(bytes, http_charset.value_or(base::encoding::Charset::kUnknown));
     if (!r) {
       std::lock_guard<std::mutex> lock(mutex_);
       tab.content_type = ContentType::kError;
@@ -608,7 +614,7 @@ void BrowserController::LoadBytes(Tab& tab,
     services.origin = origin;
     // Fetch and apply the page's external <link rel=stylesheet> sheets before
     // scripts run, so scripts see the fully styled cascade.
-    FetchExternalStylesheets(*new_page, final_url, fetch_);
+    FetchExternalStylesheets(*new_page, final_url, fetch_, *pool_);
     browser::ScriptRequestedNavigation requested;
     tab.script_runtime = RunPageScripts(
         *new_page,
@@ -634,7 +640,7 @@ void BrowserController::LoadBytes(Tab& tab,
     }
 
     // Fetch and decode the page's <img> subresources before publishing.
-    FetchPageImages(*new_page, final_url, fetch_);
+    FetchPageImages(*new_page, final_url, fetch_, *pool_);
     std::string title = new_page->document()->Title();
     if (title.empty())
       title = final_url;
@@ -706,10 +712,16 @@ void BrowserController::LoadBytes(Tab& tab,
   }
 
   if (is_text) {
+    // Decode legacy-encoded text (e.g. GBK) into UTF-8 so the viewer shows
+    // readable text instead of mojibake.
+    const std::optional<base::encoding::Charset> charset =
+        base::encoding::CharsetFromHttpHeader(content_type);
+    const std::string utf8 =
+        base::encoding::DecodeToUtf8(bytes, charset.value_or(base::encoding::Charset::kUtf8));
     {
       std::lock_guard<std::mutex> lock(mutex_);
       tab.content_type = ContentType::kText;
-      tab.raw_text = std::make_shared<std::string>(bytes);
+      tab.raw_text = std::make_shared<std::string>(utf8);
       tab.title = final_url;
     }
     RecordVisit(final_url, tab.title);
@@ -879,7 +891,8 @@ std::string BrowserController::DumpNetworkLog() const
 // fetched; data: and empty hrefs are skipped.
 void FetchExternalStylesheets(renderer::Page& page,
                               const std::string& base_url,
-                              const BrowserController::FetchFn& fetch)
+                              const BrowserController::FetchFn& fetch,
+                              base::ThreadPool& pool)
 {
   dom::Document* doc = page.document();
   if (doc == nullptr) {
@@ -955,7 +968,6 @@ void FetchExternalStylesheets(renderer::Page& page,
     }
     sheets.push_back(std::move(sheet.value()));
   } else {
-    base::ThreadPool pool;
     std::vector<std::future<base::Result<css::StyleSheet>>> futures;
     futures.reserve(urls.size());
     for (const std::string& url : urls) {
@@ -978,7 +990,8 @@ void FetchExternalStylesheets(renderer::Page& page,
 
 void FetchPageImages(renderer::Page& page,
                      const std::string& base_url,
-                     const BrowserController::FetchFn& fetch)
+                     const BrowserController::FetchFn& fetch,
+                     base::ThreadPool& pool)
 {
   dom::Document* doc = page.document();
   if (doc == nullptr) {
@@ -1064,7 +1077,6 @@ void FetchPageImages(renderer::Page& page,
     return;
   }
 
-  base::ThreadPool pool;
   std::vector<std::future<base::Result<image::Image>>> futures;
   futures.reserve(pending.size());
   for (const PendingImage& item : pending) {
