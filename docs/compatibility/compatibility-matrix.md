@@ -2,9 +2,8 @@
 
 > 本文档诚实记录每个特性的支持状态。**禁止**把"接口存在"写成"已实现"。
 > 状态取值：Not Started / Planned / In Progress / Partial / Implemented / Tested。
-> 最后更新：2026-08（Phases 0–8 M1 + M2 子集 + 外部脚本/async-defer + Grid 布局 +
-> security Origin M1：存储/图像/媒体/PDF/GUI/JS runtime + DOM 绑定/脚本执行/事件循环、
-> 压缩/TLS/GIF/LocalStorage/Flexbox M1–M6、ThreadPool 并行解码）。
+> 最后更新：2026-08（外部 `<link rel=stylesheet>`、浏览器 UA、window.location 导航、
+> SVG 解码、级联规则分桶、并行图片/样式表抓取）。
 
 | 特性 | 状态 | 测试证据 | 备注 |
 | --- | --- | --- | --- |
@@ -15,9 +14,9 @@
 | HTML tokenizer | Tested | HTML 套件 | 完整 WHATWG 命名字符引用表（2125 项，含双码点，生成代码）+ RAWTEXT/RCDATA |
 | HTML parser | Tested | HTML 套件 | 插入模式子集（无 table 容错）；隐含 p 闭合按 button 作用域判定 |
 | DOM | Tested | DOM 套件 | 树操作、querySelector 子集 |
-| CSS tokenizer/parser | Tested | CSS 套件 | 规则、声明、!important、@media |
+| CSS tokenizer/parser | Tested | CSS 套件 + 解析器健壮性回归 | 规则、声明、!important、@media；**分号/花括号/`@font-face` 等声明块不再导致死循环**（曾致 15 GB 内存暴涨）；外部 `<link rel=stylesheet>` 抓取+解析+应用（并行） |
 | 选择器匹配 | Tested | CSS 套件 | 属性/伪类(:first-child/:last-child/:nth-child/:root)/组合器子集 |
-| 级联 / 计算样式 | Tested | Style 套件 | 特异性、继承、内联样式 |
+| 级联 / 计算样式 | Tested | Style 套件 | 特异性、继承、内联样式；**规则按最右复合选择器分桶**（id/class/tag/universal），实测 6004 元素页面级联 0.688s→0.144s（约 5×） |
 | CSS 自定义属性 | Partial | 4 Style 单元测试 | `--name` 定义 + `var()` 引用（含 fallback）、默认继承、var() 无法解析时声明无效；无嵌套 var()/同元素链式引用 |
 | 逻辑属性 | Partial | 3 Style 单元测试 | inline/block-size、margin/padding-inline/block（1–2 值）、-start/end 长手属性、border-block-start/end、place-items→align-items；无 inline 轴 justify |
 | CSS 数学函数 | Partial | 5 Style + 4 Layout 单元测试 | `calc()`（+/- 线性组合）、`min()`/`max()`/`clamp()`（可嵌套 calc 与 var()）、vw/vh/vmin/vmax 单位，布局时对包含块求值；无 calc * /、嵌套 min/max |
@@ -38,6 +37,8 @@
 | 图像解码 PNG | Tested | 16 图像单元测试 | 自研解码器（chunk/CRC/滤波/Adam7/全部颜色类型） |
 | 图像解码 JPEG | Tested | 16 图像单元测试 | 封装 libjpeg，接口统一为 neko::image |
 | 图像解码 GIF | Tested | 8 图像单元测试（含测试内 LZW 编码器） | 自研解码器（GIF87a/89a、全局/局部色表、LZW 变长码宽、交错、GCE 透明）；仅渲染首帧（无动画） |
+| 图像解码 SVG | Partial | 6 图像单元测试 + 端到端截图 | 自研最小栅格化器：svg/g/a/rect(含圆角)/circle/ellipse/line/polyline/polygon/path（M/L/H/V/C/S/Q/T/A/Z + 相对）、fill/stroke/stroke-width/透明度、transform（translate/scale/rotate/matrix）、viewBox meet 居中、2× 超采样抗锯齿；无 <text>/渐变/图案/滤镜/use/clip-path 蒙版 |
+| 图像解码 WebP/AVIF | Not Started | — | 返回显式 NOT IMPLEMENTED |
 | 页面内 `<img>` 渲染 | Partial | Renderer + Layout + Paint 套件 | 子资源抓取+解码注入、行内原子盒（与文字同行）、replaced 尺寸（固有/显式/比例、presentational width/height）、object-fit fill/contain/cover/none/scale-down、vertical-align baseline/middle/top/bottom |
 | 图像解码 WebP/AVIF | Not Started | — | 返回显式 NOT IMPLEMENTED |
 | WAV 音频解码 | Tested | 13 媒体单元测试 | 自研 RIFF/WAVE，PCM+float，8/16/24/32-bit |
@@ -50,10 +51,10 @@
 | 下载器 | Tested | Browser 套件 | Content-Disposition/URL 文件名、原子写入 |
 | 绘制 / 光栅化 | Tested | Paint 套件 | 纯色、边框、文字、PPM |
 | 合成器 | Not Started | — | — |
-| JavaScript（runtime，QuickJS） | Partial | 66 JS 单元测试 + 浏览器集成测试 + CLI/GUI 集成 | ES2025 核心语言、console、执行时限/内存上限、**DOM 绑定子集**（document/Node/Element/style/timers/events/navigator/screen）、**页内 `<script>` 执行（内联 + 外部 src=、async/defer）**、**最小事件循环**（setTimeout/setInterval 同步泵）、**microtask 泵送**（async/.then 推进、未处理 rejection 报告）、**localStorage/fetch（Phase 8 M3 子集）**；无完整 Web IDL、无 WebSocket/XHR/sessionStorage、module 脚本不执行 |
-| Fetch（浏览器 API） | Not Started | — | — |
+| JavaScript（runtime，QuickJS） | Partial | 69 JS 单元测试 + 浏览器集成测试 + CLI/GUI 集成 | ES2025 核心语言、console、执行时限/内存上限、**DOM 绑定子集**（document/Node/Element/style/timers/events/navigator/screen/**location**）、**页内 `<script>` 执行（内联 + 外部 src=、async/defer）**、**最小事件循环**（setTimeout/setInterval 同步泵）、**microtask 泵送**（async/.then 推进、未处理 rejection 报告）、**localStorage/fetch（Phase 8 M3 子集）**；**window.location：href 读写、protocol/host/hostname/port/pathname/search/hash/origin、assign()/replace()/reload()/toString()，脚本导航由浏览器层执行（JS 重定向页可用）**；无完整 Web IDL、无 WebSocket/XHR/sessionStorage、module 脚本不执行 |
+| Fetch（浏览器 API） | Partial | JS 单元测试 + 浏览器集成测试 | window.fetch Promise<Response>（status/ok/headers.get/text/json）、相对 URL 解析、网络错误 reject；无 CORS preflight/streaming/FormData |
 | IndexedDB | Not Started | — | — |
-| 多线程 | Partial | 7 base 单元测试 + TSan 通过 | `base::ThreadPool`（固定 worker、Post/Submit、WaitIdle、析构排空）、页内多 `<img>` 并行解码（抓取串行、解码并行）；无多进程（Phase 12） |
+| 多线程 | Partial | 7 base 单元测试 + TSan 通过 | `base::ThreadPool`（固定 worker、Post/Submit、WaitIdle、析构排空）、页内多 `<img>` 与外部 `<link rel=stylesheet>` **抓取+解析/解码并行**（FetchFn 需线程安全）；无多进程（Phase 12） |
 | 安全（Origin/SOP） | Partial | 8 security 单元测试 + 浏览器集成测试 | `security::Origin`（scheme+host+port 三元组、同源判定、不透明 origin）、标签页记录页面 origin；SOP 实施/CORS/CSP 未开始（Phase 10 后续） |
 | GUI（Qt6） | Partial | UI 冒烟测试（offscreen）+ 端到端截图 | 标签页/地址栏/工具栏/DevTools/历史/书签/下载/设置停靠面板；未做像素级渲染对比 |
 | DevTools | Partial | GUI 验证 | DOM 树 / 网络日志 / Console；无断点调试 |
