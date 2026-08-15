@@ -46,6 +46,14 @@ public:
   Connect(std::string_view host, uint16_t port, const TlsOptions& options = {});
 
   base::Result<std::size_t> Send(std::string_view data);
+  // Reads up to |max_bytes| bytes, returning whatever is available without
+  // waiting for a clean TLS close.  An empty result means the peer closed or
+  // the timeout elapsed before any byte arrived.  A peer that closes the TCP
+  // connection without a close_notify alert is treated as EOF here: the
+  // completeness of the HTTP message is validated by the HTTP layer (via
+  // Content-Length / the chunked terminator), which keeps a truncated-stream
+  // attack from being accepted silently.
+  base::Result<std::string> Receive(std::size_t max_bytes, int timeout_ms = 10000);
   // Reads until a clean TLS close, EOF or |timeout_ms|, returning everything
   // received so far.
   base::Result<std::string> ReceiveAll(int timeout_ms = 10000);

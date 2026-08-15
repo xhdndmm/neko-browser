@@ -6,6 +6,7 @@
 #include "neko/network/socket.h"
 #include "neko/network/tls_socket.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <optional>
@@ -115,6 +116,38 @@ std::string_view TrimView(std::string_view text)
   return text;
 }
 
+// Parses one chunk-size line ("1A", "1A;ext=...").  Returns the byte count,
+// or nullopt for an empty/invalid value or one that overflows size_t (a
+// crafted size could otherwise wrap and silently truncate the body).
+std::optional<std::size_t> ParseChunkSizeLine(std::string_view line)
+{
+  const std::size_t semi = line.find(';');
+  const std::string_view hex = line.substr(0, semi);
+  std::size_t chunk_size = 0;
+  bool valid = !hex.empty();
+  for (const char c : hex) {
+    int digit = -1;
+    if (c >= '0' && c <= '9') {
+      digit = c - '0';
+    } else if (c >= 'a' && c <= 'f') {
+      digit = c - 'a' + 10;
+    } else if (c >= 'A' && c <= 'F') {
+      digit = c - 'A' + 10;
+    } else {
+      valid = false;
+      break;
+    }
+    if (chunk_size > (SIZE_MAX - static_cast<std::size_t>(digit)) / 16) {
+      return std::nullopt;
+    }
+    chunk_size = chunk_size * 16 + static_cast<std::size_t>(digit);
+  }
+  if (!valid) {
+    return std::nullopt;
+  }
+  return chunk_size;
+}
+
 // Decodes a chunked transfer body into |out.body|.
 base::Result<void> DecodeChunked(std::string_view data, HttpResponse& out)
 {
@@ -126,33 +159,11 @@ base::Result<void> DecodeChunked(std::string_view data, HttpResponse& out)
       return base::Err(base::Error::Parse("truncated chunk size line"));
     }
     const std::string_view size_line = data.substr(pos, line_end - pos);
-    const std::size_t hex_end = size_line.find(';');
-    const std::string_view hex = size_line.substr(0, hex_end);
-    std::size_t chunk_size = 0;
-    bool valid = !hex.empty();
-    for (const char c : hex) {
-      int digit = -1;
-      if (c >= '0' && c <= '9') {
-        digit = c - '0';
-      } else if (c >= 'a' && c <= 'f') {
-        digit = c - 'a' + 10;
-      } else if (c >= 'A' && c <= 'F') {
-        digit = c - 'A' + 10;
-      } else {
-        valid = false;
-        break;
-      }
-      // Guard against size_t wraparound: chunk_size * 16 + digit must not
-      // overflow, otherwise a crafted chunk size could wrap to 0 or a small
-      // value and silently truncate / misparse the response body.
-      if (chunk_size > (SIZE_MAX - static_cast<std::size_t>(digit)) / 16) {
-        return base::Err(base::Error::Parse("chunk size too large"));
-      }
-      chunk_size = chunk_size * 16 + static_cast<std::size_t>(digit);
-    }
-    if (!valid) {
+    const std::optional<std::size_t> parsed = ParseChunkSizeLine(size_line);
+    if (!parsed.has_value()) {
       return base::Err(base::Error::Parse("invalid chunk size"));
     }
+    const std::size_t chunk_size = parsed.value();
     pos = line_end + 2;
     if (chunk_size == 0) {
       out.body = std::move(body);
@@ -183,15 +194,16 @@ std::string HttpResponse::GetHeader(std::string_view name) const
   return {};
 }
 
-base::Result<HttpResponse> ParseHttpResponse(std::string_view raw)
+// Parses the status line and header section of a response.  |header_block|
+// must include the terminating CRLFCRLF.  Only fills status_code / reason /
+// headers; body framing is handled by the caller.
+base::Result<void> ParseResponseHeaders(std::string_view header_block, HttpResponse& response)
 {
-  HttpResponse response;
-
-  const std::size_t line_end = raw.find("\r\n");
+  const std::size_t line_end = header_block.find("\r\n");
   if (line_end == std::string_view::npos) {
     return base::Err(base::Error::Parse("missing status line"));
   }
-  const std::string_view status_line = raw.substr(0, line_end);
+  const std::string_view status_line = header_block.substr(0, line_end);
   const std::size_t sp1 = status_line.find(' ');
   if (sp1 == std::string_view::npos) {
     return base::Err(base::Error::Parse("malformed status line"));
@@ -221,15 +233,14 @@ base::Result<HttpResponse> ParseHttpResponse(std::string_view raw)
 
   std::size_t pos = line_end + 2;
   for (;;) {
-    const std::size_t end = raw.find("\r\n", pos);
+    const std::size_t end = header_block.find("\r\n", pos);
     if (end == std::string_view::npos) {
       return base::Err(base::Error::Parse("truncated header section"));
     }
     if (end == pos) {
-      pos += 2;
-      break;
+      break; // CRLFCRLF terminator
     }
-    const std::string_view line = raw.substr(pos, end - pos);
+    const std::string_view line = header_block.substr(pos, end - pos);
     const std::size_t colon = line.find(':');
     if (colon != std::string_view::npos) {
       HttpHeader header;
@@ -239,8 +250,27 @@ base::Result<HttpResponse> ParseHttpResponse(std::string_view raw)
     }
     pos = end + 2;
   }
+  return base::Ok();
+}
 
-  const std::string_view body = raw.substr(pos);
+// Determines how the response body is framed and returns the decoded body,
+// or an error.  |raw_body| is the full body bytes already on hand (used by
+// the legacy ParseHttpResponse path); a ResponseReader reads incrementally.
+struct BodyFraming
+{
+  enum class Kind
+  {
+    kNone, // no body (e.g. 204/304, HEAD)
+    kChunked,
+    kContentLength,
+    kUntilClose,
+  };
+  Kind kind = Kind::kNone;
+  std::size_t length = 0; // kContentLength
+};
+
+base::Result<BodyFraming> ClassifyBody(const HttpResponse& response)
+{
   const std::vector<std::string_view> transfer_encodings =
       GetAllHeaderValues(response, "transfer-encoding");
   const std::vector<std::string_view> content_lengths =
@@ -263,11 +293,7 @@ base::Result<HttpResponse> ParseHttpResponse(std::string_view raw)
     if (!base::AsciiEqualsIgnoreCase(TrimView(final_te), "chunked")) {
       return base::Err(base::Error::Parse("unsupported transfer-encoding"));
     }
-    const base::Result<void> decoded = DecodeChunked(body, response);
-    if (!decoded) {
-      return base::Err(decoded.error());
-    }
-    return response;
+    return BodyFraming{BodyFraming::Kind::kChunked, 0};
   }
 
   if (!content_lengths.empty()) {
@@ -284,15 +310,202 @@ base::Result<HttpResponse> ParseHttpResponse(std::string_view raw)
       }
       length = parsed;
     }
-    response.body = std::string(body.substr(0, length.value()));
-  } else {
+    // Responses that are defined to never carry a body ignore Content-Length
+    // (RFC 7230 3.3.3 / 3.3.2): a "0" is not an error here, and a nonzero
+    // value on a bodyless response is garbage that must not be read as body.
+    if (response.status_code == 204 || response.status_code == 304 ||
+        (response.status_code >= 100 && response.status_code < 200)) {
+      return BodyFraming{BodyFraming::Kind::kNone, 0};
+    }
+    return BodyFraming{BodyFraming::Kind::kContentLength, length.value()};
+  }
+
+  // No framing headers: the body runs until the connection closes.
+  return BodyFraming{BodyFraming::Kind::kUntilClose, 0};
+}
+
+base::Result<HttpResponse> ParseHttpResponse(std::string_view raw)
+{
+  HttpResponse response;
+
+  const std::size_t header_end = raw.find("\r\n\r\n");
+  if (header_end == std::string_view::npos) {
+    return base::Err(base::Error::Parse("missing header terminator"));
+  }
+  const base::Result<void> headers = ParseResponseHeaders(raw.substr(0, header_end + 4), response);
+  if (!headers) {
+    return base::Err(headers.error());
+  }
+  const std::string_view body = raw.substr(header_end + 4);
+
+  const base::Result<BodyFraming> framing = ClassifyBody(response);
+  if (!framing) {
+    return base::Err(framing.error());
+  }
+  switch (framing.value().kind) {
+  case BodyFraming::Kind::kChunked: {
+    const base::Result<void> decoded = DecodeChunked(body, response);
+    if (!decoded) {
+      return base::Err(decoded.error());
+    }
+    return response;
+  }
+  case BodyFraming::Kind::kContentLength: {
+    // A body shorter than Content-Length is a truncated response and must be
+    // rejected rather than silently accepted (the TLS layer treats a
+    // missing close_notify as EOF, so this check is the integrity backstop).
+    if (body.size() < framing.value().length) {
+      return base::Err(base::Error::Parse("truncated body"));
+    }
+    response.body = std::string(body.substr(0, framing.value().length));
+    return response;
+  }
+  case BodyFraming::Kind::kNone:
+    response.body.clear();
+    return response;
+  case BodyFraming::Kind::kUntilClose:
     response.body = std::string(body);
+    return response;
   }
   return response;
 }
 
+// Incremental reader over a transport: reads the header block, then exactly
+// the body bytes the response framing requires.  A peer that closes early is
+// reported as an error by the framing-aware readers (never silently accepted
+// as a complete body).
+template <typename Transport> struct ResponseReader
+{
+  Transport& transport;
+  std::string buffer; // bytes read but not yet consumed
+
+  static constexpr std::size_t kChunkBytes = 16384;
+  static constexpr std::size_t kMaxHeaderBytes = 256 * 1024;
+
+  // Appends the next chunk from the transport.  Returns false when the peer
+  // closed (or the timeout elapsed) with no data.
+  base::Result<bool> Fill()
+  {
+    const base::Result<std::string> chunk = transport.Receive(kChunkBytes);
+    if (!chunk) {
+      return base::Err(chunk.error());
+    }
+    const bool got = !chunk.value().empty();
+    buffer += chunk.value();
+    return got;
+  }
+
+  // The header block including the trailing CRLFCRLF.
+  base::Result<std::string> ReadHeaders()
+  {
+    for (;;) {
+      const std::size_t sep = buffer.find("\r\n\r\n");
+      if (sep != std::string::npos) {
+        std::string out = buffer.substr(0, sep + 4);
+        buffer.erase(0, sep + 4);
+        return out;
+      }
+      if (buffer.size() > kMaxHeaderBytes) {
+        return base::Err(base::Error::Parse("response headers too large"));
+      }
+      const base::Result<bool> got = Fill();
+      if (!got) {
+        return base::Err(got.error());
+      }
+      if (!got.value()) {
+        return base::Err(base::Error::Parse("truncated response headers"));
+      }
+    }
+  }
+
+  // One line, not including the CRLF terminator.
+  base::Result<std::string> ReadLine()
+  {
+    for (;;) {
+      const std::size_t nl = buffer.find("\r\n");
+      if (nl != std::string::npos) {
+        std::string out = buffer.substr(0, nl);
+        buffer.erase(0, nl + 2);
+        return out;
+      }
+      const base::Result<bool> got = Fill();
+      if (!got) {
+        return base::Err(got.error());
+      }
+      if (!got.value()) {
+        return base::Err(base::Error::Parse("truncated line"));
+      }
+    }
+  }
+
+  // Exactly |count| bytes.
+  base::Result<std::string> ReadExactly(std::size_t count)
+  {
+    std::string out;
+    out.reserve(count);
+    while (out.size() < count) {
+      const std::size_t take = std::min(count - out.size(), buffer.size());
+      out += buffer.substr(0, take);
+      buffer.erase(0, take);
+      if (out.size() == count) {
+        return out;
+      }
+      const base::Result<bool> got = Fill();
+      if (!got) {
+        return base::Err(got.error());
+      }
+      if (!got.value()) {
+        return base::Err(base::Error::Parse("connection closed mid-body"));
+      }
+    }
+    return out;
+  }
+};
+
+// Reads a chunked body from |reader| and returns the decoded body.
+template <typename Transport>
+base::Result<std::string> ReadChunkedBody(ResponseReader<Transport>& reader)
+{
+  std::string body;
+  for (;;) {
+    const base::Result<std::string> size_line = reader.ReadLine();
+    if (!size_line) {
+      return base::Err(size_line.error());
+    }
+    const std::optional<std::size_t> parsed = ParseChunkSizeLine(size_line.value());
+    if (!parsed.has_value()) {
+      return base::Err(base::Error::Parse("invalid chunk size"));
+    }
+    const std::size_t chunk_size = parsed.value();
+    if (chunk_size == 0) {
+      // Trailer section: read until the empty line.
+      for (;;) {
+        const base::Result<std::string> trailer = reader.ReadLine();
+        if (!trailer) {
+          return base::Err(trailer.error());
+        }
+        if (trailer.value().empty()) {
+          return body;
+        }
+      }
+    }
+    const base::Result<std::string> data = reader.ReadExactly(chunk_size);
+    if (!data) {
+      return base::Err(data.error());
+    }
+    body += data.value();
+    const base::Result<std::string> terminator = reader.ReadLine();
+    if (!terminator) {
+      return base::Err(terminator.error());
+    }
+    if (!terminator.value().empty()) {
+      return base::Err(base::Error::Parse("malformed chunk terminator"));
+    }
+  }
+}
+
 // Sends |request| over a transport (Socket or TlsSocket) and parses the raw
-// response.  The two transports expose the same Send/ReceiveAll interface.
+// response.  The two transports expose the same Send/Receive interface.
 template <typename Transport>
 base::Result<HttpResponse> PerformRequest(Transport& transport, const std::string& request)
 {
@@ -300,11 +513,58 @@ base::Result<HttpResponse> PerformRequest(Transport& transport, const std::strin
   if (!sent) {
     return base::Err(sent.error());
   }
-  const base::Result<std::string> raw = transport.ReceiveAll();
-  if (!raw) {
-    return base::Err(raw.error());
+
+  ResponseReader<Transport> reader(transport);
+  const base::Result<std::string> header_block = reader.ReadHeaders();
+  if (!header_block) {
+    return base::Err(header_block.error());
   }
-  return ParseHttpResponse(raw.value());
+  HttpResponse response;
+  const base::Result<void> headers = ParseResponseHeaders(header_block.value(), response);
+  if (!headers) {
+    return base::Err(headers.error());
+  }
+  const base::Result<BodyFraming> framing = ClassifyBody(response);
+  if (!framing) {
+    return base::Err(framing.error());
+  }
+  switch (framing.value().kind) {
+  case BodyFraming::Kind::kChunked: {
+    const base::Result<std::string> body = ReadChunkedBody(reader);
+    if (!body) {
+      return base::Err(body.error());
+    }
+    response.body = std::move(body.value());
+    return response;
+  }
+  case BodyFraming::Kind::kContentLength: {
+    const base::Result<std::string> body = reader.ReadExactly(framing.value().length);
+    if (!body) {
+      return base::Err(body.error());
+    }
+    response.body = std::move(body.value());
+    return response;
+  }
+  case BodyFraming::Kind::kNone:
+    response.body.clear();
+    return response;
+  case BodyFraming::Kind::kUntilClose:
+    // No framing: read until the connection closes (or the timeout).  The
+    // TLS layer treats a missing close_notify as EOF, so this terminates on
+    // real-world CDN servers too.
+    for (;;) {
+      const base::Result<std::string> chunk =
+          transport.Receive(ResponseReader<Transport>::kChunkBytes);
+      if (!chunk) {
+        return base::Err(chunk.error());
+      }
+      if (chunk.value().empty()) {
+        return response;
+      }
+      response.body += chunk.value();
+    }
+  }
+  return response;
 }
 
 base::Result<HttpResponse> HttpGet(const url::Url& url,

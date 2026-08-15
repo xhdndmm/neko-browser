@@ -29,6 +29,13 @@ public:
   static base::Result<Socket> Connect(std::string_view host, uint16_t port, int timeout_ms = 10000);
 
   base::Result<std::size_t> Send(std::string_view data);
+  // Reads up to |max_bytes| bytes, returning whatever is available without
+  // waiting for the peer to close.  An empty result means EOF or timeout
+  // before any byte arrived; a shorter-than-requested result means the peer
+  // closed or the timeout elapsed mid-read.  I/O errors are returned as Err.
+  // The HTTP layer uses this to read exactly as many body bytes as the
+  // response framing requires instead of waiting for a clean close.
+  base::Result<std::string> Receive(std::size_t max_bytes, int timeout_ms = 10000);
   // Reads until EOF or timeout, returning everything received.
   base::Result<std::string> ReceiveAll(int timeout_ms = 10000);
 

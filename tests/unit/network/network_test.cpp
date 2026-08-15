@@ -403,10 +403,22 @@ private:
             response = "HTTP/1.1 302 Found\r\nLocation: http://example.invalid/\r\n"
                        "Content-Length: 0\r\n\r\n";
           } else {
-            response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 20\r\n"
+            // "<h1>Hello TLS</h1>" is 18 bytes; Content-Length must match
+            // exactly (a mismatch is a truncated response and the client now
+            // rejects it).
+            response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 18\r\n"
                        "\r\n<h1>Hello TLS</h1>";
           }
           SSL_write(ssl, response.data(), static_cast<int>(response.size()));
+          if (path == "/abrupt-close") {
+            // Simulate a CDN that closes the TCP connection WITHOUT a
+            // close_notify alert after sending the full response (observed
+            // on real sites such as sohu/bing).  The client must accept the
+            // complete response even though the TLS stream is truncated.
+            SSL_free(ssl);
+            ::close(cfd);
+            continue;
+          }
         }
         SSL_shutdown(ssl);
         SSL_free(ssl);
@@ -551,6 +563,38 @@ TEST(TlsTest, GetFromLocalTlsServer)
   ASSERT_TRUE(result.has_value()) << result.error().message();
   EXPECT_EQ(result.value().status_code, 200);
   EXPECT_EQ(result.value().body, "<h1>Hello TLS</h1>");
+}
+
+TEST(TlsTest, AcceptsCompleteResponseAfterAbruptClose)
+{
+  // Regression: real CDN-fronted sites (sohu.com, cn.bing.com) close the TCP
+  // connection without a TLS close_notify after sending the full response.
+  // OpenSSL reports this as "unexpected eof while reading"; the client must
+  // still accept the (length-validated) response instead of failing the
+  // whole request.  The HTTP layer's Content-Length check is the integrity
+  // backstop, so a genuinely truncated body is still rejected.
+  TestTlsServer server;
+  ASSERT_TRUE(server.IsValid());
+  TlsOptions options;
+  options.extra_ca_cert_pem = server.cert_pem();
+  const std::string host =
+      "https://localhost:" + std::to_string(server.port()) + "/abrupt-close";
+  const auto url = url::Url::Parse(host);
+  ASSERT_TRUE(url.has_value());
+  const auto result = HttpGet(url.value(), 5, {}, options);
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  EXPECT_EQ(result.value().status_code, 200);
+  EXPECT_EQ(result.value().body, "<h1>Hello TLS</h1>");
+}
+
+TEST(HttpTest, RejectsTruncatedContentLengthBody)
+{
+  // A response whose body is shorter than Content-Length must be rejected
+  // (truncation): the TLS layer hands back whatever a truncated close
+  // delivered, and this check is what stops a truncated response from being
+  // accepted silently.
+  EXPECT_FALSE(ParseHttpResponse(
+      "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nshort").has_value());
 }
 
 TEST(TlsTest, HttpsToHttpRedirectIsRefused)

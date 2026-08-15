@@ -201,14 +201,14 @@ base::Result<std::size_t> TlsSocket::Send(std::string_view data)
   return sent;
 }
 
-base::Result<std::string> TlsSocket::ReceiveAll(int timeout_ms)
+base::Result<std::string> TlsSocket::Receive(std::size_t max_bytes, int timeout_ms)
 {
   if (impl_->ssl == nullptr) {
     return base::Err(base::Error::Network("TLS: not connected"));
   }
   std::string out;
   char buffer[16384];
-  for (;;) {
+  while (out.size() < max_bytes) {
     // Hand back any data that is already buffered inside the TLS layer
     // before waiting on the socket.
     if (SSL_pending(impl_->ssl.get()) <= 0) {
@@ -237,7 +237,8 @@ base::Result<std::string> TlsSocket::ReceiveAll(int timeout_ms)
         return base::Err(base::Error::Network("TLS poll failed"));
       }
     }
-    const int n = SSL_read(impl_->ssl.get(), buffer, sizeof(buffer));
+    const std::size_t want = std::min<std::size_t>(max_bytes - out.size(), sizeof(buffer));
+    const int n = SSL_read(impl_->ssl.get(), buffer, static_cast<int>(want));
     if (n > 0) {
       out.append(buffer, static_cast<std::size_t>(n));
       continue;
@@ -249,14 +250,35 @@ base::Result<std::string> TlsSocket::ReceiveAll(int timeout_ms)
     if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
       continue;
     }
-    if (err == SSL_ERROR_SYSCALL && n == 0) {
-      // The peer closed the TCP connection without a close_notify alert
-      // (RFC 8446 §6.1).  Treating a truncated TLS stream as a clean end
-      // would accept a potentially attacked prefix, so report it as an
-      // error instead.
-      return base::Err(base::Error::Network("TLS: connection closed without close_notify"));
+    if (err == SSL_ERROR_SSL || (err == SSL_ERROR_SYSCALL && n == 0)) {
+      // The peer closed the TCP connection without a complete close_notify
+      // (RFC 8448 §6.1).  Some real servers (CDN-fronted sites) do this
+      // after sending the full response.  Hand back what we have; the HTTP
+      // layer validates the message framing (Content-Length / chunked
+      // terminator), so a genuinely truncated response is still rejected
+      // there rather than accepted silently.
+      return out;
     }
     return base::Err(base::Error::Network("TLS read failed: " + SslErrorString()));
+  }
+  return out;
+}
+
+base::Result<std::string> TlsSocket::ReceiveAll(int timeout_ms)
+{
+  if (impl_->ssl == nullptr) {
+    return base::Err(base::Error::Network("TLS: not connected"));
+  }
+  std::string out;
+  for (;;) {
+    const base::Result<std::string> chunk = Receive(16384, timeout_ms);
+    if (!chunk) {
+      return chunk;
+    }
+    if (chunk.value().empty()) {
+      return out; // clean close, truncated close or timeout
+    }
+    out += chunk.value();
   }
 }
 

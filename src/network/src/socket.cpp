@@ -23,11 +23,18 @@ Socket::Socket() : fd_(-1) {}
 
 Socket::Socket(int fd) : fd_(fd) {}
 
-Socket::~Socket() { Close(); }
+Socket::~Socket()
+{
+  Close();
+}
 
-Socket::Socket(Socket&& other) noexcept : fd_(other.fd_) { other.fd_ = -1; }
+Socket::Socket(Socket&& other) noexcept : fd_(other.fd_)
+{
+  other.fd_ = -1;
+}
 
-Socket& Socket::operator=(Socket&& other) noexcept {
+Socket& Socket::operator=(Socket&& other) noexcept
+{
   if (this != &other) {
     Close();
     fd_ = other.fd_;
@@ -36,7 +43,8 @@ Socket& Socket::operator=(Socket&& other) noexcept {
   return *this;
 }
 
-void Socket::Close() {
+void Socket::Close()
+{
 #ifdef _WIN32
   if (fd_ >= 0) {
     closesocket(fd_);
@@ -50,14 +58,17 @@ void Socket::Close() {
 #endif
 }
 
-base::Result<Socket> Socket::Connect(std::string_view host, uint16_t port, int timeout_ms) {
+base::Result<Socket> Socket::Connect(std::string_view host, uint16_t port, int timeout_ms)
+{
 #ifdef _WIN32
   (void)host;
   (void)port;
   (void)timeout_ms;
   return base::Err(base::Error::NotImplemented("Windows sockets are not implemented yet"));
 #else
-  struct addrinfo hints {};
+  struct addrinfo hints
+  {
+  };
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
   struct addrinfo* results = nullptr;
@@ -82,7 +93,10 @@ base::Result<Socket> Socket::Connect(std::string_view host, uint16_t port, int t
     if (c == 0) {
       connected = true;
     } else if (errno == EINPROGRESS) {
-      struct pollfd pfd {fd, static_cast<short>(POLLOUT), 0};
+      struct pollfd pfd
+      {
+        fd, static_cast<short>(POLLOUT), 0
+      };
       const int pr = ::poll(&pfd, 1, timeout_ms);
       if (pr > 0) {
         int so_error = 0;
@@ -91,7 +105,7 @@ base::Result<Socket> Socket::Connect(std::string_view host, uint16_t port, int t
         connected = (so_error == 0);
       }
     }
-    ::fcntl(fd, F_SETFL, flags);  // restore blocking mode
+    ::fcntl(fd, F_SETFL, flags); // restore blocking mode
     if (connected) {
       break;
     }
@@ -106,7 +120,8 @@ base::Result<Socket> Socket::Connect(std::string_view host, uint16_t port, int t
 #endif
 }
 
-base::Result<std::size_t> Socket::Send(std::string_view data) {
+base::Result<std::size_t> Socket::Send(std::string_view data)
+{
 #ifdef _WIN32
   (void)data;
   return base::Err(base::Error::NotImplemented("Windows sockets are not implemented yet"));
@@ -126,18 +141,23 @@ base::Result<std::size_t> Socket::Send(std::string_view data) {
 #endif
 }
 
-base::Result<std::string> Socket::ReceiveAll(int timeout_ms) {
+base::Result<std::string> Socket::Receive(std::size_t max_bytes, int timeout_ms)
+{
 #ifdef _WIN32
+  (void)max_bytes;
   (void)timeout_ms;
   return base::Err(base::Error::NotImplemented("Windows sockets are not implemented yet"));
 #else
   std::string out;
   char buffer[16384];
-  for (;;) {
-    struct pollfd pfd {fd_, static_cast<short>(POLLIN), 0};
+  while (out.size() < max_bytes) {
+    struct pollfd pfd
+    {
+      fd_, static_cast<short>(POLLIN), 0
+    };
     const int pr = ::poll(&pfd, 1, timeout_ms);
     if (pr == 0) {
-      return out;  // timeout: hand back what we have
+      return out; // timeout: hand back what we have
     }
     if (pr < 0) {
       if (errno == EINTR) {
@@ -145,9 +165,10 @@ base::Result<std::string> Socket::ReceiveAll(int timeout_ms) {
       }
       return base::Err(base::Error::Network("poll failed"));
     }
-    const ssize_t n = ::recv(fd_, buffer, sizeof(buffer), 0);
+    const std::size_t want = std::min<std::size_t>(max_bytes - out.size(), sizeof(buffer));
+    const ssize_t n = ::recv(fd_, buffer, want, 0);
     if (n == 0) {
-      return out;  // EOF
+      return out; // EOF
     }
     if (n < 0) {
       if (errno == EINTR) {
@@ -157,7 +178,28 @@ base::Result<std::string> Socket::ReceiveAll(int timeout_ms) {
     }
     out.append(buffer, static_cast<std::size_t>(n));
   }
+  return out;
 #endif
 }
 
-}  // namespace neko::network
+base::Result<std::string> Socket::ReceiveAll(int timeout_ms)
+{
+#ifdef _WIN32
+  (void)timeout_ms;
+  return base::Err(base::Error::NotImplemented("Windows sockets are not implemented yet"));
+#else
+  std::string out;
+  for (;;) {
+    const base::Result<std::string> chunk = Receive(16384, timeout_ms);
+    if (!chunk) {
+      return chunk;
+    }
+    if (chunk.value().empty()) {
+      return out; // EOF or timeout
+    }
+    out += chunk.value();
+  }
+#endif
+}
+
+} // namespace neko::network
