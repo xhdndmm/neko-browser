@@ -2011,14 +2011,14 @@ JSValue LocalStorageLength(JSContext* ctx, JSValueConst this_val)
 // string parsing so the javascript layer stays decoupled from the url module.
 struct LocationParts
 {
-  std::string protocol;  // "https:"
-  std::string host;      // "www.example.com:8080"
-  std::string hostname;  // "www.example.com"
-  std::string port;      // "8080" (empty when the URL has no port)
-  std::string pathname;  // "/a/b" (empty when the URL has no path)
-  std::string search;    // "?x=1" (empty when absent)
-  std::string hash;      // "#frag" (empty when absent)
-  std::string origin;    // "https://www.example.com:8080"
+  std::string protocol; // "https:"
+  std::string host;     // "www.example.com:8080"
+  std::string hostname; // "www.example.com"
+  std::string port;     // "8080" (empty when the URL has no port)
+  std::string pathname; // "/a/b" (empty when the URL has no path)
+  std::string search;   // "?x=1" (empty when absent)
+  std::string hash;     // "#frag" (empty when absent)
+  std::string origin;   // "https://www.example.com:8080"
 };
 
 LocationParts ParseLocationParts(std::string_view href)
@@ -2113,32 +2113,32 @@ JSValue LocationPropGetter(JSContext* ctx, JSValueConst this_val, int magic)
   const LocationParts parts = ParseLocationParts(impl->apis.location_href());
   const std::string* value = nullptr;
   switch (magic) {
-    case 0:
-      value = &parts.protocol;
-      break;
-    case 1:
-      value = &parts.host;
-      break;
-    case 2:
-      value = &parts.hostname;
-      break;
-    case 3:
-      value = &parts.port;
-      break;
-    case 4:
-      value = &parts.pathname;
-      break;
-    case 5:
-      value = &parts.search;
-      break;
-    case 6:
-      value = &parts.hash;
-      break;
-    case 7:
-      value = &parts.origin;
-      break;
-    default:
-      return JS_NewStringLen(ctx, "", 0);
+  case 0:
+    value = &parts.protocol;
+    break;
+  case 1:
+    value = &parts.host;
+    break;
+  case 2:
+    value = &parts.hostname;
+    break;
+  case 3:
+    value = &parts.port;
+    break;
+  case 4:
+    value = &parts.pathname;
+    break;
+  case 5:
+    value = &parts.search;
+    break;
+  case 6:
+    value = &parts.hash;
+    break;
+  case 7:
+    value = &parts.origin;
+    break;
+  default:
+    return JS_NewStringLen(ctx, "", 0);
   }
   return JS_NewStringLen(ctx, value->data(), value->size());
 }
@@ -2186,7 +2186,8 @@ JSValue LocationReload(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSVa
   return JS_UNDEFINED;
 }
 
-JSValue LocationToString(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+JSValue
+LocationToString(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
   return LocationHrefGetter(ctx, this_val);
 }
@@ -2451,10 +2452,11 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
     static constexpr std::array<const char*, 8> kLocationMagic = {
         "protocol", "host", "hostname", "port", "pathname", "search", "hash", "origin"};
     for (int i = 0; i < static_cast<int>(kLocationMagic.size()); ++i) {
-      DefineGetter(ctx,
-                   location,
-                   kLocationMagic[static_cast<std::size_t>(i)],
-                   MakeGetterMagic(ctx, kLocationMagic[static_cast<std::size_t>(i)], LocationPropGetter, i));
+      DefineGetter(
+          ctx,
+          location,
+          kLocationMagic[static_cast<std::size_t>(i)],
+          MakeGetterMagic(ctx, kLocationMagic[static_cast<std::size_t>(i)], LocationPropGetter, i));
     }
     DefineAccessor(ctx,
                    location,
@@ -2468,7 +2470,7 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
     JSValue reload_fn = JS_NewCFunction(ctx, LocationReload, "reload", 0);
     JS_SetPropertyStr(ctx, location, "reload", reload_fn); // steals reload_fn
     JSValue toString_fn = JS_NewCFunction(ctx, LocationToString, "toString", 0);
-    JS_SetPropertyStr(ctx, location, "toString", toString_fn); // steals toString_fn
+    JS_SetPropertyStr(ctx, location, "toString", toString_fn);              // steals toString_fn
     JS_SetPropertyStr(ctx, window, "location", JS_DupValue(ctx, location)); // steals dup
     JS_SetPropertyStr(ctx, global, "location", location);                   // steals
   }

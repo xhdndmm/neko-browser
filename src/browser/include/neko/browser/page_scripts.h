@@ -65,12 +65,12 @@ struct ScriptRequestedNavigation
 // Returns the live runtime handle so the caller can keep it for the page's
 // lifetime and pump timers / dispatch events (see javascript::DomBinder), or
 // nullptr when the page has no scripts (or the runtime failed to start).
-std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
-                                                      const std::string& base_url,
-                                                      ScriptFetcher fetch,
-                                                      javascript::ScriptEngine::ConsoleSink sink,
-                                                      const PageScriptServices& services = {},
-                                                      ScriptRequestedNavigation* out_navigation =
-                                                          nullptr);
+std::shared_ptr<javascript::DomBinder>
+RunPageScripts(renderer::Page& page,
+               const std::string& base_url,
+               ScriptFetcher fetch,
+               javascript::ScriptEngine::ConsoleSink sink,
+               const PageScriptServices& services = {},
+               ScriptRequestedNavigation* out_navigation = nullptr);
 
 } // namespace neko::browser

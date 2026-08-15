@@ -3,19 +3,19 @@
 #include "neko/css/selector.h"
 #include "neko/css/tokenizer.h"
 #include "neko/css/value.h"
+#include "neko/dom/query.h"
 
+#include <gtest/gtest.h>
 #include <memory>
 #include <string>
 #include <string_view>
-
-#include "neko/dom/query.h"
-#include <gtest/gtest.h>
 
 namespace neko::css {
 namespace {
 
 // Builds a small DOM tree for selector matching tests.
-std::unique_ptr<dom::Document> MakeTree() {
+std::unique_ptr<dom::Document> MakeTree()
+{
   auto doc = std::make_unique<dom::Document>();
   auto html = std::make_unique<dom::Element>("html");
   auto body = std::make_unique<dom::Element>("body");
@@ -37,11 +37,13 @@ std::unique_ptr<dom::Document> MakeTree() {
   return doc;
 }
 
-dom::Element* ById(dom::Document& doc, std::string_view id) {
+dom::Element* ById(dom::Document& doc, std::string_view id)
+{
   return dom::QuerySelector(doc, std::string("#") + std::string(id));
 }
 
-TEST(CssColorTest, HexColors) {
+TEST(CssColorTest, HexColors)
+{
   const auto c1 = ParseColor("#f00");
   ASSERT_TRUE(c1.has_value());
   EXPECT_EQ(c1.value(), (Color{255, 0, 0, 255}));
@@ -58,7 +60,8 @@ TEST(CssColorTest, HexColors) {
   EXPECT_FALSE(ParseColor("#ff").has_value());
 }
 
-TEST(CssColorTest, RgbFunction) {
+TEST(CssColorTest, RgbFunction)
+{
   const auto c1 = ParseColor("rgb(255, 0, 128)");
   ASSERT_TRUE(c1.has_value());
   EXPECT_EQ(c1.value(), (Color{255, 0, 128, 255}));
@@ -77,7 +80,8 @@ TEST(CssColorTest, RgbFunction) {
   EXPECT_FALSE(ParseColor("rgb(300)").has_value());
 }
 
-TEST(CssColorTest, NamedColors) {
+TEST(CssColorTest, NamedColors)
+{
   EXPECT_EQ(ParseColor("red").value(), (Color{255, 0, 0, 255}));
   EXPECT_EQ(ParseColor("black").value(), (Color{0, 0, 0, 255}));
   EXPECT_EQ(ParseColor("white").value(), (Color{255, 255, 255, 255}));
@@ -86,7 +90,8 @@ TEST(CssColorTest, NamedColors) {
   EXPECT_FALSE(ParseColor("notacolor").has_value());
 }
 
-TEST(CssValueTest, ParseValues) {
+TEST(CssValueTest, ParseValues)
+{
   CssValue v1 = ParseCssValue("red");
   EXPECT_EQ(v1.type, CssValue::Type::kColor);
 
@@ -114,7 +119,8 @@ TEST(CssValueTest, ParseValues) {
   EXPECT_FALSE(IsKeyword(v6, "inline"));
 }
 
-TEST(CssSelectorTest, TypeAndClassAndId) {
+TEST(CssSelectorTest, TypeAndClassAndId)
+{
   auto doc = MakeTree();
   dom::Element* main = ById(*doc, "main");
   ASSERT_NE(main, nullptr);
@@ -136,7 +142,8 @@ TEST(CssSelectorTest, TypeAndClassAndId) {
   EXPECT_FALSE(MatchesSelector(*main, s4[0]));
 }
 
-TEST(CssSelectorTest, AttributeSelectors) {
+TEST(CssSelectorTest, AttributeSelectors)
+{
   auto doc = MakeTree();
   dom::Element* main = ById(*doc, "main");
 
@@ -150,7 +157,8 @@ TEST(CssSelectorTest, AttributeSelectors) {
   EXPECT_FALSE(MatchesSelector(*main, ParseSelectorList("[lang=fr]")[0]));
 }
 
-TEST(CssSelectorTest, AttributeEmptyValueNeverMatchesSubstringOps) {
+TEST(CssSelectorTest, AttributeEmptyValueNeverMatchesSubstringOps)
+{
   auto doc = MakeTree();
   dom::Element* main = ById(*doc, "main");
   ASSERT_NE(main, nullptr);
@@ -165,7 +173,8 @@ TEST(CssSelectorTest, AttributeEmptyValueNeverMatchesSubstringOps) {
   EXPECT_FALSE(MatchesSelector(*main, ParseSelectorList("[lang~=\"\"]")[0]));
 }
 
-TEST(CssSelectorTest, AttributeEqualsEmptyValueMatchesEmpty) {
+TEST(CssSelectorTest, AttributeEqualsEmptyValueMatchesEmpty)
+{
   auto doc = MakeTree();
   dom::Element* div = ById(*doc, "main");
   ASSERT_NE(div, nullptr);
@@ -175,7 +184,8 @@ TEST(CssSelectorTest, AttributeEqualsEmptyValueMatchesEmpty) {
   EXPECT_TRUE(MatchesSelector(*div, ParseSelectorList("[data-empty=\"\"]")[0]));
 }
 
-TEST(CssSelectorTest, Combinators) {
+TEST(CssSelectorTest, Combinators)
+{
   auto doc = MakeTree();
   dom::Element* span = dom::QuerySelector(*doc, "span");
   ASSERT_NE(span, nullptr);
@@ -186,7 +196,8 @@ TEST(CssSelectorTest, Combinators) {
   EXPECT_TRUE(MatchesSelector(*span, ParseSelectorList("p + p span")[0]));
 }
 
-TEST(CssSelectorTest, PseudoClasses) {
+TEST(CssSelectorTest, PseudoClasses)
+{
   auto doc = MakeTree();
   const std::vector<dom::Element*> ps = dom::QuerySelectorAll(*doc, "p");
   ASSERT_EQ(ps.size(), 2u);
@@ -201,7 +212,8 @@ TEST(CssSelectorTest, PseudoClasses) {
   EXPECT_TRUE(MatchesSelector(*p2, ParseSelectorList("p:nth-child(2n)")[0]));
 }
 
-TEST(CssSelectorTest, NthChildWithPlusParses) {
+TEST(CssSelectorTest, NthChildWithPlusParses)
+{
   // The '+' inside :nth-child(An+B) must not be mistaken for a sibling
   // combinator (regression: the complex-selector scanner only tracked []).
   auto doc = MakeTree();
@@ -216,7 +228,8 @@ TEST(CssSelectorTest, NthChildWithPlusParses) {
   EXPECT_FALSE(MatchesSelector(*p2, ParseSelectorList("p:nth-child(2n+1)")[0]));
 }
 
-TEST(CssSelectorTest, Specificity) {
+TEST(CssSelectorTest, Specificity)
+{
   auto doc = MakeTree();
   dom::Element* main = ById(*doc, "main");
 
@@ -236,12 +249,12 @@ TEST(CssSelectorTest, Specificity) {
   EXPECT_EQ(none, (Specificity{0, 0, 0}));
 }
 
-TEST(CssParserTest, ParseStyleSheet) {
-  const StyleSheet sheet = ParseStyleSheet(
-      "p { color: red; margin: 0; }\n"
-      ".note { font-size: 14px !important; }\n"
-      "@media screen { div { display: block; } }\n"
-      "@import url(other.css);");
+TEST(CssParserTest, ParseStyleSheet)
+{
+  const StyleSheet sheet = ParseStyleSheet("p { color: red; margin: 0; }\n"
+                                           ".note { font-size: 14px !important; }\n"
+                                           "@media screen { div { display: block; } }\n"
+                                           "@import url(other.css);");
 
   ASSERT_EQ(sheet.rules.size(), 2u);
   EXPECT_EQ(sheet.rules[0].selectors.size(), 1u);
@@ -261,22 +274,25 @@ TEST(CssParserTest, ParseStyleSheet) {
   EXPECT_EQ(sheet.at_rules[1].name, "import");
 }
 
-TEST(CssParserTest, SelectorList) {
+TEST(CssParserTest, SelectorList)
+{
   const StyleSheet sheet = ParseStyleSheet("h1, h2, .title { color: black; }");
   ASSERT_EQ(sheet.rules.size(), 1u);
   EXPECT_EQ(sheet.rules[0].selectors.size(), 3u);
 }
 
-TEST(CssParserTest, DeclarationBlock) {
-  const std::vector<Declaration> decls = ParseDeclarationBlock(
-      "color: red; margin: 4px; background: #fff;");
+TEST(CssParserTest, DeclarationBlock)
+{
+  const std::vector<Declaration> decls =
+      ParseDeclarationBlock("color: red; margin: 4px; background: #fff;");
   ASSERT_EQ(decls.size(), 3u);
   EXPECT_EQ(decls[0].property, "color");
   EXPECT_EQ(decls[0].value, "red");
   EXPECT_EQ(decls[2].value, "#fff");
 }
 
-TEST(CssParserTest, MalformedInputIsTolerated) {
+TEST(CssParserTest, MalformedInputIsTolerated)
+{
   const StyleSheet sheet = ParseStyleSheet("p { color: red } div {");
   // The first rule parses; the second (unclosed) rule is tolerated.
   ASSERT_GE(sheet.rules.size(), 1u);
@@ -287,7 +303,8 @@ TEST(CssParserTest, MalformedInputIsTolerated) {
 // the parser in an infinite loop pushing empty rules.  Real pages (e.g.
 // Baidu's homepage) contain "foo;" fragments and @font-face bodies made of
 // raw declarations separated by ";".
-TEST(CssParserTest, StraySemicolonAfterSelectorIsSkipped) {
+TEST(CssParserTest, StraySemicolonAfterSelectorIsSkipped)
+{
   const StyleSheet sheet = ParseStyleSheet("p; .note { color: red; }");
   // "p" is a valid type selector (empty declaration block), ".note" follows.
   ASSERT_EQ(sheet.rules.size(), 2u);
@@ -297,13 +314,15 @@ TEST(CssParserTest, StraySemicolonAfterSelectorIsSkipped) {
   EXPECT_EQ(sheet.rules[1].declarations[0].property, "color");
 }
 
-TEST(CssParserTest, TrailingSemicolonDoesNotHang) {
+TEST(CssParserTest, TrailingSemicolonDoesNotHang)
+{
   const StyleSheet sheet = ParseStyleSheet("p { color: red };");
   ASSERT_EQ(sheet.rules.size(), 1u);
   EXPECT_EQ(sheet.rules[0].declarations[0].value, "red");
 }
 
-TEST(CssParserTest, FontFaceBodyDoesNotHang) {
+TEST(CssParserTest, FontFaceBodyDoesNotHang)
+{
   // @font-face bodies are raw declarations separated by ";", not nested
   // qualified rules.  This previously stalled the at-rule loop forever.
   const StyleSheet sheet =
@@ -317,17 +336,19 @@ TEST(CssParserTest, FontFaceBodyDoesNotHang) {
   EXPECT_EQ(sheet.rules[0].declarations[0].value, "blue");
 }
 
-TEST(CssParserTest, UnmatchedCloseBraceDoesNotHang) {
+TEST(CssParserTest, UnmatchedCloseBraceDoesNotHang)
+{
   const StyleSheet sheet = ParseStyleSheet("} .a { color: red; }");
   ASSERT_EQ(sheet.rules.size(), 1u);
   EXPECT_EQ(sheet.rules[0].declarations[0].property, "color");
 }
 
-TEST(CssTokenizerTest, BasicTokens) {
+TEST(CssTokenizerTest, BasicTokens)
+{
   Tokenizer tokenizer("div.class { color: red; margin: 10px; }");
   const std::vector<CssToken> tokens = tokenizer.Tokenize();
   EXPECT_GE(tokens.size(), 12u);
 }
 
-}  // namespace
-}  // namespace neko::css
+} // namespace
+} // namespace neko::css

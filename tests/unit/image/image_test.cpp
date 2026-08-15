@@ -950,10 +950,9 @@ TEST(SvgTest, IsSvgDetectsXmlDeclarationAndBareSvg)
 
 TEST(SvgTest, RendersSolidRect)
 {
-  const std::string svg =
-      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"10\">"
-      "<rect x=\"2\" y=\"2\" width=\"16\" height=\"6\" fill=\"red\"/>"
-      "</svg>";
+  const std::string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"10\">"
+                          "<rect x=\"2\" y=\"2\" width=\"16\" height=\"6\" fill=\"red\"/>"
+                          "</svg>";
   const auto result = DecodeSvg(svg);
   ASSERT_TRUE(result.has_value()) << result.error().message();
   const Image& img = result.value();
@@ -972,11 +971,10 @@ TEST(SvgTest, RendersSolidRect)
 
 TEST(SvgTest, RendersCircleAndViewBox)
 {
-  const std::string svg =
-      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"40\" "
-      "viewBox=\"0 0 20 20\">"
-      "<circle cx=\"10\" cy=\"10\" r=\"8\" fill=\"#0000ff\"/>"
-      "</svg>";
+  const std::string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"40\" "
+                          "viewBox=\"0 0 20 20\">"
+                          "<circle cx=\"10\" cy=\"10\" r=\"8\" fill=\"#0000ff\"/>"
+                          "</svg>";
   const auto result = DecodeSvg(svg);
   ASSERT_TRUE(result.has_value()) << result.error().message();
   const Image& img = result.value();
@@ -993,12 +991,11 @@ TEST(SvgTest, RendersCircleAndViewBox)
 
 TEST(SvgTest, RendersPathFillWithTransform)
 {
-  const std::string svg =
-      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"30\" height=\"30\">"
-      "<g transform=\"translate(10, 10)\">"
-      "<path d=\"M0 0 L10 0 L10 10 Z\" fill=\"#00ff00\"/>"
-      "</g>"
-      "</svg>";
+  const std::string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"30\" height=\"30\">"
+                          "<g transform=\"translate(10, 10)\">"
+                          "<path d=\"M0 0 L10 0 L10 10 Z\" fill=\"#00ff00\"/>"
+                          "</g>"
+                          "</svg>";
   const auto result = DecodeSvg(svg);
   ASSERT_TRUE(result.has_value()) << result.error().message();
   const Image& img = result.value();

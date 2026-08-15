@@ -46,9 +46,8 @@ std::string DefaultProfileDir()
 // Loads a URL (http via the network stack) or a local file into the page.
 // Follows page-script navigation requests (window.location) recursively, up to
 // a depth cap so a redirect loop terminates.
-neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
-                                    const std::string& target,
-                                    int depth = 0)
+neko::base::Result<void>
+LoadTarget(neko::renderer::Page& page, const std::string& target, int depth = 0)
 {
   constexpr int kMaxNavigationDepth = 20;
   if (depth >= kMaxNavigationDepth) {

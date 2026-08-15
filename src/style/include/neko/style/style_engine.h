@@ -1,14 +1,14 @@
 #pragma once
 
+#include "neko/css/stylesheet.h"
+#include "neko/dom/element.h"
+#include "neko/style/computed_style.h"
+
 #include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
-
-#include "neko/css/stylesheet.h"
-#include "neko/dom/element.h"
-#include "neko/style/computed_style.h"
 
 namespace neko::style {
 
@@ -41,8 +41,9 @@ struct CascadeBuckets
 // Pipeline: UA stylesheet + <style> author sheets + external sheets + inline
 // style attribute -> selector matching -> cascade (importance > specificity >
 // order) -> inheritance -> computed style.  See docs/design/style.md.
-class StyleEngine {
- public:
+class StyleEngine
+{
+public:
   StyleEngine() = default;
 
   // Computes styles for every element in |document|.  Author sheets are
@@ -63,7 +64,7 @@ class StyleEngine {
   // returned.
   const ComputedStyle& StyleFor(const dom::Element& element) const;
 
- private:
+private:
   void ComputeElement(dom::Element& element, const ComputedStyle& inherited, float root_font_size);
   void BuildCascadeIndex(dom::Document& document);
 
@@ -73,4 +74,4 @@ class StyleEngine {
   std::unique_ptr<CascadeBuckets> buckets_;
 };
 
-}  // namespace neko::style
+} // namespace neko::style

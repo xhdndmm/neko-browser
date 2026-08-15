@@ -363,11 +363,11 @@ TEST(StyleTest, InlineStyleBeatsSelectors)
 TEST(StyleTest, CascadeBucketsMatchByRightmostKey)
 {
   auto doc = MakeDoc("<style>"
-                     "#by-id { color: red; }"              // id bucket
-                     ".by-class { color: blue; }"           // class bucket
-                     ".multi.a { font-size: 30px; }"        // each class bucket
-                     "em { color: green; }"                 // tag bucket
-                     "* { margin-top: 5px; }"               // universal bucket
+                     "#by-id { color: red; }"        // id bucket
+                     ".by-class { color: blue; }"    // class bucket
+                     ".multi.a { font-size: 30px; }" // each class bucket
+                     "em { color: green; }"          // tag bucket
+                     "* { margin-top: 5px; }"        // universal bucket
                      "</style>"
                      "<body>"
                      "<p id=\"by-id\">a</p>"

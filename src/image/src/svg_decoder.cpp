@@ -37,8 +37,14 @@ struct Mat
 {
   double a = 1, b = 0, c = 0, d = 1, e = 0, f = 0; // column-major 2D affine
 
-  static Mat Translate(double tx, double ty) { return {1, 0, 0, 1, tx, ty}; }
-  static Mat Scale(double sx, double sy) { return {sx, 0, 0, sy, 0, 0}; }
+  static Mat Translate(double tx, double ty)
+  {
+    return {1, 0, 0, 1, tx, ty};
+  }
+  static Mat Scale(double sx, double sy)
+  {
+    return {sx, 0, 0, sy, 0, 0};
+  }
   static Mat Rotate(double degrees)
   {
     const double rad = degrees * kPi / 180.0;
@@ -54,7 +60,10 @@ struct Mat
             a * o.e + c * o.f + e,
             b * o.e + d * o.f + f};
   }
-  Point Apply(const Point& p) const { return {a * p.x + c * p.y + e, b * p.x + d * p.y + f}; }
+  Point Apply(const Point& p) const
+  {
+    return {a * p.x + c * p.y + e, b * p.x + d * p.y + f};
+  }
 };
 
 // ---------------------------------------------------------------------------
@@ -97,13 +106,13 @@ bool ParseNamedColor(std::string_view name, Color& out)
     uint8_t r, g, b;
   };
   static constexpr Named kNamed[] = {
-      {"black", 0, 0, 0},        {"white", 255, 255, 255}, {"red", 255, 0, 0},
-      {"green", 0, 128, 0},      {"lime", 0, 255, 0},      {"blue", 0, 0, 255},
-      {"yellow", 255, 255, 0},   {"cyan", 0, 255, 255},    {"magenta", 255, 0, 255},
-      {"gray", 128, 128, 128},   {"grey", 128, 128, 128},  {"silver", 192, 192, 192},
-      {"maroon", 128, 0, 0},     {"olive", 128, 128, 0},   {"purple", 128, 0, 128},
-      {"teal", 0, 128, 128},     {"navy", 0, 0, 128},      {"orange", 255, 165, 0},
-      {"brown", 165, 42, 42},    {"pink", 255, 192, 203},  {"gold", 255, 215, 0},
+      {"black", 0, 0, 0},       {"white", 255, 255, 255}, {"red", 255, 0, 0},
+      {"green", 0, 128, 0},     {"lime", 0, 255, 0},      {"blue", 0, 0, 255},
+      {"yellow", 255, 255, 0},  {"cyan", 0, 255, 255},    {"magenta", 255, 0, 255},
+      {"gray", 128, 128, 128},  {"grey", 128, 128, 128},  {"silver", 192, 192, 192},
+      {"maroon", 128, 0, 0},    {"olive", 128, 128, 0},   {"purple", 128, 0, 128},
+      {"teal", 0, 128, 128},    {"navy", 0, 0, 128},      {"orange", 255, 165, 0},
+      {"brown", 165, 42, 42},   {"pink", 255, 192, 203},  {"gold", 255, 215, 0},
       {"transparent", 0, 0, 0},
   };
   std::string lower;
@@ -152,8 +161,8 @@ bool ParseColor(std::string_view text, Color& out, bool& is_none)
       }
       return false;
     }
-    if (hex.size() == 6 && ParseHexByte(hex.substr(0, 2), r) &&
-        ParseHexByte(hex.substr(2, 2), g) && ParseHexByte(hex.substr(4, 2), b)) {
+    if (hex.size() == 6 && ParseHexByte(hex.substr(0, 2), r) && ParseHexByte(hex.substr(2, 2), g) &&
+        ParseHexByte(hex.substr(4, 2), b)) {
       out.r = r;
       out.g = g;
       out.b = b;
@@ -496,9 +505,9 @@ std::vector<PathCmd> ParsePathData(std::string_view d)
     const char abs_cmd = static_cast<char>(std::toupper(static_cast<unsigned char>(cmd)));
     auto num = [&](std::size_t k, double& v) {
       v = args[k];
-      if (relative && (abs_cmd == 'M' || abs_cmd == 'L' || abs_cmd == 'H' || abs_cmd == 'V' ||
-                       abs_cmd == 'C' || abs_cmd == 'S' || abs_cmd == 'Q' || abs_cmd == 'T' ||
-                       abs_cmd == 'A')) {
+      if (relative &&
+          (abs_cmd == 'M' || abs_cmd == 'L' || abs_cmd == 'H' || abs_cmd == 'V' || abs_cmd == 'C' ||
+           abs_cmd == 'S' || abs_cmd == 'Q' || abs_cmd == 'T' || abs_cmd == 'A')) {
         if (abs_cmd == 'H') {
           v += current.x;
         } else if (abs_cmd == 'V') {
@@ -511,150 +520,150 @@ std::vector<PathCmd> ParsePathData(std::string_view d)
       }
     };
     switch (abs_cmd) {
-      case 'M': {
-        PathCmd m;
-        m.cmd = 'M';
-        double x, y;
-        num(0, x);
-        num(1, y);
-        m.args = {x, y};
-        current = {x, y};
-        start = current;
-        commands.push_back(std::move(m));
-        // Subsequent coordinate pairs in an M are implicit linetos.
-        for (std::size_t k = 2; k + 1 < args.size(); k += 2) {
-          double nx, ny;
-          num(k, nx);
-          num(k + 1, ny);
-          PathCmd l;
-          l.cmd = 'L';
-          l.args = {nx, ny};
-          current = {nx, ny};
-          commands.push_back(std::move(l));
-        }
-        break;
-      }
-      case 'L': {
+    case 'M': {
+      PathCmd m;
+      m.cmd = 'M';
+      double x, y;
+      num(0, x);
+      num(1, y);
+      m.args = {x, y};
+      current = {x, y};
+      start = current;
+      commands.push_back(std::move(m));
+      // Subsequent coordinate pairs in an M are implicit linetos.
+      for (std::size_t k = 2; k + 1 < args.size(); k += 2) {
+        double nx, ny;
+        num(k, nx);
+        num(k + 1, ny);
         PathCmd l;
         l.cmd = 'L';
-        for (std::size_t k = 0; k + 1 < args.size(); k += 2) {
-          double x, y;
-          num(k, x);
-          num(k + 1, y);
-          l.args.push_back(x);
-          l.args.push_back(y);
-          current = {x, y};
-        }
+        l.args = {nx, ny};
+        current = {nx, ny};
         commands.push_back(std::move(l));
-        break;
       }
-      case 'H':
-        if (!args.empty()) {
-          PathCmd h;
-          h.cmd = 'H';
-          double x;
-          num(0, x);
-          h.args = {x};
-          current.x = x;
-          commands.push_back(std::move(h));
-        }
-        break;
-      case 'V':
-        if (!args.empty()) {
-          PathCmd v;
-          v.cmd = 'V';
-          double y;
-          num(0, y);
-          v.args = {y};
-          current.y = y;
-          commands.push_back(std::move(v));
-        }
-        break;
-      case 'C': {
-        PathCmd c;
-        c.cmd = 'C';
-        for (std::size_t k = 0; k + 5 < args.size(); k += 6) {
-          double c1x, c1y, c2x, c2y, x, y;
-          num(k, c1x);
-          num(k + 1, c1y);
-          num(k + 2, c2x);
-          num(k + 3, c2y);
-          num(k + 4, x);
-          num(k + 5, y);
-          c.args.insert(c.args.end(), {c1x, c1y, c2x, c2y, x, y});
-          current = {x, y};
-        }
-        commands.push_back(std::move(c));
-        break;
+      break;
+    }
+    case 'L': {
+      PathCmd l;
+      l.cmd = 'L';
+      for (std::size_t k = 0; k + 1 < args.size(); k += 2) {
+        double x, y;
+        num(k, x);
+        num(k + 1, y);
+        l.args.push_back(x);
+        l.args.push_back(y);
+        current = {x, y};
       }
-      case 'S': {
-        PathCmd s_cmd;
-        s_cmd.cmd = 'S';
-        for (std::size_t k = 0; k + 3 < args.size(); k += 4) {
-          double c2x, c2y, x, y;
-          num(k, c2x);
-          num(k + 1, c2y);
-          num(k + 2, x);
-          num(k + 3, y);
-          s_cmd.args.insert(s_cmd.args.end(), {c2x, c2y, x, y});
-          current = {x, y};
-        }
-        commands.push_back(std::move(s_cmd));
-        break;
+      commands.push_back(std::move(l));
+      break;
+    }
+    case 'H':
+      if (!args.empty()) {
+        PathCmd h;
+        h.cmd = 'H';
+        double x;
+        num(0, x);
+        h.args = {x};
+        current.x = x;
+        commands.push_back(std::move(h));
       }
-      case 'Q': {
-        PathCmd q;
-        q.cmd = 'Q';
-        for (std::size_t k = 0; k + 3 < args.size(); k += 4) {
-          double cx, cy, x, y;
-          num(k, cx);
-          num(k + 1, cy);
-          num(k + 2, x);
-          num(k + 3, y);
-          q.args.insert(q.args.end(), {cx, cy, x, y});
-          current = {x, y};
-        }
-        commands.push_back(std::move(q));
-        break;
+      break;
+    case 'V':
+      if (!args.empty()) {
+        PathCmd v;
+        v.cmd = 'V';
+        double y;
+        num(0, y);
+        v.args = {y};
+        current.y = y;
+        commands.push_back(std::move(v));
       }
-      case 'T': {
-        PathCmd t;
-        t.cmd = 'T';
-        for (std::size_t k = 0; k + 1 < args.size(); k += 2) {
-          double x, y;
-          num(k, x);
-          num(k + 1, y);
-          t.args.push_back(x);
-          t.args.push_back(y);
-          current = {x, y};
-        }
-        commands.push_back(std::move(t));
-        break;
+      break;
+    case 'C': {
+      PathCmd c;
+      c.cmd = 'C';
+      for (std::size_t k = 0; k + 5 < args.size(); k += 6) {
+        double c1x, c1y, c2x, c2y, x, y;
+        num(k, c1x);
+        num(k + 1, c1y);
+        num(k + 2, c2x);
+        num(k + 3, c2y);
+        num(k + 4, x);
+        num(k + 5, y);
+        c.args.insert(c.args.end(), {c1x, c1y, c2x, c2y, x, y});
+        current = {x, y};
       }
-      case 'A': {
-        PathCmd a;
-        a.cmd = 'A';
-        for (std::size_t k = 0; k + 6 < args.size(); k += 7) {
-          double rx, ry, rot, laf, sf, x, y;
-          rx = args[k];
-          ry = args[k + 1];
-          rot = args[k + 2];
-          laf = args[k + 3];
-          sf = args[k + 4];
-          num(k + 5, x);
-          num(k + 6, y);
-          a.args.insert(a.args.end(), {rx, ry, rot, laf, sf, x, y});
-          current = {x, y};
-        }
-        commands.push_back(std::move(a));
-        break;
+      commands.push_back(std::move(c));
+      break;
+    }
+    case 'S': {
+      PathCmd s_cmd;
+      s_cmd.cmd = 'S';
+      for (std::size_t k = 0; k + 3 < args.size(); k += 4) {
+        double c2x, c2y, x, y;
+        num(k, c2x);
+        num(k + 1, c2y);
+        num(k + 2, x);
+        num(k + 3, y);
+        s_cmd.args.insert(s_cmd.args.end(), {c2x, c2y, x, y});
+        current = {x, y};
       }
-      case 'Z':
-        commands.push_back(PathCmd{'Z', {}});
-        current = start;
-        break;
-      default:
-        break;
+      commands.push_back(std::move(s_cmd));
+      break;
+    }
+    case 'Q': {
+      PathCmd q;
+      q.cmd = 'Q';
+      for (std::size_t k = 0; k + 3 < args.size(); k += 4) {
+        double cx, cy, x, y;
+        num(k, cx);
+        num(k + 1, cy);
+        num(k + 2, x);
+        num(k + 3, y);
+        q.args.insert(q.args.end(), {cx, cy, x, y});
+        current = {x, y};
+      }
+      commands.push_back(std::move(q));
+      break;
+    }
+    case 'T': {
+      PathCmd t;
+      t.cmd = 'T';
+      for (std::size_t k = 0; k + 1 < args.size(); k += 2) {
+        double x, y;
+        num(k, x);
+        num(k + 1, y);
+        t.args.push_back(x);
+        t.args.push_back(y);
+        current = {x, y};
+      }
+      commands.push_back(std::move(t));
+      break;
+    }
+    case 'A': {
+      PathCmd a;
+      a.cmd = 'A';
+      for (std::size_t k = 0; k + 6 < args.size(); k += 7) {
+        double rx, ry, rot, laf, sf, x, y;
+        rx = args[k];
+        ry = args[k + 1];
+        rot = args[k + 2];
+        laf = args[k + 3];
+        sf = args[k + 4];
+        num(k + 5, x);
+        num(k + 6, y);
+        a.args.insert(a.args.end(), {rx, ry, rot, laf, sf, x, y});
+        current = {x, y};
+      }
+      commands.push_back(std::move(a));
+      break;
+    }
+    case 'Z':
+      commands.push_back(PathCmd{'Z', {}});
+      current = start;
+      break;
+    default:
+      break;
     }
   }
   return commands;
@@ -723,8 +732,8 @@ void FlattenArc(std::vector<Point>& out,
     ry2 = ry * ry;
   }
   const double den = rx2 * y1pp2 + ry2 * x1pp2;
-  const double radicand = den != 0 ? std::max(0.0, (rx2 * ry2 - rx2 * y1pp2 - ry2 * x1pp2) / den)
-                                   : 0.0;
+  const double radicand =
+      den != 0 ? std::max(0.0, (rx2 * ry2 - rx2 * y1pp2 - ry2 * x1pp2) / den) : 0.0;
   const double coef = (large_arc == sweep ? -1.0 : 1.0) * std::sqrt(radicand);
   const double cxp = coef * ((rx * y1pp) / ry);
   const double cyp = coef * (-(ry * x1pp) / rx);
@@ -794,7 +803,8 @@ bool ParseTransform(std::string_view value, Mat& out)
         break;
       }
       args.push_back(v);
-      while (pos < s.size() && (std::isspace(static_cast<unsigned char>(s[pos])) || s[pos] == ',')) {
+      while (pos < s.size() &&
+             (std::isspace(static_cast<unsigned char>(s[pos])) || s[pos] == ',')) {
         ++pos;
       }
       if (pos < s.size() && s[pos] == ')') {
@@ -888,8 +898,8 @@ void FillPolygon(RasterBuffer& buf, const std::vector<Point>& poly, const Color&
         if (x < 0) {
           continue;
         }
-        const double covered = std::min(1.0, std::min(static_cast<double>(x) + 1.0, x1) -
-                                                 std::max(static_cast<double>(x), x0));
+        const double covered = std::min(
+            1.0, std::min(static_cast<double>(x) + 1.0, x1) - std::max(static_cast<double>(x), x0));
         buf.Blend(static_cast<std::size_t>(y) * static_cast<std::size_t>(buf.width) +
                       static_cast<std::size_t>(x),
                   color,
@@ -961,10 +971,9 @@ void RenderShape(RasterBuffer& buf,
   if (stroke && stroke_width > 0) {
     // stroke-width is in user units; the points were already transformed into
     // device space, so scale the width by the transform's average scale.
-    const double scale =
-        (std::sqrt(transform.a * transform.a + transform.b * transform.b) +
-         std::sqrt(transform.c * transform.c + transform.d * transform.d)) /
-        2.0;
+    const double scale = (std::sqrt(transform.a * transform.a + transform.b * transform.b) +
+                          std::sqrt(transform.c * transform.c + transform.d * transform.d)) /
+                         2.0;
     const double half = stroke_width / 2.0 * scale;
     for (std::size_t i = 0; i + 1 < device.size(); ++i) {
       StrokeSegment(buf, device[i], device[i + 1], half, stroke_color);
@@ -991,7 +1000,14 @@ void RenderPath(RasterBuffer& buf,
 
   auto flush = [&]() {
     if (poly.size() >= 2) {
-      RenderShape(buf, transform, poly, /*closed=*/false, fill, stroke, stroke_width, fill_color,
+      RenderShape(buf,
+                  transform,
+                  poly,
+                  /*closed=*/false,
+                  fill,
+                  stroke,
+                  stroke_width,
+                  fill_color,
                   stroke_color);
     }
     poly.clear();
@@ -1000,92 +1016,99 @@ void RenderPath(RasterBuffer& buf,
   for (const PathCmd& cmd : commands) {
     const std::vector<double>& a = cmd.args;
     switch (cmd.cmd) {
-      case 'M':
-        flush();
-        current = {a[0], a[1]};
-        start = current;
-        poly = {current};
-        break;
-      case 'L':
-        for (std::size_t k = 0; k + 1 < a.size(); k += 2) {
-          current = {a[k], a[k + 1]};
-          poly.push_back(current);
-        }
-        break;
-      case 'H':
-        current.x = a[0];
+    case 'M':
+      flush();
+      current = {a[0], a[1]};
+      start = current;
+      poly = {current};
+      break;
+    case 'L':
+      for (std::size_t k = 0; k + 1 < a.size(); k += 2) {
+        current = {a[k], a[k + 1]};
         poly.push_back(current);
-        break;
-      case 'V':
-        current.y = a[0];
-        poly.push_back(current);
-        break;
-      case 'C':
-        for (std::size_t k = 0; k + 5 < a.size(); k += 6) {
-          const Point p0 = current;
-          const Point p1{a[k], a[k + 1]};
-          const Point p2{a[k + 2], a[k + 3]};
-          const Point p3{a[k + 4], a[k + 5]};
-          std::vector<Point> flat;
-          FlattenCubic(flat, p0, p1, p2, p3, 8);
-          poly.insert(poly.end(), flat.begin(), flat.end());
-          current = p3;
-        }
-        break;
-      case 'S':
-        for (std::size_t k = 0; k + 3 < a.size(); k += 4) {
-          const Point p0 = current;
-          const Point p1 = poly.size() >= 2 ? poly[poly.size() - 2] : current;
-          const Point p2{a[k], a[k + 1]};
-          const Point p3{a[k + 2], a[k + 3]};
-          std::vector<Point> flat;
-          FlattenCubic(flat, p0, p1, p2, p3, 8);
-          poly.insert(poly.end(), flat.begin(), flat.end());
-          current = p3;
-        }
-        break;
-      case 'Q':
-        for (std::size_t k = 0; k + 3 < a.size(); k += 4) {
-          const Point p0 = current;
-          const Point p1{a[k], a[k + 1]};
-          const Point p2{a[k + 2], a[k + 3]};
-          std::vector<Point> flat;
-          FlattenQuadratic(flat, p0, p1, p2, 8);
-          poly.insert(poly.end(), flat.begin(), flat.end());
-          current = p2;
-        }
-        break;
-      case 'T':
-        for (std::size_t k = 0; k + 1 < a.size(); k += 2) {
-          const Point p0 = current;
-          const Point p1 = poly.size() >= 2 ? poly[poly.size() - 2] : current;
-          const Point p2{a[k], a[k + 1]};
-          std::vector<Point> flat;
-          FlattenQuadratic(flat, p0, p1, p2, 8);
-          poly.insert(poly.end(), flat.begin(), flat.end());
-          current = p2;
-        }
-        break;
-      case 'A':
-        for (std::size_t k = 0; k + 6 < a.size(); k += 7) {
-          const Point p0 = current;
-          const Point p1{a[k + 5], a[k + 6]};
-          std::vector<Point> flat;
-          FlattenArc(flat, p0, a[k], a[k + 1], a[k + 2], a[k + 3] != 0, a[k + 4] != 0, p1);
-          poly.insert(poly.end(), flat.begin(), flat.end());
-          current = p1;
-        }
-        break;
-      case 'Z':
-        if (poly.size() >= 2) {
-          RenderShape(buf, transform, poly, /*closed=*/true, fill, stroke, stroke_width,
-                      fill_color, stroke_color);
-        }
-        poly.clear();
-        current = start;
-        break;
-      default:
-        break;
+      }
+      break;
+    case 'H':
+      current.x = a[0];
+      poly.push_back(current);
+      break;
+    case 'V':
+      current.y = a[0];
+      poly.push_back(current);
+      break;
+    case 'C':
+      for (std::size_t k = 0; k + 5 < a.size(); k += 6) {
+        const Point p0 = current;
+        const Point p1{a[k], a[k + 1]};
+        const Point p2{a[k + 2], a[k + 3]};
+        const Point p3{a[k + 4], a[k + 5]};
+        std::vector<Point> flat;
+        FlattenCubic(flat, p0, p1, p2, p3, 8);
+        poly.insert(poly.end(), flat.begin(), flat.end());
+        current = p3;
+      }
+      break;
+    case 'S':
+      for (std::size_t k = 0; k + 3 < a.size(); k += 4) {
+        const Point p0 = current;
+        const Point p1 = poly.size() >= 2 ? poly[poly.size() - 2] : current;
+        const Point p2{a[k], a[k + 1]};
+        const Point p3{a[k + 2], a[k + 3]};
+        std::vector<Point> flat;
+        FlattenCubic(flat, p0, p1, p2, p3, 8);
+        poly.insert(poly.end(), flat.begin(), flat.end());
+        current = p3;
+      }
+      break;
+    case 'Q':
+      for (std::size_t k = 0; k + 3 < a.size(); k += 4) {
+        const Point p0 = current;
+        const Point p1{a[k], a[k + 1]};
+        const Point p2{a[k + 2], a[k + 3]};
+        std::vector<Point> flat;
+        FlattenQuadratic(flat, p0, p1, p2, 8);
+        poly.insert(poly.end(), flat.begin(), flat.end());
+        current = p2;
+      }
+      break;
+    case 'T':
+      for (std::size_t k = 0; k + 1 < a.size(); k += 2) {
+        const Point p0 = current;
+        const Point p1 = poly.size() >= 2 ? poly[poly.size() - 2] : current;
+        const Point p2{a[k], a[k + 1]};
+        std::vector<Point> flat;
+        FlattenQuadratic(flat, p0, p1, p2, 8);
+        poly.insert(poly.end(), flat.begin(), flat.end());
+        current = p2;
+      }
+      break;
+    case 'A':
+      for (std::size_t k = 0; k + 6 < a.size(); k += 7) {
+        const Point p0 = current;
+        const Point p1{a[k + 5], a[k + 6]};
+        std::vector<Point> flat;
+        FlattenArc(flat, p0, a[k], a[k + 1], a[k + 2], a[k + 3] != 0, a[k + 4] != 0, p1);
+        poly.insert(poly.end(), flat.begin(), flat.end());
+        current = p1;
+      }
+      break;
+    case 'Z':
+      if (poly.size() >= 2) {
+        RenderShape(buf,
+                    transform,
+                    poly,
+                    /*closed=*/true,
+                    fill,
+                    stroke,
+                    stroke_width,
+                    fill_color,
+                    stroke_color);
+      }
+      poly.clear();
+      current = start;
+      break;
+    default:
+      break;
     }
   }
   flush();
@@ -1128,8 +1151,7 @@ void ApplyPaintAttr(PaintState& state, std::string_view attr, std::string_view v
   } else if (attr == "fill-opacity") {
     state.fill.a = std::max(0.0, std::min(1.0, std::strtod(std::string(value).c_str(), nullptr)));
   } else if (attr == "stroke-opacity") {
-    state.stroke.a =
-        std::max(0.0, std::min(1.0, std::strtod(std::string(value).c_str(), nullptr)));
+    state.stroke.a = std::max(0.0, std::min(1.0, std::strtod(std::string(value).c_str(), nullptr)));
   } else if (attr == "opacity") {
     const double o = std::max(0.0, std::min(1.0, std::strtod(std::string(value).c_str(), nullptr)));
     state.fill.a *= o;
@@ -1143,10 +1165,7 @@ double AttrNumber(const Element& element, std::string_view key, double dflt)
   return v == nullptr || v->empty() ? dflt : std::strtod(v->c_str(), nullptr);
 }
 
-void RenderElement(RasterBuffer& buf,
-                   const Element& element,
-                   const Mat& parent,
-                   PaintState state)
+void RenderElement(RasterBuffer& buf, const Element& element, const Mat& parent, PaintState state)
 {
   for (const auto& attr : element.attrs) {
     if (attr.first == "fill" || attr.first == "stroke" || attr.first == "stroke-width" ||
@@ -1196,19 +1215,33 @@ void RenderElement(RasterBuffer& buf,
       FlattenCubic(smooth, c3, {x + w, y + h - ryy / 2}, {x + w - rxx / 2, y + h}, c4, 6);
       smooth.push_back(c5);
       FlattenCubic(smooth, c5, {x + rxx / 2, y + h}, {x, y + h - ryy / 2}, c6, 6);
-      RenderShape(buf, local, smooth, true, state.has_fill, state.has_stroke, state.stroke_width,
-                  state.fill, state.stroke);
+      RenderShape(buf,
+                  local,
+                  smooth,
+                  true,
+                  state.has_fill,
+                  state.has_stroke,
+                  state.stroke_width,
+                  state.fill,
+                  state.stroke);
       return;
     }
-    RenderShape(buf, local, {{x, y}, {x + w, y}, {x + w, y + h}, {x, y + h}}, true,
-                state.has_fill, state.has_stroke, state.stroke_width, state.fill, state.stroke);
+    RenderShape(buf,
+                local,
+                {{x, y}, {x + w, y}, {x + w, y + h}, {x, y + h}},
+                true,
+                state.has_fill,
+                state.has_stroke,
+                state.stroke_width,
+                state.fill,
+                state.stroke);
     return;
   }
   if (element.name == "circle" || element.name == "ellipse") {
     const double cx = AttrNumber(element, "cx", 0);
     const double cy = AttrNumber(element, "cy", 0);
-    const double rx = element.name == "ellipse" ? AttrNumber(element, "rx", 0)
-                                                : AttrNumber(element, "r", 0);
+    const double rx =
+        element.name == "ellipse" ? AttrNumber(element, "rx", 0) : AttrNumber(element, "r", 0);
     const double ry = element.name == "ellipse" ? AttrNumber(element, "ry", 0) : rx;
     std::vector<Point> pts;
     const int steps = 64;
@@ -1217,15 +1250,28 @@ void RenderElement(RasterBuffer& buf,
       const double a = 2.0 * kPi * static_cast<double>(i) / static_cast<double>(steps);
       pts.push_back({cx + rx * std::cos(a), cy + ry * std::sin(a)});
     }
-    RenderShape(buf, local, pts, true, state.has_fill, state.has_stroke, state.stroke_width,
-                state.fill, state.stroke);
+    RenderShape(buf,
+                local,
+                pts,
+                true,
+                state.has_fill,
+                state.has_stroke,
+                state.stroke_width,
+                state.fill,
+                state.stroke);
     return;
   }
   if (element.name == "line") {
-    RenderShape(buf, local,
+    RenderShape(buf,
+                local,
                 {{AttrNumber(element, "x1", 0), AttrNumber(element, "y1", 0)},
                  {AttrNumber(element, "x2", 0), AttrNumber(element, "y2", 0)}},
-                false, false, state.has_stroke, state.stroke_width, state.fill, state.stroke);
+                false,
+                false,
+                state.has_stroke,
+                state.stroke_width,
+                state.fill,
+                state.stroke);
     return;
   }
   if (element.name == "polyline" || element.name == "polygon") {
@@ -1239,13 +1285,26 @@ void RenderElement(RasterBuffer& buf,
       }
       pts.push_back({x, y});
     }
-    RenderShape(buf, local, pts, element.name == "polygon", state.has_fill, state.has_stroke,
-                state.stroke_width, state.fill, state.stroke);
+    RenderShape(buf,
+                local,
+                pts,
+                element.name == "polygon",
+                state.has_fill,
+                state.has_stroke,
+                state.stroke_width,
+                state.fill,
+                state.stroke);
     return;
   }
   if (element.name == "path") {
     if (const std::string* d = element.Attr("d")) {
-      RenderPath(buf, local, *d, state.has_fill, state.has_stroke, state.stroke_width, state.fill,
+      RenderPath(buf,
+                 local,
+                 *d,
+                 state.has_fill,
+                 state.has_stroke,
+                 state.stroke_width,
+                 state.fill,
                  state.stroke);
     }
     return;
@@ -1317,8 +1376,8 @@ base::Result<Image> DecodeSvg(std::string_view data)
 
   Mat to_device = Mat::Scale(2.0, 2.0);
   if (has_viewbox && vbw > 0 && vbh > 0) {
-    const double scale = std::min(static_cast<double>(buf.width) / vbw,
-                                  static_cast<double>(buf.height) / vbh);
+    const double scale =
+        std::min(static_cast<double>(buf.width) / vbw, static_cast<double>(buf.height) / vbh);
     const double tx = (static_cast<double>(buf.width) - vbw * scale) / 2.0 - vbx * scale;
     const double ty = (static_cast<double>(buf.height) - vbh * scale) / 2.0 - vby * scale;
     to_device = Mat::Translate(tx, ty) * Mat::Scale(scale, scale);
@@ -1339,9 +1398,9 @@ base::Result<Image> DecodeSvg(std::string_view data)
       double ar = 0, ag = 0, ab = 0, aa = 0;
       for (int dy = 0; dy < 2; ++dy) {
         for (int dx = 0; dx < 2; ++dx) {
-          const std::size_t idx = static_cast<std::size_t>(y * 2 + dy) *
-                                      static_cast<std::size_t>(buf.width) +
-                                  static_cast<std::size_t>(x * 2 + dx);
+          const std::size_t idx =
+              static_cast<std::size_t>(y * 2 + dy) * static_cast<std::size_t>(buf.width) +
+              static_cast<std::size_t>(x * 2 + dx);
           ar += buf.r[idx];
           ag += buf.g[idx];
           ab += buf.b[idx];
@@ -1350,7 +1409,8 @@ base::Result<Image> DecodeSvg(std::string_view data)
       }
       const double inv = aa > 0 ? 4.0 / aa : 0;
       const std::size_t idx = (static_cast<std::size_t>(y) * static_cast<std::size_t>(out_w) +
-                               static_cast<std::size_t>(x)) * 4;
+                               static_cast<std::size_t>(x)) *
+                              4;
       const double alpha = std::min(1.0, aa / 4.0);
       image.rgba[idx + 0] = static_cast<uint8_t>(std::min(255.0, ar * inv) + 0.5);
       image.rgba[idx + 1] = static_cast<uint8_t>(std::min(255.0, ag * inv) + 0.5);

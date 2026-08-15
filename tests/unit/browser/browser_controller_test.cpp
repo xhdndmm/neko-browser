@@ -690,8 +690,7 @@ TEST(BrowserControllerTest, PageScriptLocationReloadRefetches)
   struct CountingFetcher
   {
     int* served;
-    base::Result<network::HttpResponse> operator()(const url::Url& url,
-                                                   std::string_view cookie)
+    base::Result<network::HttpResponse> operator()(const url::Url& url, std::string_view cookie)
     {
       (void)url;
       (void)cookie;
@@ -786,10 +785,12 @@ TEST(BrowserControllerTest, FetchesAndAppliesExternalStylesheets)
 
   // The stylesheet (and only it — the icon link is not a stylesheet) was
   // fetched alongside the page.
-  EXPECT_NE(std::find(fetch.requests_.begin(), fetch.requests_.end(), "http://example.com/style.css"),
-            fetch.requests_.end());
-  EXPECT_EQ(std::find(fetch.requests_.begin(), fetch.requests_.end(), "http://example.com/favicon.ico"),
-            fetch.requests_.end());
+  EXPECT_NE(
+      std::find(fetch.requests_.begin(), fetch.requests_.end(), "http://example.com/style.css"),
+      fetch.requests_.end());
+  EXPECT_EQ(
+      std::find(fetch.requests_.begin(), fetch.requests_.end(), "http://example.com/favicon.ico"),
+      fetch.requests_.end());
 
   // The computed style reflects the external sheet (red text, 24px).
   Tab* tab = controller.ActiveTab();

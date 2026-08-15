@@ -1,15 +1,15 @@
 #include "neko/renderer/page.h"
 
-#include <fstream>
-#include <optional>
-#include <string>
-#include <string_view>
-
 #include "neko/base/logging.h"
 #include "neko/base/status.h"
 #include "neko/css/color.h"
 #include "neko/html/parser.h"
 #include "neko/paint/painter.h"
+
+#include <fstream>
+#include <optional>
+#include <string>
+#include <string_view>
 
 namespace neko::renderer {
 namespace {
@@ -17,7 +17,8 @@ namespace {
 // Depth-first hit-test over the layout tree.  Returns the innermost element
 // whose content contains (x, y): block children and inline runs are searched
 // before the box's own border box so deeper content wins.
-const dom::Element* ElementAt(const layout::LayoutBox& box, float x, float y) {
+const dom::Element* ElementAt(const layout::LayoutBox& box, float x, float y)
+{
   for (const auto& child : box.children) {
     if (const dom::Element* hit = ElementAt(*child, x, y)) {
       return hit;
@@ -42,15 +43,17 @@ const dom::Element* ElementAt(const layout::LayoutBox& box, float x, float y) {
   return nullptr;
 }
 
-}  // namespace
+} // namespace
 
-Page::Page() {
+Page::Page()
+{
   // Touch the default sans-serif selector so the first layout/paint pass does
   // not pay the font-discovery cost; failure is fine (8x8 fallback).
   fonts_.SelectorFor("sans-serif");
 }
 
-base::Result<void> Page::LoadHtml(std::string_view html) {
+base::Result<void> Page::LoadHtml(std::string_view html)
+{
   std::lock_guard<std::mutex> lock(mutex_);
   document_ = html::Parser(html).Parse();
   styles_.ApplyStyles(*document_);
@@ -60,7 +63,8 @@ base::Result<void> Page::LoadHtml(std::string_view html) {
   return base::Ok();
 }
 
-void Page::ReapplyStyles() {
+void Page::ReapplyStyles()
+{
   std::lock_guard<std::mutex> lock(mutex_);
   if (document_ == nullptr) {
     return;
@@ -69,7 +73,8 @@ void Page::ReapplyStyles() {
   root_.reset();
 }
 
-void Page::SetExternalStylesheets(std::vector<css::StyleSheet> sheets) {
+void Page::SetExternalStylesheets(std::vector<css::StyleSheet> sheets)
+{
   std::lock_guard<std::mutex> lock(mutex_);
   styles_.SetExternalStylesheets(std::move(sheets));
   if (document_ == nullptr) {
@@ -79,7 +84,8 @@ void Page::SetExternalStylesheets(std::vector<css::StyleSheet> sheets) {
   root_.reset();
 }
 
-base::Result<void> Page::LoadFile(std::string_view path) {
+base::Result<void> Page::LoadFile(std::string_view path)
+{
   std::ifstream in(std::string(path), std::ios::binary);
   if (!in.is_open()) {
     return base::Err(base::Error::Io("cannot open file: " + std::string(path)));
@@ -88,7 +94,8 @@ base::Result<void> Page::LoadFile(std::string_view path) {
   return LoadHtml(content);
 }
 
-void Page::Layout(float viewport_width) {
+void Page::Layout(float viewport_width)
+{
   std::lock_guard<std::mutex> lock(mutex_);
   if (document_ == nullptr) {
     return;
@@ -98,20 +105,23 @@ void Page::Layout(float viewport_width) {
   root_ = engine.BuildLayoutTree(*document_, viewport_width);
 }
 
-void Page::SetElementImage(const dom::Element& element, image::Image image) {
+void Page::SetElementImage(const dom::Element& element, image::Image image)
+{
   std::lock_guard<std::mutex> lock(mutex_);
   images_[&element] = std::move(image);
-  root_.reset();  // the replaced box's intrinsic size may have changed
+  root_.reset(); // the replaced box's intrinsic size may have changed
 }
 
 // NOTE: called only from LayoutEngine while Layout() holds the mutex, so this
 // must not lock again (would deadlock).
-const image::Image* Page::Find(const dom::Element& element) const {
+const image::Image* Page::Find(const dom::Element& element) const
+{
   const auto it = images_.find(&element);
   return it != images_.end() ? &it->second : nullptr;
 }
 
-paint::Rasterizer Page::Rasterize(int width, int height, float y_offset) const {
+paint::Rasterizer Page::Rasterize(int width, int height, float y_offset) const
+{
   std::lock_guard<std::mutex> lock(mutex_);
   paint::Rasterizer image(width, height);
   image.SetFontRegistry(&fonts_);
@@ -125,7 +135,8 @@ paint::Rasterizer Page::Rasterize(int width, int height, float y_offset) const {
   return image;
 }
 
-css::Color Page::CanvasBackgroundColor() const {
+css::Color Page::CanvasBackgroundColor() const
+{
   const dom::Element* html = document_ != nullptr ? document_->document_element() : nullptr;
   if (html != nullptr) {
     const style::ComputedStyle& html_style = styles_.StyleFor(*html);
@@ -152,7 +163,8 @@ css::Color Page::CanvasBackgroundColor() const {
   return css::Color{255, 255, 255, 255};
 }
 
-float Page::ContentHeight() const {
+float Page::ContentHeight() const
+{
   std::lock_guard<std::mutex> lock(mutex_);
   if (root_ == nullptr) {
     return 0;
@@ -161,7 +173,8 @@ float Page::ContentHeight() const {
   return root_->height;
 }
 
-const dom::Element* Page::ElementAt(float x, float y) const {
+const dom::Element* Page::ElementAt(float x, float y) const
+{
   std::lock_guard<std::mutex> lock(mutex_);
   if (root_ == nullptr) {
     return nullptr;
@@ -169,17 +182,21 @@ const dom::Element* Page::ElementAt(float x, float y) const {
   return renderer::ElementAt(*root_, x, y);
 }
 
-std::string Page::DumpDom() const {
+std::string Page::DumpDom() const
+{
   std::lock_guard<std::mutex> lock(mutex_);
   return document_ != nullptr ? document_->ToString() : std::string();
 }
 
-std::string Page::DumpLayoutTree() const {
+std::string Page::DumpLayoutTree() const
+{
   std::lock_guard<std::mutex> lock(mutex_);
   std::string out;
-  struct Printer {
+  struct Printer
+  {
     std::string& out;
-    void Print(const layout::LayoutBox& box, int depth) {
+    void Print(const layout::LayoutBox& box, int depth)
+    {
       out.append(static_cast<std::size_t>(depth) * 2, ' ');
       out += '<';
       out += box.element != nullptr ? box.element->tag_name() : "anonymous";
@@ -209,4 +226,4 @@ std::string Page::DumpLayoutTree() const {
   return out;
 }
 
-}  // namespace neko::renderer
+} // namespace neko::renderer

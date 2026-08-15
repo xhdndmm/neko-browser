@@ -1,11 +1,5 @@
 #pragma once
 
-#include <memory>
-#include <mutex>
-#include <string>
-#include <string_view>
-#include <unordered_map>
-
 #include "neko/base/status.h"
 #include "neko/dom/element.h"
 #include "neko/graphics/font_registry.h"
@@ -14,6 +8,12 @@
 #include "neko/paint/rasterizer.h"
 #include "neko/style/style_engine.h"
 
+#include <memory>
+#include <mutex>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+
 namespace neko::renderer {
 
 // The minimal page pipeline: HTML -> DOM -> style -> layout -> paint.
@@ -21,8 +21,9 @@ namespace neko::renderer {
 // Lifecycle: LoadHtml() -> Layout(viewport) -> Rasterize(w, h).
 // Headless by design: network fetching happens in the browser application
 // (which injects decoded <img> data via SetElementImage).
-class Page : public layout::ImageProvider {
- public:
+class Page : public layout::ImageProvider
+{
+public:
   Page();
 
   // Parses |html| into a DOM document and computes styles.
@@ -64,14 +65,23 @@ class Page : public layout::ImageProvider {
   // laid-out content.  Used for link hit-testing.
   const dom::Element* ElementAt(float x, float y) const;
 
-  dom::Document* document() { return document_.get(); }
-  const layout::LayoutBox* layout_root() const { return root_.get(); }
-  const style::StyleEngine& styles() const { return styles_; }
+  dom::Document* document()
+  {
+    return document_.get();
+  }
+  const layout::LayoutBox* layout_root() const
+  {
+    return root_.get();
+  }
+  const style::StyleEngine& styles() const
+  {
+    return styles_;
+  }
 
   std::string DumpDom() const;
   std::string DumpLayoutTree() const;
 
- private:
+private:
   // Canvas background per CSS propagation: <html> background, else a <body>
   // background, else white.  Paints the whole viewport.
   css::Color CanvasBackgroundColor() const;
@@ -89,4 +99,4 @@ class Page : public layout::ImageProvider {
   mutable std::mutex mutex_;
 };
 
-}  // namespace neko::renderer
+} // namespace neko::renderer

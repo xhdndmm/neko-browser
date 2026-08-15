@@ -59,9 +59,18 @@ bool StartsWith(std::string_view s, std::string_view prefix)
 class NavigationDepthGuard
 {
 public:
-  explicit NavigationDepthGuard(int limit) : limit_(limit) { ++depth_; }
-  ~NavigationDepthGuard() { --depth_; }
-  bool Exceeded() const { return depth_ > limit_; }
+  explicit NavigationDepthGuard(int limit) : limit_(limit)
+  {
+    ++depth_;
+  }
+  ~NavigationDepthGuard()
+  {
+    --depth_;
+  }
+  bool Exceeded() const
+  {
+    return depth_ > limit_;
+  }
   NavigationDepthGuard(const NavigationDepthGuard&) = delete;
   NavigationDepthGuard& operator=(const NavigationDepthGuard&) = delete;
 
@@ -1054,9 +1063,8 @@ void FetchPageImages(renderer::Page& page,
   std::vector<std::future<base::Result<image::Image>>> futures;
   futures.reserve(pending.size());
   for (const PendingImage& item : pending) {
-    futures.push_back(pool.Submit([&fetch_and_decode, url = item.url]() {
-      return fetch_and_decode(url);
-    }));
+    futures.push_back(
+        pool.Submit([&fetch_and_decode, url = item.url]() { return fetch_and_decode(url); }));
   }
   for (std::size_t i = 0; i < pending.size(); ++i) {
     auto decoded = futures[i].get();

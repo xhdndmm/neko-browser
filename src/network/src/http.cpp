@@ -383,8 +383,7 @@ base::Result<HttpResponse> HttpGet(const url::Url& url,
         // following such a redirect is SSL stripping.  The caller can retry
         // the Location explicitly if it wants to.
         if (url.scheme() == "https" && next.value().scheme() == "http") {
-          return base::Err(base::Error::NotImplemented(
-              "refusing https->http redirect downgrade"));
+          return base::Err(base::Error::NotImplemented("refusing https->http redirect downgrade"));
         }
         return HttpGet(next.value(), redirect_limit - 1, extra_headers, tls_options);
       }

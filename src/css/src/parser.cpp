@@ -1,31 +1,43 @@
 #include "neko/css/parser.h"
 
+#include "neko/css/tokenizer.h"
+
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include "neko/css/tokenizer.h"
-
 namespace neko::css {
 namespace {
 
-struct TokenStream {
+struct TokenStream
+{
   explicit TokenStream(const std::vector<CssToken>& input) : tokens(input) {}
 
   const std::vector<CssToken>& tokens;
   std::size_t i = 0;
 
-  bool AtEnd() const { return i >= tokens.size() || tokens[i].type == CssTokenType::kEOF; }
-  const CssToken& Peek() const { return tokens[i]; }
-  const CssToken& Next() { return tokens[i++]; }
-  void SkipWhitespace() {
+  bool AtEnd() const
+  {
+    return i >= tokens.size() || tokens[i].type == CssTokenType::kEOF;
+  }
+  const CssToken& Peek() const
+  {
+    return tokens[i];
+  }
+  const CssToken& Next()
+  {
+    return tokens[i++];
+  }
+  void SkipWhitespace()
+  {
     while (!AtEnd() && Peek().type == CssTokenType::kWhitespace) {
       ++i;
     }
   }
 };
 
-std::string_view TrimView(std::string_view text) {
+std::string_view TrimView(std::string_view text)
+{
   while (!text.empty() && (text.front() == ' ' || text.front() == '\t' || text.front() == '\n' ||
                            text.front() == '\r')) {
     text.remove_prefix(1);
@@ -37,58 +49,60 @@ std::string_view TrimView(std::string_view text) {
   return text;
 }
 
-void AppendTokenText(const CssToken& token, std::string& out) {
+void AppendTokenText(const CssToken& token, std::string& out)
+{
   switch (token.type) {
-    case CssTokenType::kHash:
-      out.push_back('#');
-      out += token.text;
-      break;
-    case CssTokenType::kDimension:
-      out += token.text;
-      out += token.unit;
-      break;
-    case CssTokenType::kPercentage:
-      out += token.text;
-      out.push_back('%');
-      break;
-    case CssTokenType::kAtKeyword:
-      out.push_back('@');
-      out += token.text;
-      break;
-    case CssTokenType::kComma:
-      out.push_back(',');
-      break;
-    case CssTokenType::kColon:
-      out.push_back(':');
-      break;
-    case CssTokenType::kSemicolon:
-      out.push_back(';');
-      break;
-    case CssTokenType::kOpenBracket:
-      out.push_back('[');
-      break;
-    case CssTokenType::kCloseBracket:
-      out.push_back(']');
-      break;
-    case CssTokenType::kOpenParen:
-      out.push_back('(');
-      break;
-    case CssTokenType::kCloseParen:
-      out.push_back(')');
-      break;
-    case CssTokenType::kWhitespace:
-      if (!out.empty() && out.back() != ' ') {
-        out.push_back(' ');
-      }
-      break;
-    default:
-      out += token.text;
-      break;
+  case CssTokenType::kHash:
+    out.push_back('#');
+    out += token.text;
+    break;
+  case CssTokenType::kDimension:
+    out += token.text;
+    out += token.unit;
+    break;
+  case CssTokenType::kPercentage:
+    out += token.text;
+    out.push_back('%');
+    break;
+  case CssTokenType::kAtKeyword:
+    out.push_back('@');
+    out += token.text;
+    break;
+  case CssTokenType::kComma:
+    out.push_back(',');
+    break;
+  case CssTokenType::kColon:
+    out.push_back(':');
+    break;
+  case CssTokenType::kSemicolon:
+    out.push_back(';');
+    break;
+  case CssTokenType::kOpenBracket:
+    out.push_back('[');
+    break;
+  case CssTokenType::kCloseBracket:
+    out.push_back(']');
+    break;
+  case CssTokenType::kOpenParen:
+    out.push_back('(');
+    break;
+  case CssTokenType::kCloseParen:
+    out.push_back(')');
+    break;
+  case CssTokenType::kWhitespace:
+    if (!out.empty() && out.back() != ' ') {
+      out.push_back(' ');
+    }
+    break;
+  default:
+    out += token.text;
+    break;
   }
 }
 
 // Collects tokens until ';' or '}' or EOF, reconstructing the raw value text.
-std::string CollectValueText(TokenStream& stream, bool& important) {
+std::string CollectValueText(TokenStream& stream, bool& important)
+{
   std::string out;
   important = false;
   while (!stream.AtEnd() && stream.Peek().type != CssTokenType::kSemicolon &&
@@ -109,7 +123,8 @@ std::string CollectValueText(TokenStream& stream, bool& important) {
 }
 
 // Parses declarations until '}' or EOF; consumes a trailing '}' if present.
-std::vector<Declaration> ParseDeclarationBody(TokenStream& stream) {
+std::vector<Declaration> ParseDeclarationBody(TokenStream& stream)
+{
   std::vector<Declaration> declarations;
   for (;;) {
     stream.SkipWhitespace();
@@ -142,7 +157,8 @@ std::vector<Declaration> ParseDeclarationBody(TokenStream& stream) {
   return declarations;
 }
 
-std::string CollectPrelude(TokenStream& stream) {
+std::string CollectPrelude(TokenStream& stream)
+{
   std::string out;
   while (!stream.AtEnd() && stream.Peek().type != CssTokenType::kOpenBrace &&
          stream.Peek().type != CssTokenType::kSemicolon &&
@@ -152,7 +168,8 @@ std::string CollectPrelude(TokenStream& stream) {
   return std::string(TrimView(out));
 }
 
-void SkipNestedBlock(TokenStream& stream) {
+void SkipNestedBlock(TokenStream& stream)
+{
   int depth = 0;
   while (!stream.AtEnd()) {
     const CssTokenType type = stream.Next().type;
@@ -166,7 +183,8 @@ void SkipNestedBlock(TokenStream& stream) {
   }
 }
 
-StyleRule ParseQualifiedRule(TokenStream& stream) {
+StyleRule ParseQualifiedRule(TokenStream& stream)
+{
   StyleRule rule;
   const std::string prelude = CollectPrelude(stream);
   rule.selectors = ParseSelectorList(prelude);
@@ -192,13 +210,14 @@ StyleRule ParseQualifiedRule(TokenStream& stream) {
 // following rules are not swallowed.
 bool IsDeclarationBlockAtRule(std::string_view name)
 {
-  return name == "font-face" || name == "page" || name == "counter-style" ||
-         name == "viewport" || name == "font-feature-values" || name == "property";
+  return name == "font-face" || name == "page" || name == "counter-style" || name == "viewport" ||
+         name == "font-feature-values" || name == "property";
 }
 
-AtRule ParseAtRule(TokenStream& stream) {
+AtRule ParseAtRule(TokenStream& stream)
+{
   AtRule at_rule;
-  at_rule.name = stream.Next().text;  // the at-keyword
+  at_rule.name = stream.Next().text; // the at-keyword
   const std::string prelude = CollectPrelude(stream);
   at_rule.prelude = prelude;
   if (!stream.AtEnd() && stream.Peek().type == CssTokenType::kSemicolon) {
@@ -243,9 +262,10 @@ AtRule ParseAtRule(TokenStream& stream) {
   return at_rule;
 }
 
-}  // namespace
+} // namespace
 
-StyleSheet ParseStyleSheet(std::string_view text) {
+StyleSheet ParseStyleSheet(std::string_view text)
+{
   Tokenizer tokenizer(text);
   const std::vector<CssToken> tokens = tokenizer.Tokenize();
   TokenStream stream(tokens);
@@ -270,11 +290,12 @@ StyleSheet ParseStyleSheet(std::string_view text) {
   return sheet;
 }
 
-std::vector<Declaration> ParseDeclarationBlock(std::string_view text) {
+std::vector<Declaration> ParseDeclarationBlock(std::string_view text)
+{
   Tokenizer tokenizer(text);
   const std::vector<CssToken> tokens = tokenizer.Tokenize();
   TokenStream stream(tokens);
   return ParseDeclarationBody(stream);
 }
 
-}  // namespace neko::css
+} // namespace neko::css

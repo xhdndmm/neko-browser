@@ -1,8 +1,8 @@
 #pragma once
 
-#include <string_view>
-
 #include "neko/image/image.h"
+
+#include <string_view>
 
 namespace neko::image {
 

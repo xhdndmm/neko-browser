@@ -999,8 +999,8 @@ void StyleEngine::ComputeElement(dom::Element& element,
       }
     }
     std::sort(candidate_indices.begin(), candidate_indices.end());
-    candidate_indices.erase(
-        std::unique(candidate_indices.begin(), candidate_indices.end()), candidate_indices.end());
+    candidate_indices.erase(std::unique(candidate_indices.begin(), candidate_indices.end()),
+                            candidate_indices.end());
 
     for (const int rule_index : candidate_indices) {
       const IndexedCascadeRule& indexed = buckets.rules[static_cast<std::size_t>(rule_index)];

@@ -2,9 +2,18 @@
 
 namespace neko::base {
 
-std::string_view GetVersionString() { return NEKO_VERSION_STRING; }
-std::string_view GetVersionTriple() { return NEKO_VERSION_STRING; }
-std::string_view GetProjectName() { return NEKO_PROJECT_NAME; }
+std::string_view GetVersionString()
+{
+  return NEKO_VERSION_STRING;
+}
+std::string_view GetVersionTriple()
+{
+  return NEKO_VERSION_STRING;
+}
+std::string_view GetProjectName()
+{
+  return NEKO_PROJECT_NAME;
+}
 
 std::string_view GetUserAgent()
 {
@@ -13,4 +22,4 @@ std::string_view GetUserAgent()
          "Chrome/120.0.0.0 Safari/537.36 NekoBrowser/" NEKO_VERSION_STRING;
 }
 
-}  // namespace neko::base
+} // namespace neko::base
