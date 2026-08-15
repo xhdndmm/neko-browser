@@ -6,6 +6,7 @@
 #include "neko/browser/download_manager.h"
 #include "neko/dom/query.h"
 #include "neko/image/image.h"
+#include "neko/layout/layout_tree.h"
 #include "neko/network/http.h"
 #include "neko/storage/file_util.h"
 #include "neko/url/url.h"
@@ -288,6 +289,182 @@ TEST(BrowserControllerTest, RunsInlineScriptsOnHtmlLoad)
   EXPECT_NE(dom.find("from script"), std::string::npos);
   // The live runtime handle is kept on the tab.
   EXPECT_NE(tab->script_runtime, nullptr);
+}
+
+// Finds the first laid-out text run belonging to |target| and returns its
+// top-left point (document coordinates, before scroll).
+bool FindElementRunPoint(const layout::LayoutBox& box, const dom::Element* target, float& x, float& y)
+{
+  for (const layout::Line& line : box.lines) {
+    for (const layout::TextRun& run : line.runs) {
+      if (run.element == target) {
+        x = run.x + 1.0f;
+        y = run.y + 1.0f;
+        return true;
+      }
+    }
+    for (const layout::InlineBox& ib : line.boxes) {
+      if (ib.block_box != nullptr && FindElementRunPoint(*ib.block_box, target, x, y)) {
+        return true;
+      }
+    }
+  }
+  for (const auto& child : box.children) {
+    if (FindElementRunPoint(*child, target, x, y)) {
+      return true;
+    }
+  }
+  for (const auto& f : box.floats) {
+    if (FindElementRunPoint(*f, target, x, y)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+TEST(BrowserControllerTest, PointerClickRunsClickEventAndNavigates)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+                               "<html><body><a href=\"http://target.example/\">go</a>"
+                               "<script>var a=document.querySelector('a');"
+                               "window.__clicked=false;"
+                               "a.addEventListener('click',function(){window.__clicked=true;});"
+                               "</script></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* a = dom::QuerySelector(*tab->page->document(), "a");
+  ASSERT_NE(a, nullptr);
+  float x = 0;
+  float y = 0;
+  ASSERT_TRUE(FindElementRunPoint(*tab->page->layout_root(), a, x, y));
+
+  EXPECT_TRUE(controller.DispatchPointerClick(tab->id, x, y));
+  // The click listener fired, and the default action navigated the link.
+  EXPECT_TRUE(tab->script_runtime->Evaluate("window.__clicked").has_value());
+  EXPECT_EQ(tab->url, "http://target.example/");
+}
+
+TEST(BrowserControllerTest, PointerClickPreventDefaultSkipsNavigation)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+                               "<html><body><a href=\"http://target.example/\">go</a>"
+                               "<script>var a=document.querySelector('a');"
+                               "a.addEventListener('click',function(e){e.preventDefault();});"
+                               "</script></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* a = dom::QuerySelector(*tab->page->document(), "a");
+  ASSERT_NE(a, nullptr);
+  float x = 0;
+  float y = 0;
+  ASSERT_TRUE(FindElementRunPoint(*tab->page->layout_root(), a, x, y));
+
+  EXPECT_TRUE(controller.DispatchPointerClick(tab->id, x, y));
+  // preventDefault() canceled the click: no navigation happened.
+  EXPECT_EQ(tab->url, "http://example.com/");
+}
+
+TEST(BrowserControllerTest, KeyboardDispatchRunsPageListener)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<script>window.__key='';"
+                               "document.body.addEventListener('keydown',function(e){"
+                               "  window.__key=e.key+':'+e.code+':'+e.cancelable;});"
+                               "</script></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Enter", "Enter"));
+  ASSERT_TRUE(tab->script_runtime != nullptr);
+  const auto v = tab->script_runtime->Evaluate("window.__key");
+  ASSERT_TRUE(v.has_value());
+  const auto s = v.value().ToString();
+  ASSERT_TRUE(s.has_value());
+  EXPECT_EQ(s.value(), "Enter:Enter:true");
+}
+
+TEST(BrowserControllerTest, SubmitButtonSubmitsFormWithEncodedData)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  // Target page for the form action.
+  fetch.Add("http://example.com/search",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+                               "<html><body>results</body></html>"});
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<form action=\"/search\">"
+                               "<input name=\"q\" type=\"text\" value=\"hello world\">"
+                               "<input name=\"agree\" type=\"checkbox\" checked>"
+                               "<input name=\"no\" type=\"checkbox\">"
+                               "<button type=\"submit\">Go</button>"
+                               "</form></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  // Find the submit button's laid-out text position and click it.
+  dom::Element* button = dom::QuerySelector(*tab->page->document(), "button");
+  ASSERT_NE(button, nullptr);
+  float x = 0;
+  float y = 0;
+  ASSERT_TRUE(FindElementRunPoint(*tab->page->layout_root(), button, x, y));
+  EXPECT_TRUE(controller.DispatchPointerClick(tab->id, x, y));
+  // GET submission: q=hello%20world&agree=on (unchecked boxes omitted).
+  EXPECT_EQ(tab->url, "http://example.com/search?q=hello%20world&agree=on");
+}
+
+TEST(BrowserControllerTest, SubmitEventPreventDefaultBlocksNavigation)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<form action=\"/search\">"
+                               "<input name=\"q\" type=\"text\" value=\"x\">"
+                               "<button type=\"submit\">Go</button>"
+                               "</form>"
+                               "<script>document.querySelector('form').addEventListener("
+                               "'submit', function(e){ e.preventDefault(); });</script>"
+                               "</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* button = dom::QuerySelector(*tab->page->document(), "button");
+  ASSERT_NE(button, nullptr);
+  float x = 0;
+  float y = 0;
+  ASSERT_TRUE(FindElementRunPoint(*tab->page->layout_root(), button, x, y));
+  EXPECT_TRUE(controller.DispatchPointerClick(tab->id, x, y));
+  // preventDefault canceled the submit: no navigation.
+  EXPECT_EQ(tab->url, "http://example.com/");
 }
 
 TEST(BrowserControllerTest, PageScriptConsoleGoesToDevToolsLog)
@@ -1041,6 +1218,280 @@ TEST(BrowserControllerTest, LoadsLocalFile)
   ASSERT_TRUE(controller.NavigateActive(file).has_value());
   EXPECT_EQ(controller.ActiveTab()->content_type, ContentType::kHtml);
   EXPECT_EQ(controller.ActiveTab()->title, "Local");
+}
+
+TEST(BrowserControllerTest, LocalFormSubmitKeepsQueryAndLoadsFile)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  BrowserController controller(tp.path(), std::ref(fetch));
+  const std::string file = tp.path() + "/form.html";
+  ASSERT_TRUE(storage::WriteFileAtomic(
+      file, "<html><title>F</title><body>"
+            "<form action=\"form.html\"><input name=\"q\" value=\"hi\">"
+            "<button type=\"submit\">Go</button></form></body></html>")
+                 .has_value());
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive(file).has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* button = dom::QuerySelector(*tab->page->document(), "button");
+  ASSERT_NE(button, nullptr);
+  float x = 0;
+  float y = 0;
+  ASSERT_TRUE(FindElementRunPoint(*tab->page->layout_root(), button, x, y));
+  EXPECT_TRUE(controller.DispatchPointerClick(tab->id, x, y));
+  // The query stays in the URL; the file on disk loads without it.
+  EXPECT_EQ(tab->url, file + "?q=hi");
+  EXPECT_EQ(tab->content_type, ContentType::kHtml);
+  EXPECT_EQ(tab->title, "F");
+}
+
+TEST(BrowserControllerTest, FocusAndTypeIntoInput)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+                               "<html><body><input id=\"q\" value=\"hi\"></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* input = dom::QuerySelector(*tab->page->document(), "#q");
+  ASSERT_NE(input, nullptr);
+  float x = 0;
+  float y = 0;
+  ASSERT_TRUE(FindElementRunPoint(*tab->page->layout_root(), input, x, y));
+
+  // Clicking the input focuses it.
+  controller.DispatchPointerClick(tab->id, x, y);
+  EXPECT_EQ(tab->focused_element, input);
+  EXPECT_EQ(tab->page->FocusedElement(), input);
+
+  // Typing appends to the value.
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "a", "KeyA"));
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "b", "KeyB"));
+  EXPECT_EQ(std::string(input->GetAttribute("value").value_or("")), "hiab");
+
+  // Backspace deletes the last character.
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Backspace", "Backspace"));
+  EXPECT_EQ(std::string(input->GetAttribute("value").value_or("")), "hia");
+}
+
+TEST(BrowserControllerTest, EnterInFocusedInputSubmitsForm)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/search",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+                               "<html><body>results</body></html>"});
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<form action=\"/search\"><input id=\"q\" name=\"q\" value=\"go\"></form>"
+                               "</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* input = dom::QuerySelector(*tab->page->document(), "#q");
+  ASSERT_NE(input, nullptr);
+  float x = 0;
+  float y = 0;
+  ASSERT_TRUE(FindElementRunPoint(*tab->page->layout_root(), input, x, y));
+  controller.DispatchPointerClick(tab->id, x, y);
+  EXPECT_EQ(tab->focused_element, input);
+  // Enter in a text input submits its form.
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Enter", "Enter"));
+  EXPECT_EQ(tab->url, "http://example.com/search?q=go");
+}
+
+TEST(BrowserControllerTest, ElementGeometryApisReflectLayout)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  // Default (content-box) sizing: width:100px is the content width, so the
+  // border box adds 2px borders + 4px padding each side.
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+                               "<html><body style=\"margin:0\">"
+                               "<div id=\"box\" style=\"width:100px;height:50px;margin:10px;"
+                               "border:2px solid black;padding:4px\">x<span id=\"sp\">text</span></div>"
+                               "<script>"
+                               "var b = document.getElementById('box');"
+                               "b.setAttribute('data-w', b.offsetWidth);"
+                               "b.setAttribute('data-h', b.offsetHeight);"
+                               "b.setAttribute('data-x', b.getBoundingClientRect().x);"
+                               "b.setAttribute('data-y', b.getBoundingClientRect().y);"
+                               "b.setAttribute('data-cw', b.clientWidth);"
+                               "b.setAttribute('data-ch', b.clientHeight);"
+                               "b.setAttribute('data-ct', b.clientTop);"
+                               "b.setAttribute('data-cl', b.clientLeft);"
+                               "b.setAttribute('data-ot', b.offsetTop);"
+                               "var s = document.getElementById('sp');"
+                               "s.setAttribute('data-w', s.offsetWidth);"
+                               "s.setAttribute('data-sx', s.getBoundingClientRect().x);"
+                               "</script></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* box = dom::QuerySelector(*tab->page->document(), "#box");
+  ASSERT_NE(box, nullptr);
+  EXPECT_EQ(box->GetAttribute("data-w"), "112"); // 100 + 2*2 border + 2*4 padding
+  EXPECT_EQ(box->GetAttribute("data-h"), "62");  // 50 + 4 + 8
+  EXPECT_EQ(box->GetAttribute("data-x"), "10");  // margin 10, body margin 0
+  EXPECT_EQ(box->GetAttribute("data-y"), "10");
+  EXPECT_EQ(box->GetAttribute("data-cw"), "108"); // 112 - 2*2 border
+  EXPECT_EQ(box->GetAttribute("data-ch"), "58");  // 62 - 2*2 border
+  EXPECT_EQ(box->GetAttribute("data-ct"), "2");   // border-top
+  EXPECT_EQ(box->GetAttribute("data-cl"), "2");   // border-left
+  EXPECT_EQ(box->GetAttribute("data-ot"), "10");  // document coordinate (offsetParent = body)
+  dom::Element* sp = dom::QuerySelector(*tab->page->document(), "#sp");
+  ASSERT_NE(sp, nullptr);
+  // An inline element has no box of its own; its geometry aggregates its text
+  // runs, so it still reports a real size and position.
+  EXPECT_TRUE(sp->GetAttribute("data-w").has_value());
+  EXPECT_GT(std::stod(std::string(sp->GetAttribute("data-w").value())), 0);
+  EXPECT_TRUE(sp->GetAttribute("data-sx").has_value());
+  EXPECT_GT(std::stod(std::string(sp->GetAttribute("data-sx").value())), 0);
+}
+
+TEST(BrowserControllerTest, ClickRunsElementOnclickHandler)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+                               "<html><body style=\"margin:0\">"
+                               "<button id=\"b\" style=\"width:100px;height:40px\">go</button>"
+                               "<script>"
+                               "window.__n = 0;"
+                               "var b = document.getElementById('b');"
+                               "b.onclick = function(ev){"
+                               "  b.setAttribute('data-n', ++window.__n);"
+                               "  b.setAttribute('data-cx', ev.clientX);"
+                               "};"
+                               "</script></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* button = dom::QuerySelector(*tab->page->document(), "#b");
+  ASSERT_NE(button, nullptr);
+  float x = 0;
+  float y = 0;
+  ASSERT_TRUE(FindElementRunPoint(*tab->page->layout_root(), button, x, y));
+  controller.DispatchPointerClick(tab->id, x, y);
+  EXPECT_EQ(button->GetAttribute("data-n"), "1");
+  // The click event is a MouseEvent with client coordinates.
+  EXPECT_GT(std::stod(std::string(button->GetAttribute("data-cx").value_or("0"))), 0);
+}
+
+TEST(BrowserControllerTest, OnclickPreventDefaultBlocksNavigation)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/nav",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+                               "<html><body>nav</body></html>"});
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+                               "<html><body style=\"margin:0\">"
+                               "<a id=\"lk\" href=\"/nav\">go</a>"
+                               "<script>"
+                               "document.getElementById('lk').onclick = function(ev){"
+                               "  ev.preventDefault();"
+                               "};"
+                               "</script></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* link = dom::QuerySelector(*tab->page->document(), "#lk");
+  ASSERT_NE(link, nullptr);
+  float x = 0;
+  float y = 0;
+  ASSERT_TRUE(FindElementRunPoint(*tab->page->layout_root(), link, x, y));
+  controller.DispatchPointerClick(tab->id, x, y);
+  EXPECT_EQ(tab->url, "http://example.com/"); // still on the page
+}
+
+TEST(BrowserControllerTest, TypingFiresInputEvent)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+                               "<html><body style=\"margin:0\">"
+                               "<input id=\"q\" value=\"x\">"
+                               "<script>"
+                               "var q = document.getElementById('q');"
+                               "q.oninput = function(){ q.setAttribute('data-v', q.value); };"
+                               "q.addEventListener('input', function(){"
+                               "  q.setAttribute('data-n', q.value.length);"
+                               "});"
+                               "</script></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* input = dom::QuerySelector(*tab->page->document(), "#q");
+  ASSERT_NE(input, nullptr);
+  float x = 0;
+  float y = 0;
+  ASSERT_TRUE(FindElementRunPoint(*tab->page->layout_root(), input, x, y));
+  controller.DispatchPointerClick(tab->id, x, y);
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "a", "KeyA"));
+  // oninput + input listener both fire; the value reflects the typed char.
+  EXPECT_EQ(input->GetAttribute("data-v"), "xa");
+  EXPECT_EQ(input->GetAttribute("data-n"), "2");
+}
+
+TEST(BrowserControllerTest, FocusAndBlurFireOnClick)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+                               "<html><body style=\"margin:0\">"
+                               "<input id=\"q\" value=\"x\">"
+                               "<script>"
+                               "var q = document.getElementById('q');"
+                               "q.onfocus = function(){ q.setAttribute('data-f','1'); };"
+                               "q.onblur = function(){ q.setAttribute('data-f','2'); };"
+                               "</script></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* input = dom::QuerySelector(*tab->page->document(), "#q");
+  ASSERT_NE(input, nullptr);
+  float x = 0;
+  float y = 0;
+  ASSERT_TRUE(FindElementRunPoint(*tab->page->layout_root(), input, x, y));
+  // Clicking the input focuses it -> onfocus.
+  controller.DispatchPointerClick(tab->id, x, y);
+  EXPECT_EQ(input->GetAttribute("data-f"), "1");
+  // Clicking the body (right of the ~180px input) blurs it -> onblur.
+  controller.DispatchPointerClick(tab->id, 400, 5);
+  EXPECT_EQ(input->GetAttribute("data-f"), "2");
 }
 
 // ---------------------------------------------------------------------------

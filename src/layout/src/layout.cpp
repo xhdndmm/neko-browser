@@ -1045,8 +1045,8 @@ std::string ListMarkerText(style::ListStyleType type, int ordinal)
 
 } // namespace
 
-std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document,
-                                                         float viewport_width)
+std::unique_ptr<LayoutBox>
+LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, float viewport_height)
 {
   // Coordinates are absolute (viewport space).  BuildBlock lays out |element|
   // inside a containing block whose content box starts at |origin_x|/|origin_y|.
@@ -1126,6 +1126,111 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       for (dom::Element* child : absolute_children) {
         box->positioned_children.push_back(
             BuildAbsolute(*child, 0, 0, avail_width, child_cb_h, kNoFloats));
+      }
+      return box;
+    }
+
+    // Lays out a form control (<input>/<textarea>/<select>) as an atomic
+    // inline box with default widget chrome (border + light background) and the
+    // control's value — or its placeholder when empty — as a single text run.
+    // Selection / editing is wired by the browser layer (focused element +
+    // key input).
+    std::unique_ptr<LayoutBox> BuildFormControl(dom::Element& element, float containing_width)
+    {
+      auto box = std::make_unique<LayoutBox>();
+      box->element = &element;
+      box->style = styles.StyleFor(element);
+      ResolveBoxEdges(*box, containing_width);
+
+      // Default widget chrome; author CSS overrides via background/border.
+      if (!box->style.background_color.has_value()) {
+        box->style.background_color = css::Color{255, 255, 255, 255};
+      }
+      if (box->border_top == 0) {
+        box->border_top = 1;
+      }
+      if (box->border_right == 0) {
+        box->border_right = 1;
+      }
+      if (box->border_bottom == 0) {
+        box->border_bottom = 1;
+      }
+      if (box->border_left == 0) {
+        box->border_left = 1;
+      }
+      if (!box->style.border_color.has_value()) {
+        box->style.border_color = css::Color{0, 0, 0, 255};
+      }
+      if (box->padding_left == 0 && box->padding_right == 0) {
+        box->padding_left = box->padding_right = 4;
+      }
+      if (box->padding_top == 0 && box->padding_bottom == 0) {
+        box->padding_top = box->padding_bottom = 2;
+      }
+
+      const float border_padding_w = box->border_left + box->border_right + box->padding_left +
+                                     box->padding_right;
+      float content_width = 0;
+      if (box->style.width.has_value() && !box->style.width.value().percent &&
+          !box->style.width.value().is_calc && !box->style.width.value().is_extremum) {
+        content_width = box->style.width.value().value;
+      } else {
+        content_width = 170.0f; // default text-field width
+      }
+      box->width = content_width + border_padding_w;
+
+      const float line_h = std::max(1.0f, box->style.font_size * 1.2f);
+      box->height = line_h + box->padding_top + box->padding_bottom + box->border_top +
+                    box->border_bottom;
+      box->x = box->margin_left;
+      box->y = box->margin_top;
+
+      // The displayed text: the value for an <input>, the content for a
+      // <textarea>, the first option for a <select>; placeholder when empty.
+      std::string text;
+      if (element.tag_name() == "textarea") {
+        text = element.TextContent();
+      } else if (element.tag_name() == "select") {
+        for (dom::Node* c : element.ChildNodes()) {
+          if (c->node_type() != dom::NodeType::kElement) {
+            continue;
+          }
+          dom::Element& opt = static_cast<dom::Element&>(*c);
+          if (opt.tag_name() == "option") {
+            const std::optional<std::string_view> val = opt.GetAttribute("value");
+            text = val.has_value() ? std::string(*val) : opt.TextContent();
+            break;
+          }
+        }
+      } else {
+        const std::optional<std::string_view> val = element.GetAttribute("value");
+        text = val.has_value() ? std::string(*val) : "";
+      }
+      const bool is_placeholder = text.empty();
+      if (is_placeholder) {
+        text = std::string(element.GetAttribute("placeholder").value_or(""));
+      }
+      if (!text.empty()) {
+        TextRun run;
+        run.text = text;
+        run.font_family = box->style.font_family;
+        run.font_weight = box->style.font_weight;
+        run.font_italic = box->style.font_italic;
+        run.font_size = box->style.font_size;
+        // The box origin carries its margins; content starts inside the
+        // border+padding.  Run coordinates must be global (the box origin
+        // offset is included), matching how the painter draws runs.
+        run.x = box->x + box->border_left + box->padding_left;
+        run.y = box->y + box->border_top + box->padding_top;
+        run.color = is_placeholder ? css::Color{160, 160, 160, 255}
+                                   : css::Color{0, 0, 0, 255};
+        run.width = MeasureTextWidth(registry, run.font_family, run.font_weight, run.font_italic,
+                                     run.text, run.font_size);
+        run.element = &element;
+        Line line;
+        line.height = line_h;
+        line.runs.push_back(std::move(run));
+        box->lines.push_back(std::move(line));
       }
       return box;
     }
@@ -1233,6 +1338,21 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
                                    /*baseline_offset=*/h});
         return;
       }
+      // Form controls render as atomic inline boxes with value/placeholder.
+      if (child_element.tag_name() == "input" || child_element.tag_name() == "textarea" ||
+          child_element.tag_name() == "select") {
+        auto block_box = BuildFormControl(child_element, containing_width);
+        InlineItem item;
+        item.style = &child_style;
+        item.element = &child_element;
+        item.atomic = true;
+        item.width = block_box->margin_left + block_box->width + block_box->margin_right;
+        item.height = block_box->margin_top + block_box->height + block_box->margin_bottom;
+        item.baseline_offset = block_box->height;
+        item.block_box = std::move(block_box);
+        items.push_back(std::move(item));
+        return;
+      }
       if (child_style.display == style::Display::kInlineBlock &&
           child_style.position == style::Position::kStatic) {
         auto block_box = BuildInlineBlock(child_element, containing_width);
@@ -1289,7 +1409,8 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
                              float cb_w,
                              float cb_h,
                              const std::vector<const LayoutBox*>& parent_floats,
-                             std::vector<dom::Element*>& absolute_children)
+                             std::vector<dom::Element*>& absolute_children,
+                             float percent_base_h = 0)
     {
       // A flex container's children are flex items, not normal-flow content.
       if (box.style.display == style::Display::kFlex ||
@@ -1396,7 +1517,8 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
                                  cb_y,
                                  cb_w,
                                  cb_h,
-                                 cur);
+                                 cur,
+                                 /*percent_base_h=*/percent_base_h);
         }
         cursor_y += child_box->margin_top + child_box->height + child_box->margin_bottom;
         box.children.push_back(std::move(child_box));
@@ -1456,11 +1578,21 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
                                           float cb_y,
                                           float cb_w,
                                           float cb_h,
-                                          const std::vector<const LayoutBox*>& parent_floats)
+                                          const std::vector<const LayoutBox*>& parent_floats,
+                                          float percent_base_h = 0)
     {
       auto box = std::make_unique<LayoutBox>();
       box->element = &element;
       box->style = styles.StyleFor(element);
+      // CSS background-image: carry the URL and resolve the decoded image
+      // through the ImageProvider (the browser fetches it keyed by element,
+      // the same mechanism as <img>).
+      if (box->style.background_image.has_value()) {
+        box->background_image_url = box->style.background_image.value();
+        if (images != nullptr) {
+          box->background_image = images->Find(element);
+        }
+      }
       ResolveBoxEdges(*box, containing_width);
 
       // A list item reserves space for its marker on the left: the marker box
@@ -1515,6 +1647,32 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
         child_cb_w = box->width - box->border_left - box->border_right;
       }
 
+      const float border_padding_h =
+          box->border_top + box->border_bottom + box->padding_top + box->padding_bottom;
+
+      // Definite content height of this box, when it has an explicit height
+      // that can resolve now.  It becomes the percentage-height basis for the
+      // box's block children (CSS 2.2 §10.5: a percentage height resolves
+      // against the containing block only when that height is definite).
+      float definite_content_height = 0;
+      if (box->style.height.has_value()) {
+        if (box->style.height.value().percent) {
+          if (percent_base_h > 0) {
+            definite_content_height = std::max(0.0f,
+                                               SpecToContent(box->style.height.value(),
+                                                             percent_base_h,
+                                                             border_padding_h,
+                                                             box->style.box_sizing));
+          }
+        } else {
+          definite_content_height = std::max(0.0f,
+                                             SpecToContent(box->style.height.value(),
+                                                           containing_width,
+                                                           border_padding_h,
+                                                           box->style.box_sizing));
+        }
+      }
+
       std::vector<dom::Element*> absolute_children;
       float content_height = LayoutBlockContent(*box,
                                                 element,
@@ -1524,16 +1682,22 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
                                                 child_cb_w,
                                                 /*cb_h*/ 0.0f,
                                                 parent_floats,
-                                                absolute_children);
+                                                absolute_children,
+                                                /*percent_base_h=*/definite_content_height);
 
-      const float border_padding_h =
-          box->border_top + box->border_bottom + box->padding_top + box->padding_bottom;
-      if (box->style.height.has_value() && !box->style.height.value().percent) {
-        content_height = std::max(content_height,
-                                  SpecToContent(box->style.height.value(),
-                                                containing_width,
-                                                border_padding_h,
-                                                box->style.box_sizing));
+      if (box->style.height.has_value()) {
+        if (box->style.height.value().percent) {
+          if (percent_base_h > 0) {
+            content_height = std::max(content_height, definite_content_height);
+          }
+          // else: a percentage height against an auto containing block is auto.
+        } else {
+          content_height = std::max(content_height,
+                                    SpecToContent(box->style.height.value(),
+                                                  containing_width,
+                                                  border_padding_h,
+                                                  box->style.box_sizing));
+        }
       } else if (box->style.aspect_ratio.has_value() && box->style.width.has_value()) {
         content_height = content_width / box->style.aspect_ratio.value();
       }
@@ -3104,8 +3268,9 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
                             0,
                             0,
                             viewport_width,
-                            0,
-                            kNoFloats);
+                            viewport_height,
+                            kNoFloats,
+                            /*percent_base_h=*/viewport_height);
 }
 
 } // namespace neko::layout

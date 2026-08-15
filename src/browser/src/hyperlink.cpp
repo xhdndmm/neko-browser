@@ -29,6 +29,23 @@ std::optional<std::string> HyperlinkTarget(const dom::Node* node,
     // Resolve the (possibly relative) href against the page URL.  The fragment
     // is preserved so in-page anchors keep their full target URL.
     const std::string_view ref = *href;
+
+    // A file:// URL or a bare local path base (no scheme): the URL parser
+    // cannot resolve relative references against these, so use string
+    // concatenation.  Absolute hrefs (/x) resolve to the same root; relative
+    // hrefs (x) resolve to the base's directory.
+    const bool is_file = base_url.rfind("file://", 0) == 0;
+    const bool is_bare_path = base_url.find(':') == std::string_view::npos;
+    if (is_file || is_bare_path) {
+      if (!ref.empty() && ref[0] == '/') {
+        return is_file ? "file://" + std::string(ref) : std::string(ref);
+      }
+      const std::size_t slash = base_url.find_last_of('/');
+      const std::string dir = std::string(
+          base_url.substr(0, slash != std::string_view::npos ? slash + 1 : base_url.size()));
+      return dir + std::string(ref);
+    }
+
     const auto base = url::Url::Parse(base_url);
     if (base.has_value()) {
       const auto resolved = url::Url::Parse(ref, base.value());

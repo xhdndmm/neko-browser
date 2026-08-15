@@ -290,6 +290,12 @@ struct ComputedStyle
 
   std::optional<css::Color> background_color;
 
+  // CSS background-image: the resolved URL (relative URLs resolved against the
+  // page base by the browser layer when fetching).  Empty / unset = none.
+  // Images are decoded by the browser and injected keyed by the element, the
+  // same mechanism as <img>; layout/paint render it over the box's background.
+  std::optional<std::string> background_image;
+
   // aspect-ratio (CSS Box Sizing 4): width / height ratio (e.g. 1 for a
   // square, 16/9 for 16:9).  With a definite width (or height) and the other
   // axis auto, layout derives the auto axis from the ratio.  nullopt = auto.

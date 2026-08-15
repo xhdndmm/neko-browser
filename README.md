@@ -51,7 +51,7 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
 - **Layout**：盒模型、block/inline 布局、文字换行、relative 定位
 - **Paint**：显示列表 + 软件光栅化 + 8x8 位图字体 + PPM 输出
 - **存储**：Cookie（RFC 6265 子集）、历史、书签 —— 自研行式文件 + 原子写入
-- **图像**：自研 PNG 解码器（chunk/CRC/滤波/Adam7/全部颜色类型）+ libjpeg 封装
+- **图像**：自研 PNG 解码器（chunk/CRC/滤波/Adam7/全部颜色类型）+ libjpeg/libwebp 封装
 - **媒体**：自研 WAV 解码（PCM+float，8/16/24/32-bit）
 - **PDF**：文本提取（xref/FlateDecode/文本操作符）—— **PARTIAL**
 - **JavaScript**：QuickJS（quickjs-ng）runtime 封装 —— 核心语言 + console

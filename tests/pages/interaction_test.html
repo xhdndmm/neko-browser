@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Interaction Test</title>
+<style>
+  body { font-family: sans-serif; margin: 24px; }
+  h1 { font-size: 20px; }
+  .card { border: 1px solid #ccc; padding: 12px; margin: 16px 0; }
+  button { font-size: 14px; padding: 5px 14px; margin-right: 8px; }
+  input[type=text] { padding: 4px 8px; font-size: 14px; }
+  pre { background: #f5f5f5; padding: 10px; font-size: 13px; min-height: 1.2em; }
+  span.out { color: #060; font-weight: bold; }
+</style>
+</head>
+<body>
+  <h1>Interaction Events Test</h1>
+  <p>在 GUI 中操作控件，右侧实时显示事件触发结果。点页面/输入框获得键盘焦点后再按键。</p>
+
+  <div class="card">
+    <b>1. onclick（IDL，element.onclick = fn）</b><br>
+    <button id="btnA">Click me</button>
+    <span class="out" id="outA">0 clicks</span>
+  </div>
+
+  <div class="card">
+    <b>2. onclick（content attribute，onclick="..."）</b><br>
+    <button id="btnB" onclick="document.getElementById('outB').textContent = 'fired: ' + (++window.__b);">Content attr</button>
+    <span class="out" id="outB">not fired</span>
+  </div>
+
+  <div class="card">
+    <b>3. mousedown / mouseup（clientX/clientY/button）</b><br>
+    <button id="btnC">Press me</button>
+    <span class="out" id="outC">—</span>
+  </div>
+
+  <div class="card">
+    <b>4. input + oninput（输入时触发，value 反映）</b><br>
+    <input id="inp" type="text" value="" placeholder="type here">
+    <span class="out" id="outD">—</span>
+  </div>
+
+  <div class="card">
+    <b>5. focus / blur（点击输入框聚焦/点击别处失焦）</b><br>
+    <input id="inp2" type="text" value="x">
+    <span class="out" id="outE">—</span>
+  </div>
+
+  <div class="card">
+    <b>6. keydown（key / code / keyCode）</b><br>
+    <span class="out" id="outF">(点击页面后按任意键)</span>
+  </div>
+
+  <div class="card">
+    <b>7. wheel（deltaY，滚动页面触发）</b><br>
+    <span class="out" id="outG">—</span>
+  </div>
+
+  <div class="card">
+    <b>8. preventDefault 链接（点击不跳转）</b><br>
+    <a id="lk" href="interaction_test.html">blocked link</a>
+    <span class="out" id="outH">—</span>
+  </div>
+
+  <pre id="log">(interactions appear here)</pre>
+
+  <script>
+    window.__b = 0;
+
+    // 1. IDL onclick
+    var a = document.getElementById('btnA');
+    var n = 0;
+    a.onclick = function (ev) {
+      n++;
+      document.getElementById('outA').textContent =
+          n + ' clicks (clientX=' + Math.round(ev.clientX) + ')';
+    };
+
+    // 3. mousedown / mouseup coordinates + button
+    var c = document.getElementById('btnC');
+    c.addEventListener('mousedown', function (ev) {
+      document.getElementById('outC').textContent =
+          'mousedown @' + Math.round(ev.clientX) + ',' + Math.round(ev.clientY) + ' button=' + ev.button;
+    });
+    c.addEventListener('mouseup', function (ev) {
+      document.getElementById('outC').textContent +=
+          ' | mouseup @' + Math.round(ev.clientX) + ',' + Math.round(ev.clientY);
+    });
+
+    // 4. oninput: fires as you type
+    var d = document.getElementById('inp');
+    d.addEventListener('input', function () {
+      document.getElementById('outD').textContent = 'value="' + d.value + '"';
+    });
+
+    // 5. focus / blur
+    var e = document.getElementById('inp2');
+    e.onfocus = function () { document.getElementById('outE').textContent = 'focused'; };
+    e.onblur = function () { document.getElementById('outE').textContent = 'blurred'; };
+
+    // 6. keydown with key/code/keyCode
+    document.addEventListener('keydown', function (ev) {
+      document.getElementById('outF').textContent =
+          'key=' + ev.key + ' code=' + ev.code + ' keyCode=' + ev.keyCode;
+    });
+
+    // 7. wheel
+    document.addEventListener('wheel', function (ev) {
+      document.getElementById('outG').textContent = 'deltaY=' + Math.round(ev.deltaY);
+    });
+
+    // 8. preventDefault link: no navigation
+    document.getElementById('lk').addEventListener('click', function (ev) {
+      ev.preventDefault();
+      document.getElementById('outH').textContent = 'navigation blocked (preventDefault)';
+      document.getElementById('log').textContent = 'link click intercepted, URL unchanged';
+    });
+  </script>
+</body>
+</html>

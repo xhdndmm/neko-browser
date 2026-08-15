@@ -201,6 +201,25 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     return SerializeComputedStyle(style);
   };
 
+  // Element layout geometry (getBoundingClientRect / offsetWidth etc): the
+  // union of the element's laid-out border box and inline fragments.
+  apis.element_geometry = [&page](const dom::Element& element) -> std::optional<javascript::ElementGeometry> {
+    const std::optional<renderer::ElementGeometry> g = page.ElementBoxGeometry(element);
+    if (!g.has_value()) {
+      return std::nullopt;
+    }
+    javascript::ElementGeometry out;
+    out.x = g->x;
+    out.y = g->y;
+    out.width = g->width;
+    out.height = g->height;
+    out.client_width = g->client_width;
+    out.client_height = g->client_height;
+    out.border_top = g->border_top;
+    out.border_left = g->border_left;
+    return out;
+  };
+
   auto binder = std::make_shared<javascript::DomBinder>(*document, apis);
   binder->SetConsoleSink(std::move(sink));
 

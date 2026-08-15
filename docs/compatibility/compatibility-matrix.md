@@ -35,6 +35,7 @@
 | Grid | Partial | 8 布局单元测试 + 5 样式解析测试 | display:grid、grid-template-columns/rows（px/%/fr/auto/min-content/max-content + repeat()）、row-major 自动放置、grid-column/row 行与 span 放置、column/row gap、隐式轨道按 auto 尺寸；无 inline-grid、命名区域、dense 打包、minmax()、grid-auto-flow 除 row 外、网格项目内绝对定位精确定位 |
 | float | Partial | Layout + Style 套件 | 行外锚定 block 一侧（left/right）、行盒环绕让位、shrink-to-fit/显式宽高；无 clear、多 float 相交、跨 BFC 布局 |
 | `appearance` / `<button>` 原生外观 | Partial | Style + Paint + Renderer 套件 | appearance none/auto/button（CSS-UI-4 §7.2）：button UA 默认 inline-block + 文本居中 + buttonface 背景与 outset 边框（作者 background/border 优先，与浏览器一致），button 可强制任意元素；无 hover/active/disabled 状态、box-sizing:border-box、min 尺寸、内容垂直居中 |
+| 表单控件（`<input>`/`<textarea>`/`<select>`） | Partial | 3 Browser 集成 + 2 UI 端到端 + Layout/Paint 验证 | 原子行内盒渲染（默认 1px 边框 + 白底 + value/placeholder 文本 run，text/textarea/select 内容、默认 170px 宽与行高）；点击聚焦（元素级焦点，后续键盘输入可达）；键盘输入默认行为：可打印字符追加、Backspace 删除、Enter 隐含提交表单；GUI 点击窃取键盘焦点（Qt setFocus）；聚焦文本控件绘制**闪烁文本光标（caret）**（500ms QTimer，置于 value 文本末尾，焦点离开/导航即消失，UI 测试逐帧抓图验证闪烁）；无 focus outline、textarea/select 就地编辑、IME、剪贴板、maxlength |
 | position absolute | Partial | Layout 套件 | 包含块判定（最近 positioning 祖先 padding box）、top/left/right/bottom、shrink-to-fit 与 left+right 约束方程；fixed 暂按 absolute 处理，无 z-index/百分比 offset |
 | 文本（位图字体回退） | Tested | Paint 套件 | 无系统字体时的 8x8 ASCII 回退 |
 | 文本（FreeType） | Partial | Graphics + Paint 套件 | 系统字体、抗锯齿、任意字号、UTF-8、glyph 缓存、布局真实 advance、font-family 匹配、逐字符回退 + CJK 回退链（中文可显示）、粗体/斜体变体匹配；**glyph/字体选择器/字形缓存均线程安全（互斥锁，支持并行栅格化）**、**TextWidth 记忆化**（同 (text,px) 命中缓存）；无 HarfBuzz 整形 |
@@ -43,9 +44,8 @@
 | 图像解码 JPEG | Tested | 16 图像单元测试 | 封装 libjpeg，接口统一为 neko::image |
 | 图像解码 GIF | Tested | 8 图像单元测试（含测试内 LZW 编码器） | 自研解码器（GIF87a/89a、全局/局部色表、LZW 变长码宽、交错、GCE 透明）；仅渲染首帧（无动画） |
 | 图像解码 SVG | Partial | 6 图像单元测试 + 端到端截图 | 自研最小栅格化器：svg/g/a/rect(含圆角)/circle/ellipse/line/polyline/polygon/path（M/L/H/V/C/S/Q/T/A/Z + 相对）、fill/stroke/stroke-width/透明度、transform（translate/scale/rotate/matrix）、viewBox meet 居中、2× 超采样抗锯齿；无 <text>/渐变/图案/滤镜/use/clip-path 蒙版 |
-| 图像解码 WebP/AVIF | Not Started | — | 返回显式 NOT IMPLEMENTED |
+| 图像解码 WebP | Implemented | 3 WebP 单元测试（无损 VP8L 色块、magic 检测、拒绝坏 magic） | libwebp 封装；AVIF 仍 Not Started |
 | 页面内 `<img>` 渲染 | Partial | Renderer + Layout + Paint 套件 | 子资源抓取+解码注入、行内原子盒（与文字同行）、replaced 尺寸（固有/显式/比例、presentational width/height）、object-fit fill/contain/cover/none/scale-down、vertical-align baseline/middle/top/bottom |
-| 图像解码 WebP/AVIF | Not Started | — | 返回显式 NOT IMPLEMENTED |
 | WAV 音频解码 | Tested | 13 媒体单元测试 | 自研 RIFF/WAVE，PCM+float，8/16/24/32-bit |
 | 视频解码（H.264/VP9 等） | Not Started | — | 显式 NOT IMPLEMENTED，架构预留 |
 | PDF 文本提取 | Partial | 12 PDF 单元测试 | xref（含 /Prev）、FlateDecode、内容流文本操作符；无 xref stream/渲染/CMap |
@@ -59,6 +59,8 @@
 | 合成器 | Not Started | — | — |
 | JavaScript（runtime，QuickJS） | Partial | 107 JS 单元测试 + 浏览器集成测试 + CLI/GUI 集成 + bing 实测 | ES2025 核心语言、console、执行时限/内存上限、**DOM 绑定**（document/Node/Element/Text/Comment/DocumentFragment/CSSStyleDeclaration/**Event**/**CustomEvent**）、**页内 `<script>` 执行（内联 + 外部 src=、async/defer）**、**最小事件循环**（setTimeout/setInterval 同步泵、**requestAnimationFrame**）、**事件传播**（capture→target→bubble、preventDefault/stopPropagation/stopImmediatePropagation、once/capture 选项、composedPath）、**microtask 泵送**、**localStorage/fetch（Phase 8 M3 子集）**、**window.location 导航**、**classList/dataset/matches/closest**、**表单控件 value/checked/type/placeholder/disabled/name**、**a.href/img.src 绝对化与 img.naturalWidth/Height/complete**、**getComputedStyle**（浏览器层接线 StyleEngine）、**history/performance.now + performance.timing.navigationStart/timeOrigin**、**window === globalThis**（`window._G={...}` 与裸 `_G` 读写互通，bing 47 脚本链的根因修复）、**window.self/top/parent/frames**、**innerText（读，textContent 近似）**、**matchMedia**（基础媒体查询求值，固定 800×600 视口）、**全局事件处理属性**（onload/onerror/...，可裸读可赋值）；无完整 Web IDL、无 WebSocket/XHR/sessionStorage/FormData、module 脚本不执行 |
 | Fetch（浏览器 API） | Partial | JS 单元测试 + 浏览器集成测试 | window.fetch Promise<Response>（status/ok/headers.get/text/json）、相对 URL 解析、网络错误 reject；无 CORS preflight/streaming/FormData |
+| DOM 元素几何 API | Partial | 1 JS 回调测试 + 1 浏览器集成测试 + Renderer 几何查询 | **getBoundingClientRect** 返回真实布局矩形（border box，文档坐标，含 toJSON）、**offsetWidth/Height**（border box 尺寸）、**offsetLeft/Top**（文档坐标）、**offsetParent**（恒为 body）、**clientWidth/Height**（padding box）、**clientTop/Left**（border 宽）；块级/原子元素读自身布局盒，纯 inline 元素聚合其文本 run 的并集矩形；布局缺失时按需构建（脚本先于 UI 布局）；无滚动感知（scrollWidth/Height/scrollTop 未建模、getBoundingClientRect 未减滚动偏移）、offsetParent 恒为 body（positioned 祖先/表格单元格未建模） |
+| 用户交互事件（阶段 2） | Partial | 7 JS 事件测试 + 4 浏览器集成 + 3 UI 端到端 | 浏览器派发 **MouseEvent**（clientX/clientY/button，mousedown→mouseup→click 顺序）、**KeyboardEvent keyCode**、**focus/blur**（点击控件聚焦/失焦触发）、**input**（输入后 bubbling 触发 oninput/listener）、**wheel**（滚动 deltaY，Qt wheelEvent 接线）；**元素全局事件处理属性**：IDL 赋值（element.onclick=fn）与 content attribute（on*="code" 编译执行）都在事件到达元素时触发，click 的 preventDefault 仍控制导航/提交默认行为；**事件 handler 改 DOM → 立即重算+重绘**（DomBinder 脏检测 + ReapplyStyles 立即重建布局，页面脚本交互及时反映）；点击在导航加载中不丢失（worker 端实时命中）；无 mousemove/mouseover/mouseout/dblclick 接线、wheel 的 preventDefault 不阻止默认滚动、on* content attribute 每次触发重新编译（无缓存） |
 | IndexedDB | Not Started | — | — |
 | 多线程 | Partial | 7 base 单元测试 + TSan 通过 | `base::ThreadPool`（固定 worker、Post/Submit、WaitIdle、析构排空）、页内多 `<img>` 与外部 `<link rel=stylesheet>` **抓取+解析/解码并行**（FetchFn 需线程安全）、**并行带栅格化**（大页面渲染按水平带并行）、**共享线程池**（浏览器控制器持有，样式/图像抓取与渲染复用同一池）；无多进程（Phase 12） |
 | 样式解析缓存 | Tested | Style 套件 | `<style>` 元素按文本内容记忆化解析（内容未变不重解析，元素删除时清理）；选择器分桶 + 计算样式缓存配合下，重复样式应用不再重解析 |

@@ -73,6 +73,15 @@ public:
   void Back();
   void Forward();
   void Reload();
+  // Dispatches a user click (document coordinates) to the page's script
+  // runtime on the worker thread; runs the cancelable "click" event and the
+  // default action (hyperlink navigation) unless preventDefault was called.
+  void DispatchPointerClick(int tab_id, float doc_x, float doc_y);
+  // Dispatches a wheel event (vertical delta px) to the page's script runtime.
+  void DispatchWheel(int tab_id, double delta_y);
+  // Dispatches a keyboard event (keydown/keyup) to the page's script runtime.
+  void DispatchKeyboard(int tab_id, const QString& type, const QString& key,
+                        const QString& code);
   void NewTab(const QString& url, bool activate);
   void CloseTab(int id);
   void ActivateTab(int id);

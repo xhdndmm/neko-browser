@@ -7,6 +7,7 @@
 #include "neko/html/parser.h"
 #include "neko/paint/painter.h"
 
+#include <algorithm>
 #include <fstream>
 #include <optional>
 #include <string>
@@ -14,6 +15,105 @@
 
 namespace neko::renderer {
 namespace {
+
+// Depth-first search for the first layout box owned by |target| (block-level
+// boxes and atomic inline boxes carry the element's own geometry).
+const layout::LayoutBox* FindElementBox(const layout::LayoutBox& box,
+                                        const dom::Element* target)
+{
+  if (box.element == target) {
+    return &box;
+  }
+  for (const auto& child : box.children) {
+    if (const layout::LayoutBox* hit = FindElementBox(*child, target)) {
+      return hit;
+    }
+  }
+  for (const layout::Line& line : box.lines) {
+    for (const layout::InlineBox& ib : line.boxes) {
+      if (ib.block_box != nullptr) {
+        if (const layout::LayoutBox* hit = FindElementBox(*ib.block_box, target)) {
+          return hit;
+        }
+      }
+    }
+  }
+  for (const auto& child : box.positioned_children) {
+    if (const layout::LayoutBox* hit = FindElementBox(*child, target)) {
+      return hit;
+    }
+  }
+  for (const auto& f : box.floats) {
+    if (const layout::LayoutBox* hit = FindElementBox(*f, target)) {
+      return hit;
+    }
+  }
+  return nullptr;
+}
+
+// Aggregates the laid-out fragments of an element that has no box of its own
+// (inline text runs and replaced inline atoms such as <img>), returning the
+// union rectangle in document coordinates.
+bool CollectFragmentRect(const layout::LayoutBox& box,
+                         const dom::Element* target,
+                         float& min_x,
+                         float& min_y,
+                         float& max_right,
+                         float& max_bottom)
+{
+  bool found = false;
+  const auto add = [&](float x, float y, float w, float h) {
+    const float right = x + w;
+    const float bottom = y + h;
+    if (!found) {
+      min_x = x;
+      min_y = y;
+      max_right = right;
+      max_bottom = bottom;
+      found = true;
+    } else {
+      min_x = std::min(min_x, x);
+      min_y = std::min(min_y, y);
+      max_right = std::max(max_right, right);
+      max_bottom = std::max(max_bottom, bottom);
+    }
+  };
+  for (const layout::Line& line : box.lines) {
+    for (const layout::TextRun& run : line.runs) {
+      if (run.element == target) {
+        const float w = run.width > 0
+                            ? run.width
+                            : static_cast<float>(run.text.size()) * run.font_size;
+        add(run.x, run.y, w, run.font_size);
+      }
+    }
+    for (const layout::InlineBox& ib : line.boxes) {
+      if (ib.image != nullptr && ib.element == target) {
+        add(ib.x, ib.y, ib.width, ib.height);
+      }
+      if (ib.block_box != nullptr &&
+          CollectFragmentRect(*ib.block_box, target, min_x, min_y, max_right, max_bottom)) {
+        found = true;
+      }
+    }
+  }
+  for (const auto& child : box.children) {
+    if (CollectFragmentRect(*child, target, min_x, min_y, max_right, max_bottom)) {
+      found = true;
+    }
+  }
+  for (const auto& child : box.positioned_children) {
+    if (CollectFragmentRect(*child, target, min_x, min_y, max_right, max_bottom)) {
+      found = true;
+    }
+  }
+  for (const auto& f : box.floats) {
+    if (CollectFragmentRect(*f, target, min_x, min_y, max_right, max_bottom)) {
+      found = true;
+    }
+  }
+  return found;
+}
 
 // Depth-first hit-test over the layout tree.  Returns the innermost element
 // whose content contains (x, y): block children and inline runs are searched
@@ -26,6 +126,24 @@ const dom::Element* ElementAt(const layout::LayoutBox& box, float x, float y)
     }
   }
   for (const layout::Line& line : box.lines) {
+    // Atomic inline boxes (replaced <img>, inline-block) sit in line.boxes;
+    // an inline-block's inner box is translated to absolute coordinates, so
+    // recurse into it to resolve clicks on its content too.
+    for (const layout::InlineBox& ib : line.boxes) {
+      if (ib.block_box != nullptr) {
+        const layout::LayoutBox& bb = *ib.block_box;
+        if (x >= bb.x && x < bb.x + bb.width && y >= bb.y && y < bb.y + bb.height) {
+          if (const dom::Element* hit = ElementAt(bb, x, y)) {
+            return hit;
+          }
+          return ib.element;
+        }
+      } else if (ib.image != nullptr) {
+        if (x >= ib.x && x < ib.x + ib.width && y >= ib.y && y < ib.y + ib.height) {
+          return ib.element;
+        }
+      }
+    }
     for (const layout::TextRun& run : line.runs) {
       // Prefer the measured width; fall back to the monospace model for runs
       // built without a font (width stays 0 only in that case).
@@ -65,6 +183,7 @@ void Page::LoadHtmlImpl(std::string_view bytes, base::encoding::Charset charset)
   // matching :hover/:active).
   styles_.SetHoveredElement(nullptr);
   styles_.SetActiveElement(nullptr);
+  focused_element_ = nullptr;
   styles_.ApplyStyles(*document_);
   root_.reset();
   // The old DOM is gone; image entries keyed by element address are stale.
@@ -105,7 +224,7 @@ void Page::SetHoveredElement(const dom::Element* element)
   // would make the UI's Refresh() treat the page as freshly loaded and reset
   // the scroll position to the top.
   styles_.ApplyStyles(*document_);
-  LayoutLocked(viewport_width_);
+  LayoutLocked(viewport_width_, viewport_height_);
 }
 
 void Page::SetActiveElement(const dom::Element* element)
@@ -116,7 +235,19 @@ void Page::SetActiveElement(const dom::Element* element)
   }
   styles_.SetActiveElement(element);
   styles_.ApplyStyles(*document_);
-  LayoutLocked(viewport_width_);
+  LayoutLocked(viewport_width_, viewport_height_);
+}
+
+void Page::SetFocusedElement(const dom::Element* element)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  focused_element_ = element;
+}
+
+const dom::Element* Page::FocusedElement() const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  return focused_element_;
 }
 
 void Page::ReapplyStylesLocked()
@@ -125,7 +256,10 @@ void Page::ReapplyStylesLocked()
     return;
   }
   styles_.ApplyStyles(*document_);
-  root_.reset();
+  // Rebuild the layout tree right away so the document/root stays consistent
+  // for hit-testing and geometry queries even before the UI repaints (which
+  // would otherwise see a null root and defer everything to its own pass).
+  LayoutLocked(viewport_width_, viewport_height_);
   display_list_.reset();
   BumpVersion();
 }
@@ -153,20 +287,21 @@ base::Result<void> Page::LoadFile(std::string_view path)
   return LoadHtml(content);
 }
 
-void Page::Layout(float viewport_width)
+void Page::Layout(float viewport_width, float viewport_height)
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  LayoutLocked(viewport_width);
+  LayoutLocked(viewport_width, viewport_height);
 }
 
-void Page::LayoutLocked(float viewport_width)
+void Page::LayoutLocked(float viewport_width, float viewport_height)
 {
   if (document_ == nullptr) {
     return;
   }
   viewport_width_ = viewport_width;
+  viewport_height_ = viewport_height;
   layout::LayoutEngine engine(styles_, &fonts_, this);
-  root_ = engine.BuildLayoutTree(*document_, viewport_width);
+  root_ = engine.BuildLayoutTree(*document_, viewport_width, viewport_height);
   display_list_.reset();
   BumpVersion();
 }
@@ -300,6 +435,52 @@ const dom::Element* Page::ElementAt(float x, float y) const
     return nullptr;
   }
   return renderer::ElementAt(*root_, x, y);
+}
+
+std::optional<ElementGeometry> Page::ElementBoxGeometry(const dom::Element& element)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (document_ == nullptr) {
+    return std::nullopt;
+  }
+  if (root_ == nullptr) {
+    // No layout yet (e.g. page scripts run before the UI lays out): build one
+    // at the last viewport size so geometry queries have real values.
+    LayoutLocked(viewport_width_ > 0 ? viewport_width_ : 800, viewport_height_);
+  }
+  if (root_ == nullptr) {
+    return std::nullopt;
+  }
+  // An element with its own layout box: report the box geometry directly.
+  if (const layout::LayoutBox* box = FindElementBox(*root_, &element)) {
+    ElementGeometry g;
+    g.x = box->x;
+    g.y = box->y;
+    g.width = box->width;
+    g.height = box->height;
+    g.border_top = box->border_top;
+    g.border_left = box->border_left;
+    g.client_width = std::max(0.0f, box->width - box->border_left - box->border_right);
+    g.client_height = std::max(0.0f, box->height - box->border_top - box->border_bottom);
+    return g;
+  }
+  // Inline text and replaced elements without their own box: aggregate their
+  // fragments (no borders, so the padding box equals the border box).
+  float min_x = 0;
+  float min_y = 0;
+  float max_right = 0;
+  float max_bottom = 0;
+  if (CollectFragmentRect(*root_, &element, min_x, min_y, max_right, max_bottom)) {
+    ElementGeometry g;
+    g.x = min_x;
+    g.y = min_y;
+    g.width = max_right - min_x;
+    g.height = max_bottom - min_y;
+    g.client_width = g.width;
+    g.client_height = g.height;
+    return g;
+  }
+  return std::nullopt;
 }
 
 std::string Page::DumpDom() const

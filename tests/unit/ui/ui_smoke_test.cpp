@@ -11,6 +11,7 @@
 #include <QPixmap>
 #include <QPlainTextEdit>
 #include <QScrollBar>
+#include <QWheelEvent>
 #include <QTabBar>
 #include <QWidget>
 
@@ -23,6 +24,8 @@
 #include <gtest/gtest.h>
 
 #include "neko/browser/browser_controller.h"
+#include "neko/dom/query.h"
+#include "neko/layout/layout_tree.h"
 #include "neko/storage/file_util.h"
 #include "neko/ui/browser_worker.h"
 #include "neko/ui/main_window.h"
@@ -382,6 +385,469 @@ TEST(UiSmokeTest, HoverDoesNotResetScroll) {
   QCoreApplication::processEvents();
 
   EXPECT_EQ(view->verticalScrollBar()->value(), 200);
+}
+
+TEST(UiSmokeTest, ClickRunsPageClickListener) {
+  TempProfile tp;
+  const std::string html =
+      "<html><head><title>Click</title></head>"
+      "<body style=\"margin:0\">"
+      "<button id=\"btn\" style=\"width:200px;height:40px;margin:10px\">Click</button>"
+      "<span id=\"status\">no</span>"
+      "<script>"
+      "document.getElementById('btn').addEventListener('click', function(){"
+      "  document.getElementById('status').textContent = 'yes'; });"
+      "</script></body></html>";
+  const std::string html_file = tp.path() + "/click.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(html_file, html).has_value());
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.resize(800, 600);
+  window.show();
+  worker.NavigateActive(QString::fromStdString(html_file));
+  window.AddressBar()->clearFocus();
+
+  ASSERT_TRUE(WaitFor([&] {
+    const auto snap = worker.SnapshotActiveTab();
+    return snap.page != nullptr && snap.page->layout_root() != nullptr;
+  }));
+  auto* view = window.findChild<neko::ui::WebView*>();
+  ASSERT_NE(view, nullptr);
+
+  // Click the button's center: body margin 0, button margin 10 + 200x40 →
+  // the button spans roughly (10,10)..(210,50); (100,30) hits it.
+  QMouseEvent press(QEvent::MouseButtonPress, QPointF(100, 30), Qt::LeftButton, Qt::LeftButton,
+                    Qt::NoModifier);
+  QApplication::sendEvent(view->viewport(), &press);
+  QMouseEvent release(QEvent::MouseButtonRelease, QPointF(100, 30), Qt::LeftButton, Qt::NoButton,
+                      Qt::NoModifier);
+  QApplication::sendEvent(view->viewport(), &release);
+
+  // The click is dispatched on the worker thread; wait until the page script
+  // observed it and updated #status.
+  ASSERT_TRUE(WaitFor([&] {
+    const auto snap = worker.SnapshotActiveTab();
+    if (snap.page == nullptr || snap.page->document() == nullptr) {
+      return false;
+    }
+    neko::dom::Element* status = neko::dom::QuerySelector(*snap.page->document(), "#status");
+    return status != nullptr && status->TextContent() == "yes";
+  }));
+}
+
+// Finds the first laid-out text run belonging to |target| and returns its
+// top-left point (document coordinates, before scroll).
+bool FindElementRunPoint(const neko::layout::LayoutBox& box, const neko::dom::Element* target,
+                         float& x, float& y) {
+  for (const neko::layout::Line& line : box.lines) {
+    for (const neko::layout::TextRun& run : line.runs) {
+      if (run.element == target) {
+        x = run.x + 1.0f;
+        y = run.y + 1.0f;
+        return true;
+      }
+    }
+    for (const neko::layout::InlineBox& ib : line.boxes) {
+      if (ib.block_box != nullptr && FindElementRunPoint(*ib.block_box, target, x, y)) {
+        return true;
+      }
+    }
+  }
+  for (const auto& child : box.children) {
+    if (FindElementRunPoint(*child, target, x, y)) {
+      return true;
+    }
+  }
+  for (const auto& f : box.floats) {
+    if (FindElementRunPoint(*f, target, x, y)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+TEST(UiSmokeTest, ClickInputAndTypeUpdatesValue) {
+  TempProfile tp;
+  const std::string html =
+      "<html><head><title>Input</title></head>"
+      "<body style=\"margin:0\">"
+      "<input id=\"q\" value=\"hi\" style=\"margin:10px\">"
+      "</body></html>";
+  const std::string html_file = tp.path() + "/input.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(html_file, html).has_value());
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.resize(800, 600);
+  window.show();
+  worker.NavigateActive(QString::fromStdString(html_file));
+  window.AddressBar()->clearFocus();
+
+  ASSERT_TRUE(WaitFor([&] {
+    const auto snap = worker.SnapshotActiveTab();
+    if (snap.page == nullptr || snap.page->layout_root() == nullptr ||
+        snap.page->document() == nullptr) {
+      return false;
+    }
+    neko::dom::Element* input = neko::dom::QuerySelector(*snap.page->document(), "#q");
+    if (input == nullptr) {
+      return false;
+    }
+    float x = 0;
+    float y = 0;
+    return FindElementRunPoint(*snap.page->layout_root(), input, x, y);
+  }));
+  auto* view = window.findChild<neko::ui::WebView*>();
+  ASSERT_NE(view, nullptr);
+  // The WebView's cached snapshot only refreshes on the main window's timer;
+  // sync it so click/key handling sees the loaded page.
+  view->Refresh();
+
+  // Click the input's value text: it gains focus and keyboard focus moves to
+  // the WebView (address bar clears above, but the click steals focus too).
+  {
+    const auto snap = worker.SnapshotActiveTab();
+    ASSERT_NE(snap.page->document(), nullptr);
+    neko::dom::Element* input = neko::dom::QuerySelector(*snap.page->document(), "#q");
+    ASSERT_NE(input, nullptr);
+    float x = 0;
+    float y = 0;
+    ASSERT_TRUE(FindElementRunPoint(*snap.page->layout_root(), input, x, y));
+    QMouseEvent press(QEvent::MouseButtonPress, QPointF(x, y), Qt::LeftButton, Qt::LeftButton,
+                      Qt::NoModifier);
+    QApplication::sendEvent(view->viewport(), &press);
+    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(x, y), Qt::LeftButton, Qt::NoButton,
+                        Qt::NoModifier);
+    QApplication::sendEvent(view->viewport(), &release);
+  }
+  // The focused control is published on the page (read by caret painting).
+  ASSERT_TRUE(WaitFor([&] {
+    const auto snap = worker.SnapshotActiveTab();
+    return snap.page != nullptr && snap.page->FocusedElement() != nullptr;
+  }));
+
+  // Type a character; the WebView now owns keyboard focus, so the keystroke is
+  // forwarded to the focused input (keydown inserts, keyup only dispatches).
+  {
+    QKeyEvent down(QEvent::KeyPress, Qt::Key_A, Qt::NoModifier);
+    QApplication::sendEvent(view, &down);
+    QKeyEvent up(QEvent::KeyRelease, Qt::Key_A, Qt::NoModifier);
+    QApplication::sendEvent(view, &up);
+  }
+
+  ASSERT_TRUE(WaitFor([&] {
+    const auto snap = worker.SnapshotActiveTab();
+    if (snap.page == nullptr || snap.page->document() == nullptr) {
+      return false;
+    }
+    neko::dom::Element* input = neko::dom::QuerySelector(*snap.page->document(), "#q");
+    return input != nullptr && input->GetAttribute("value").value_or("") == "hia";
+  }));
+}
+
+// Returns the caret point of |target|: the end of its first text run
+// (document coordinates, before scroll).
+bool FindCaretPoint(const neko::layout::LayoutBox& box, const neko::dom::Element* target,
+                    float& x, float& y, float& h) {
+  for (const neko::layout::Line& line : box.lines) {
+    for (const neko::layout::TextRun& run : line.runs) {
+      if (run.element == target) {
+        x = run.x + run.width;
+        y = run.y;
+        h = line.height;
+        return true;
+      }
+    }
+    for (const neko::layout::InlineBox& ib : line.boxes) {
+      if (ib.block_box != nullptr && FindCaretPoint(*ib.block_box, target, x, y, h)) {
+        return true;
+      }
+    }
+  }
+  for (const auto& child : box.children) {
+    if (FindCaretPoint(*child, target, x, y, h)) {
+      return true;
+    }
+  }
+  for (const auto& f : box.floats) {
+    if (FindCaretPoint(*f, target, x, y, h)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+TEST(UiSmokeTest, FocusedInputDrawsCaret) {
+  TempProfile tp;
+  const std::string html =
+      "<html><head><title>I</title></head>"
+      "<body style=\"margin:0\">"
+      "<input id=\"q\" value=\"ab\" style=\"margin:10px\">"
+      "</body></html>";
+  const std::string html_file = tp.path() + "/caret.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(html_file, html).has_value());
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.resize(800, 600);
+  window.show();
+  worker.NavigateActive(QString::fromStdString(html_file));
+  window.AddressBar()->clearFocus();
+
+  ASSERT_TRUE(WaitFor([&] {
+    const auto snap = worker.SnapshotActiveTab();
+    if (snap.page == nullptr || snap.page->layout_root() == nullptr ||
+        snap.page->document() == nullptr) {
+      return false;
+    }
+    neko::dom::Element* input = neko::dom::QuerySelector(*snap.page->document(), "#q");
+    if (input == nullptr) {
+      return false;
+    }
+    float x = 0;
+    float y = 0;
+    float h = 0;
+    return FindCaretPoint(*snap.page->layout_root(), input, x, y, h);
+  }));
+  auto* view = window.findChild<neko::ui::WebView*>();
+  ASSERT_NE(view, nullptr);
+  view->Refresh();
+
+  // Click the input's text to focus it.
+  {
+    const auto snap = worker.SnapshotActiveTab();
+    neko::dom::Element* input = neko::dom::QuerySelector(*snap.page->document(), "#q");
+    float x = 0;
+    float y = 0;
+    float h = 0;
+    ASSERT_TRUE(FindCaretPoint(*snap.page->layout_root(), input, x, y, h));
+    QMouseEvent press(QEvent::MouseButtonPress, QPointF(x - 2.0f, y), Qt::LeftButton,
+                      Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(view->viewport(), &press);
+    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(x - 2.0f, y), Qt::LeftButton,
+                        Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(view->viewport(), &release);
+  }
+  ASSERT_TRUE(WaitFor([&] {
+    const auto snap = worker.SnapshotActiveTab();
+    return snap.page != nullptr && snap.page->FocusedElement() != nullptr;
+  }));
+
+  // Grab the viewport across several blink intervals: the caret must be
+  // present in some frames and absent in others (blinking).
+  const auto snap = worker.SnapshotActiveTab();
+  neko::dom::Element* input = neko::dom::QuerySelector(*snap.page->document(), "#q");
+  ASSERT_NE(input, nullptr);
+  float cx = 0;
+  float cy = 0;
+  float ch = 0;
+  ASSERT_TRUE(FindCaretPoint(*snap.page->layout_root(), input, cx, cy, ch));
+  bool saw_caret = false;
+  bool saw_no_caret = false;
+  for (int i = 0; i < 5; ++i) {
+    const QImage img = view->viewport()->grab().toImage();
+    bool has = false;
+    for (int y = std::max(0, (int)cy); y < (int)(cy + ch) && y < img.height(); ++y) {
+      if (cx < img.width()) {
+        const QColor c = img.pixelColor((int)cx, y);
+        if (c.red() < 100 && c.green() < 100 && c.blue() < 100) {
+          has = true;
+          break;
+        }
+      }
+    }
+    (has ? saw_caret : saw_no_caret) = true;
+    if (saw_caret && saw_no_caret) {
+      break;
+    }
+    // Let the 500 ms blink timer fire before the next frame.
+    QCoreApplication::processEvents();
+    std::this_thread::sleep_for(std::chrono::milliseconds(560));
+  }
+  EXPECT_TRUE(saw_caret);
+  EXPECT_TRUE(saw_no_caret);
+
+  // The caret follows the value: typing moves it to the new end of the text.
+  {
+    QKeyEvent down(QEvent::KeyPress, Qt::Key_C, Qt::NoModifier);
+    QApplication::sendEvent(view, &down);
+    QKeyEvent up(QEvent::KeyRelease, Qt::Key_C, Qt::NoModifier);
+    QApplication::sendEvent(view, &up);
+  }
+  ASSERT_TRUE(WaitFor([&] {
+    const auto snap2 = worker.SnapshotActiveTab();
+    if (snap2.page == nullptr || snap2.page->document() == nullptr) {
+      return false;
+    }
+    neko::dom::Element* q = neko::dom::QuerySelector(*snap2.page->document(), "#q");
+    return q != nullptr && q->GetAttribute("value").value_or("") == "abc";
+  }));
+  float cx2 = 0;
+  float cy2 = 0;
+  float ch2 = 0;
+  {
+    const auto snap2 = worker.SnapshotActiveTab();
+    neko::dom::Element* q = neko::dom::QuerySelector(*snap2.page->document(), "#q");
+    ASSERT_NE(q, nullptr);
+    ASSERT_TRUE(FindCaretPoint(*snap2.page->layout_root(), q, cx2, cy2, ch2));
+  }
+  EXPECT_GT(cx2, cx);
+  // The caret must still blink at its new position.
+  bool saw_caret2 = false;
+  bool saw_no_caret2 = false;
+  for (int i = 0; i < 5; ++i) {
+    const QImage img = view->viewport()->grab().toImage();
+    bool has = false;
+    for (int y = std::max(0, (int)cy2); y < (int)(cy2 + ch2) && y < img.height(); ++y) {
+      if (cx2 < img.width()) {
+        const QColor c = img.pixelColor((int)cx2, y);
+        if (c.red() < 100 && c.green() < 100 && c.blue() < 100) {
+          has = true;
+          break;
+        }
+      }
+    }
+    (has ? saw_caret2 : saw_no_caret2) = true;
+    if (saw_caret2 && saw_no_caret2) {
+      break;
+    }
+    QCoreApplication::processEvents();
+    std::this_thread::sleep_for(std::chrono::milliseconds(560));
+  }
+  EXPECT_TRUE(saw_caret2);
+  EXPECT_TRUE(saw_no_caret2);
+}
+
+TEST(UiSmokeTest, WheelFiresPageWheelEvent) {
+  TempProfile tp;
+  const std::string html =
+      "<html><head><title>W</title></head>"
+      "<body style=\"margin:0\"><div style=\"height:2000px\">tall</div>"
+      "<script>"
+      "document.body.onwheel = function(e){"
+      "  document.body.setAttribute('data-d', e.deltaY);"
+      "};"
+      "</script></body></html>";
+  const std::string html_file = tp.path() + "/wheel.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(html_file, html).has_value());
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.resize(800, 600);
+  window.show();
+  worker.NavigateActive(QString::fromStdString(html_file));
+  window.AddressBar()->clearFocus();
+
+  ASSERT_TRUE(WaitFor([&] {
+    const auto snap = worker.SnapshotActiveTab();
+    return snap.page != nullptr && snap.page->layout_root() != nullptr;
+  }));
+  auto* view = window.findChild<neko::ui::WebView*>();
+  ASSERT_NE(view, nullptr);
+  view->Refresh();
+
+  // One wheel notch: deltaY = the line step chosen by the view.
+  QWheelEvent wheel(QPointF(100, 100), QPointF(100, 100), QPoint(0, 0), QPoint(0, -120),
+                    Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, /*inverted=*/false);
+  QApplication::sendEvent(view->viewport(), &wheel);
+
+  // The page's onwheel handler observed a non-zero vertical delta.
+  ASSERT_TRUE(WaitFor([&] {
+    const auto snap = worker.SnapshotActiveTab();
+    if (snap.page == nullptr || snap.page->document() == nullptr) {
+      return false;
+    }
+    neko::dom::Element* body = neko::dom::QuerySelector(*snap.page->document(), "body");
+    return body != nullptr && body->GetAttribute("data-d").has_value() &&
+           std::stod(std::string(body->GetAttribute("data-d").value())) != 0;
+  }));
+}
+
+
+TEST(UiSmokeTest, ClickLinkNavigates) {
+  TempProfile tp;
+  const std::string html =
+      "<html><head><title>Link</title></head>"
+      "<body style=\"margin:0\"><a href=\"/nav\" id=\"lk\">go</a></body>";
+  const std::string html_file = tp.path() + "/link.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(html_file, html).has_value());
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.resize(800, 600);
+  window.show();
+  worker.NavigateActive(QString::fromStdString(html_file));
+  window.AddressBar()->clearFocus();
+
+  ASSERT_TRUE(WaitFor([&] {
+    const auto snap = worker.SnapshotActiveTab();
+    return snap.page != nullptr && snap.page->layout_root() != nullptr;
+  }));
+  auto* view = window.findChild<neko::ui::WebView*>();
+  ASSERT_NE(view, nullptr);
+
+  const auto snap = worker.SnapshotActiveTab();
+  neko::dom::Element* link = neko::dom::QuerySelector(*snap.page->document(), "#lk");
+  ASSERT_NE(link, nullptr);
+  float x = 0;
+  float y = 0;
+  ASSERT_TRUE(FindElementRunPoint(*snap.page->layout_root(), link, x, y));
+
+  QMouseEvent press(QEvent::MouseButtonPress, QPointF(x, y), Qt::LeftButton, Qt::LeftButton,
+                    Qt::NoModifier);
+  QApplication::sendEvent(view->viewport(), &press);
+  QMouseEvent release(QEvent::MouseButtonRelease, QPointF(x, y), Qt::LeftButton, Qt::NoButton,
+                      Qt::NoModifier);
+  QApplication::sendEvent(view->viewport(), &release);
+
+  // The default action navigates the link to /nav.
+  ASSERT_TRUE(WaitFor([&] {
+    const auto s = worker.SnapshotActiveTab();
+    return s.url.find("/nav") != std::string::npos;
+  }));
+}
+
+TEST(UiSmokeTest, HoverLinkShowsPointingHand) {
+  TempProfile tp;
+  const std::string html =
+      "<html><head><title>Hover</title></head>"
+      "<body style=\"margin:0\"><a href=\"/x\" id=\"lk\">go</a></body>";
+  const std::string html_file = tp.path() + "/hover.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(html_file, html).has_value());
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.resize(800, 600);
+  window.show();
+  worker.NavigateActive(QString::fromStdString(html_file));
+  window.AddressBar()->clearFocus();
+
+  ASSERT_TRUE(WaitFor([&] {
+    const auto snap = worker.SnapshotActiveTab();
+    return snap.page != nullptr && snap.page->layout_root() != nullptr;
+  }));
+  auto* view = window.findChild<neko::ui::WebView*>();
+  ASSERT_NE(view, nullptr);
+
+  const auto snap = worker.SnapshotActiveTab();
+  neko::dom::Element* link = neko::dom::QuerySelector(*snap.page->document(), "#lk");
+  ASSERT_NE(link, nullptr);
+  float x = 0;
+  float y = 0;
+  ASSERT_TRUE(FindElementRunPoint(*snap.page->layout_root(), link, x, y));
+
+  // Hovering the hyperlink switches the pointer to a pointing hand.
+  QMouseEvent move(QEvent::MouseMove, QPointF(x, y), Qt::NoButton, Qt::NoButton,
+                   Qt::NoModifier);
+  QApplication::sendEvent(view->viewport(), &move);
+  EXPECT_EQ(view->viewport()->cursor().shape(), Qt::PointingHandCursor);
+
+  // Hovering elsewhere restores the arrow.
+  QMouseEvent away(QEvent::MouseMove, QPointF(500, 400), Qt::NoButton, Qt::NoButton,
+                   Qt::NoModifier);
+  QApplication::sendEvent(view->viewport(), &away);
+  EXPECT_EQ(view->viewport()->cursor().shape(), Qt::ArrowCursor);
 }
 
 }  // namespace

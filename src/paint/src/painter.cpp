@@ -112,6 +112,19 @@ void Painter::PaintBox(const layout::LayoutBox& box, DisplayList& list) const
       FillBackground(box, box.style.background_color.value(), list);
     }
 
+    // CSS background-image paints over the background color (e.g. Bing's
+    // wallpaper).  A missing or not-yet-decoded image is skipped; cover keeps
+    // the image filling the box without distortion.
+    if (!box.background_image_url.empty() && box.background_image != nullptr &&
+        !box.background_image->empty()) {
+      list.DrawImage(box.x,
+                     box.y,
+                     box.width,
+                     box.height,
+                     *box.background_image,
+                     style::ObjectFit::kCover);
+    }
+
     // Border.
     if (box.border_top > 0 || box.border_right > 0 || box.border_bottom > 0 ||
         box.border_left > 0) {

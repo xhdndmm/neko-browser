@@ -30,6 +30,21 @@ struct FetchResponse
   std::string body;
 };
 
+// Laid-out geometry of an element (border box origin/size in document
+// coordinates, css px) plus its padding-box size and border widths.  Computed
+// from the layout tree by the browser layer.
+struct ElementGeometry
+{
+  double x = 0;
+  double y = 0;
+  double width = 0;
+  double height = 0;
+  double client_width = 0;
+  double client_height = 0;
+  double border_top = 0;
+  double border_left = 0;
+};
+
 // Optional browser Web APIs exposed to page scripts (Phase 8 M3 subset:
 // window.localStorage + window.fetch).  Callbacks keep the binder decoupled
 // from the storage/network implementations; the browser layer wires them
@@ -67,6 +82,12 @@ struct PageApis
   // layer from the renderer's style engine; when absent, getComputedStyle
   // returns an empty object.
   std::function<std::map<std::string, std::string>(const dom::Element&)> computed_style;
+
+  // Element layout geometry (getBoundingClientRect / offsetWidth / offsetTop
+  // etc).  Wired by the browser layer from the renderer's layout tree; when
+  // absent (or for elements with no laid-out box) the geometry getters report
+  // 0 / the zero rect.
+  std::function<std::optional<ElementGeometry>(const dom::Element&)> element_geometry;
 };
 
 // Binds a DOM document into a JavaScript runtime, exposing a practical subset
@@ -114,7 +135,10 @@ struct PageApis
 //               nextElementSibling, previousElementSibling, querySelector(All),
 //               getElementsByTagName, getElementsByClassName, matches, closest,
 //               remove, innerHTML (get/set), outerHTML, style
-//               (CSSStyleDeclaration), hidden/title/lang, getBoundingClientRect
+//               (CSSStyleDeclaration), hidden/title/lang, layout geometry
+//               (getBoundingClientRect / offsetWidth/Height/Left/Top /
+//               offsetParent / clientWidth/Height/Top/Left, backed by the
+//               browser layer's layout tree via PageApis::element_geometry)
 //   Form/links: input/textarea/select/option value/checked/type/placeholder/
 //               disabled/name; a.href (resolved absolute)/target/rel;
 //               img.src (resolved)/currentSrc/alt/width/height/
@@ -128,7 +152,13 @@ struct PageApis
 //               options {capture, once}; full capture -> target -> bubble
 //               propagation; dispatchEvent returns false when canceled.
 //               Plain {type: ...} objects remain accepted by dispatchEvent as
-//               a non-bubbling shortcut.
+//               a non-bubbling shortcut.  Browser-dispatched pointer events
+//               (mousedown/mouseup/click) carry MouseEvent fields
+//               (clientX/clientY/button); keyboard events expose the legacy
+//               keyCode; wheel events carry deltaY; focus/blur and input
+//               events are dispatched by the browser layer; element global
+//               event handler attributes work both as IDL assignments
+//               (element.onclick = fn) and content attributes (on*="code").
 //
 // append/replaceChildren accept node arguments (DOM spec converts string
 // arguments to text nodes; that is a documented limitation here).
@@ -136,9 +166,11 @@ struct PageApis
 // NOT implemented (documented limitation): property getters beyond the above,
 // live NodeList objects (childNodes/querySelectorAll return snapshot arrays),
 // event default actions for the browser's built-in behaviors, async script
-// loading (async/defer), module scripts, full CSSOM, real element geometry
-// (getBoundingClientRect returns a zero rect), and computed styles for
-// properties the style engine does not track.
+// loading (async/defer), module scripts, full CSSOM, scroll-aware element
+// geometry (getBoundingClientRect is in document coordinates — scroll offsets
+// and scrollWidth/scrollHeight/scrollTop are not yet modelled; offsetParent
+// is always <body>), and computed styles for properties the style engine does
+// not track.
 //
 // Ownership and lifetime:
 //   * The binder owns its own ScriptEngine (one runtime per document).
@@ -184,6 +216,42 @@ public:
   // run synchronously (no bubbling).  No default action is defined for any
   // event type.
   void DispatchEvent(dom::Element& element, std::string_view type);
+
+  // Dispatches a user-interaction event (e.g. "click", "submit", "keydown")
+  // to |element| with full capture -> target -> bubble propagation and
+  // cancelable=true.  Returns true when the event was NOT canceled (no
+  // listener called preventDefault), so the caller knows to run the event's
+  // default action (link navigation, form submission).
+  bool DispatchCancelableEvent(dom::Element& element, std::string_view type);
+
+  // Dispatches a cancelable keyboard event (keydown/keyup) to |element| with
+  // the UI Events key/code strings.  Returns true when NOT canceled.
+  bool DispatchKeyboardEvent(dom::Element& element, std::string_view type, std::string_view key,
+                             std::string_view code);
+
+  // Dispatches a cancelable pointer event (mousedown/mouseup/click) to
+  // |element| with client coordinates and the mouse button.  Returns true
+  // when NOT canceled.
+  bool DispatchMouseEvent(dom::Element& element, std::string_view type, double client_x,
+                          double client_y, int button);
+
+  // Dispatches a cancelable wheel event to |element| with the vertical scroll
+  // delta (px).  Returns true when NOT canceled.
+  bool DispatchWheelEvent(dom::Element& element, std::string_view type, double delta_y);
+
+  // Dispatches a non-bubbling focus/blur event to |element| (fires listeners
+  // and the element's onfocus/onblur handler).
+  void DispatchFocusEvent(dom::Element& element, std::string_view type);
+
+  // Dispatches a bubbling "input" event to |element| after a text control's
+  // value changed (fires listeners and the element's oninput handler).
+  void DispatchInputEvent(dom::Element& element);
+
+  // Returns whether any JS DOM mutation has run since the last time this was
+  // called (or since the binder was created), clearing the flag.  The browser
+  // layer uses it after dispatching user-interaction events to decide whether
+  // to re-run the style cascade/layout so event-handler DOM changes appear.
+  bool TakeDomDirty();
 
   // Dispatches a synthetic document-level event (e.g. "DOMContentLoaded",
   // "load") to listeners registered on the document — which is where

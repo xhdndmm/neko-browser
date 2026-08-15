@@ -70,6 +70,10 @@ struct Tab
   std::vector<std::string> history;
   int history_index = -1;
 
+  // The element with keyboard focus (worker-thread only).  Points into the
+  // current document; cleared on navigation (the document is replaced).
+  dom::Element* focused_element = nullptr;
+
   // Live JavaScript runtime for the current HTML page (Phase 8 M2): holds the
   // DOM bindings, timers and event listeners of the page's scripts.  Worker
   // thread only — never exposed to the GUI.  Null for non-HTML content or
@@ -164,6 +168,31 @@ public:
   int NewTab(const std::string& url = "", bool activate = true);
   void CloseTab(int id);
   void ActivateTab(int id);
+
+  // Dispatches a user click at document coordinates (doc_x, doc_y) on
+  // |tab_id|: runs the page's cancelable "click" event on the hit element
+  // (full capture->bubble), then — when the event was not canceled — performs
+  // the default action (navigate an <a href> hyperlink).  Runs on the worker
+  // thread (the page's script runtime is thread-confined).  Returns true when
+  // the click was consumed (navigation started or preventDefault).
+  bool DispatchPointerClick(int tab_id, float doc_x, float doc_y);
+
+  // Dispatches a cancelable wheel event (vertical scroll delta in px) to the
+  // tab's focused element (falling back to <body>) on the worker thread.
+  // Returns true when NOT canceled.
+  bool DispatchWheel(int tab_id, double delta_y);
+
+  // Dispatches a cancelable keyboard event (keydown/keyup) to the tab's
+  // focused element (falling back to <body>/document) on the worker thread.
+  // Returns true when NOT canceled.
+  bool DispatchKeyboard(int tab_id, std::string_view type, std::string_view key,
+                        std::string_view code);
+
+  // Submits |form| on |tab_id| (worker thread): runs the cancelable "submit"
+  // event, then — unless preventDefault was called — collects the named form
+  // controls, URL-encodes them (application/x-www-form-urlencoded) and
+  // navigates to the form action with the encoded data (GET query).
+  void SubmitForm(int tab_id, dom::Element* form);
 
   // Worker/test thread only: raw handles into the live tab list.  The GUI
   // must use SnapshotTabs()/SnapshotActiveTab() instead.

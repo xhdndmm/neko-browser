@@ -1,4 +1,6 @@
 #include "neko/browser/browser_controller.h"
+#include "neko/browser/hyperlink.h"
+#include "neko/dom/query.h"
 
 #include "neko/base/logging.h"
 #include "neko/base/string_util.h"
@@ -10,6 +12,7 @@
 #include "neko/network/http.h"
 #include "neko/security/origin.h"
 #include "neko/storage/file_util.h"
+#include "neko/url/url.h"
 
 #include <algorithm>
 #include <chrono>
@@ -29,6 +32,170 @@ std::string_view Trim(std::string_view s)
   while (!s.empty() && (s.back() == ' ' || s.back() == '\t'))
     s.remove_suffix(1);
   return s;
+}
+
+// Resolves a possibly-relative reference against a base page URL.  Handles
+// file:// / bare local path bases (which the URL parser rejects) by string
+// concatenation, mirroring HyperlinkTarget.
+std::string ResolveUrlAgainstBase(std::string_view ref, std::string_view base_url)
+{
+  if (ref.empty()) {
+    return std::string(base_url);
+  }
+  const bool is_file = base_url.rfind("file://", 0) == 0;
+  const bool is_bare_path = base_url.find(':') == std::string_view::npos;
+  if (is_file || is_bare_path) {
+    if (ref[0] == '/') {
+      return is_file ? "file://" + std::string(ref) : std::string(ref);
+    }
+    const std::size_t slash = base_url.find_last_of('/');
+    return std::string(base_url.substr(0, slash != std::string_view::npos ? slash + 1
+                                                                          : base_url.size())) +
+           std::string(ref);
+  }
+  const auto base = url::Url::Parse(base_url);
+  if (base.has_value()) {
+    const auto resolved = url::Url::Parse(ref, base.value());
+    if (resolved.has_value()) {
+      return resolved.value().Serialize(/*include_fragment=*/true);
+    }
+  }
+  return std::string(ref);
+}
+
+// Collects the named, enabled form controls of |form| and encodes them as an
+// application/x-www-form-urlencoded string (HTML §4.10.21.5, simplified: text
+// /search /hidden /password inputs, checkboxes and radios, textarea, first
+// option of a select).
+std::string CollectFormData(const dom::Element& form)
+{
+  std::string out;
+  const auto add_field = [&](const std::string& name, const std::string& value) {
+    if (name.empty()) {
+      return;
+    }
+    if (!out.empty()) {
+      out += '&';
+    }
+    out += url::PercentEncode(name) + '=' + url::PercentEncode(value);
+  };
+  std::vector<dom::Node*> stack;
+  // Pre-order (document-order) walk: push children in reverse so they pop in
+  // tree order, matching the HTML entry-list order.
+  auto push_children = [&stack](dom::Node& n) {
+    std::vector<dom::Node*> children;
+    for (dom::Node* c : n.ChildNodes()) {
+      children.push_back(c);
+    }
+    for (auto it = children.rbegin(); it != children.rend(); ++it) {
+      stack.push_back(*it);
+    }
+  };
+  push_children(const_cast<dom::Element&>(form));
+  while (!stack.empty()) {
+    dom::Node* n = stack.back();
+    stack.pop_back();
+    if (n->node_type() != dom::NodeType::kElement) {
+      continue;
+    }
+    dom::Element& e = static_cast<dom::Element&>(*n);
+    push_children(e);
+    const std::string tag = std::string(e.tag_name());
+    if (tag != "input" && tag != "textarea" && tag != "select") {
+      continue;
+    }
+    const std::optional<std::string_view> name = e.GetAttribute("name");
+    if (!name.has_value() || name->empty() || e.HasAttribute("disabled")) {
+      continue;
+    }
+    if (tag == "textarea") {
+      add_field(std::string(*name), e.TextContent());
+    } else if (tag == "select") {
+      for (dom::Node* c : e.ChildNodes()) {
+        if (c->node_type() != dom::NodeType::kElement) {
+          continue;
+        }
+        dom::Element& opt = static_cast<dom::Element&>(*c);
+        if (opt.tag_name() == "option") {
+          const std::optional<std::string_view> val = opt.GetAttribute("value");
+          add_field(std::string(*name),
+                    val.has_value() ? std::string(*val) : opt.TextContent());
+          break;
+        }
+      }
+    } else {
+      const std::string type = std::string(e.GetAttribute("type").value_or("text"));
+      if (type == "checkbox" || type == "radio") {
+        if (!e.HasAttribute("checked")) {
+          continue;
+        }
+        const std::optional<std::string_view> val = e.GetAttribute("value");
+        add_field(std::string(*name), val.has_value() ? std::string(*val) : "on");
+      } else if (type == "hidden" || type == "text" || type == "search" ||
+                 type == "password" || type == "email" || type == "url") {
+        const std::optional<std::string_view> val = e.GetAttribute("value");
+        add_field(std::string(*name), val.has_value() ? std::string(*val) : "");
+      }
+      // submit/reset/button/file/image/... are not part of the entry list here.
+    }
+  }
+  return out;
+}
+
+// Walks from |node| up to find a submit button (<button> or <input
+// type=submit>), then returns the <form> that owns it.
+dom::Element* FindSubmitForm(dom::Node* node)
+{
+  dom::Element* button = nullptr;
+  for (dom::Node* n = node; n != nullptr; n = n->parent()) {
+    if (n->node_type() != dom::NodeType::kElement) {
+      continue;
+    }
+    dom::Element& e = static_cast<dom::Element&>(*n);
+    const std::string tag = std::string(e.tag_name());
+    if (tag == "button") {
+      const std::string type = std::string(e.GetAttribute("type").value_or("submit"));
+      if (type == "submit") {
+        button = &e;
+        break;
+      }
+    } else if (tag == "input") {
+      const std::string type = std::string(e.GetAttribute("type").value_or("text"));
+      if (type == "submit") {
+        button = &e;
+        break;
+      }
+    }
+  }
+  if (button == nullptr) {
+    return nullptr;
+  }
+  for (dom::Node* n = button; n != nullptr; n = n->parent()) {
+    if (n->node_type() != dom::NodeType::kElement) {
+      continue;
+    }
+    dom::Element& e = static_cast<dom::Element&>(*n);
+    if (e.tag_name() == "form") {
+      return &e;
+    }
+  }
+  return nullptr;
+}
+
+// Returns the closest <form> ancestor of a control, if any (used for
+// implicit submission when Enter is pressed inside a text input).
+dom::Element* FindEnclosingForm(dom::Node* node)
+{
+  for (dom::Node* n = node; n != nullptr; n = n->parent()) {
+    if (n->node_type() != dom::NodeType::kElement) {
+      continue;
+    }
+    dom::Element& e = static_cast<dom::Element&>(*n);
+    if (e.tag_name() == "form") {
+      return &e;
+    }
+  }
+  return nullptr;
 }
 
 int64_t NowUnix()
@@ -357,6 +524,8 @@ void BrowserController::NavigateToUrl(Tab& tab, const std::string& url_string)
     std::lock_guard<std::mutex> lock(mutex_);
     tab.url = url_string;
   }
+  // A fresh document replaces the old one; any focused element is stale.
+  tab.focused_element = nullptr;
   // Local paths (and file:// URLs) are handled directly without the URL
   // parser (which does not support opaque file: URLs yet).
   if (StartsWith(url_string, "file://")) {
@@ -389,7 +558,15 @@ void BrowserController::NavigateToUrl(Tab& tab, const std::string& url_string)
 
 void BrowserController::LoadLocalPath(Tab& tab, const std::string& path)
 {
-  auto maybe_bytes = storage::ReadFile(path);
+  // Strip any query/fragment from a self-referential form submission (e.g.
+  // form.html?q=hello): the file on disk is form.html; the query stays in
+  // tab.url so window.location.search reflects it.
+  std::string file = path;
+  const std::size_t q = file.find_first_of("?#");
+  if (q != std::string::npos) {
+    file.resize(q);
+  }
+  auto maybe_bytes = storage::ReadFile(file);
   if (!maybe_bytes) {
     std::lock_guard<std::mutex> lock(mutex_);
     tab.content_type = ContentType::kError;
@@ -397,6 +574,8 @@ void BrowserController::LoadLocalPath(Tab& tab, const std::string& path)
     tab.title = "File error";
     return;
   }
+  // base_url keeps the full reference (query included) so window.location
+  // reflects a self-submitting form's query string.
   LoadBytes(tab, maybe_bytes.value(), "", "file://" + path);
 }
 
@@ -427,10 +606,188 @@ base::Result<void> BrowserController::Navigate(int tab_id, const std::string& in
   return base::Ok();
 }
 
+bool BrowserController::DispatchPointerClick(int tab_id, float doc_x, float doc_y)
+{
+  Tab* tab = FindTab(tab_id);
+  if (tab == nullptr || tab->content_type != ContentType::kHtml || tab->page == nullptr) {
+    return false;
+  }
+  const dom::Element* element = tab->page->ElementAt(doc_x, doc_y);
+  if (element == nullptr) {
+    return false;
+  }
+  // Focus a clicked form control so keyboard input reaches it; clicking
+  // anywhere else clears the focus.  The page keeps the focused element for
+  // the UI's caret painting (read across threads under the page lock).
+  // Focus changes fire blur (old) / focus (new) on the elements.
+  const std::string clicked_tag = std::string(element->tag_name());
+  dom::Element* prev_focused = tab->focused_element;
+  if (clicked_tag == "input" || clicked_tag == "textarea" || clicked_tag == "select") {
+    tab->focused_element = const_cast<dom::Element*>(element);
+    tab->page->SetFocusedElement(element);
+    if (tab->script_runtime != nullptr && prev_focused != tab->focused_element) {
+      if (prev_focused != nullptr) {
+        tab->script_runtime->DispatchFocusEvent(*prev_focused, "blur");
+      }
+      tab->script_runtime->DispatchFocusEvent(*tab->focused_element, "focus");
+    }
+  } else if (tab->focused_element != nullptr) {
+    dom::Element* losing = tab->focused_element;
+    tab->focused_element = nullptr;
+    tab->page->SetFocusedElement(nullptr);
+    if (tab->script_runtime != nullptr) {
+      tab->script_runtime->DispatchFocusEvent(*losing, "blur");
+    }
+  }
+  // Run the page's cancelable pointer events (mousedown -> mouseup -> click)
+  // when a script runtime exists; a page with no scripts skips straight to the
+  // default action.  The document owns the element, so const_cast is safe.
+  if (tab->script_runtime != nullptr) {
+    dom::Element& el = const_cast<dom::Element&>(*element);
+    (void)tab->script_runtime->DispatchMouseEvent(el, "mousedown", doc_x, doc_y, 0);
+    (void)tab->script_runtime->DispatchMouseEvent(el, "mouseup", doc_x, doc_y, 0);
+    const bool not_canceled =
+        tab->script_runtime->DispatchMouseEvent(el, "click", doc_x, doc_y, 0);
+    // A pointer handler may have mutated the DOM; reflect it before the
+    // default action (which may navigate away).
+    if (tab->script_runtime->TakeDomDirty()) {
+      tab->page->ReapplyStyles();
+    }
+    if (!not_canceled) {
+      return true; // preventDefault: the page handled the click.
+    }
+  }
+  // Default action: navigate an <a href> hyperlink (or a clickable element
+  // nested inside one).
+  const std::optional<std::string> target = HyperlinkTarget(element, tab->url);
+  if (target.has_value()) {
+    Navigate(tab_id, target.value());
+    return true;
+  }
+  // Default action: a submit button submits its enclosing form.
+  if (dom::Element* form = FindSubmitForm(const_cast<dom::Element*>(element))) {
+    SubmitForm(tab_id, form);
+    return true;
+  }
+  return false;
+}
+
+bool BrowserController::DispatchWheel(int tab_id, double delta_y)
+{
+  Tab* tab = FindTab(tab_id);
+  if (tab == nullptr || tab->content_type != ContentType::kHtml || tab->page == nullptr) {
+    return false;
+  }
+  dom::Element* target = tab->focused_element;
+  if (target == nullptr) {
+    if (tab->page->document() != nullptr) {
+      target = dom::QuerySelector(*tab->page->document(), "body");
+    }
+  }
+  if (target == nullptr || tab->script_runtime == nullptr) {
+    return true;
+  }
+  const bool not_canceled = tab->script_runtime->DispatchWheelEvent(*target, "wheel", delta_y);
+  // A wheel handler may mutate the DOM (e.g. lazy-load placeholders); reflect
+  // it so the change appears without waiting for the next navigation.
+  if (tab->script_runtime->TakeDomDirty()) {
+    tab->page->ReapplyStyles();
+  }
+  return not_canceled;
+}
+
+bool BrowserController::DispatchKeyboard(int tab_id, std::string_view type, std::string_view key,
+                                         std::string_view code)
+{
+  Tab* tab = FindTab(tab_id);
+  if (tab == nullptr || tab->content_type != ContentType::kHtml || tab->page == nullptr) {
+    return false;
+  }
+  // Keyboard events target the focused element; without focus, <body>.
+  dom::Element* target = tab->focused_element;
+  if (target == nullptr) {
+    if (tab->page->document() != nullptr) {
+      target = dom::QuerySelector(*tab->page->document(), "body");
+    }
+  }
+  // Run the cancelable keydown, then the default action unless canceled.
+  const bool not_canceled =
+      tab->script_runtime != nullptr && target != nullptr
+          ? tab->script_runtime->DispatchKeyboardEvent(*target, type, key, code)
+          : true;
+  if (!not_canceled || type != "keydown") {
+    return not_canceled;
+  }
+  // Default actions: a printable character inserts into a focused text input,
+  // Backspace deletes, Enter submits the enclosing form (implicit submission).
+  dom::Element* control = tab->focused_element;
+  const bool input_is_text =
+      control != nullptr && control->tag_name() == "input";
+  bool value_changed = false;
+  if (input_is_text) {
+    const std::string type = std::string(control->GetAttribute("type").value_or("text"));
+    const bool text_like = type == "text" || type == "search" || type == "password" ||
+                           type == "email" || type == "url" || type == "hidden";
+    if (text_like) {
+      std::string value = std::string(control->GetAttribute("value").value_or(""));
+      if (key == "Backspace") {
+        if (!value.empty()) {
+          value.pop_back();
+        }
+      } else if (key == "Enter") {
+        if (dom::Element* form = FindEnclosingForm(control)) {
+          SubmitForm(tab_id, form);
+        }
+        return not_canceled;
+      } else if (key.size() == 1 && key[0] >= ' ' && key[0] != '\t') {
+        value += key;
+      } else {
+        return not_canceled;
+      }
+      control->SetAttribute("value", value);
+      value_changed = true;
+      // Fire the bubbling "input" event (oninput / addEventListener('input')).
+      if (tab->script_runtime != nullptr) {
+        tab->script_runtime->DispatchInputEvent(*control);
+      }
+    }
+  }
+  // Reflect DOM changes from the keydown/input handlers or the value edit
+  // (the layout rebuilds and the UI repaints on the next StateChanged).  The
+  // value edit always rebuilds, even on pages with no scripts.
+  if (value_changed ||
+      (tab->script_runtime != nullptr && tab->script_runtime->TakeDomDirty())) {
+    tab->page->ReapplyStyles();
+  }
+  return not_canceled;
+}
+
+void BrowserController::SubmitForm(int tab_id, dom::Element* form)
+{
+  Tab* tab = FindTab(tab_id);
+  if (tab == nullptr || form == nullptr || tab->page == nullptr) {
+    return;
+  }
+  // Cancelable submit event; the page can preventDefault() to block it.
+  if (tab->script_runtime != nullptr &&
+      !tab->script_runtime->DispatchCancelableEvent(*form, "submit")) {
+    return;
+  }
+  // Encode the named controls (application/x-www-form-urlencoded) and navigate
+  // to the action with the data as the query string (GET).
+  const std::string data = CollectFormData(*form);
+  const std::string action = std::string(form->GetAttribute("action").value_or(""));
+  std::string target = ResolveUrlAgainstBase(action, tab->url);
+  if (target.empty()) {
+    target = tab->url;
+  }
+  target += (target.find('?') != std::string::npos ? "&" : "?") + data;
+  Navigate(tab_id, target);
+}
+
 base::Result<void> BrowserController::NavigateActive(const std::string& input)
 {
-  Tab* tab = ActiveTab();
-  if (tab == nullptr)
+  Tab* tab = ActiveTab();  if (tab == nullptr)
     return base::Err(base::Error::InvalidArgument("no active tab"));
   return Navigate(tab->id, input);
 }
@@ -936,6 +1293,8 @@ void FetchExternalStylesheets(renderer::Page& page,
   }
 
   // Resolve hrefs (document order preserved).
+
+  // Resolve hrefs (document order preserved).
   std::vector<std::string> urls;
   urls.reserve(links.size());
   for (dom::Element* element : links) {
@@ -1006,12 +1365,33 @@ void FetchPageImages(renderer::Page& page,
   }
   const base::Result<url::Url> base = url::Url::Parse(base_url);
 
-  // Depth-first walk collecting <img src> subresources.
-  std::vector<dom::Element*> images;
+  // Depth-first walk collecting <img src> and CSS background-image
+  // subresources.  background-image URLs come from the computed style (the
+  // cascade has run by the time this is called, after scripts).
+  struct PendingImage
+  {
+    dom::Element* element = nullptr;
+    std::string url;
+  };
+  std::vector<PendingImage> pending;
   std::vector<dom::Node*> stack;
   for (dom::Node* child : doc->ChildNodes()) {
     stack.push_back(child);
   }
+  const auto collect_url = [&](dom::Element* element, const std::string& raw_url) {
+    if (raw_url.empty()) {
+      return;
+    }
+    base::Result<url::Url> target = url::Url::Parse(raw_url);
+    if (base.has_value()) {
+      target = url::Url::Parse(raw_url, base.value());
+    }
+    if (!target.has_value()) {
+      NEKO_LOG_WARNING("img: cannot resolve url \"" + raw_url + "\"");
+      return;
+    }
+    pending.push_back(PendingImage{element, target.value().Serialize()});
+  };
   while (!stack.empty()) {
     dom::Node* node = stack.back();
     stack.pop_back();
@@ -1020,39 +1400,18 @@ void FetchPageImages(renderer::Page& page,
     }
     dom::Element* element = static_cast<dom::Element*>(node);
     if (element->tag_name() == "img") {
-      images.push_back(element);
+      const std::optional<std::string_view> src = element->GetAttribute("src");
+      if (src.has_value()) {
+        collect_url(element, std::string(*src));
+      }
+    }
+    const style::ComputedStyle& cs = page.styles().StyleFor(*element);
+    if (cs.background_image.has_value() && !cs.background_image->empty()) {
+      collect_url(element, cs.background_image.value());
     }
     for (dom::Node* child : node->ChildNodes()) {
       stack.push_back(child);
     }
-  }
-
-  // Fetch every subresource and decode the bodies in parallel on a thread
-  // pool, then inject the decoded images back on the calling thread
-  // (SetElementImage locks internally).  The production FetchFn
-  // (network::HttpGet) is stateless per call and thread-safe; a custom
-  // FetchFn must be too (documented requirement).
-  struct PendingImage
-  {
-    dom::Element* element = nullptr;
-    std::string url;
-  };
-  std::vector<PendingImage> pending;
-  pending.reserve(images.size());
-  for (dom::Element* element : images) {
-    const std::optional<std::string_view> src = element->GetAttribute("src");
-    if (!src.has_value() || src->empty()) {
-      continue;
-    }
-    base::Result<url::Url> target = url::Url::Parse(*src);
-    if (base.has_value()) {
-      target = url::Url::Parse(*src, base.value());
-    }
-    if (!target.has_value()) {
-      NEKO_LOG_WARNING("img: cannot resolve src \"" + std::string(*src) + "\"");
-      continue;
-    }
-    pending.push_back(PendingImage{element, target.value().Serialize()});
   }
   if (pending.empty()) {
     return;
@@ -1080,7 +1439,8 @@ void FetchPageImages(renderer::Page& page,
       return;
     }
     page.SetElementImage(*pending[0].element, std::move(decoded.value()));
-    NEKO_LOG_INFO("img: injected " + pending[0].url);
+    NEKO_LOG_INFO("img: injected " + pending[0].url + " -> <" +
+                  std::string(pending[0].element->tag_name()) + ">");
     return;
   }
 
@@ -1097,7 +1457,8 @@ void FetchPageImages(renderer::Page& page,
       continue;
     }
     page.SetElementImage(*pending[i].element, std::move(decoded.value()));
-    NEKO_LOG_INFO("img: injected " + pending[i].url);
+    NEKO_LOG_INFO("img: injected " + pending[i].url + " -> <" +
+                  std::string(pending[i].element->tag_name()) + ">");
   }
 }
 

@@ -92,6 +92,16 @@ struct EventWrapper
   bool propagation_stopped = false;
   bool immediate_stopped = false;
   int event_phase = 0;                   // 0 none, 1 capture, 2 target, 3 bubble
+  // KeyboardEvent fields (empty for non-keyboard events).
+  std::string key;
+  std::string code;
+  int key_code = 0; // legacy UI Events keyCode
+  // Pointer/MouseEvent fields.
+  double client_x = 0;
+  double client_y = 0;
+  int button = 0;
+  // WheelEvent vertical scroll delta (px).
+  double delta_y = 0;
   JSValue target = JS_UNDEFINED;         // owned node wrapper (or undefined)
   JSValue current_target = JS_UNDEFINED; // owned node wrapper (or undefined)
 };
@@ -661,6 +671,22 @@ struct Impl
   using ListenerMap = std::unordered_map<std::string, std::vector<Listener>>;
   std::unordered_map<const dom::Node*, ListenerMap> listeners;
 
+  // Set whenever a JS DOM mutation runs (textContent/attribute/style/node
+  // tree edits).  The browser layer reads it after dispatching user
+  // interaction events to decide whether to re-run the style cascade/layout,
+  // so on-screen updates from event handlers are reflected promptly.
+  bool dom_dirty_ = false;
+  void MarkDomDirty()
+  {
+    dom_dirty_ = true;
+  }
+  bool TakeDomDirty()
+  {
+    const bool dirty = dom_dirty_;
+    dom_dirty_ = false;
+    return dirty;
+  }
+
   // Optional browser Web APIs (localStorage/fetch) wired by the browser layer.
   PageApis apis;
 
@@ -677,6 +703,28 @@ struct Impl
 
   // Creates an Event object (class wrapper + event_proto prototype).
   JSValue MakeEvent(std::string type, bool bubbles, bool cancelable);
+  // Creates a KeyboardEvent-carrying Event with key/code strings.
+  JSValue MakeKeyboardEvent(std::string type, bool bubbles, bool cancelable, std::string key,
+                            std::string code);
+  // Creates a pointer (MouseEvent) carrying Event with client coordinates.
+  JSValue MakeMouseEvent(std::string type, bool bubbles, bool cancelable, double client_x,
+                         double client_y, int button);
+  // Creates a wheel Event carrying a vertical scroll delta.
+  JSValue MakeWheelEvent(std::string type, bool bubbles, bool cancelable, double delta_y);
+  // Dispatches a cancelable pointer event to |node|; returns whether NOT
+  // canceled.
+  bool DispatchMouseToNode(dom::Node* node, std::string_view type, double client_x,
+                           double client_y, int button);
+  // Dispatches a cancelable wheel event to |node|; returns whether NOT canceled.
+  bool DispatchWheelToNode(dom::Node* node, std::string_view type, double delta_y);
+  // Dispatches a non-bubbling focus/blur event to |node|.
+  void DispatchFocusToNode(dom::Node* node, std::string_view type);
+  // Dispatches a bubbling "input" event to |node|.
+  void DispatchInputToNode(dom::Node* node);
+  // Fires the element's global event handler (element.onclick/oninput/...),
+  // whether set via JS (IDL) or a content attribute (on*="code"), during
+  // dispatch for every element on the propagation path.
+  void FireEventHandler(dom::Node* node, EventWrapper* w, JSValue event, int phase);
   // Runs one event through capture -> target -> bubble propagation over the
   // ancestor path of |target|.  |event| must be an Event object (the opaque
   // wrapper's state is mutated).  Listeners run synchronously; the event's
@@ -691,6 +739,9 @@ struct Impl
   int RunPendingRaf();
   std::optional<std::chrono::steady_clock::time_point> NextTimerDeadline() const;
   void DispatchToNode(dom::Node* node, std::string_view type);
+  bool DispatchCancelableToNode(dom::Node* node, std::string_view type);
+  bool DispatchKeyboardToNode(dom::Node* node, std::string_view type, std::string_view key,
+                              std::string_view code);
   void DispatchEvent(dom::Element& element, std::string_view type);
   void DispatchDocumentEvent(std::string_view type);
 };
@@ -779,6 +830,7 @@ JSValue NodeAppendChild(JSContext* ctx, JSValueConst this_val, int argc, JSValue
     return JS_ThrowTypeError(ctx, "appendChild: internal ownership error");
   }
   parent->AppendChild(std::move(owned));
+  impl->MarkDomDirty();
   return impl->WrapNode(child);
 }
 
@@ -803,6 +855,7 @@ JSValue NodeAppend(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
     }
     JS_FreeValue(ctx, result);
   }
+  impl->MarkDomDirty();
   return JS_UNDEFINED;
 }
 
@@ -828,6 +881,7 @@ JSValue NodeReplaceChildren(JSContext* ctx, JSValueConst this_val, int argc, JSV
     }
     JS_FreeValue(ctx, result);
   }
+  impl->MarkDomDirty();
   return JS_UNDEFINED;
 }
 
@@ -862,6 +916,7 @@ JSValue NodeInsertBefore(JSContext* ctx, JSValueConst this_val, int argc, JSValu
     return JS_ThrowTypeError(ctx, "insertBefore: internal ownership error");
   }
   parent->InsertBefore(std::move(owned), reference);
+  impl->MarkDomDirty();
   return impl->WrapNode(child);
 }
 
@@ -882,6 +937,7 @@ JSValue NodeRemoveChild(JSContext* ctx, JSValueConst this_val, int argc, JSValue
   }
   std::unique_ptr<dom::Node> removed = parent->RemoveChild(child);
   impl->TakeOwnership(child, std::move(removed));
+  impl->MarkDomDirty();
   return impl->WrapNode(child);
 }
 
@@ -1108,10 +1164,12 @@ JSValue NodeSetTextContent(JSContext* ctx, JSValueConst this_val, JSValueConst v
   // data; it must not create child nodes (which a Text/Comment cannot have).
   if (node->node_type() == dom::NodeType::kText) {
     static_cast<dom::Text*>(node)->SetData(text);
+    impl->MarkDomDirty();
     return JS_UNDEFINED;
   }
   if (node->node_type() == dom::NodeType::kComment) {
     static_cast<dom::Comment*>(node)->SetData(text);
+    impl->MarkDomDirty();
     return JS_UNDEFINED;
   }
   while (node->first_child() != nullptr) {
@@ -1121,6 +1179,7 @@ JSValue NodeSetTextContent(JSContext* ctx, JSValueConst this_val, JSValueConst v
   if (!text.empty()) {
     node->AppendChild(std::make_unique<dom::Text>(text));
   }
+  impl->MarkDomDirty();
   return JS_UNDEFINED;
 }
 
@@ -1483,6 +1542,7 @@ JSValue ElementSetId(JSContext* ctx, JSValueConst this_val, JSValueConst value)
   } else {
     element->SetAttribute("id", id);
   }
+  ImplFor(ctx, this_val)->MarkDomDirty();
   return JS_UNDEFINED;
 }
 
@@ -1515,6 +1575,7 @@ JSValue ElementSetClassName(JSContext* ctx, JSValueConst this_val, JSValueConst 
   } else {
     element->SetAttribute("class", cls);
   }
+  ImplFor(ctx, this_val)->MarkDomDirty();
   return JS_UNDEFINED;
 }
 
@@ -1713,6 +1774,22 @@ JSValue RectToJson(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueC
   return out;
 }
 
+// Returns the laid-out geometry of the element backing |this_val|, or nullopt
+// when it is not an element, no layout exists, or the browser layer did not
+// wire geometry.
+std::optional<ElementGeometry> ElementGeometryOf(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return std::nullopt;
+  }
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.element_geometry) {
+    return std::nullopt;
+  }
+  return impl->apis.element_geometry(*element);
+}
+
 JSValue ElementGetBoundingClientRect(JSContext* ctx,
                                      JSValueConst this_val,
                                      int /*argc*/,
@@ -1721,21 +1798,66 @@ JSValue ElementGetBoundingClientRect(JSContext* ctx,
   if (AsElement(UnwrapNode(this_val)) == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
-  // The binder has no layout tree, so geometry is a documented approximation:
-  // a zero rect at the origin.  Scripts that branch on visibility still work
-  // (0 is falsy for width/height), but pixel positions are not meaningful.
+  // The laid-out border box in document coordinates (client coordinates when
+  // the page is scrolled to the top; scroll offsets are not yet modelled).
+  const std::optional<ElementGeometry> g = ElementGeometryOf(ctx, this_val);
+  const double x = g ? g->x : 0;
+  const double y = g ? g->y : 0;
+  const double width = g ? g->width : 0;
+  const double height = g ? g->height : 0;
   JSValue rect = JS_NewObject(ctx);
-  JS_SetPropertyStr(ctx, rect, "x", JS_NewInt32(ctx, 0));
-  JS_SetPropertyStr(ctx, rect, "y", JS_NewInt32(ctx, 0));
-  JS_SetPropertyStr(ctx, rect, "left", JS_NewInt32(ctx, 0));
-  JS_SetPropertyStr(ctx, rect, "top", JS_NewInt32(ctx, 0));
-  JS_SetPropertyStr(ctx, rect, "right", JS_NewInt32(ctx, 0));
-  JS_SetPropertyStr(ctx, rect, "bottom", JS_NewInt32(ctx, 0));
-  JS_SetPropertyStr(ctx, rect, "width", JS_NewInt32(ctx, 0));
-  JS_SetPropertyStr(ctx, rect, "height", JS_NewInt32(ctx, 0));
-  JSValue to_json = JS_NewCFunction(ctx, RectToJson, "toJSON", 0);
-  JS_SetPropertyStr(ctx, rect, "toJSON", to_json); // steals to_json
+  JS_SetPropertyStr(ctx, rect, "x", JS_NewFloat64(ctx, x));
+  JS_SetPropertyStr(ctx, rect, "y", JS_NewFloat64(ctx, y));
+  JS_SetPropertyStr(ctx, rect, "left", JS_NewFloat64(ctx, x));
+  JS_SetPropertyStr(ctx, rect, "top", JS_NewFloat64(ctx, y));
+  JS_SetPropertyStr(ctx, rect, "right", JS_NewFloat64(ctx, x + width));
+  JS_SetPropertyStr(ctx, rect, "bottom", JS_NewFloat64(ctx, y + height));
+  JS_SetPropertyStr(ctx, rect, "width", JS_NewFloat64(ctx, width));
+  JS_SetPropertyStr(ctx, rect, "height", JS_NewFloat64(ctx, height));
+  JS_SetPropertyStr(ctx, rect, "toJSON", JS_NewCFunction(ctx, RectToJson, "toJSON", 0)); // steals
   return rect;
+}
+
+#define DEFINE_GEOMETRY_GETTER(Name, Member)                                                   \
+  JSValue Name(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)    \
+  {                                                                                            \
+    const std::optional<ElementGeometry> g = ElementGeometryOf(ctx, this_val);                 \
+    return JS_NewFloat64(ctx, g ? static_cast<double>(g->Member) : 0);                         \
+  }
+
+DEFINE_GEOMETRY_GETTER(ElementGetOffsetWidth, width)
+DEFINE_GEOMETRY_GETTER(ElementGetOffsetHeight, height)
+DEFINE_GEOMETRY_GETTER(ElementGetClientWidth, client_width)
+DEFINE_GEOMETRY_GETTER(ElementGetClientHeight, client_height)
+DEFINE_GEOMETRY_GETTER(ElementGetClientTop, border_top)
+DEFINE_GEOMETRY_GETTER(ElementGetClientLeft, border_left)
+DEFINE_GEOMETRY_GETTER(ElementGetOffsetTop, y)
+DEFINE_GEOMETRY_GETTER(ElementGetOffsetLeft, x)
+
+#undef DEFINE_GEOMETRY_GETTER
+
+JSValue ElementGetOffsetParent(JSContext* ctx, JSValueConst this_val, int /*argc*/,
+                               JSValueConst* /*argv*/)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  // Simplified: the <body> is the offset parent of in-flow content; positioned
+  // ancestors and table cells are not yet modelled.  offsetTop/offsetLeft are
+  // therefore reported in document coordinates.
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_NULL;
+  }
+  dom::Element* body = nullptr;
+  if (impl->document.document_element() != nullptr) {
+    body = dom::QuerySelector(*impl->document.document_element(), "body");
+  }
+  if (body == nullptr || body == element) {
+    return JS_NULL;
+  }
+  return impl->WrapNode(body);
 }
 
 JSValue ElementGetHidden(JSContext* ctx, JSValueConst this_val)
@@ -1763,6 +1885,7 @@ JSValue ElementSetHidden(JSContext* ctx, JSValueConst this_val, JSValueConst val
   } else {
     element->RemoveAttribute("hidden");
   }
+  ImplFor(ctx, this_val)->MarkDomDirty();
   return JS_UNDEFINED;
 }
 
@@ -2645,6 +2768,7 @@ JSValue ElementSetInnerHTML(JSContext* ctx, JSValueConst this_val, JSValueConst 
       element->AppendChild(std::move(child));
     }
   }
+  impl->MarkDomDirty();
   return JS_UNDEFINED;
 }
 
@@ -2704,6 +2828,7 @@ JSValue ElementSetAttribute(JSContext* ctx, JSValueConst this_val, int argc, JSV
     return JS_EXCEPTION;
   }
   element->SetAttribute(name, value);
+  ImplFor(ctx, this_val)->MarkDomDirty();
   return JS_UNDEFINED;
 }
 
@@ -2722,6 +2847,7 @@ JSValue ElementRemoveAttribute(JSContext* ctx, JSValueConst this_val, int argc, 
     return JS_EXCEPTION;
   }
   element->RemoveAttribute(name);
+  ImplFor(ctx, this_val)->MarkDomDirty();
   return JS_UNDEFINED;
 }
 
@@ -3378,6 +3504,7 @@ JSValue StyleSetProperty(JSContext* ctx, JSValueConst this_val, int argc, JSValu
     decls.push_back(InlineDecl{name, value, false});
   }
   SetStyleAttr(*element, SerializeInlineStyle(decls));
+  ImplFor(ctx, this_val)->MarkDomDirty();
   return JS_UNDEFINED;
 }
 
@@ -3704,6 +3831,143 @@ JSValue EventGetType(JSContext* ctx, JSValueConst this_val)
   return JS_NewStringLen(ctx, w->type.data(), w->type.size());
 }
 
+JSValue EventGetKey(JSContext* ctx, JSValueConst this_val)
+{
+  EventWrapper* w = UnwrapEvent(this_val);
+  if (w == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an Event");
+  }
+  return JS_NewStringLen(ctx, w->key.data(), w->key.size());
+}
+
+JSValue EventGetCode(JSContext* ctx, JSValueConst this_val)
+{
+  EventWrapper* w = UnwrapEvent(this_val);
+  if (w == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an Event");
+  }
+  return JS_NewStringLen(ctx, w->code.data(), w->code.size());
+}
+
+JSValue EventGetKeyCode(JSContext* ctx, JSValueConst this_val)
+{
+  EventWrapper* w = UnwrapEvent(this_val);
+  if (w == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an Event");
+  }
+  return JS_NewInt32(ctx, w->key_code);
+}
+
+JSValue EventGetClientX(JSContext* ctx, JSValueConst this_val)
+{
+  EventWrapper* w = UnwrapEvent(this_val);
+  if (w == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an Event");
+  }
+  return JS_NewFloat64(ctx, w->client_x);
+}
+
+JSValue EventGetClientY(JSContext* ctx, JSValueConst this_val)
+{
+  EventWrapper* w = UnwrapEvent(this_val);
+  if (w == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an Event");
+  }
+  return JS_NewFloat64(ctx, w->client_y);
+}
+
+JSValue EventGetButton(JSContext* ctx, JSValueConst this_val)
+{
+  EventWrapper* w = UnwrapEvent(this_val);
+  if (w == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an Event");
+  }
+  return JS_NewInt32(ctx, w->button);
+}
+
+JSValue EventGetDeltaY(JSContext* ctx, JSValueConst this_val)
+{
+  EventWrapper* w = UnwrapEvent(this_val);
+  if (w == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an Event");
+  }
+  return JS_NewFloat64(ctx, w->delta_y);
+}
+
+// Maps an event type to the element's global event handler attribute name
+// (element.onclick = fn / on*="code"), or nullptr when no handler exists for
+// the type.  HTML spec §8.1.7.2.
+const char* OnHandlerForType(std::string_view type)
+{
+  if (type == "click") return "onclick";
+  if (type == "dblclick") return "ondblclick";
+  if (type == "mousedown") return "onmousedown";
+  if (type == "mouseup") return "onmouseup";
+  if (type == "mousemove") return "onmousemove";
+  if (type == "mouseover") return "onmouseover";
+  if (type == "mouseout") return "onmouseout";
+  if (type == "focus") return "onfocus";
+  if (type == "blur") return "onblur";
+  if (type == "keydown") return "onkeydown";
+  if (type == "keyup") return "onkeyup";
+  if (type == "input") return "oninput";
+  if (type == "change") return "onchange";
+  if (type == "submit") return "onsubmit";
+  if (type == "wheel") return "onwheel";
+  if (type == "load") return "onload";
+  if (type == "error") return "onerror";
+  if (type == "scroll") return "onscroll";
+  return nullptr;
+}
+
+// Element-level global event handler IDL attributes (onclick/oninput/...).
+// The handler is stored as a property on the element's wrapper so JS sees a
+// regular function value; a content attribute (on*="code") is compiled to a
+// function on first fire and cached on the wrapper.
+static constexpr std::array<const char*, 19> kElementEventHandlers = {
+    "onclick", "ondblclick", "onmousedown", "onmouseup", "onmousemove",
+    "onmouseover", "onmouseout", "onfocus", "onblur", "onkeydown", "onkeyup",
+    "oninput", "onchange", "onsubmit", "onwheel", "onload", "onerror",
+    "onscroll", "onresize"};
+
+// The getter/setter are JS_CFUNC_getter_magic / JS_CFUNC_setter_magic: the
+// magic (handler index) arrives as the trailing int argument (no argc/argv).
+JSValue ElementGetEventHandler(JSContext* ctx, JSValueConst this_val, int magic)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr || magic < 0 ||
+      magic >= static_cast<int>(kElementEventHandlers.size())) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  JSValue wrapper = impl->WrapNode(node);
+  JSValue h = JS_GetPropertyStr(ctx, wrapper, kElementEventHandlers[magic]);
+  JS_FreeValue(ctx, wrapper);
+  if (JS_IsUndefined(h)) {
+    JS_FreeValue(ctx, h);
+    return JS_NULL;
+  }
+  return h;
+}
+
+JSValue ElementSetEventHandler(JSContext* ctx, JSValueConst this_val, JSValueConst value,
+                               int magic)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr || magic < 0 ||
+      magic >= static_cast<int>(kElementEventHandlers.size())) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  JSValue wrapper = impl->WrapNode(node);
+  // Define an own property (not JS_SetPropertyStr, which would re-enter the
+  // prototype's accessor and recurse).
+  JS_DefinePropertyValueStr(ctx, wrapper, kElementEventHandlers[magic],
+                            JS_DupValue(ctx, value), JS_PROP_C_W_E);
+  JS_FreeValue(ctx, wrapper);
+  return JS_UNDEFINED;
+}
+
 JSValue EventGetTarget(JSContext* ctx, JSValueConst this_val)
 {
   EventWrapper* w = UnwrapEvent(this_val);
@@ -3847,6 +4111,13 @@ void DefineEventPrototype(JSContext* ctx, Impl& impl)
       ctx, impl.event_proto, kMethods.data(), static_cast<int>(kMethods.size()));
 
   DefineGetter(ctx, impl.event_proto, "type", MakeGetter(ctx, "type", EventGetType));
+  DefineGetter(ctx, impl.event_proto, "key", MakeGetter(ctx, "key", EventGetKey));
+  DefineGetter(ctx, impl.event_proto, "code", MakeGetter(ctx, "code", EventGetCode));
+  DefineGetter(ctx, impl.event_proto, "keyCode", MakeGetter(ctx, "keyCode", EventGetKeyCode));
+  DefineGetter(ctx, impl.event_proto, "clientX", MakeGetter(ctx, "clientX", EventGetClientX));
+  DefineGetter(ctx, impl.event_proto, "clientY", MakeGetter(ctx, "clientY", EventGetClientY));
+  DefineGetter(ctx, impl.event_proto, "button", MakeGetter(ctx, "button", EventGetButton));
+  DefineGetter(ctx, impl.event_proto, "deltaY", MakeGetter(ctx, "deltaY", EventGetDeltaY));
   DefineGetter(ctx, impl.event_proto, "target", MakeGetter(ctx, "target", EventGetTarget));
   DefineGetter(ctx,
                impl.event_proto,
@@ -3974,6 +4245,39 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
                  MakeSetter(ctx, "className", ElementSetClassName));
   DefineGetter(
       ctx, impl.element_proto, "attributes", MakeGetter(ctx, "attributes", ElementGetAttributes));
+  // Element layout geometry (getBoundingClientRect + offset/client series).
+  DefineGetter(ctx,
+               impl.element_proto,
+               "offsetWidth",
+               MakeGetter(ctx, "offsetWidth", ElementGetOffsetWidth));
+  DefineGetter(ctx,
+               impl.element_proto,
+               "offsetHeight",
+               MakeGetter(ctx, "offsetHeight", ElementGetOffsetHeight));
+  DefineGetter(
+      ctx, impl.element_proto, "offsetTop", MakeGetter(ctx, "offsetTop", ElementGetOffsetTop));
+  DefineGetter(
+      ctx, impl.element_proto, "offsetLeft", MakeGetter(ctx, "offsetLeft", ElementGetOffsetLeft));
+  DefineGetter(
+      ctx, impl.element_proto, "offsetParent", MakeGetter(ctx, "offsetParent", ElementGetOffsetParent));
+  DefineGetter(
+      ctx, impl.element_proto, "clientWidth", MakeGetter(ctx, "clientWidth", ElementGetClientWidth));
+  DefineGetter(ctx,
+               impl.element_proto,
+               "clientHeight",
+               MakeGetter(ctx, "clientHeight", ElementGetClientHeight));
+  DefineGetter(
+      ctx, impl.element_proto, "clientTop", MakeGetter(ctx, "clientTop", ElementGetClientTop));
+  DefineGetter(
+      ctx, impl.element_proto, "clientLeft", MakeGetter(ctx, "clientLeft", ElementGetClientLeft));
+  // Element-level global event handler attributes (element.onclick = fn).
+  for (int i = 0; i < static_cast<int>(kElementEventHandlers.size()); ++i) {
+    DefineAccessor(ctx,
+                   impl.element_proto,
+                   kElementEventHandlers[i],
+                   MakeGetterMagic(ctx, kElementEventHandlers[i], ElementGetEventHandler, i),
+                   MakeSetterMagic(ctx, kElementEventHandlers[i], ElementSetEventHandler, i));
+  }
   DefineGetter(
       ctx, impl.element_proto, "children", MakeGetter(ctx, "children", ElementGetChildren));
   DefineGetter(ctx,
@@ -4375,39 +4679,42 @@ struct LocationParts
 LocationParts ParseLocationParts(std::string_view href)
 {
   LocationParts out;
+  std::size_t path_start = 0;
   const std::size_t scheme_end = href.find("://");
   if (scheme_end == std::string_view::npos) {
+    // Bare path (no scheme, e.g. a local form submission target): the whole
+    // string is the path plus an optional query/fragment.
     const std::size_t colon = href.find(':');
     if (colon != std::string_view::npos) {
       out.protocol = std::string(href.substr(0, colon + 1));
     }
-    return out;
-  }
-  out.protocol = std::string(href.substr(0, scheme_end + 1));
-  std::size_t i = scheme_end + 3;
-  const std::size_t path_start = href.find_first_of("/?#", i);
-  const std::size_t host_end = path_start == std::string_view::npos ? href.size() : path_start;
-  out.host = std::string(href.substr(i, host_end - i));
-  out.origin = out.protocol + "//" + out.host;
-  const std::size_t colon = out.host.rfind(':');
-  if (colon != std::string::npos) {
-    out.hostname = out.host.substr(0, colon);
-    out.port = out.host.substr(colon + 1);
   } else {
-    out.hostname = out.host;
+    out.protocol = std::string(href.substr(0, scheme_end + 1));
+    std::size_t i = scheme_end + 3;
+    const std::size_t ps = href.find_first_of("/?#", i);
+    const std::size_t host_end = ps == std::string_view::npos ? href.size() : ps;
+    out.host = std::string(href.substr(i, host_end - i));
+    out.origin = out.protocol + "//" + out.host;
+    const std::size_t colon = out.host.rfind(':');
+    if (colon != std::string::npos) {
+      out.hostname = out.host.substr(0, colon);
+      out.port = out.host.substr(colon + 1);
+    } else {
+      out.hostname = out.host;
+    }
+    path_start = ps == std::string_view::npos ? href.size() : ps;
   }
-  if (path_start == std::string_view::npos) {
-    return out;
-  }
-  i = path_start;
-  const std::size_t q = href.find('?', i);
-  const std::size_t h = href.find('#', i);
+
+  // Path / search / hash extraction shared by both cases.
+  const std::size_t q = href.find('?', path_start);
+  const std::size_t h = href.find('#', path_start);
   const std::size_t path_end = std::min(q == std::string_view::npos ? href.size() : q,
                                         h == std::string_view::npos ? href.size() : h);
-  out.pathname = std::string(href.substr(i, path_end - i));
+  if (path_start < href.size()) {
+    out.pathname = std::string(href.substr(path_start, path_end - path_start));
+  }
   if (q != std::string_view::npos) {
-    const std::size_t search_end =
-        h == std::string_view::npos ? href.size() : std::min(h, href.size());
+    const std::size_t search_end = h == std::string_view::npos ? href.size() : h;
     out.search = std::string(href.substr(q, search_end - q));
   }
   if (h != std::string_view::npos) {
@@ -5750,6 +6057,205 @@ JSValue Impl::MakeEvent(std::string type, bool bubbles, bool cancelable)
   return obj;
 }
 
+// Returns the legacy UI Events keyCode for a DOM key string (0 when unknown).
+int KeyCodeFor(std::string_view key)
+{
+  if (key.size() == 1) {
+    const unsigned char c = static_cast<unsigned char>(key[0]);
+    return c == ' ' ? 32 : static_cast<int>(c);
+  }
+  static const std::unordered_map<std::string_view, int> kMap = {
+      {"Enter", 13},   {"Backspace", 8},   {"Tab", 9},        {"Escape", 27},
+      {"Delete", 46},  {"Home", 36},       {"End", 35},       {"PageUp", 33},
+      {"PageDown", 34}, {"ArrowLeft", 37}, {"ArrowUp", 38},   {"ArrowRight", 39},
+      {"ArrowDown", 40}, {"Shift", 16},    {"Control", 17},   {"Alt", 18},
+      {"Meta", 91},    {"F1", 112},        {"F2", 113},       {"F3", 114},
+      {"F4", 115},     {"F5", 116},        {"F6", 117},       {"F7", 118},
+      {"F8", 119},     {"F9", 120},        {"F10", 121},      {"F11", 122},
+      {"F12", 123},
+  };
+  const auto it = kMap.find(key);
+  return it != kMap.end() ? it->second : 0;
+}
+
+JSValue Impl::MakeKeyboardEvent(std::string type,
+                                bool bubbles,
+                                bool cancelable,
+                                std::string key,
+                                std::string code)
+{
+  auto* w = new EventWrapper{this, std::move(type), bubbles, cancelable};
+  w->key = std::move(key);
+  w->code = std::move(code);
+  w->key_code = KeyCodeFor(w->key);
+  JSValue obj = JS_NewObjectClass(ctx, g_event_class_id);
+  JS_SetOpaque(obj, w);
+  JS_SetPrototype(ctx, obj, event_proto);
+  return obj;
+}
+
+JSValue Impl::MakeMouseEvent(std::string type,
+                             bool bubbles,
+                             bool cancelable,
+                             double client_x,
+                             double client_y,
+                             int button)
+{
+  auto* w = new EventWrapper{this, std::move(type), bubbles, cancelable};
+  w->client_x = client_x;
+  w->client_y = client_y;
+  w->button = button;
+  JSValue obj = JS_NewObjectClass(ctx, g_event_class_id);
+  JS_SetOpaque(obj, w);
+  JS_SetPrototype(ctx, obj, event_proto);
+  return obj;
+}
+
+JSValue Impl::MakeWheelEvent(std::string type, bool bubbles, bool cancelable, double delta_y)
+{
+  auto* w = new EventWrapper{this, std::move(type), bubbles, cancelable};
+  w->delta_y = delta_y;
+  JSValue obj = JS_NewObjectClass(ctx, g_event_class_id);
+  JS_SetOpaque(obj, w);
+  JS_SetPrototype(ctx, obj, event_proto);
+  return obj;
+}
+
+// Dispatches a cancelable keyboard event (keydown/keyup) to |node| with the
+// UI Events key/code strings.  Returns whether the event was NOT canceled.
+bool Impl::DispatchKeyboardToNode(dom::Node* node, std::string_view type, std::string_view key,
+                                  std::string_view code)
+{
+  if (node == nullptr) {
+    return true;
+  }
+  JSValue event = MakeKeyboardEvent(std::string(type), /*bubbles=*/true, /*cancelable=*/true,
+                                    std::string(key), std::string(code));
+  const bool not_canceled = DispatchPropagated(node, event);
+  JS_FreeValue(ctx, event);
+  engine.RunPendingJobs();
+  return not_canceled;
+}
+
+// Dispatches a cancelable pointer event (mousedown/mouseup/click) to |node|
+// with client coordinates and the mouse button.  Returns whether NOT canceled.
+bool Impl::DispatchMouseToNode(dom::Node* node,
+                               std::string_view type,
+                               double client_x,
+                               double client_y,
+                               int button)
+{
+  if (node == nullptr) {
+    return true;
+  }
+  JSValue event = MakeMouseEvent(std::string(type), /*bubbles=*/true, /*cancelable=*/true,
+                                 client_x, client_y, button);
+  const bool not_canceled = DispatchPropagated(node, event);
+  JS_FreeValue(ctx, event);
+  engine.RunPendingJobs();
+  return not_canceled;
+}
+
+// Dispatches a cancelable wheel event to |node| with the vertical scroll delta
+// (px).  Returns whether NOT canceled.
+bool Impl::DispatchWheelToNode(dom::Node* node, std::string_view type, double delta_y)
+{
+  if (node == nullptr) {
+    return true;
+  }
+  JSValue event = MakeWheelEvent(std::string(type), /*bubbles=*/true, /*cancelable=*/true,
+                                 delta_y);
+  const bool not_canceled = DispatchPropagated(node, event);
+  JS_FreeValue(ctx, event);
+  engine.RunPendingJobs();
+  return not_canceled;
+}
+
+// Dispatches a focus event ("focus"/"blur") to |node|.  Non-bubbling and
+// non-cancelable, matching the UI Events spec.
+void Impl::DispatchFocusToNode(dom::Node* node, std::string_view type)
+{
+  if (node == nullptr) {
+    return;
+  }
+  JSValue event = MakeEvent(std::string(type), /*bubbles=*/false, /*cancelable=*/false);
+  (void)DispatchPropagated(node, event);
+  JS_FreeValue(ctx, event);
+  engine.RunPendingJobs();
+}
+
+// Dispatches an "input" event to |node| after a text control's value changed.
+// Bubbles, not cancelable.
+void Impl::DispatchInputToNode(dom::Node* node)
+{
+  if (node == nullptr) {
+    return;
+  }
+  JSValue event = MakeEvent("input", /*bubbles=*/true, /*cancelable=*/false);
+  (void)DispatchPropagated(node, event);
+  JS_FreeValue(ctx, event);
+  engine.RunPendingJobs();
+}
+
+// Fires the element's global event handler (onclick/oninput/...) for the
+// event's type if one is set — either a JS-assigned IDL handler stored on the
+// wrapper, or a content attribute (on*="code") compiled to a function on first
+// fire and cached on the wrapper.
+void Impl::FireEventHandler(dom::Node* node, EventWrapper* w, JSValue event, int phase)
+{
+  if (node->node_type() != dom::NodeType::kElement) {
+    return;
+  }
+  const char* name = OnHandlerForType(w->type);
+  if (name == nullptr) {
+    return;
+  }
+  auto* element = static_cast<dom::Element*>(node);
+  JSValue wrapper = WrapNode(element);
+  JSValue handler = JS_UNDEFINED;
+  const auto attr = element->GetAttribute(name);
+  if (attr.has_value()) {
+    // Content attribute (on*="code") wins over any IDL handler: compile it to
+    // a function on every fire (content attributes change rarely).
+    std::string src = "(function(event){\n";
+    src.append(attr->begin(), attr->end());
+    src.append("\n})");
+    JSValue compiled =
+        JS_Eval(ctx, src.data(), src.size(), "<inline-handler>", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(compiled)) {
+      JS_FreeValue(ctx, JS_GetException(ctx));
+      JS_FreeValue(ctx, wrapper);
+      return;
+    }
+    handler = compiled;
+  } else {
+    // IDL handler assigned from JS (element.onclick = fn).
+    handler = JS_GetPropertyStr(ctx, wrapper, name);
+    if (!JS_IsFunction(ctx, handler)) {
+      JS_FreeValue(ctx, handler);
+      JS_FreeValue(ctx, wrapper);
+      return;
+    }
+  }
+  // Expose currentTarget/eventPhase to the handler, then call it with
+  // this = the element and the event as the single argument.
+  if (!JS_IsUndefined(w->current_target)) {
+    JS_FreeValue(ctx, w->current_target);
+  }
+  w->current_target = JS_DupValue(ctx, wrapper);
+  w->event_phase = phase;
+  JSValue event_arg = JS_DupValue(ctx, event);
+  JSValue result = JS_Call(ctx, handler, wrapper, 1, &event_arg);
+  JS_FreeValue(ctx, event_arg);
+  if (JS_IsException(result)) {
+    JS_FreeValue(ctx, JS_GetException(ctx));
+  } else {
+    JS_FreeValue(ctx, result);
+  }
+  JS_FreeValue(ctx, handler);
+  JS_FreeValue(ctx, wrapper);
+}
+
 // Runs one event through capture -> target -> bubble propagation over the
 // ancestor path of |target|.  The event's target/currentTarget/eventPhase are
 // updated along the way; stopPropagation()/stopImmediatePropagation() are
@@ -5789,6 +6295,14 @@ bool Impl::DispatchPropagated(dom::Node* target, JSValue event)
   auto fire = [&](dom::Node* node, bool capture_phase, int phase) {
     if (w->immediate_stopped || w->propagation_stopped) {
       return;
+    }
+    // Global event handler attributes (element.onclick = fn) fire like bubble
+    // listeners: once per element on the propagation path, never in capture.
+    if (!capture_phase) {
+      FireEventHandler(node, w, event, phase);
+      if (w->immediate_stopped || w->propagation_stopped) {
+        return;
+      }
     }
     const auto el_it = listeners.find(node);
     if (el_it == listeners.end()) {
@@ -5891,6 +6405,21 @@ void Impl::DispatchEvent(dom::Element& element, std::string_view type)
   DispatchToNode(&element, type);
 }
 
+// A cancelable user-interaction event (click/submit/keydown...): bubbles with
+// the canceled flag wired to preventDefault, so the caller learns whether to
+// run the default action.
+bool Impl::DispatchCancelableToNode(dom::Node* node, std::string_view type)
+{
+  if (node == nullptr) {
+    return true;
+  }
+  JSValue event = MakeEvent(std::string(type), /*bubbles=*/true, /*cancelable=*/true);
+  const bool not_canceled = DispatchPropagated(node, event);
+  JS_FreeValue(ctx, event);
+  engine.RunPendingJobs();
+  return not_canceled;
+}
+
 void Impl::DispatchDocumentEvent(std::string_view type)
 {
   DispatchToNode(&document, type);
@@ -5932,6 +6461,43 @@ std::optional<std::chrono::steady_clock::time_point> DomBinder::NextTimerDeadlin
 void DomBinder::DispatchEvent(dom::Element& element, std::string_view type)
 {
   impl_->DispatchEvent(element, type);
+}
+
+bool DomBinder::DispatchCancelableEvent(dom::Element& element, std::string_view type)
+{
+  return impl_->DispatchCancelableToNode(&element, type);
+}
+
+bool DomBinder::DispatchKeyboardEvent(dom::Element& element, std::string_view type,
+                                      std::string_view key, std::string_view code)
+{
+  return impl_->DispatchKeyboardToNode(&element, type, key, code);
+}
+
+bool DomBinder::DispatchMouseEvent(dom::Element& element, std::string_view type, double client_x,
+                                   double client_y, int button)
+{
+  return impl_->DispatchMouseToNode(&element, type, client_x, client_y, button);
+}
+
+bool DomBinder::DispatchWheelEvent(dom::Element& element, std::string_view type, double delta_y)
+{
+  return impl_->DispatchWheelToNode(&element, type, delta_y);
+}
+
+void DomBinder::DispatchFocusEvent(dom::Element& element, std::string_view type)
+{
+  impl_->DispatchFocusToNode(&element, type);
+}
+
+void DomBinder::DispatchInputEvent(dom::Element& element)
+{
+  impl_->DispatchInputToNode(&element);
+}
+
+bool DomBinder::TakeDomDirty()
+{
+  return impl_->TakeDomDirty();
 }
 
 void DomBinder::DispatchDocumentEvent(std::string_view type)

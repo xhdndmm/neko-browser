@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Click Interaction Test</title>
+<style>
+  body { font-family: sans-serif; margin: 24px; }
+  h1 { font-size: 20px; }
+  button { font-size: 14px; padding: 6px 14px; }
+  #status { color: #005; font-weight: bold; min-height: 1.2em; }
+  a { color: blue; }
+  .row { margin: 12px 0; }
+</style>
+</head>
+<body>
+  <h1>Click Interaction Test</h1>
+
+  <p>点按钮 → JS <code>click</code> 监听器触发并更新状态。</p>
+  <p class="row">
+    <button id="btn">Click me</button>
+    <span id="status">not clicked yet</span>
+  </p>
+
+  <p>下面链接有 <code>preventDefault()</code>：点击不应跳转（地址栏不变）。</p>
+  <p class="row"><a id="blocked" href="/should-not-navigate">preventDefault link</a></p>
+
+  <p>下面链接无拦截：点击应导航（地址栏变为 /navigate）。</p>
+  <p class="row"><a href="/navigate">normal link</a></p>
+
+  <script>
+    var btn = document.getElementById('btn');
+    var status = document.getElementById('status');
+    var clicks = 0;
+    btn.addEventListener('click', function (ev) {
+      clicks++;
+      status.textContent = 'clicked ' + clicks + 'x (target=' + ev.target.id +
+                           ', bubbles=' + ev.bubbles + ', cancelable=' + ev.cancelable + ')';
+    });
+    document.getElementById('blocked').addEventListener('click', function (ev) {
+      ev.preventDefault();
+      status.textContent = 'blocked link: preventDefault() stopped navigation';
+    });
+  </script>
+</body>
+</html>

@@ -103,6 +103,14 @@ LoadTarget(neko::renderer::Page& page, const std::string& target, int depth = 0)
         NEKO_LOG_INFO("script reloaded " + url.Serialize());
         return LoadTarget(page, url.Serialize(), depth + 1);
       }
+      // Scripts may have injected <link rel=stylesheet> (e.g. Bing's
+      // as-css-link) after the initial stylesheet pass; fetch those so the
+      // fully styled cascade (wallpaper/theme rules) applies.
+      neko::browser::FetchExternalStylesheets(
+          page,
+          url.Serialize(),
+          [](const neko::url::Url& u, std::string_view) { return neko::network::HttpGet(u); },
+          pool);
       // Fetch and decode the page's <img> subresources (headless path).
       neko::browser::FetchPageImages(
           page,
@@ -412,7 +420,10 @@ int main(int argc, char** argv)
   if (parsed.options.screenshot_path.has_value()) {
     constexpr float kViewportWidth = 800;
     constexpr int kMinHeight = 600;
-    page.Layout(kViewportWidth);
+    // A fixed initial viewport height gives percentage-height chains
+    // (html/body/... { height: 100% }) a definite basis to resolve against,
+    // matching a browser window rather than an unbounded "whole page" canvas.
+    page.Layout(kViewportWidth, kMinHeight);
     const float content_height =
         page.layout_root() != nullptr ? page.layout_root()->height : kMinHeight;
     const int height = std::max(kMinHeight, static_cast<int>(content_height) + 40);

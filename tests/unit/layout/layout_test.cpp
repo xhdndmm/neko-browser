@@ -2023,5 +2023,50 @@ TEST(LayoutTest, TextAlignCenterAndRight)
   EXPECT_NEAR(right_edge, rdiv->content_x() + rdiv->content_width(), 0.01f);
 }
 
+TEST(LayoutTest, PercentageHeightChainResolvesAgainstViewport)
+{
+  // html/body/div { height: 100% } must resolve against the viewport height,
+  // not collapse to the content height (regression: bing's whole page rendered
+  // as a thin dark strip because the height:100% chain was ignored).
+  auto doc = html::Parser("<html><head><style>"
+                          "html,body{height:100%;margin:0}"
+                          ".fill{height:100%}"
+                          "</style></head><body><div class=\"fill\">x</div></body></html>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800, 600);
+  ASSERT_NE(root, nullptr);
+  // html height resolves to the viewport height.
+  EXPECT_NEAR(root->height, 600.0f, 0.5f);
+  ASSERT_EQ(root->children.size(), 1u);
+  const LayoutBox* body = root->children[0].get();
+  EXPECT_NEAR(body->height, 600.0f, 0.5f);
+  ASSERT_EQ(body->children.size(), 1u);
+  const LayoutBox* fill = body->children[0].get();
+  EXPECT_NEAR(fill->height, 600.0f, 0.5f);
+}
+
+TEST(LayoutTest, PercentageHeightAgainstAutoContainingBlockIsAuto)
+{
+  // A percentage height must be treated as auto when the containing block's
+  // height is not definite (CSS 2.2 §10.5).
+  auto doc =
+      html::Parser("<body><div><div id=\"pct\" style=\"height:50%\">x</div></div></body>").Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800, 600);
+  ASSERT_NE(root, nullptr);
+  dom::Element* pct = dom::QuerySelector(*doc, "#pct");
+  ASSERT_NE(pct, nullptr);
+  const LayoutBox* box = FindBox(*root, "#pct", *doc);
+  ASSERT_NE(box, nullptr);
+  // The percentage height is ignored (auto): the box is only as tall as its
+  // text line, not 50% of anything.
+  EXPECT_LT(box->height, 100.0f);
+}
+
 } // namespace
 } // namespace neko::layout

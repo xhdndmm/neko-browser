@@ -1,9 +1,11 @@
 #include "neko/ui/web_view.h"
 
 #include "neko/browser/hyperlink.h"
+#include "neko/layout/layout_tree.h"
 #include "neko/paint/rasterizer.h"
 #include "neko/ui/browser_worker.h"
 
+#include <QCursor>
 #include <QEvent>
 #include <QImage>
 #include <QMouseEvent>
@@ -22,6 +24,7 @@ WebView::WebView(BrowserWorker* worker, int tab_id, QWidget* parent)
 {
   viewport()->setAutoFillBackground(true);
   viewport()->setMouseTracking(true); // receive MouseMove without a pressed button
+  setFocusPolicy(Qt::StrongFocus);    // receive keystrokes after a click
   setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
   // Comfortable line step for the scroll-bar arrows / arrow keys. Wheel
@@ -30,6 +33,12 @@ WebView::WebView(BrowserWorker* worker, int tab_id, QWidget* parent)
   // Re-render the visible region whenever the scroll position changes.
   connect(
       verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int) { viewport()->update(); });
+
+  // Blinking caret: repaint every half second while a control holds focus.
+  caret_timer_ = new QTimer(this);
+  caret_timer_->setInterval(500);
+  connect(caret_timer_, &QTimer::timeout, this, &WebView::OnCaretBlink);
+  caret_timer_->start();
 
   text_view_ = new QPlainTextEdit(viewport());
   text_view_->setReadOnly(true);
@@ -85,8 +94,63 @@ void WebView::wheelEvent(QWheelEvent* event)
     return;
   }
   wheel_accum_ -= notches * 120;
+  // Fire the page's cancelable wheel event (vertical delta in px) so scripts
+  // can observe scrolling; the default scroll action still runs below.
+  worker_->DispatchWheel(tab_id_, static_cast<double>(notches * step));
   verticalScrollBar()->setValue(verticalScrollBar()->value() - notches * step);
   event->accept();
+}
+
+namespace {
+
+// Maps a Qt key to the UI Events (DOM) `key` and `code` strings for the common
+// printable and control keys.  Returns false for keys we do not dispatch.
+bool QtKeyToDomKey(int qkey, std::string& key, std::string& code)
+{
+  if (qkey >= Qt::Key_A && qkey <= Qt::Key_Z) {
+    const char lower = static_cast<char>('a' + (qkey - Qt::Key_A));
+    key = std::string(1, lower);
+    code = std::string("Key") + static_cast<char>('A' + (qkey - Qt::Key_A));
+    return true;
+  }
+  if (qkey >= Qt::Key_0 && qkey <= Qt::Key_9) {
+    key = std::string(1, static_cast<char>('0' + (qkey - Qt::Key_0)));
+    code = std::string("Digit") + key;
+    return true;
+  }
+  switch (qkey) {
+  case Qt::Key_Return:
+  case Qt::Key_Enter: key = "Enter"; code = "Enter"; return true;
+  case Qt::Key_Backspace: key = "Backspace"; code = "Backspace"; return true;
+  case Qt::Key_Space: key = " "; code = "Space"; return true;
+  case Qt::Key_Escape: key = "Escape"; code = "Escape"; return true;
+  case Qt::Key_Tab: key = "Tab"; code = "Tab"; return true;
+  case Qt::Key_Delete: key = "Delete"; code = "Delete"; return true;
+  case Qt::Key_Up: key = "ArrowUp"; code = "ArrowUp"; return true;
+  case Qt::Key_Down: key = "ArrowDown"; code = "ArrowDown"; return true;
+  case Qt::Key_Left: key = "ArrowLeft"; code = "ArrowLeft"; return true;
+  case Qt::Key_Right: key = "ArrowRight"; code = "ArrowRight"; return true;
+  case Qt::Key_Home: key = "Home"; code = "Home"; return true;
+  case Qt::Key_End: key = "End"; code = "End"; return true;
+  case Qt::Key_PageUp: key = "PageUp"; code = "PageUp"; return true;
+  case Qt::Key_PageDown: key = "PageDown"; code = "PageDown"; return true;
+  default: return false;
+  }
+}
+
+} // namespace
+
+void WebView::keyPressEvent(QKeyEvent* event)
+{
+  std::string key;
+  std::string code;
+  if (snapshot_.content_type == browser::ContentType::kHtml && QtKeyToDomKey(event->key(), key, code)) {
+    worker_->DispatchKeyboard(tab_id_, QStringLiteral("keydown"), QString::fromStdString(key),
+                              QString::fromStdString(code));
+    worker_->DispatchKeyboard(tab_id_, QStringLiteral("keyup"), QString::fromStdString(key),
+                              QString::fromStdString(code));
+  }
+  QAbstractScrollArea::keyPressEvent(event);
 }
 
 bool WebView::viewportEvent(QEvent* event)
@@ -101,6 +165,9 @@ bool WebView::viewportEvent(QEvent* event)
   } else if (event->type() == QEvent::MouseButtonPress) {
     const auto* mouse = static_cast<QMouseEvent*>(event);
     if (mouse->button() == Qt::LeftButton) {
+      // Steal keyboard focus so subsequent keystrokes reach the page (typed
+      // input, implicit form submission) instead of the address bar.
+      setFocus(Qt::MouseFocusReason);
       HandleLinkClick(mouse->position());
       HandleActive(mouse->position());
     }
@@ -122,20 +189,19 @@ float WebView::ScrollY() const
 
 void WebView::HandleLinkClick(const QPointF& viewport_pos)
 {
-  if (snapshot_.id < 0 || snapshot_.content_type != browser::ContentType::kHtml ||
-      snapshot_.page == nullptr) {
+  // Dispatch regardless of the cached snapshot's freshness: the worker
+  // resolves the hit against its own current tab state, so a click during a
+  // navigation (or before a Refresh picked up the new page) is not dropped.
+  if (snapshot_.id < 0) {
     return;
   }
   // The layout tree is in document coordinates; add the scroll offset.  The
-  // snapshot keeps the page (and its DOM) alive, so the hit-tested element
-  // cannot be freed while we resolve the link.
+  // dispatch runs on the worker thread: it hits the element, runs the page's
+  // cancelable "click" event, and only then performs the default action
+  // (hyperlink navigation) unless a listener called preventDefault().
   const float doc_x = static_cast<float>(viewport_pos.x());
   const float doc_y = static_cast<float>(viewport_pos.y()) + ScrollY();
-  const dom::Element* element = snapshot_.page->ElementAt(doc_x, doc_y);
-  const std::optional<std::string> target = browser::HyperlinkTarget(element, snapshot_.url);
-  if (target.has_value()) {
-    worker_->Navigate(tab_id_, QString::fromStdString(*target));
-  }
+  worker_->DispatchPointerClick(tab_id_, doc_x, doc_y);
 }
 
 void WebView::HandleHover(const QPointF& viewport_pos)
@@ -152,6 +218,10 @@ void WebView::HandleHover(const QPointF& viewport_pos)
   }
   hovered_element_ = element;
   snapshot_.page->SetHoveredElement(element);
+  // Pointing hand over hyperlinks (WHATWG HTML §4.6.5).
+  const bool is_link =
+      element != nullptr && browser::HyperlinkTarget(element, snapshot_.url).has_value();
+  viewport()->setCursor(is_link ? Qt::PointingHandCursor : Qt::ArrowCursor);
   viewport()->update();
 }
 
@@ -161,6 +231,7 @@ void WebView::HandleHoverClear()
     return;
   }
   hovered_element_ = nullptr;
+  viewport()->setCursor(Qt::ArrowCursor);
   if (snapshot_.page != nullptr) {
     snapshot_.page->SetHoveredElement(nullptr);
   }
@@ -200,13 +271,16 @@ void WebView::EnsureLayout(int width)
 {
   if (snapshot_.page == nullptr)
     return;
-  // Re-layout only when the viewport width changes or the page was just
+  // Re-layout only when the viewport size changes or the page was just
   // (re)loaded (a fresh page has no layout tree). This keeps scrolling from
   // rebuilding the whole layout tree on every repaint.
-  if (laid_out_width_ == width && snapshot_.page->layout_root() != nullptr)
+  const int viewport_height = std::max(1, viewport()->height());
+  if (laid_out_width_ == width && laid_out_height_ == viewport_height &&
+      snapshot_.page->layout_root() != nullptr)
     return;
-  snapshot_.page->Layout(static_cast<float>(width));
+  snapshot_.page->Layout(static_cast<float>(width), static_cast<float>(viewport_height));
   laid_out_width_ = width;
+  laid_out_height_ = viewport_height;
 }
 
 void WebView::UpdateScrollRange()
@@ -358,6 +432,72 @@ void WebView::PaintHtml(QPainter& painter)
                raster_cache_->height(),
                QImage::Format_RGBA8888);
   painter.drawImage(0, 0, image);
+  PaintCaret(painter);
+}
+
+// Finds the caret point for |target|: the end of its first laid-out text run
+// (document coordinates, before scroll).
+bool FindCaretPosition(const layout::LayoutBox& box, const dom::Element* target, float& x, float& y,
+                       float& h)
+{
+  for (const layout::Line& line : box.lines) {
+    for (const layout::TextRun& run : line.runs) {
+      if (run.element == target) {
+        x = run.x + run.width;
+        y = run.y;
+        h = line.height;
+        return true;
+      }
+    }
+    for (const layout::InlineBox& ib : line.boxes) {
+      if (ib.block_box != nullptr && FindCaretPosition(*ib.block_box, target, x, y, h)) {
+        return true;
+      }
+    }
+  }
+  for (const auto& child : box.children) {
+    if (FindCaretPosition(*child, target, x, y, h)) {
+      return true;
+    }
+  }
+  for (const auto& f : box.floats) {
+    if (FindCaretPosition(*f, target, x, y, h)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void WebView::PaintCaret(QPainter& painter)
+{
+  if (!caret_visible_ || snapshot_.content_type != browser::ContentType::kHtml ||
+      snapshot_.page == nullptr || snapshot_.page->layout_root() == nullptr) {
+    return;
+  }
+  const dom::Element* focused = snapshot_.page->FocusedElement();
+  if (focused == nullptr || focused->tag_name() != "input") {
+    return;
+  }
+  float x = 0;
+  float y = 0;
+  float h = 0;
+  if (!FindCaretPosition(*snapshot_.page->layout_root(), focused, x, y, h)) {
+    return;
+  }
+  const int scroll = verticalScrollBar()->value();
+  painter.fillRect(static_cast<int>(x), static_cast<int>(y - scroll), 1, std::max(1, (int)h),
+                   QColor(0, 0, 0));
+}
+
+void WebView::OnCaretBlink()
+{
+  // Only blink while a control holds focus; an idle page never repaints.
+  if (snapshot_.page == nullptr || snapshot_.page->FocusedElement() == nullptr) {
+    caret_visible_ = true;
+    return;
+  }
+  caret_visible_ = !caret_visible_;
+  viewport()->update();
 }
 
 void WebView::PaintImage(QPainter& painter)

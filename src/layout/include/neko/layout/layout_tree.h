@@ -89,6 +89,12 @@ struct LayoutBox {
   // Decoded image for a replaced <img> box (set by layout from ImageProvider).
   const image::Image* image = nullptr;
 
+  // CSS background-image (resolved URL from ComputedStyle) and its decoded
+  // image, fetched by the browser keyed by the element (like <img>).  Empty
+  // url = no background image.  Paint draws it over the box's background.
+  std::string background_image_url;
+  const image::Image* background_image = nullptr;
+
   float x = 0;
   float y = 0;
   float width = 0;
@@ -144,7 +150,8 @@ class LayoutEngine {
                         const ImageProvider* images = nullptr)
       : styles_(styles), registry_(registry), images_(images) {}
 
-  std::unique_ptr<LayoutBox> BuildLayoutTree(dom::Document& document, float viewport_width);
+  std::unique_ptr<LayoutBox> BuildLayoutTree(dom::Document& document, float viewport_width,
+                                             float viewport_height = 0);
 
  private:
   const style::StyleEngine& styles_;

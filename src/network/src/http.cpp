@@ -609,7 +609,8 @@ base::Result<HttpResponse> HttpGet(const url::Url& url,
   request += "User-Agent: ";
   request += base::GetUserAgent();
   request += "\r\n";
-  request += "Accept: text/html,application/xhtml+xml\r\n";
+  request += "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n";
+  request += "Accept-Language: en-US,en;q=0.9\r\n";
   request += "Accept-Encoding: gzip, deflate\r\n";
   if (extra_headers) {
     for (const HttpHeader& header : extra_headers(url)) {

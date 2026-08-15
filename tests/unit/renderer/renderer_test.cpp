@@ -660,8 +660,9 @@ TEST(PageTest, HoveredElementRemovedFromDomDoesNotDangle)
   // The cascade must drop the dangling hovered pointer instead of matching
   // :hover against freed memory (no crash under ASan).
   EXPECT_NO_FATAL_FAILURE(page.ReapplyStyles());
-  // The page stays usable; a now-empty document simply has no layout tree.
-  EXPECT_EQ(page.layout_root(), nullptr);
+  // The page stays usable: ReapplyStyles rebuilds a fresh (now empty) layout
+  // tree rather than leaving the root null.
+  EXPECT_NE(page.layout_root(), nullptr);
 }
 
 TEST(PageTest, ScrollBlitMatchesFullRasterize)

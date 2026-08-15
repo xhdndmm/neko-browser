@@ -4,10 +4,12 @@
 #include "neko/paint/rasterizer.h"
 
 #include <QAbstractScrollArea>
+#include <QTimer>
 #include <cstdint>
 #include <optional>
 
 class QPlainTextEdit;
+class QKeyEvent;
 
 namespace neko::ui {
 
@@ -45,11 +47,14 @@ protected:
   void paintEvent(QPaintEvent* event) override;
   void resizeEvent(QResizeEvent* event) override;
   void wheelEvent(QWheelEvent* event) override;
+  void keyPressEvent(QKeyEvent* event) override;
   bool viewportEvent(QEvent* event) override;
 
 private:
   void PaintHtml(QPainter& painter);
   void PaintImage(QPainter& painter);
+  void PaintCaret(QPainter& painter);
+  void OnCaretBlink();
   void UpdateTextOverlay();
   void EnsureLayout(int width);
   void UpdateScrollRange();
@@ -65,8 +70,9 @@ private:
   // Last consistent copy of the tab's renderable state; GUI-thread only.
   browser::TabSnapshot snapshot_;
   QPlainTextEdit* text_view_;
-  int laid_out_width_ = -1; // viewport width the page was last laid out at
-  int wheel_accum_ = 0;     // fractional wheel delta (eighths of a degree)
+  int laid_out_width_ = -1;  // viewport width the page was last laid out at
+  int laid_out_height_ = -1; // viewport height the page was last laid out at
+  int wheel_accum_ = 0;      // fractional wheel delta (eighths of a degree)
   // Element last reported as hovered/active (GUI thread); reset when the
   // document is replaced by a navigation so the state re-resolves from scratch.
   const dom::Element* hovered_element_ = nullptr;
@@ -74,6 +80,12 @@ private:
   // Document the hover/active state was resolved against; a change signals a
   // navigation (the document pointer is replaced), requiring a scroll reset.
   const dom::Document* cached_document_ = nullptr;
+
+  // Blinking caret for the focused element (GUI thread).  The blink timer
+  // flips visibility only while a control holds focus, so an idle page never
+  // triggers repaints.
+  bool caret_visible_ = true;
+  QTimer* caret_timer_ = nullptr;
 
   // Cached viewport raster + the state it was produced for (GUI thread).
   std::optional<paint::Rasterizer> raster_cache_;

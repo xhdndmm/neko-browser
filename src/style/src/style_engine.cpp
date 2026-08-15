@@ -1900,16 +1900,55 @@ void StyleEngine::ComputeElement(dom::Element& element,
   }
 
   // background.
+  // background.  `background-image` supplies the first url(...) in the value;
+  // `background-color` / `background` supply the color.  A `background`
+  // shorthand may carry both (e.g. `background: url(x) #555`).
+  const auto extract_url = [](std::string_view v) -> std::optional<std::string> {
+    const std::size_t p = v.find("url(");
+    if (p == std::string_view::npos) {
+      return std::nullopt;
+    }
+    std::size_t start = p + 4;
+    while (start < v.size() && (v[start] == ' ' || v[start] == '\t')) {
+      ++start;
+    }
+    if (start < v.size() && (v[start] == '"' || v[start] == '\'')) {
+      const char quote = v[start];
+      ++start;
+      const std::size_t end = v.find(quote, start);
+      if (end == std::string_view::npos) {
+        return std::nullopt;
+      }
+      return std::string(v.substr(start, end - start));
+    }
+    const std::size_t end = v.find(')', start);
+    if (end == std::string_view::npos) {
+      return std::nullopt;
+    }
+    std::size_t e = end;
+    while (e > start && (v[e - 1] == ' ' || v[e - 1] == '\t')) {
+      --e;
+    }
+    return std::string(v.substr(start, e - start));
+  };
   if (const css::Declaration* d = find("background-color")) {
     const css::CssValue v = css::ParseCssValue(d->value);
     if (v.type == css::CssValue::Type::kColor) {
       out.background_color = v.color;
     }
   }
+  if (const css::Declaration* d = find("background-image")) {
+    if (std::optional<std::string> url = extract_url(d->value)) {
+      out.background_image = std::move(url);
+    }
+  }
   if (const css::Declaration* d = find("background")) {
     const css::CssValue v = css::ParseCssValue(d->value);
     if (v.type == css::CssValue::Type::kColor) {
       out.background_color = v.color;
+    }
+    if (std::optional<std::string> url = extract_url(d->value)) {
+      out.background_image = std::move(url);
     }
   }
 

@@ -214,6 +214,7 @@ gtest_discover_tests(neko_security_tests DISCOVERY_MODE PRE_TEST)
 add_executable(neko_javascript_tests
   javascript/javascript_test.cpp
   javascript/dom_binding_test.cpp
+  javascript/event_test.cpp
 )
 target_link_libraries(neko_javascript_tests PRIVATE neko::javascript gtest_main)
 apply_compiler_warnings(neko_javascript_tests)

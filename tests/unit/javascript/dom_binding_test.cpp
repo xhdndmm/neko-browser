@@ -399,6 +399,60 @@ TEST_F(DomBinderTest, DispatchEventFromCpp)
   EXPECT_EQ(EvalString("window._evType"), "app-hi");
 }
 
+TEST_F(DomBinderTest, DispatchCancelableEventReturnsNotCanceled)
+{
+  dom::Element* first = dom::QuerySelector(*document_, "#first");
+  ASSERT_NE(first, nullptr);
+  // No listeners: the event is not canceled.
+  EXPECT_TRUE(binder_->DispatchCancelableEvent(*first, "click"));
+  // A listener that does not call preventDefault: still not canceled, and the
+  // listener fires with a cancelable, bubbling event.
+  ASSERT_TRUE(EvalBool("(function(){ var e = document.getElementById('first'); "
+                       "window._clicks = 0; window._cancelable = false; "
+                       "e.addEventListener('click', function(ev) { "
+                       "  window._clicks++; window._cancelable = ev.cancelable; "
+                       "}); "
+                       "return true; })()"));
+  EXPECT_TRUE(binder_->DispatchCancelableEvent(*first, "click"));
+  EXPECT_EQ(EvalNumber("window._clicks"), 1.0);
+  EXPECT_TRUE(EvalBool("window._cancelable === true"));
+}
+
+TEST_F(DomBinderTest, DispatchCancelableEventPreventDefault)
+{
+  dom::Element* first = dom::QuerySelector(*document_, "#first");
+  ASSERT_NE(first, nullptr);
+  ASSERT_TRUE(EvalBool("(function(){ var e = document.getElementById('first'); "
+                       "e.addEventListener('click', function(ev) { "
+                       "  window._canceledBefore = ev.defaultPrevented; "
+                       "  ev.preventDefault(); "
+                       "  window._canceledAfter = ev.defaultPrevented; "
+                       "}); "
+                       "return true; })()"));
+  // preventDefault() cancels the event: dispatch returns false, so the caller
+  // knows not to run the default action.
+  EXPECT_FALSE(binder_->DispatchCancelableEvent(*first, "click"));
+  EXPECT_TRUE(EvalBool("window._canceledBefore === false && window._canceledAfter === true"));
+}
+
+TEST_F(DomBinderTest, DispatchCancelableEventBubblesToAncestors)
+{
+  dom::Element* first = dom::QuerySelector(*document_, "#first");
+  ASSERT_NE(first, nullptr);
+  ASSERT_TRUE(EvalBool("(function(){ var p = document.getElementById('first'); "
+                       "var main = document.getElementById('main'); "
+                       "window._order = []; "
+                       "p.addEventListener('click', function(ev){ "
+                       "  window._order.push('target:' + ev.currentTarget.id); }); "
+                       "main.addEventListener('click', function(ev){ "
+                       "  window._order.push('ancestor:' + ev.currentTarget.id); }); "
+                       "return true; })()"));
+  binder_->DispatchCancelableEvent(*first, "click");
+  EXPECT_TRUE(EvalBool("window._order.length === 2 && "
+                       "window._order[0] === 'target:first' && "
+                       "window._order[1] === 'ancestor:main'"));
+}
+
 TEST_F(DomBinderTest, EventConstructorAndProperties)
 {
   EXPECT_TRUE(EvalBool("(function(){ var ev = new Event('go', {bubbles: true, cancelable: true}); "
@@ -1225,6 +1279,94 @@ TEST_F(DomBinderTest, PerformanceTimingNavigationStart)
   EXPECT_TRUE(EvalBool("typeof performance.timing.navigationStart === 'number'"));
   EXPECT_TRUE(EvalNumber("performance.timing.navigationStart") > 1000000000000.0);
   EXPECT_EQ(EvalString("performance.timing.navigationStart"), EvalString("performance.timeOrigin"));
+}
+
+// Element layout geometry getters map the browser layer's element_geometry
+// callback onto getBoundingClientRect / offsetWidth / clientWidth / offsetTop
+// etc.  Here the callback returns fixed values; the browser integration tests
+// exercise real layout.
+TEST(DomBinderGeometryTest, GeometryGettersUseCallback)
+{
+  auto document = html::Parser(R"(<html><body>
+    <div id="box">hi</div>
+    <span id="sp">text</span>
+    <p id="np">none</p>
+  </body></html>)")
+                      .Parse();
+  javascript::PageApis apis;
+  apis.element_geometry = [](const dom::Element& element) -> std::optional<javascript::ElementGeometry> {
+    const std::string id = std::string(element.GetAttribute("id").value_or(""));
+    if (id == "box") {
+      javascript::ElementGeometry g;
+      g.x = 10;
+      g.y = 12;
+      g.width = 132;
+      g.height = 72;
+      g.client_width = 128;
+      g.client_height = 68;
+      g.border_top = 2;
+      g.border_left = 2;
+      return g;
+    }
+    if (id == "sp") {
+      javascript::ElementGeometry g;
+      g.x = 20;
+      g.y = 30;
+      g.width = 40;
+      g.height = 16;
+      g.client_width = 40;
+      g.client_height = 16;
+      return g;
+    }
+    return std::nullopt;
+  };
+  javascript::DomBinder binder(*document, apis);
+
+  const auto num = [&](const std::string& code) -> double {
+    auto r = binder.Evaluate(code);
+    if (!r.has_value()) {
+      return -1e9;
+    }
+    auto n = r.value().ToNumber();
+    return n.has_value() ? n.value() : -1e9;
+  };
+  const auto str = [&](const std::string& code) -> std::string {
+    auto r = binder.Evaluate(code);
+    if (!r.has_value()) {
+      return "<error>";
+    }
+    auto s = r.value().ToString();
+    return s.has_value() ? s.value() : "<tostring-error>";
+  };
+
+  EXPECT_EQ(num("document.getElementById('box').offsetWidth"), 132);
+  EXPECT_EQ(num("document.getElementById('box').offsetHeight"), 72);
+  EXPECT_EQ(num("document.getElementById('box').offsetLeft"), 10);
+  EXPECT_EQ(num("document.getElementById('box').offsetTop"), 12);
+  EXPECT_EQ(num("document.getElementById('box').clientWidth"), 128);
+  EXPECT_EQ(num("document.getElementById('box').clientHeight"), 68);
+  EXPECT_EQ(num("document.getElementById('box').clientLeft"), 2);
+  EXPECT_EQ(num("document.getElementById('box').clientTop"), 2);
+  EXPECT_EQ(num("document.getElementById('box').getBoundingClientRect().x"), 10);
+  EXPECT_EQ(num("document.getElementById('box').getBoundingClientRect().y"), 12);
+  EXPECT_EQ(num("document.getElementById('box').getBoundingClientRect().left"), 10);
+  EXPECT_EQ(num("document.getElementById('box').getBoundingClientRect().top"), 12);
+  EXPECT_EQ(num("document.getElementById('box').getBoundingClientRect().right"), 142);
+  EXPECT_EQ(num("document.getElementById('box').getBoundingClientRect().bottom"), 84);
+  EXPECT_EQ(num("document.getElementById('box').getBoundingClientRect().width"), 132);
+  EXPECT_EQ(num("document.getElementById('box').getBoundingClientRect().height"), 72);
+  EXPECT_EQ(num("document.getElementById('box').getBoundingClientRect().toJSON().width"), 132);
+
+  EXPECT_EQ(num("document.getElementById('sp').offsetWidth"), 40);
+
+  // Elements with no laid-out box report 0 / a zero rect.
+  EXPECT_EQ(num("document.getElementById('np').offsetWidth"), 0);
+  EXPECT_EQ(num("document.getElementById('np').getBoundingClientRect().width"), 0);
+
+  // offsetParent resolves to <body>.
+  EXPECT_EQ(str("document.getElementById('box').offsetParent.tagName"), "BODY");
+  EXPECT_EQ(str("document.getElementById('box').offsetParent.offsetParent === null ? 'null' : 'x'"),
+            "null");
 }
 
 } // namespace
