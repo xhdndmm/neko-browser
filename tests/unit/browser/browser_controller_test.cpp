@@ -805,6 +805,41 @@ TEST(BrowserControllerTest, FetchesAndAppliesExternalStylesheets)
   EXPECT_FLOAT_EQ(style.font_size, 24.0f);
 }
 
+TEST(BrowserControllerTest, ExternalStylesheetsCascadeInDocumentOrder)
+{
+  // Two external sheets with equal-specificity declarations: the later one
+  // in document order must win.  (Regression: sheets were collected in
+  // reverse document order, inverting the cascade.)
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head>"
+                               "<link rel=\"stylesheet\" href=\"/a.css\">"
+                               "<link rel=\"stylesheet\" href=\"/b.css\">"
+                               "</head><body><p id=\"t\">x</p></body></html>"});
+  fetch.Add("http://example.com/a.css",
+            FakeFetcher::Route{200, {{"content-type", "text/css"}}, "#t { color: rgb(255, 0, 0); }"});
+  fetch.Add("http://example.com/b.css",
+            FakeFetcher::Route{200, {{"content-type", "text/css"}}, "#t { color: rgb(0, 0, 255); }"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  dom::Element* target = dom::QuerySelector(*tab->page->document(), "#t");
+  ASSERT_NE(target, nullptr);
+  const style::ComputedStyle& style = tab->page->styles().StyleFor(*target);
+  ASSERT_TRUE(style.color.has_value());
+  // b.css comes later in the document, so blue wins over red.
+  EXPECT_EQ(style.color.value().r, 0);
+  EXPECT_EQ(style.color.value().g, 0);
+  EXPECT_EQ(style.color.value().b, 255);
+}
+
 // A failing external stylesheet is skipped without stopping the page.
 TEST(BrowserControllerTest, MissingExternalStylesheetIsSkipped)
 {

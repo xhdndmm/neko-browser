@@ -901,10 +901,12 @@ void FetchExternalStylesheets(renderer::Page& page,
   const base::Result<url::Url> base = url::Url::Parse(base_url);
 
   // Collect <link rel=stylesheet> in document order (pre-order traversal).
+  // The stack pops LIFO, so children are pushed in reverse to yield forward
+  // order on pop.
   std::vector<dom::Element*> links;
   std::vector<dom::Node*> stack;
-  for (dom::Node* child : doc->ChildNodes()) {
-    stack.push_back(child);
+  for (auto it = doc->ChildNodes().begin(); it != doc->ChildNodes().end(); ++it) {
+    stack.push_back(*it);
   }
   while (!stack.empty()) {
     dom::Node* node = stack.back();
@@ -920,8 +922,13 @@ void FetchExternalStylesheets(renderer::Page& page,
         links.push_back(element);
       }
     }
+    // Reverse iteration so the stack pops children in document order.
+    std::vector<dom::Node*> children;
     for (dom::Node* child : node->ChildNodes()) {
-      stack.push_back(child);
+      children.push_back(child);
+    }
+    for (auto it = children.rbegin(); it != children.rend(); ++it) {
+      stack.push_back(*it);
     }
   }
   if (links.empty()) {
