@@ -476,6 +476,7 @@ std::vector<PathCmd> ParsePathData(std::string_view d)
   Point current{0, 0};
   Point start{0, 0};
   while (pos < s.size()) {
+    const std::size_t pos_before = pos;
     while (pos < s.size() && std::isspace(static_cast<unsigned char>(s[pos]))) {
       ++pos;
     }
@@ -504,6 +505,13 @@ std::vector<PathCmd> ParsePathData(std::string_view d)
     const bool relative = std::islower(static_cast<unsigned char>(cmd));
     const char abs_cmd = static_cast<char>(std::toupper(static_cast<unsigned char>(cmd)));
     auto num = [&](std::size_t k, double& v) {
+      // Guard against a command with too few arguments (e.g. "d=\"M\""):
+      // reading args[k] out of bounds is UB.  Missing arguments are treated
+      // as 0, matching the lenient tolerance of real parsers.
+      if (k >= args.size()) {
+        v = 0;
+        return;
+      }
       v = args[k];
       if (relative &&
           (abs_cmd == 'M' || abs_cmd == 'L' || abs_cmd == 'H' || abs_cmd == 'V' || abs_cmd == 'C' ||
@@ -664,6 +672,12 @@ std::vector<PathCmd> ParsePathData(std::string_view d)
       break;
     default:
       break;
+    }
+    // Guarantee forward progress: an unrecognized character in "d" (e.g. '#')
+    // is consumed by neither the argument loop nor the switch, which would
+    // otherwise loop forever.
+    if (pos_before == pos) {
+      ++pos;
     }
   }
   return commands;
@@ -1366,7 +1380,8 @@ base::Result<Image> DecodeSvg(std::string_view data)
     }
   }
 
-  if (width <= 0 || height <= 0 || width > 4096 || height > 4096) {
+  if (!std::isfinite(width) || !std::isfinite(height) || width <= 0 || height <= 0 ||
+      width > 4096 || height > 4096) {
     return base::Err(base::Error::Parse("invalid SVG dimensions"));
   }
   const int out_w = static_cast<int>(std::ceil(width));
@@ -1375,7 +1390,8 @@ base::Result<Image> DecodeSvg(std::string_view data)
   buf.Init(out_w * 2, out_h * 2);
 
   Mat to_device = Mat::Scale(2.0, 2.0);
-  if (has_viewbox && vbw > 0 && vbh > 0) {
+  if (has_viewbox && std::isfinite(vbx) && std::isfinite(vby) && std::isfinite(vbw) &&
+      std::isfinite(vbh) && vbw > 0 && vbh > 0) {
     const double scale =
         std::min(static_cast<double>(buf.width) / vbw, static_cast<double>(buf.height) / vbh);
     const double tx = (static_cast<double>(buf.width) - vbw * scale) / 2.0 - vbx * scale;

@@ -1034,5 +1034,36 @@ TEST(SvgTest, RejectsInvalidInput)
   EXPECT_FALSE(DecodeSvg("<rect/>").has_value()); // no <svg> root
 }
 
+TEST(SvgTest, PathDataDoesNotHangOnUnrecognizedChar)
+{
+  // A '#' in the path data is consumed by neither the argument parser nor the
+  // command switch; it must not spin forever.
+  const std::string svg =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">"
+      "<path d=\"M0 0 #\"/></svg>";
+  const auto r = DecodeSvg(svg);
+  EXPECT_TRUE(r.has_value());  // tolerated, no hang
+}
+
+TEST(SvgTest, PathDataMissingArgumentsDoesNotOverrun)
+{
+  // d=\"M\" has no coordinates; reading args[1] must not overrun the vector.
+  const std::string svg =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">"
+      "<path d=\"M\"/></svg>";
+  const auto r = DecodeSvg(svg);
+  EXPECT_TRUE(r.has_value());
+}
+
+TEST(SvgTest, NonFiniteDimensionsAreRejected)
+{
+  // NaN width must not slip past the bounds check and overflow the pixel
+  // allocation / int conversion.
+  EXPECT_FALSE(DecodeSvg("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"NaN\" height=\"10\"/>")
+                   .has_value());
+  EXPECT_FALSE(DecodeSvg("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"Infinity\"/>")
+                   .has_value());
+}
+
 } // namespace
 } // namespace neko::image
