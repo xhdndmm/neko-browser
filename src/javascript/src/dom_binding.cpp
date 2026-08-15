@@ -32,6 +32,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <ctime>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -73,6 +74,206 @@ void NodeFinalizer(JSRuntime* /*rt*/, JSValue obj)
 {
   auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(obj, g_node_class_id));
   delete w;
+}
+
+// Opaque state attached to every Event object (new Event(...) or the fresh
+// event created by a dispatch).  target/currentTarget are owned JSValues
+// (Dup'd node wrappers) stored here rather than as JS properties: the
+// prototype's target/currentTarget getters must not read the same-named
+// property (that would recurse), and storing them on the wrapper keeps the
+// dispatch state in one place.
+struct EventWrapper
+{
+  Impl* impl = nullptr;
+  std::string type;
+  bool bubbles = false;
+  bool cancelable = false;
+  bool default_prevented = false;
+  bool propagation_stopped = false;
+  bool immediate_stopped = false;
+  int event_phase = 0;                   // 0 none, 1 capture, 2 target, 3 bubble
+  JSValue target = JS_UNDEFINED;         // owned node wrapper (or undefined)
+  JSValue current_target = JS_UNDEFINED; // owned node wrapper (or undefined)
+};
+
+JSClassID g_event_class_id = 0;
+std::mutex g_event_class_mutex;
+std::unordered_set<JSRuntime*> g_event_class_registered;
+
+void EventFinalizer(JSRuntime* rt, JSValue obj)
+{
+  auto* w = static_cast<EventWrapper*>(JS_GetOpaque(obj, g_event_class_id));
+  if (w != nullptr) {
+    JS_FreeValueRT(rt, w->target);
+    JS_FreeValueRT(rt, w->current_target);
+    delete w;
+  }
+}
+
+// Forward declarations (defined below with the other node/string helpers).
+std::string ArgString(JSContext* ctx, JSValueConst value, bool* ok);
+dom::Element* AsElement(dom::Node* node);
+
+// Dataset objects (element.dataset): a class whose exotic get/set property
+// handlers map camelCase keys to the element's data-* attributes, so both
+// reads (el.dataset.foo) and writes (el.dataset.fooBar = 'x') round-trip
+// through the attribute list without needing per-property accessors.
+JSClassID g_dataset_class_id = 0;
+std::mutex g_dataset_class_mutex;
+std::unordered_set<JSRuntime*> g_dataset_class_registered;
+JSClassExoticMethods g_dataset_exotic = {};
+
+void DatasetFinalizer(JSRuntime* /*rt*/, JSValue obj)
+{
+  auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(obj, g_dataset_class_id));
+  delete w;
+}
+
+// "fooBar" -> "data-foo-bar".
+std::string DatasetKeyToAttr(const std::string& key)
+{
+  std::string attr = "data-";
+  for (const char c : key) {
+    if (c >= 'A' && c <= 'Z') {
+      attr.push_back('-');
+      attr.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    } else {
+      attr.push_back(c);
+    }
+  }
+  return attr;
+}
+
+// "data-foo-bar" -> "fooBar".
+std::string DatasetAttrToKey(const std::string& attr)
+{
+  std::string key;
+  bool upper = false;
+  for (std::size_t i = 5; i < attr.size(); ++i) { // skip "data-"
+    const char c = attr[i];
+    if (c == '-') {
+      upper = true;
+      continue;
+    }
+    key.push_back(upper ? static_cast<char>(std::toupper(static_cast<unsigned char>(c))) : c);
+    upper = false;
+  }
+  return key;
+}
+
+JSValue DatasetGetProperty(JSContext* ctx, JSValueConst obj, JSAtom atom, JSValueConst /*receiver*/)
+{
+  auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(obj, g_dataset_class_id));
+  dom::Element* el = w != nullptr ? AsElement(w->node) : nullptr;
+  if (el == nullptr) {
+    return JS_UNDEFINED;
+  }
+  const char* name = JS_AtomToCString(ctx, atom);
+  if (name == nullptr) {
+    return JS_UNDEFINED;
+  }
+  const std::string attr = DatasetKeyToAttr(name);
+  JS_FreeCString(ctx, name);
+  const std::optional<std::string_view> value = el->GetAttribute(attr);
+  return value.has_value() ? JS_NewStringLen(ctx, value->data(), value->size()) : JS_UNDEFINED;
+}
+
+int DatasetSetProperty(JSContext* ctx,
+                       JSValueConst obj,
+                       JSAtom atom,
+                       JSValueConst value,
+                       JSValueConst /*receiver*/,
+                       int /*flags*/)
+{
+  auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(obj, g_dataset_class_id));
+  dom::Element* el = w != nullptr ? AsElement(w->node) : nullptr;
+  if (el == nullptr) {
+    return 0;
+  }
+  const char* name = JS_AtomToCString(ctx, atom);
+  if (name == nullptr) {
+    return 0;
+  }
+  const std::string attr = DatasetKeyToAttr(name);
+  JS_FreeCString(ctx, name);
+  bool ok = false;
+  const std::string value_str = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return 0; // exception pending
+  }
+  if (value_str.empty()) {
+    el->RemoveAttribute(attr);
+  } else {
+    el->SetAttribute(attr, value_str);
+  }
+  return 1;
+}
+
+// Returns the element's data-* attributes as an object keyed by camelCase
+// (used by get_own_property_names so Object.keys / JSON see them).
+int DatasetGetOwnPropertyNames(JSContext* ctx,
+                               JSPropertyEnum** ptab,
+                               uint32_t* plen,
+                               JSValueConst obj)
+{
+  auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(obj, g_dataset_class_id));
+  dom::Element* el = w != nullptr ? AsElement(w->node) : nullptr;
+  if (el == nullptr) {
+    *ptab = nullptr;
+    *plen = 0;
+    return 0;
+  }
+  std::vector<std::string> keys;
+  for (const dom::Attribute& attr : el->attributes()) {
+    if (attr.name.rfind("data-", 0) == 0) {
+      keys.push_back(DatasetAttrToKey(attr.name));
+    }
+  }
+  JSPropertyEnum* table =
+      static_cast<JSPropertyEnum*>(js_malloc(ctx, keys.size() * sizeof(JSPropertyEnum)));
+  if (keys.empty()) {
+    *ptab = table;
+    *plen = 0;
+    return 0;
+  }
+  if (table == nullptr) {
+    return -1;
+  }
+  for (std::size_t i = 0; i < keys.size(); ++i) {
+    table[i].atom = JS_NewAtomLen(ctx, keys[i].data(), keys[i].size());
+    table[i].is_enumerable = 1;
+  }
+  *ptab = table;
+  *plen = static_cast<uint32_t>(keys.size());
+  return 0;
+}
+
+// Forward declarations (defined below with the other node/string helpers).
+EventWrapper* UnwrapEvent(JSValueConst value)
+{
+  return static_cast<EventWrapper*>(JS_GetOpaque(value, g_event_class_id));
+}
+
+// Reads the 'type' of an event-like value: the opaque wrapper's type for a
+// real Event, else the JS 'type' property (for plain {type: ...} objects,
+// which dispatchEvent still accepts as a shortcut).
+bool EventTypeOf(JSContext* ctx, JSValueConst value, std::string* out)
+{
+  if (EventWrapper* w = UnwrapEvent(value); w != nullptr) {
+    *out = w->type;
+    return true;
+  }
+  JSValue type_val = JS_GetPropertyStr(ctx, value, "type");
+  bool ok = false;
+  *out = ArgString(ctx, type_val, &ok);
+  JS_FreeValue(ctx, type_val);
+  return ok;
+}
+
+// True when |value| is a real Event object.
+bool IsEvent(JSValueConst value)
+{
+  return UnwrapEvent(value) != nullptr;
 }
 
 std::mutex g_ctx_mutex;
@@ -384,6 +585,8 @@ struct Impl
   JSValue document_proto = JS_UNDEFINED;
   JSValue fragment_proto = JS_UNDEFINED;
   JSValue style_proto = JS_UNDEFINED;
+  JSValue event_proto = JS_UNDEFINED;
+  JSValue class_list_proto = JS_UNDEFINED;
   JSValue window = JS_UNDEFINED;
 
   // Wrapper registry: node -> kept-alive wrapper (JS_DupValue'd).  Wrappers
@@ -410,12 +613,33 @@ struct Impl
   std::vector<Timer> timers;
   int64_t next_timer_id = 1;
 
-  // Event listeners: node -> (type -> callbacks).  Keyed by node (elements
+  // requestAnimationFrame callbacks.  Queued during a script run; the pump
+  // (RunPendingTimers) moves them to |raf_pending| and invokes each with a
+  // timestamp.  Callbacks are Dup'd.
+  struct RafEntry
+  {
+    int64_t id = 0;
+    JSValue callback = JS_UNDEFINED;
+  };
+  std::vector<RafEntry> raf_queue;
+  std::vector<RafEntry> raf_pending;
+  int64_t next_raf_id = 1;
+
+  // performance.now() origin (steady clock at binder construction).
+  std::chrono::steady_clock::time_point performance_origin = std::chrono::steady_clock::now();
+
+  // Event listeners: node -> (type -> listeners).  Keyed by node (elements
   // and the document; window-level listeners are stored under the document,
   // since the window and the document are the same event target here).
   // Callbacks are Dup'd; nodes stay alive through |wrappers|/|retained| for
-  // the binder's life.
-  using ListenerMap = std::unordered_map<std::string, std::vector<JSValue>>;
+  // the binder's life.  Capture/once options are honored by dispatch.
+  struct Listener
+  {
+    JSValue callback = JS_UNDEFINED;
+    bool capture = false;
+    bool once = false;
+  };
+  using ListenerMap = std::unordered_map<std::string, std::vector<Listener>>;
   std::unordered_map<const dom::Node*, ListenerMap> listeners;
 
   // Optional browser Web APIs (localStorage/fetch) wired by the browser layer.
@@ -432,10 +656,20 @@ struct Impl
   JSValue MakeNodeArray(const std::vector<dom::Node*>& nodes);
   JSValue MakeElementArray(const std::vector<dom::Element*>& elements);
 
+  // Creates an Event object (class wrapper + event_proto prototype).
+  JSValue MakeEvent(std::string type, bool bubbles, bool cancelable);
+  // Runs one event through capture -> target -> bubble propagation over the
+  // ancestor path of |target|.  |event| must be an Event object (the opaque
+  // wrapper's state is mutated).  Listeners run synchronously; the event's
+  // target/currentTarget/eventPhase are updated along the way.  Returns false
+  // when the event was canceled (dispatchEvent must return false then).
+  bool DispatchPropagated(dom::Node* target, JSValue event);
+
   void TakeOwnership(dom::Node* node, std::unique_ptr<dom::Node> owned);
   std::unique_ptr<dom::Node> ReleaseOwned(dom::Node* node);
 
   int RunPendingTimers();
+  int RunPendingRaf();
   std::optional<std::chrono::steady_clock::time_point> NextTimerDeadline() const;
   void DispatchToNode(dom::Node* node, std::string_view type);
   void DispatchEvent(dom::Element& element, std::string_view type);
@@ -629,7 +863,47 @@ JSValue NodeAddEventListener(JSContext* ctx, JSValueConst this_val, int argc, JS
   if (!ok) {
     return JS_EXCEPTION;
   }
-  impl->listeners[node][type].push_back(JS_DupValue(ctx, argv[1]));
+  // Options: a boolean (capture) or an object with capture/once.
+  bool capture = false;
+  bool once = false;
+  if (argc >= 3 && !JS_IsUndefined(argv[2])) {
+    if (JS_IsBool(argv[2])) {
+      const int v = JS_ToBool(ctx, argv[2]);
+      if (v < 0) {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        return JS_EXCEPTION;
+      }
+      capture = v != 0;
+    } else if (JS_IsObject(argv[2])) {
+      JSValue c = JS_GetPropertyStr(ctx, argv[2], "capture");
+      if (JS_IsBool(c)) {
+        const int v = JS_ToBool(ctx, c);
+        if (v < 0) {
+          JS_FreeValue(ctx, c);
+          JS_FreeValue(ctx, JS_GetException(ctx));
+          return JS_EXCEPTION;
+        }
+        capture = v != 0;
+      }
+      JS_FreeValue(ctx, c);
+      JSValue o = JS_GetPropertyStr(ctx, argv[2], "once");
+      if (JS_IsBool(o)) {
+        const int v = JS_ToBool(ctx, o);
+        if (v < 0) {
+          JS_FreeValue(ctx, o);
+          JS_FreeValue(ctx, JS_GetException(ctx));
+          return JS_EXCEPTION;
+        }
+        once = v != 0;
+      }
+      JS_FreeValue(ctx, o);
+    }
+  }
+  Impl::Listener listener;
+  listener.callback = JS_DupValue(ctx, argv[1]);
+  listener.capture = capture;
+  listener.once = once;
+  impl->listeners[node][type].push_back(std::move(listener));
   return JS_UNDEFINED;
 }
 
@@ -648,6 +922,30 @@ JSValue NodeRemoveEventListener(JSContext* ctx, JSValueConst this_val, int argc,
   if (!ok) {
     return JS_EXCEPTION;
   }
+  // Removal matches the callback plus the capture flag (like browsers).
+  bool capture = false;
+  if (argc >= 3 && !JS_IsUndefined(argv[2])) {
+    if (JS_IsBool(argv[2])) {
+      const int v = JS_ToBool(ctx, argv[2]);
+      if (v < 0) {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        return JS_EXCEPTION;
+      }
+      capture = v != 0;
+    } else if (JS_IsObject(argv[2])) {
+      JSValue c = JS_GetPropertyStr(ctx, argv[2], "capture");
+      if (JS_IsBool(c)) {
+        const int v = JS_ToBool(ctx, c);
+        if (v < 0) {
+          JS_FreeValue(ctx, c);
+          JS_FreeValue(ctx, JS_GetException(ctx));
+          return JS_EXCEPTION;
+        }
+        capture = v != 0;
+      }
+      JS_FreeValue(ctx, c);
+    }
+  }
   const auto el_it = impl->listeners.find(node);
   if (el_it == impl->listeners.end()) {
     return JS_UNDEFINED;
@@ -656,15 +954,15 @@ JSValue NodeRemoveEventListener(JSContext* ctx, JSValueConst this_val, int argc,
   if (type_it == el_it->second.end()) {
     return JS_UNDEFINED;
   }
-  std::vector<JSValue>& callbacks = type_it->second;
-  for (auto it = callbacks.begin(); it != callbacks.end(); ++it) {
-    if (JS_IsStrictEqual(ctx, *it, argv[1])) {
-      JS_FreeValue(ctx, *it);
-      callbacks.erase(it);
+  std::vector<Impl::Listener>& listeners = type_it->second;
+  for (auto it = listeners.begin(); it != listeners.end(); ++it) {
+    if (it->capture == capture && JS_IsStrictEqual(ctx, it->callback, argv[1])) {
+      JS_FreeValue(ctx, it->callback);
+      listeners.erase(it);
       break;
     }
   }
-  if (callbacks.empty()) {
+  if (listeners.empty()) {
     el_it->second.erase(type_it);
   }
   return JS_UNDEFINED;
@@ -680,44 +978,22 @@ JSValue NodeDispatchEvent(JSContext* ctx, JSValueConst this_val, int argc, JSVal
   if (argc < 1 || !JS_IsObject(argv[0])) {
     return JS_ThrowTypeError(ctx, "dispatchEvent requires an event object");
   }
-  JSValue type_val = JS_GetPropertyStr(ctx, argv[0], "type");
-  bool ok = false;
-  const std::string type = ArgString(ctx, type_val, &ok);
-  JS_FreeValue(ctx, type_val);
-  if (!ok) {
-    return JS_EXCEPTION;
-  }
-  // Populate target/currentTarget on the caller's event object.
-  JSValue target = impl->WrapNode(node);
-  JS_SetPropertyStr(ctx, argv[0], "target", JS_DupValue(ctx, target));
-  JS_SetPropertyStr(ctx, argv[0], "currentTarget", JS_DupValue(ctx, target));
-  JS_FreeValue(ctx, target);
-
-  const auto el_it = impl->listeners.find(node);
-  if (el_it != impl->listeners.end()) {
-    const auto type_it = el_it->second.find(type);
-    if (type_it != el_it->second.end()) {
-      // Snapshot so listeners added/removed during dispatch don't mutate the
-      // list we iterate.
-      std::vector<JSValue> callbacks;
-      callbacks.reserve(type_it->second.size());
-      for (JSValue cb : type_it->second) {
-        callbacks.push_back(JS_DupValue(ctx, cb));
-      }
-      JSValue this_wrap = impl->WrapNode(node);
-      for (JSValue cb : callbacks) {
-        JSValue result = JS_Call(ctx, cb, this_wrap, 1, argv);
-        if (JS_IsException(result)) {
-          JS_FreeValue(ctx, JS_GetException(ctx));
-        } else {
-          JS_FreeValue(ctx, result);
-        }
-        JS_FreeValue(ctx, cb);
-      }
-      JS_FreeValue(ctx, this_wrap);
+  // The caller may pass a real Event object (new Event(...)) or a plain
+  // {type: ...} object (legacy shortcut).  Plain objects are dispatched as a
+  // non-bubbling, non-cancelable event; real events keep their options.
+  JSValue event = JS_UNDEFINED;
+  if (IsEvent(argv[0])) {
+    event = JS_DupValue(ctx, argv[0]);
+  } else {
+    std::string type;
+    if (!EventTypeOf(ctx, argv[0], &type)) {
+      return JS_EXCEPTION;
     }
+    event = impl->MakeEvent(std::move(type), /*bubbles=*/false, /*cancelable=*/false);
   }
-  return JS_NewBool(ctx, true);
+  const bool not_canceled = impl->DispatchPropagated(node, event);
+  JS_FreeValue(ctx, event);
+  return JS_NewBool(ctx, not_canceled);
 }
 
 JSValue NodeGetNodeType(JSContext* ctx, JSValueConst this_val)
@@ -814,6 +1090,209 @@ JSValue NodeGetChildNodes(JSContext* ctx, JSValueConst this_val)
     nodes.push_back(child);
   }
   return impl->MakeNodeArray(nodes);
+}
+
+// Returns the sibling at |offset| (+1 next, -1 previous), or nullptr.
+dom::Node* SiblingOf(dom::Node* node, int offset)
+{
+  if (node == nullptr || node->parent() == nullptr) {
+    return nullptr;
+  }
+  dom::Node* parent = node->parent();
+  for (dom::Node* child : parent->ChildNodes()) {
+    if (child == node) {
+      // Walk from the located child.
+      dom::Node* current = node;
+      while (offset > 0) {
+        bool found = false;
+        for (dom::Node* n : parent->ChildNodes()) {
+          if (found) {
+            return n;
+          }
+          if (n == current) {
+            found = true;
+          }
+        }
+        return nullptr; // no more siblings
+      }
+      while (offset < 0) {
+        dom::Node* prev = nullptr;
+        for (dom::Node* n : parent->ChildNodes()) {
+          if (n == current) {
+            return prev;
+          }
+          prev = n;
+        }
+        return nullptr;
+      }
+      return current;
+    }
+  }
+  return nullptr;
+}
+
+JSValue NodeGetNextSibling(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr) {
+    return JS_ThrowTypeError(ctx, "detached node");
+  }
+  return impl->WrapNode(SiblingOf(node, +1));
+}
+
+JSValue NodeGetPreviousSibling(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr) {
+    return JS_ThrowTypeError(ctx, "detached node");
+  }
+  return impl->WrapNode(SiblingOf(node, -1));
+}
+
+JSValue NodeGetParentElement(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr) {
+    return JS_ThrowTypeError(ctx, "detached node");
+  }
+  return impl->WrapNode(AsElement(node->parent()));
+}
+
+JSValue NodeGetOwnerDocument(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr) {
+    return JS_ThrowTypeError(ctx, "detached node");
+  }
+  // Per spec, Document.ownerDocument is null.
+  if (node->node_type() == dom::NodeType::kDocument) {
+    return JS_NULL;
+  }
+  return impl->WrapNode(&impl->document);
+}
+
+JSValue NodeGetIsConnected(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr) {
+    return JS_ThrowTypeError(ctx, "detached node");
+  }
+  bool connected = false;
+  for (dom::Node* p = node; p != nullptr; p = p->parent()) {
+    if (p == &impl->document) {
+      connected = true;
+      break;
+    }
+  }
+  return JS_NewBool(ctx, connected);
+}
+
+JSValue NodeContains(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  dom::Node* node = UnwrapNode(this_val);
+  if (node == nullptr) {
+    return JS_ThrowTypeError(ctx, "contains: detached node");
+  }
+  if (argc < 1) {
+    return JS_NewBool(ctx, false);
+  }
+  dom::Node* other = UnwrapNode(argv[0]);
+  if (other == nullptr) {
+    return JS_NewBool(ctx, false);
+  }
+  if (other == node) {
+    return JS_NewBool(ctx, true);
+  }
+  return JS_NewBool(ctx, IsAncestorOf(node, other));
+}
+
+JSValue NodeReplaceChild(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* parent = UnwrapNode(this_val);
+  if (impl == nullptr || parent == nullptr) {
+    return JS_ThrowTypeError(ctx, "replaceChild: detached node");
+  }
+  if (argc < 2) {
+    return JS_ThrowTypeError(ctx, "replaceChild requires (newChild, oldChild)");
+  }
+  dom::Node* new_child = UnwrapNode(argv[0]);
+  dom::Node* old_child = UnwrapNode(argv[1]);
+  if (new_child == nullptr || old_child == nullptr) {
+    return JS_ThrowTypeError(ctx, "replaceChild: arguments are not nodes");
+  }
+  if (old_child->parent() != parent) {
+    return JS_ThrowTypeError(ctx, "replaceChild: oldChild is not a child of this node");
+  }
+  if (new_child == parent || new_child->node_type() == dom::NodeType::kDocument ||
+      IsAncestorOf(new_child, parent)) {
+    return JS_ThrowTypeError(ctx, "replaceChild: invalid newChild");
+  }
+  // Insert the new child before the old one, then remove the old one.
+  if (new_child->parent() != nullptr) {
+    std::unique_ptr<dom::Node> removed = new_child->parent()->RemoveChild(new_child);
+    impl->TakeOwnership(new_child, std::move(removed));
+  }
+  std::unique_ptr<dom::Node> owned = impl->ReleaseOwned(new_child);
+  if (owned == nullptr) {
+    return JS_ThrowTypeError(ctx, "replaceChild: internal ownership error");
+  }
+  parent->InsertBefore(std::move(owned), old_child);
+  std::unique_ptr<dom::Node> removed_old = parent->RemoveChild(old_child);
+  impl->TakeOwnership(old_child, std::move(removed_old));
+  return impl->WrapNode(new_child);
+}
+
+JSValue NodeNormalize(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr) {
+    return JS_ThrowTypeError(ctx, "normalize: detached node");
+  }
+  // Snapshot the children: merging calls RemoveChild, which mutates the
+  // children vector, and range-iterating a view over it while erasing would
+  // invalidate the end iterator (out-of-bounds dereference).
+  std::vector<dom::Node*> children;
+  children.reserve(node->child_count());
+  for (dom::Node* child : node->ChildNodes()) {
+    children.push_back(child);
+  }
+  // Merge adjacent Text nodes (DOM spec: normalize()).
+  for (dom::Node* child : children) {
+    if (child->node_type() != dom::NodeType::kText) {
+      continue;
+    }
+    while (true) {
+      dom::Node* next = SiblingOf(child, +1);
+      if (next == nullptr || next->node_type() != dom::NodeType::kText) {
+        break;
+      }
+      auto* text = static_cast<dom::Text*>(child);
+      auto* next_text = static_cast<dom::Text*>(next);
+      text->AppendData(next_text->data());
+      std::unique_ptr<dom::Node> removed = node->RemoveChild(next);
+      impl->TakeOwnership(next, std::move(removed));
+    }
+  }
+  // Recurse into element children (normalize() applies to the whole subtree).
+  for (dom::Node* child : children) {
+    if (child->node_type() == dom::NodeType::kElement) {
+      JSValue child_wrap = impl->WrapNode(child);
+      JSValue result = NodeNormalize(ctx, child_wrap, 0, nullptr);
+      JS_FreeValue(ctx, child_wrap);
+      if (JS_IsException(result)) {
+        return result;
+      }
+      JS_FreeValue(ctx, result);
+    }
+  }
+  return JS_UNDEFINED;
 }
 
 // ---------------------------------------------------------------------------
@@ -945,6 +1424,1015 @@ JSValue ElementGetFirstElementChild(JSContext* ctx, JSValueConst this_val)
     }
   }
   return JS_NULL;
+}
+
+JSValue ElementGetLastElementChild(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (impl == nullptr || element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  dom::Element* found = nullptr;
+  for (dom::Node* child : element->ChildNodes()) {
+    if (dom::Element* el = AsElement(child)) {
+      found = el;
+    }
+  }
+  return impl->WrapNode(found);
+}
+
+// The adjacent element sibling of |element| in the given direction.
+dom::Element* ElementSiblingOf(dom::Element* element, int offset)
+{
+  if (element == nullptr || element->parent() == nullptr) {
+    return nullptr;
+  }
+  dom::Node* parent = element->parent();
+  dom::Element* prev = nullptr;
+  bool seen = false;
+  for (dom::Node* child : parent->ChildNodes()) {
+    dom::Element* el = AsElement(child);
+    if (el == nullptr) {
+      continue;
+    }
+    if (el == element) {
+      seen = true;
+      if (offset < 0) {
+        return prev;
+      }
+    } else if (seen && offset > 0) {
+      return el;
+    } else if (!seen) {
+      prev = el;
+    }
+  }
+  return nullptr;
+}
+
+JSValue ElementGetNextElementSibling(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (impl == nullptr || element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  return impl->WrapNode(ElementSiblingOf(element, +1));
+}
+
+JSValue ElementGetPreviousElementSibling(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (impl == nullptr || element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  return impl->WrapNode(ElementSiblingOf(element, -1));
+}
+
+JSValue ElementGetDataset(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (impl == nullptr || element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  // A dataset object per access; its exotic property handlers read/write the
+  // element's data-* attributes through the class's NodeWrapper opaque.
+  auto* w = new NodeWrapper{impl, element};
+  JSValue dataset = JS_NewObjectClass(ctx, g_dataset_class_id);
+  JS_SetOpaque(dataset, w);
+  return dataset;
+}
+
+JSValue ElementMatches(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "matches: not an element");
+  }
+  if (argc < 1) {
+    return JS_ThrowTypeError(ctx, "matches requires a selector");
+  }
+  bool ok = false;
+  const std::string selector = ArgString(ctx, argv[0], &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  return JS_NewBool(ctx, dom::MatchesCompoundSelector(*element, selector));
+}
+
+JSValue ElementClosest(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (impl == nullptr || element == nullptr) {
+    return JS_ThrowTypeError(ctx, "closest: not an element");
+  }
+  if (argc < 1) {
+    return JS_ThrowTypeError(ctx, "closest requires a selector");
+  }
+  bool ok = false;
+  const std::string selector = ArgString(ctx, argv[0], &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  for (dom::Element* e = element; e != nullptr; e = AsElement(e->parent())) {
+    if (dom::MatchesCompoundSelector(*e, selector)) {
+      return impl->WrapNode(e);
+    }
+  }
+  return JS_NULL;
+}
+
+JSValue ElementRemove(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr || node->parent() == nullptr) {
+    return JS_UNDEFINED;
+  }
+  std::unique_ptr<dom::Node> removed = node->parent()->RemoveChild(node);
+  impl->TakeOwnership(node, std::move(removed));
+  return JS_UNDEFINED;
+}
+
+// DOMRect.toJSON(): a plain object with the rect fields (numbers).
+JSValue RectToJson(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  JSValue out = JS_NewObject(ctx);
+  for (const char* name : {"x", "y", "left", "top", "right", "bottom", "width", "height"}) {
+    JSValue v = JS_GetPropertyStr(ctx, this_val, name);
+    JS_SetPropertyStr(ctx, out, name, v); // steals v
+  }
+  return out;
+}
+
+JSValue ElementGetBoundingClientRect(JSContext* ctx,
+                                     JSValueConst this_val,
+                                     int /*argc*/,
+                                     JSValueConst* /*argv*/)
+{
+  if (AsElement(UnwrapNode(this_val)) == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  // The binder has no layout tree, so geometry is a documented approximation:
+  // a zero rect at the origin.  Scripts that branch on visibility still work
+  // (0 is falsy for width/height), but pixel positions are not meaningful.
+  JSValue rect = JS_NewObject(ctx);
+  JS_SetPropertyStr(ctx, rect, "x", JS_NewInt32(ctx, 0));
+  JS_SetPropertyStr(ctx, rect, "y", JS_NewInt32(ctx, 0));
+  JS_SetPropertyStr(ctx, rect, "left", JS_NewInt32(ctx, 0));
+  JS_SetPropertyStr(ctx, rect, "top", JS_NewInt32(ctx, 0));
+  JS_SetPropertyStr(ctx, rect, "right", JS_NewInt32(ctx, 0));
+  JS_SetPropertyStr(ctx, rect, "bottom", JS_NewInt32(ctx, 0));
+  JS_SetPropertyStr(ctx, rect, "width", JS_NewInt32(ctx, 0));
+  JS_SetPropertyStr(ctx, rect, "height", JS_NewInt32(ctx, 0));
+  JSValue to_json = JS_NewCFunction(ctx, RectToJson, "toJSON", 0);
+  JS_SetPropertyStr(ctx, rect, "toJSON", to_json); // steals to_json
+  return rect;
+}
+
+JSValue ElementGetHidden(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  return JS_NewBool(ctx, element->HasAttribute("hidden"));
+}
+
+JSValue ElementSetHidden(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const int v = JS_ToBool(ctx, value);
+  if (v < 0) {
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return JS_EXCEPTION;
+  }
+  if (v != 0) {
+    element->SetAttribute("hidden", "");
+  } else {
+    element->RemoveAttribute("hidden");
+  }
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetTitle(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const std::optional<std::string_view> title = element->GetAttribute("title");
+  return title.has_value() ? JS_NewStringLen(ctx, title->data(), title->size())
+                           : JS_NewStringLen(ctx, "", 0);
+}
+
+JSValue ElementSetTitle(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  bool ok = false;
+  const std::string title = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  if (title.empty()) {
+    element->RemoveAttribute("title");
+  } else {
+    element->SetAttribute("title", title);
+  }
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetLang(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const std::optional<std::string_view> lang = element->GetAttribute("lang");
+  return lang.has_value() ? JS_NewStringLen(ctx, lang->data(), lang->size())
+                          : JS_NewStringLen(ctx, "", 0);
+}
+
+JSValue ElementSetLang(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  bool ok = false;
+  const std::string lang = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  if (lang.empty()) {
+    element->RemoveAttribute("lang");
+  } else {
+    element->SetAttribute("lang", lang);
+  }
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetOuterHTML(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Node* node = UnwrapNode(this_val);
+  if (node == nullptr) {
+    return JS_ThrowTypeError(ctx, "detached node");
+  }
+  const std::string out = node->ToString();
+  return JS_NewStringLen(ctx, out.data(), out.size());
+}
+
+// ---------------------------------------------------------------------------
+// Form controls / links / images.
+//
+// value/checked/type/placeholder/disabled/name apply to form controls
+// (input/textarea/select/option); href/target/rel to <a>; src/alt/width/
+// height/natural*/complete to <img> (and src to <script>).  They live on the
+// Element prototype and dispatch on the element's tag name.
+// ---------------------------------------------------------------------------
+
+// The raw attribute value, or empty string.
+std::string RawAttr(const dom::Element& element, std::string_view name)
+{
+  const std::optional<std::string_view> value = element.GetAttribute(name);
+  return value.has_value() ? std::string(value.value()) : std::string();
+}
+
+// The absolute URL for an href/src attribute (resolved against the page base
+// via the PageApis callback when wired; otherwise the raw attribute).
+std::string ResolvedUrl(const Impl& impl, const std::string& raw)
+{
+  if (impl.apis.resolve_url && !raw.empty()) {
+    const std::string resolved = impl.apis.resolve_url(raw);
+    if (!resolved.empty()) {
+      return resolved;
+    }
+  }
+  return raw;
+}
+
+bool IsFormControl(const dom::Element& element)
+{
+  const std::string_view tag = element.tag_name();
+  return tag == "input" || tag == "textarea" || tag == "select" || tag == "option" ||
+         tag == "button";
+}
+
+bool IsCheckableInput(const dom::Element& element)
+{
+  if (element.tag_name() != "input") {
+    return false;
+  }
+  const std::string type = ToLower(RawAttr(element, "type"));
+  return type == "checkbox" || type == "radio";
+}
+
+JSValue ElementGetValue(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const std::string_view tag = element->tag_name();
+  if (tag == "textarea") {
+    // value == the text content (textContent; <br> not meaningful here).
+    const std::string text = element->TextContent();
+    return JS_NewStringLen(ctx, text.data(), text.size());
+  }
+  if (tag == "option") {
+    // option.value: the value attribute, else the text content.
+    const std::string attr = RawAttr(*element, "value");
+    if (!attr.empty()) {
+      return JS_NewStringLen(ctx, attr.data(), attr.size());
+    }
+    const std::string text = element->TextContent();
+    return JS_NewStringLen(ctx, text.data(), text.size());
+  }
+  const std::string value = RawAttr(*element, "value");
+  return JS_NewStringLen(ctx, value.data(), value.size());
+}
+
+JSValue ElementSetValue(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  bool ok = false;
+  const std::string text = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  if (element->tag_name() == "textarea") {
+    // Setting value on a textarea replaces its text child.
+    while (element->first_child() != nullptr) {
+      element->RemoveChild(element->first_child());
+    }
+    if (!text.empty()) {
+      element->AppendChild(std::make_unique<dom::Text>(text));
+    }
+  } else {
+    element->SetAttribute("value", text);
+  }
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetChecked(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr || !IsCheckableInput(*element)) {
+    return JS_NewBool(ctx, false);
+  }
+  return JS_NewBool(ctx, element->HasAttribute("checked"));
+}
+
+JSValue ElementSetChecked(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr || !IsCheckableInput(*element)) {
+    return JS_UNDEFINED;
+  }
+  const int v = JS_ToBool(ctx, value);
+  if (v < 0) {
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return JS_EXCEPTION;
+  }
+  if (v != 0) {
+    element->SetAttribute("checked", "checked");
+  } else {
+    element->RemoveAttribute("checked");
+  }
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetType(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  if (element->tag_name() != "input") {
+    return JS_NewStringLen(ctx, "", 0);
+  }
+  const std::string type = RawAttr(*element, "type");
+  return JS_NewStringLen(ctx, type.data(), type.size());
+}
+
+JSValue ElementSetType(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  bool ok = false;
+  const std::string type = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  if (element->tag_name() == "input") {
+    element->SetAttribute("type", type);
+  }
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetPlaceholder(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const std::string value = RawAttr(*element, "placeholder");
+  return JS_NewStringLen(ctx, value.data(), value.size());
+}
+
+JSValue ElementSetPlaceholder(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  bool ok = false;
+  const std::string text = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  element->SetAttribute("placeholder", text);
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetDisabled(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  return JS_NewBool(ctx, element->HasAttribute("disabled"));
+}
+
+JSValue ElementSetDisabled(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const int v = JS_ToBool(ctx, value);
+  if (v < 0) {
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return JS_EXCEPTION;
+  }
+  if (v != 0) {
+    element->SetAttribute("disabled", "disabled");
+  } else {
+    element->RemoveAttribute("disabled");
+  }
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetName(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const std::string value = RawAttr(*element, "name");
+  return JS_NewStringLen(ctx, value.data(), value.size());
+}
+
+JSValue ElementSetName(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  bool ok = false;
+  const std::string text = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  element->SetAttribute("name", text);
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetHref(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (impl == nullptr || element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const std::string raw = RawAttr(*element, "href");
+  const std::string resolved = ResolvedUrl(*impl, raw);
+  return JS_NewStringLen(ctx, resolved.data(), resolved.size());
+}
+
+JSValue ElementSetHref(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  bool ok = false;
+  const std::string href = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  element->SetAttribute("href", href);
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetTarget(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const std::string value = RawAttr(*element, "target");
+  return JS_NewStringLen(ctx, value.data(), value.size());
+}
+
+JSValue ElementSetTarget(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  bool ok = false;
+  const std::string text = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  element->SetAttribute("target", text);
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetRel(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const std::string value = RawAttr(*element, "rel");
+  return JS_NewStringLen(ctx, value.data(), value.size());
+}
+
+JSValue ElementSetRel(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  bool ok = false;
+  const std::string text = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  element->SetAttribute("rel", text);
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetSrc(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (impl == nullptr || element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const std::string raw = RawAttr(*element, "src");
+  const std::string resolved = ResolvedUrl(*impl, raw);
+  return JS_NewStringLen(ctx, resolved.data(), resolved.size());
+}
+
+JSValue ElementSetSrc(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  bool ok = false;
+  const std::string src = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  element->SetAttribute("src", src);
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetAlt(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const std::string value = RawAttr(*element, "alt");
+  return JS_NewStringLen(ctx, value.data(), value.size());
+}
+
+JSValue ElementSetAlt(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  bool ok = false;
+  const std::string text = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  element->SetAttribute("alt", text);
+  return JS_UNDEFINED;
+}
+
+// Parses a non-negative integer attribute (for img width/height).
+int64_t PositiveIntAttr(const dom::Element& element, std::string_view name)
+{
+  const std::string value = RawAttr(element, name);
+  if (value.empty()) {
+    return 0;
+  }
+  int64_t out = 0;
+  for (const char c : value) {
+    if (c < '0' || c > '9') {
+      return 0;
+    }
+    out = out * 10 + (c - '0');
+  }
+  return out;
+}
+
+JSValue ElementGetWidth(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  return JS_NewInt64(ctx, PositiveIntAttr(*element, "width"));
+}
+
+JSValue ElementSetWidth(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  int32_t v = 0;
+  if (JS_ToInt32(ctx, &v, value) != 0) {
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return JS_EXCEPTION;
+  }
+  if (v < 0) {
+    v = 0;
+  }
+  element->SetAttribute("width", std::to_string(v));
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetHeight(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  return JS_NewInt64(ctx, PositiveIntAttr(*element, "height"));
+}
+
+JSValue ElementSetHeight(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  int32_t v = 0;
+  if (JS_ToInt32(ctx, &v, value) != 0) {
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return JS_EXCEPTION;
+  }
+  if (v < 0) {
+    v = 0;
+  }
+  element->SetAttribute("height", std::to_string(v));
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetNaturalWidth(JSContext* ctx, JSValueConst this_val)
+{
+  if (AsElement(UnwrapNode(this_val)) == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  // The binder does not track decoded image dimensions; 0 (a documented
+  // approximation — scripts that check naturalWidth before drawing a layout
+  // still branch correctly).
+  return JS_NewInt32(ctx, 0);
+}
+
+JSValue ElementGetNaturalHeight(JSContext* ctx, JSValueConst this_val)
+{
+  if (AsElement(UnwrapNode(this_val)) == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  return JS_NewInt32(ctx, 0);
+}
+
+JSValue ElementGetComplete(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  // complete: true once a src is present (loading is synchronous here).
+  return JS_NewBool(ctx, element->HasAttribute("src"));
+}
+
+JSValue ElementGetCurrentSrc(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (impl == nullptr || element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const std::string raw = RawAttr(*element, "src");
+  const std::string resolved = ResolvedUrl(*impl, raw);
+  return JS_NewStringLen(ctx, resolved.data(), resolved.size());
+}
+
+JSValue ElementGetText(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  if (element->tag_name() != "option") {
+    return JS_NewStringLen(ctx, "", 0);
+  }
+  const std::string text = element->TextContent();
+  return JS_NewStringLen(ctx, text.data(), text.size());
+}
+
+// ---------------------------------------------------------------------------
+// classList (DOMTokenList subset).
+//
+// A classList object is backed by the element's class attribute.  add/remove/
+// toggle/contains/replace operate on the whitespace-separated token set and
+// persist to the attribute; item/length/toString expose the current tokens.
+// ---------------------------------------------------------------------------
+
+std::vector<std::string> ClassTokens(const dom::Element& element)
+{
+  std::vector<std::string> out;
+  const std::optional<std::string_view> cls = element.GetAttribute("class");
+  if (!cls.has_value()) {
+    return out;
+  }
+  std::string current;
+  auto flush = [&]() {
+    if (!current.empty()) {
+      out.push_back(current);
+      current.clear();
+    }
+  };
+  for (const char c : cls.value()) {
+    if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+      flush();
+    } else {
+      current.push_back(c);
+    }
+  }
+  flush();
+  return out;
+}
+
+void SetClassTokens(dom::Element& element, const std::vector<std::string>& tokens)
+{
+  std::string out;
+  for (std::size_t i = 0; i < tokens.size(); ++i) {
+    if (i > 0) {
+      out += ' ';
+    }
+    out += tokens[i];
+  }
+  if (out.empty()) {
+    element.RemoveAttribute("class");
+  } else {
+    element.SetAttribute("class", out);
+  }
+}
+
+JSValue ClassListAdd(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "classList: not an element");
+  }
+  std::vector<std::string> tokens = ClassTokens(*element);
+  for (int i = 0; i < argc; ++i) {
+    bool ok = false;
+    const std::string token = ArgString(ctx, argv[i], &ok);
+    if (!ok) {
+      return JS_EXCEPTION;
+    }
+    if (token.empty()) {
+      continue;
+    }
+    bool present = false;
+    for (const std::string& t : tokens) {
+      if (t == token) {
+        present = true;
+        break;
+      }
+    }
+    if (!present) {
+      tokens.push_back(token);
+    }
+  }
+  SetClassTokens(*element, tokens);
+  return JS_UNDEFINED;
+}
+
+JSValue ClassListRemove(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "classList: not an element");
+  }
+  std::vector<std::string> tokens = ClassTokens(*element);
+  for (int i = 0; i < argc; ++i) {
+    bool ok = false;
+    const std::string token = ArgString(ctx, argv[i], &ok);
+    if (!ok) {
+      return JS_EXCEPTION;
+    }
+    tokens.erase(std::remove(tokens.begin(), tokens.end(), token), tokens.end());
+  }
+  SetClassTokens(*element, tokens);
+  return JS_UNDEFINED;
+}
+
+JSValue ClassListContains(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "classList: not an element");
+  }
+  if (argc < 1) {
+    return JS_NewBool(ctx, false);
+  }
+  bool ok = false;
+  const std::string token = ArgString(ctx, argv[0], &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  const std::vector<std::string> tokens = ClassTokens(*element);
+  for (const std::string& t : tokens) {
+    if (t == token) {
+      return JS_NewBool(ctx, true);
+    }
+  }
+  return JS_NewBool(ctx, false);
+}
+
+JSValue ClassListToggle(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "classList: not an element");
+  }
+  if (argc < 1) {
+    return JS_NewBool(ctx, false);
+  }
+  bool ok = false;
+  const std::string token = ArgString(ctx, argv[0], &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  std::vector<std::string> tokens = ClassTokens(*element);
+  const bool present = std::find(tokens.begin(), tokens.end(), token) != tokens.end();
+  // Optional |force| argument: true -> add, false -> remove.
+  if (argc >= 2) {
+    const int force = JS_ToBool(ctx, argv[1]);
+    if (force < 0) {
+      JS_FreeValue(ctx, JS_GetException(ctx));
+      return JS_EXCEPTION;
+    }
+    const bool want = force != 0;
+    const bool added = want && !present;
+    if (want && !present) {
+      tokens.push_back(token);
+    } else if (!want && present) {
+      tokens.erase(std::remove(tokens.begin(), tokens.end(), token), tokens.end());
+    }
+    SetClassTokens(*element, tokens);
+    return JS_NewBool(ctx, added);
+  }
+  if (present) {
+    tokens.erase(std::remove(tokens.begin(), tokens.end(), token), tokens.end());
+    SetClassTokens(*element, tokens);
+    return JS_NewBool(ctx, false);
+  }
+  tokens.push_back(token);
+  SetClassTokens(*element, tokens);
+  return JS_NewBool(ctx, true);
+}
+
+JSValue ClassListReplace(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "classList: not an element");
+  }
+  if (argc < 2) {
+    return JS_NewBool(ctx, false);
+  }
+  bool ok = false;
+  const std::string old_token = ArgString(ctx, argv[0], &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  const std::string new_token = ArgString(ctx, argv[1], &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  std::vector<std::string> tokens = ClassTokens(*element);
+  for (std::string& t : tokens) {
+    if (t == old_token) {
+      t = new_token;
+      SetClassTokens(*element, tokens);
+      return JS_NewBool(ctx, true);
+    }
+  }
+  return JS_NewBool(ctx, false);
+}
+
+JSValue ClassListItem(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "classList: not an element");
+  }
+  const std::vector<std::string> tokens = ClassTokens(*element);
+  int64_t index = -1;
+  if (argc >= 1) {
+    if (JS_ToInt64(ctx, &index, argv[0]) != 0) {
+      JS_FreeValue(ctx, JS_GetException(ctx));
+      return JS_EXCEPTION;
+    }
+  }
+  if (index < 0 || index >= static_cast<int64_t>(tokens.size())) {
+    return JS_NULL;
+  }
+  return JS_NewStringLen(ctx,
+                         tokens[static_cast<std::size_t>(index)].data(),
+                         tokens[static_cast<std::size_t>(index)].size());
+}
+
+JSValue ClassListGetLength(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "classList: not an element");
+  }
+  return JS_NewInt32(ctx, static_cast<int32_t>(ClassTokens(*element).size()));
+}
+
+JSValue
+ClassListToString(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "classList: not an element");
+  }
+  const std::vector<std::string> tokens = ClassTokens(*element);
+  std::string out;
+  for (std::size_t i = 0; i < tokens.size(); ++i) {
+    if (i > 0) {
+      out += ' ';
+    }
+    out += tokens[i];
+  }
+  return JS_NewStringLen(ctx, out.data(), out.size());
+}
+
+JSValue ElementGetClassList(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (impl == nullptr || element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  // Reuse the node wrapper class (NodeWrapper opaque carries the element);
+  // the classList prototype provides the DOMTokenList methods.
+  auto* w = new NodeWrapper{impl, element};
+  JSValue list = JS_NewObjectClass(ctx, g_node_class_id);
+  JS_SetOpaque(list, w);
+  JS_SetPrototype(ctx, list, impl->class_list_proto);
+  return list;
 }
 
 JSValue ElementGetInnerHTML(JSContext* ctx, JSValueConst this_val)
@@ -1468,6 +2956,245 @@ JSValue DocQuerySelectorAll(JSContext* ctx, JSValueConst this_val, int argc, JSV
   return impl->MakeElementArray(dom::QuerySelectorAll(*node, selector));
 }
 
+JSValue DocCreateDocumentFragment(JSContext* ctx,
+                                  JSValueConst this_val,
+                                  int /*argc*/,
+                                  JSValueConst* /*argv*/)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  auto fragment = std::make_unique<dom::DocumentFragment>();
+  dom::DocumentFragment* raw = fragment.get();
+  impl->created[raw] = std::move(fragment);
+  return impl->WrapNode(raw);
+}
+
+JSValue DocCreateComment(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  bool ok = false;
+  const std::string text = argc >= 1 ? ArgString(ctx, argv[0], &ok) : std::string();
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  auto comment = std::make_unique<dom::Comment>(text);
+  dom::Comment* raw = comment.get();
+  impl->created[raw] = std::move(comment);
+  return impl->WrapNode(raw);
+}
+
+JSValue DocCreateElementNS(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  // The namespace is accepted and ignored (HTML semantics; no SVG/MathML
+  // element types are distinguished).  createElementNS(ns, "svg") yields a
+  // plain element, matching the HTML parser's behavior for unknown tags.
+  if (argc < 2) {
+    return JS_ThrowTypeError(ctx, "createElementNS requires (namespace, tagName)");
+  }
+  return DocCreateElement(ctx, this_val, 1, &argv[1]);
+}
+
+// All elements with the given tag name, in document order.
+std::vector<dom::Element*> CollectByTag(const dom::Node& root, std::string_view tag)
+{
+  std::vector<dom::Element*> out;
+  for (dom::Node* child : root.ChildNodes()) {
+    if (dom::Element* el = AsElement(child)) {
+      if (el->tag_name() == tag) {
+        out.push_back(el);
+      }
+      std::vector<dom::Element*> nested = CollectByTag(*el, tag);
+      out.insert(out.end(), nested.begin(), nested.end());
+    }
+  }
+  return out;
+}
+
+// All elements carrying |cls| (exact token match) in document order.
+std::vector<dom::Element*> CollectByClass(const dom::Node& root, std::string_view cls)
+{
+  std::vector<dom::Element*> out;
+  for (dom::Node* child : root.ChildNodes()) {
+    if (dom::Element* el = AsElement(child)) {
+      for (const std::string_view token : el->ClassList()) {
+        if (token == cls) {
+          out.push_back(el);
+          break;
+        }
+      }
+      std::vector<dom::Element*> nested = CollectByClass(*el, cls);
+      out.insert(out.end(), nested.begin(), nested.end());
+    }
+  }
+  return out;
+}
+
+JSValue DocGetElementsByTagName(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  if (argc < 1) {
+    return impl->MakeElementArray({});
+  }
+  bool ok = false;
+  const std::string tag = ToLower(ArgString(ctx, argv[0], &ok));
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  // "*" matches every element.
+  if (tag == "*") {
+    std::vector<dom::Element*> all;
+    std::function<void(const dom::Node&)> walk = [&](const dom::Node& n) {
+      for (dom::Node* c : n.ChildNodes()) {
+        if (dom::Element* el = AsElement(c)) {
+          all.push_back(el);
+          walk(*el);
+        }
+      }
+    };
+    walk(*node);
+    return impl->MakeElementArray(all);
+  }
+  return impl->MakeElementArray(CollectByTag(*node, tag));
+}
+
+JSValue
+DocGetElementsByClassName(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  if (argc < 1) {
+    return impl->MakeElementArray({});
+  }
+  bool ok = false;
+  const std::string cls = ArgString(ctx, argv[0], &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  return impl->MakeElementArray(CollectByClass(*node, cls));
+}
+
+// The current document URL (from the PageApis location callback when wired).
+std::string DocumentUrl(const Impl& impl)
+{
+  if (impl.apis.location_href) {
+    const std::string url = impl.apis.location_href();
+    if (!url.empty()) {
+      return url;
+    }
+  }
+  return std::string();
+}
+
+JSValue DocGetURL(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  const std::string url = DocumentUrl(*impl);
+  return JS_NewStringLen(ctx, url.data(), url.size());
+}
+
+JSValue DocGetBaseURI(JSContext* ctx, JSValueConst this_val)
+{
+  return DocGetURL(ctx, this_val);
+}
+
+JSValue DocGetDocumentURI(JSContext* ctx, JSValueConst this_val)
+{
+  return DocGetURL(ctx, this_val);
+}
+
+JSValue DocGetCharacterSet(JSContext* ctx, JSValueConst this_val)
+{
+  if (ImplFor(ctx, this_val) == nullptr) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  return JS_NewString(ctx, "UTF-8");
+}
+
+JSValue DocGetContentType(JSContext* ctx, JSValueConst this_val)
+{
+  if (ImplFor(ctx, this_val) == nullptr) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  return JS_NewString(ctx, "text/html");
+}
+
+JSValue DocGetReferrer(JSContext* ctx, JSValueConst this_val)
+{
+  if (ImplFor(ctx, this_val) == nullptr) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  return JS_NewString(ctx, "");
+}
+
+JSValue DocGetForms(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  return impl->MakeElementArray(CollectByTag(*node, "form"));
+}
+
+JSValue DocGetImages(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  return impl->MakeElementArray(CollectByTag(*node, "img"));
+}
+
+JSValue DocGetScripts(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  return impl->MakeElementArray(CollectByTag(*node, "script"));
+}
+
+JSValue DocGetLinks(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  // document.links: <a> and <area> elements with an href.
+  std::vector<dom::Element*> out;
+  std::function<void(const dom::Node&)> walk = [&](const dom::Node& n) {
+    for (dom::Node* c : n.ChildNodes()) {
+      if (dom::Element* el = AsElement(c)) {
+        const std::string_view tag = el->tag_name();
+        if ((tag == "a" || tag == "area") && el->HasAttribute("href")) {
+          out.push_back(el);
+        }
+        walk(*el);
+      }
+    }
+  };
+  walk(*node);
+  return impl->MakeElementArray(out);
+}
+
 // ---------------------------------------------------------------------------
 // CSSStyleDeclaration methods and accessors.
 // ---------------------------------------------------------------------------
@@ -1701,19 +3428,267 @@ JSValue WindowDispatchEvent(JSContext* ctx, JSValueConst this_val, int argc, JSV
 }
 
 // ---------------------------------------------------------------------------
+// Event objects.
+//
+// `new Event(type, {bubbles, cancelable})` creates a real Event whose
+// prototype exposes type/target/currentTarget/bubbles/cancelable/
+// defaultPrevented/eventPhase/timeStamp and the standard methods.  Events
+// created internally by a dispatch (including plain {type: ...} shortcuts)
+// carry the same state.  The mutable dispatch state lives in the opaque
+// EventWrapper; target/currentTarget are regular properties on the object.
+// ---------------------------------------------------------------------------
+
+// Event constants (DOM standard).
+static constexpr int kEventNone = 0;
+static constexpr int kEventCapturing = 1;
+static constexpr int kEventAtTarget = 2;
+static constexpr int kEventBubbling = 3;
+
+JSValue EventConstructor(JSContext* ctx, JSValueConst /*this_val*/, int argc, JSValueConst* argv)
+{
+  // The Event constructor has no node wrapper on |this|; ImplFor falls back
+  // to the ctx -> Impl registry.
+  Impl* impl = ImplFor(ctx, JS_UNDEFINED);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  bool ok = false;
+  const std::string type = argc >= 1 ? ArgString(ctx, argv[0], &ok) : std::string();
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  bool bubbles = false;
+  bool cancelable = false;
+  if (argc >= 2 && JS_IsObject(argv[1])) {
+    JSValue b = JS_GetPropertyStr(ctx, argv[1], "bubbles");
+    if (JS_IsBool(b)) {
+      const int v = JS_ToBool(ctx, b);
+      if (v < 0) {
+        JS_FreeValue(ctx, b);
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        return JS_EXCEPTION;
+      }
+      bubbles = v != 0;
+    }
+    JS_FreeValue(ctx, b);
+    JSValue c = JS_GetPropertyStr(ctx, argv[1], "cancelable");
+    if (JS_IsBool(c)) {
+      const int v = JS_ToBool(ctx, c);
+      if (v < 0) {
+        JS_FreeValue(ctx, c);
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        return JS_EXCEPTION;
+      }
+      cancelable = v != 0;
+    }
+    JS_FreeValue(ctx, c);
+  }
+  return impl->MakeEvent(type, bubbles, cancelable);
+}
+
+JSValue EventGetType(JSContext* ctx, JSValueConst this_val)
+{
+  EventWrapper* w = UnwrapEvent(this_val);
+  if (w == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an Event");
+  }
+  return JS_NewStringLen(ctx, w->type.data(), w->type.size());
+}
+
+JSValue EventGetTarget(JSContext* ctx, JSValueConst this_val)
+{
+  EventWrapper* w = UnwrapEvent(this_val);
+  if (w == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an Event");
+  }
+  return !JS_IsUndefined(w->target) ? JS_DupValue(ctx, w->target) : JS_NULL;
+}
+
+JSValue EventGetCurrentTarget(JSContext* ctx, JSValueConst this_val)
+{
+  EventWrapper* w = UnwrapEvent(this_val);
+  if (w == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an Event");
+  }
+  return !JS_IsUndefined(w->current_target) ? JS_DupValue(ctx, w->current_target) : JS_NULL;
+}
+
+JSValue EventGetBubbles(JSContext* ctx, JSValueConst this_val)
+{
+  EventWrapper* w = UnwrapEvent(this_val);
+  if (w == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an Event");
+  }
+  return JS_NewBool(ctx, w->bubbles);
+}
+
+JSValue EventGetCancelable(JSContext* ctx, JSValueConst this_val)
+{
+  EventWrapper* w = UnwrapEvent(this_val);
+  if (w == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an Event");
+  }
+  return JS_NewBool(ctx, w->cancelable);
+}
+
+JSValue EventGetDefaultPrevented(JSContext* ctx, JSValueConst this_val)
+{
+  EventWrapper* w = UnwrapEvent(this_val);
+  if (w == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an Event");
+  }
+  return JS_NewBool(ctx, w->default_prevented);
+}
+
+JSValue EventGetEventPhase(JSContext* ctx, JSValueConst this_val)
+{
+  EventWrapper* w = UnwrapEvent(this_val);
+  if (w == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an Event");
+  }
+  return JS_NewInt32(ctx, w->event_phase);
+}
+
+JSValue EventGetTimeStamp(JSContext* ctx, JSValueConst this_val)
+{
+  if (UnwrapEvent(this_val) == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an Event");
+  }
+  // A documented simplification: timeStamp is the time of the getter call.
+  return JS_NewFloat64(ctx, static_cast<double>(std::time(nullptr)) * 1000.0);
+}
+
+JSValue EventGetIsTrusted(JSContext* ctx, JSValueConst this_val)
+{
+  if (UnwrapEvent(this_val) == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an Event");
+  }
+  return JS_FALSE;
+}
+
+JSValue
+EventPreventDefault(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  EventWrapper* w = UnwrapEvent(this_val);
+  if (w == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an Event");
+  }
+  if (w->cancelable) {
+    w->default_prevented = true;
+  }
+  return JS_UNDEFINED;
+}
+
+JSValue
+EventStopPropagation(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  EventWrapper* w = UnwrapEvent(this_val);
+  if (w == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an Event");
+  }
+  w->propagation_stopped = true;
+  return JS_UNDEFINED;
+}
+
+JSValue EventStopImmediatePropagation(JSContext* ctx,
+                                      JSValueConst this_val,
+                                      int /*argc*/,
+                                      JSValueConst* /*argv*/)
+{
+  EventWrapper* w = UnwrapEvent(this_val);
+  if (w == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an Event");
+  }
+  w->propagation_stopped = true;
+  w->immediate_stopped = true;
+  return JS_UNDEFINED;
+}
+
+JSValue
+EventComposedPath(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  EventWrapper* w = UnwrapEvent(this_val);
+  if (impl == nullptr || w == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an Event");
+  }
+  dom::Node* node = !JS_IsUndefined(w->target) ? UnwrapNode(w->target) : nullptr;
+  std::vector<dom::Node*> path;
+  for (dom::Node* p = node; p != nullptr; p = p->parent()) {
+    path.push_back(p);
+  }
+  // composedPath() returns root -> target.
+  std::vector<dom::Node*> reversed;
+  reversed.reserve(path.size());
+  for (auto it = path.rbegin(); it != path.rend(); ++it) {
+    reversed.push_back(*it);
+  }
+  return impl->MakeNodeArray(reversed);
+}
+
+void DefineEventPrototype(JSContext* ctx, Impl& impl)
+{
+  static const std::array<JSCFunctionListEntry, 4> kMethods = {{
+      JS_CFUNC_DEF("preventDefault", 0, EventPreventDefault),
+      JS_CFUNC_DEF("stopPropagation", 0, EventStopPropagation),
+      JS_CFUNC_DEF("stopImmediatePropagation", 0, EventStopImmediatePropagation),
+      JS_CFUNC_DEF("composedPath", 0, EventComposedPath),
+  }};
+  JS_SetPropertyFunctionList(
+      ctx, impl.event_proto, kMethods.data(), static_cast<int>(kMethods.size()));
+
+  DefineGetter(ctx, impl.event_proto, "type", MakeGetter(ctx, "type", EventGetType));
+  DefineGetter(ctx, impl.event_proto, "target", MakeGetter(ctx, "target", EventGetTarget));
+  DefineGetter(ctx,
+               impl.event_proto,
+               "currentTarget",
+               MakeGetter(ctx, "currentTarget", EventGetCurrentTarget));
+  DefineGetter(ctx, impl.event_proto, "bubbles", MakeGetter(ctx, "bubbles", EventGetBubbles));
+  DefineGetter(
+      ctx, impl.event_proto, "cancelable", MakeGetter(ctx, "cancelable", EventGetCancelable));
+  DefineGetter(ctx,
+               impl.event_proto,
+               "defaultPrevented",
+               MakeGetter(ctx, "defaultPrevented", EventGetDefaultPrevented));
+  DefineGetter(
+      ctx, impl.event_proto, "eventPhase", MakeGetter(ctx, "eventPhase", EventGetEventPhase));
+  DefineGetter(ctx, impl.event_proto, "timeStamp", MakeGetter(ctx, "timeStamp", EventGetTimeStamp));
+  DefineGetter(ctx, impl.event_proto, "isTrusted", MakeGetter(ctx, "isTrusted", EventGetIsTrusted));
+}
+
+void DefineClassListPrototype(JSContext* ctx, Impl& impl)
+{
+  static const std::array<JSCFunctionListEntry, 7> kMethods = {{
+      JS_CFUNC_DEF("add", 1, ClassListAdd),
+      JS_CFUNC_DEF("remove", 1, ClassListRemove),
+      JS_CFUNC_DEF("toggle", 1, ClassListToggle),
+      JS_CFUNC_DEF("contains", 1, ClassListContains),
+      JS_CFUNC_DEF("replace", 2, ClassListReplace),
+      JS_CFUNC_DEF("item", 1, ClassListItem),
+      JS_CFUNC_DEF("toString", 0, ClassListToString),
+  }};
+  JS_SetPropertyFunctionList(
+      ctx, impl.class_list_proto, kMethods.data(), static_cast<int>(kMethods.size()));
+  DefineGetter(ctx, impl.class_list_proto, "length", MakeGetter(ctx, "length", ClassListGetLength));
+}
+
+// ---------------------------------------------------------------------------
 // Prototype construction.
 // ---------------------------------------------------------------------------
 
 void DefineNodePrototype(JSContext* ctx, Impl& impl)
 {
-  static const std::array<JSCFunctionListEntry, 10> kMethods = {{
+  static const std::array<JSCFunctionListEntry, 13> kMethods = {{
       JS_CFUNC_DEF("appendChild", 1, NodeAppendChild),
       JS_CFUNC_DEF("append", 0, NodeAppend),
       JS_CFUNC_DEF("replaceChildren", 0, NodeReplaceChildren),
       JS_CFUNC_DEF("insertBefore", 2, NodeInsertBefore),
+      JS_CFUNC_DEF("replaceChild", 2, NodeReplaceChild),
       JS_CFUNC_DEF("removeChild", 1, NodeRemoveChild),
       JS_CFUNC_DEF("hasChildNodes", 0, NodeHasChildNodes),
       JS_CFUNC_DEF("cloneNode", 1, NodeCloneNode),
+      JS_CFUNC_DEF("contains", 1, NodeContains),
+      JS_CFUNC_DEF("normalize", 0, NodeNormalize),
       JS_CFUNC_DEF("addEventListener", 2, NodeAddEventListener),
       JS_CFUNC_DEF("removeEventListener", 2, NodeRemoveEventListener),
       JS_CFUNC_DEF("dispatchEvent", 1, NodeDispatchEvent),
@@ -1730,16 +3705,32 @@ void DefineNodePrototype(JSContext* ctx, Impl& impl)
                  MakeSetter(ctx, "textContent", NodeSetTextContent));
   DefineGetter(
       ctx, impl.node_proto, "parentNode", MakeGetter(ctx, "parentNode", NodeGetParentNode));
+  DefineGetter(ctx,
+               impl.node_proto,
+               "parentElement",
+               MakeGetter(ctx, "parentElement", NodeGetParentElement));
   DefineGetter(
       ctx, impl.node_proto, "firstChild", MakeGetter(ctx, "firstChild", NodeGetFirstChild));
   DefineGetter(ctx, impl.node_proto, "lastChild", MakeGetter(ctx, "lastChild", NodeGetLastChild));
   DefineGetter(
       ctx, impl.node_proto, "childNodes", MakeGetter(ctx, "childNodes", NodeGetChildNodes));
+  DefineGetter(
+      ctx, impl.node_proto, "nextSibling", MakeGetter(ctx, "nextSibling", NodeGetNextSibling));
+  DefineGetter(ctx,
+               impl.node_proto,
+               "previousSibling",
+               MakeGetter(ctx, "previousSibling", NodeGetPreviousSibling));
+  DefineGetter(ctx,
+               impl.node_proto,
+               "ownerDocument",
+               MakeGetter(ctx, "ownerDocument", NodeGetOwnerDocument));
+  DefineGetter(
+      ctx, impl.node_proto, "isConnected", MakeGetter(ctx, "isConnected", NodeGetIsConnected));
 }
 
 void DefineElementPrototype(JSContext* ctx, Impl& impl)
 {
-  static const std::array<JSCFunctionListEntry, 8> kMethods = {{
+  static const std::array<JSCFunctionListEntry, 12> kMethods = {{
       JS_CFUNC_DEF("getAttribute", 1, ElementGetAttribute),
       JS_CFUNC_DEF("setAttribute", 2, ElementSetAttribute),
       JS_CFUNC_DEF("removeAttribute", 1, ElementRemoveAttribute),
@@ -1748,6 +3739,10 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
       JS_CFUNC_DEF("querySelectorAll", 1, ElementQuerySelectorAll),
       JS_CFUNC_DEF("getElementsByTagName", 1, ElementGetElementsByTagName),
       JS_CFUNC_DEF("getElementsByClassName", 1, ElementGetElementsByClassName),
+      JS_CFUNC_DEF("matches", 1, ElementMatches),
+      JS_CFUNC_DEF("closest", 1, ElementClosest),
+      JS_CFUNC_DEF("remove", 0, ElementRemove),
+      JS_CFUNC_DEF("getBoundingClientRect", 0, ElementGetBoundingClientRect),
   }};
   JS_SetPropertyFunctionList(
       ctx, impl.element_proto, kMethods.data(), static_cast<int>(kMethods.size()));
@@ -1771,22 +3766,143 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
                impl.element_proto,
                "firstElementChild",
                MakeGetter(ctx, "firstElementChild", ElementGetFirstElementChild));
+  DefineGetter(ctx,
+               impl.element_proto,
+               "lastElementChild",
+               MakeGetter(ctx, "lastElementChild", ElementGetLastElementChild));
+  DefineGetter(ctx,
+               impl.element_proto,
+               "nextElementSibling",
+               MakeGetter(ctx, "nextElementSibling", ElementGetNextElementSibling));
+  DefineGetter(ctx,
+               impl.element_proto,
+               "previousElementSibling",
+               MakeGetter(ctx, "previousElementSibling", ElementGetPreviousElementSibling));
   DefineAccessor(ctx,
                  impl.element_proto,
                  "innerHTML",
                  MakeGetter(ctx, "innerHTML", ElementGetInnerHTML),
                  MakeSetter(ctx, "innerHTML", ElementSetInnerHTML));
+  DefineGetter(
+      ctx, impl.element_proto, "outerHTML", MakeGetter(ctx, "outerHTML", ElementGetOuterHTML));
   DefineGetter(ctx, impl.element_proto, "style", MakeGetter(ctx, "style", ElementGetStyle));
+  DefineGetter(
+      ctx, impl.element_proto, "classList", MakeGetter(ctx, "classList", ElementGetClassList));
+  DefineGetter(ctx, impl.element_proto, "dataset", MakeGetter(ctx, "dataset", ElementGetDataset));
+  DefineAccessor(ctx,
+                 impl.element_proto,
+                 "hidden",
+                 MakeGetter(ctx, "hidden", ElementGetHidden),
+                 MakeSetter(ctx, "hidden", ElementSetHidden));
+  DefineAccessor(ctx,
+                 impl.element_proto,
+                 "title",
+                 MakeGetter(ctx, "title", ElementGetTitle),
+                 MakeSetter(ctx, "title", ElementSetTitle));
+  DefineAccessor(ctx,
+                 impl.element_proto,
+                 "lang",
+                 MakeGetter(ctx, "lang", ElementGetLang),
+                 MakeSetter(ctx, "lang", ElementSetLang));
+
+  // Form controls (input/textarea/select/option/button).
+  DefineAccessor(ctx,
+                 impl.element_proto,
+                 "value",
+                 MakeGetter(ctx, "value", ElementGetValue),
+                 MakeSetter(ctx, "value", ElementSetValue));
+  DefineAccessor(ctx,
+                 impl.element_proto,
+                 "checked",
+                 MakeGetter(ctx, "checked", ElementGetChecked),
+                 MakeSetter(ctx, "checked", ElementSetChecked));
+  DefineAccessor(ctx,
+                 impl.element_proto,
+                 "type",
+                 MakeGetter(ctx, "type", ElementGetType),
+                 MakeSetter(ctx, "type", ElementSetType));
+  DefineAccessor(ctx,
+                 impl.element_proto,
+                 "placeholder",
+                 MakeGetter(ctx, "placeholder", ElementGetPlaceholder),
+                 MakeSetter(ctx, "placeholder", ElementSetPlaceholder));
+  DefineAccessor(ctx,
+                 impl.element_proto,
+                 "disabled",
+                 MakeGetter(ctx, "disabled", ElementGetDisabled),
+                 MakeSetter(ctx, "disabled", ElementSetDisabled));
+  DefineAccessor(ctx,
+                 impl.element_proto,
+                 "name",
+                 MakeGetter(ctx, "name", ElementGetName),
+                 MakeSetter(ctx, "name", ElementSetName));
+  // Links (<a>).
+  DefineAccessor(ctx,
+                 impl.element_proto,
+                 "href",
+                 MakeGetter(ctx, "href", ElementGetHref),
+                 MakeSetter(ctx, "href", ElementSetHref));
+  DefineAccessor(ctx,
+                 impl.element_proto,
+                 "target",
+                 MakeGetter(ctx, "target", ElementGetTarget),
+                 MakeSetter(ctx, "target", ElementSetTarget));
+  DefineAccessor(ctx,
+                 impl.element_proto,
+                 "rel",
+                 MakeGetter(ctx, "rel", ElementGetRel),
+                 MakeSetter(ctx, "rel", ElementSetRel));
+  // Images (<img>) and script src.
+  DefineAccessor(ctx,
+                 impl.element_proto,
+                 "src",
+                 MakeGetter(ctx, "src", ElementGetSrc),
+                 MakeSetter(ctx, "src", ElementSetSrc));
+  DefineAccessor(ctx,
+                 impl.element_proto,
+                 "currentSrc",
+                 MakeGetter(ctx, "currentSrc", ElementGetCurrentSrc),
+                 MakeSetter(ctx, "currentSrc", ElementSetSrc));
+  DefineAccessor(ctx,
+                 impl.element_proto,
+                 "alt",
+                 MakeGetter(ctx, "alt", ElementGetAlt),
+                 MakeSetter(ctx, "alt", ElementSetAlt));
+  DefineAccessor(ctx,
+                 impl.element_proto,
+                 "width",
+                 MakeGetter(ctx, "width", ElementGetWidth),
+                 MakeSetter(ctx, "width", ElementSetWidth));
+  DefineAccessor(ctx,
+                 impl.element_proto,
+                 "height",
+                 MakeGetter(ctx, "height", ElementGetHeight),
+                 MakeSetter(ctx, "height", ElementSetHeight));
+  DefineGetter(ctx,
+               impl.element_proto,
+               "naturalWidth",
+               MakeGetter(ctx, "naturalWidth", ElementGetNaturalWidth));
+  DefineGetter(ctx,
+               impl.element_proto,
+               "naturalHeight",
+               MakeGetter(ctx, "naturalHeight", ElementGetNaturalHeight));
+  DefineGetter(
+      ctx, impl.element_proto, "complete", MakeGetter(ctx, "complete", ElementGetComplete));
 }
 
 void DefineDocumentPrototype(JSContext* ctx, Impl& impl)
 {
-  static const std::array<JSCFunctionListEntry, 5> kMethods = {{
+  static const std::array<JSCFunctionListEntry, 10> kMethods = {{
       JS_CFUNC_DEF("getElementById", 1, DocGetElementById),
       JS_CFUNC_DEF("createElement", 1, DocCreateElement),
+      JS_CFUNC_DEF("createElementNS", 2, DocCreateElementNS),
       JS_CFUNC_DEF("createTextNode", 1, DocCreateTextNode),
+      JS_CFUNC_DEF("createDocumentFragment", 0, DocCreateDocumentFragment),
+      JS_CFUNC_DEF("createComment", 1, DocCreateComment),
       JS_CFUNC_DEF("querySelector", 1, DocQuerySelector),
       JS_CFUNC_DEF("querySelectorAll", 1, DocQuerySelectorAll),
+      JS_CFUNC_DEF("getElementsByTagName", 1, DocGetElementsByTagName),
+      JS_CFUNC_DEF("getElementsByClassName", 1, DocGetElementsByClassName),
   }};
   JS_SetPropertyFunctionList(
       ctx, impl.document_proto, kMethods.data(), static_cast<int>(kMethods.size()));
@@ -1804,6 +3920,21 @@ void DefineDocumentPrototype(JSContext* ctx, Impl& impl)
                  "title",
                  MakeGetter(ctx, "title", DocGetTitle),
                  MakeSetter(ctx, "title", DocSetTitle));
+  DefineGetter(ctx, impl.document_proto, "URL", MakeGetter(ctx, "URL", DocGetURL));
+  DefineGetter(ctx, impl.document_proto, "baseURI", MakeGetter(ctx, "baseURI", DocGetBaseURI));
+  DefineGetter(
+      ctx, impl.document_proto, "documentURI", MakeGetter(ctx, "documentURI", DocGetDocumentURI));
+  DefineGetter(ctx,
+               impl.document_proto,
+               "characterSet",
+               MakeGetter(ctx, "characterSet", DocGetCharacterSet));
+  DefineGetter(
+      ctx, impl.document_proto, "contentType", MakeGetter(ctx, "contentType", DocGetContentType));
+  DefineGetter(ctx, impl.document_proto, "referrer", MakeGetter(ctx, "referrer", DocGetReferrer));
+  DefineGetter(ctx, impl.document_proto, "forms", MakeGetter(ctx, "forms", DocGetForms));
+  DefineGetter(ctx, impl.document_proto, "images", MakeGetter(ctx, "images", DocGetImages));
+  DefineGetter(ctx, impl.document_proto, "links", MakeGetter(ctx, "links", DocGetLinks));
+  DefineGetter(ctx, impl.document_proto, "scripts", MakeGetter(ctx, "scripts", DocGetScripts));
 }
 
 void DefineStylePrototype(JSContext* ctx, Impl& impl)
@@ -2310,6 +4441,250 @@ JSValue JsFetch(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* a
   return ResolvePromise(ctx, resp);
 }
 
+// ---------------------------------------------------------------------------
+// Window extensions: requestAnimationFrame, scrolling, history,
+// performance.now(), getComputedStyle.
+// ---------------------------------------------------------------------------
+
+JSValue
+WindowRequestAnimationFrame(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  if (argc < 1 || !JS_IsFunction(ctx, argv[0])) {
+    return JS_ThrowTypeError(ctx, "requestAnimationFrame requires a callback");
+  }
+  Impl::RafEntry entry;
+  entry.id = impl->next_raf_id++;
+  entry.callback = JS_DupValue(ctx, argv[0]);
+  const int64_t id = entry.id;
+  impl->raf_queue.push_back(std::move(entry));
+  return JS_NewInt64(ctx, id);
+}
+
+JSValue
+WindowCancelAnimationFrame(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_UNDEFINED;
+  }
+  int64_t id = 0;
+  if (argc >= 1) {
+    if (JS_ToInt64(ctx, &id, argv[0]) != 0) {
+      JS_FreeValue(ctx, JS_GetException(ctx));
+      return JS_UNDEFINED;
+    }
+  }
+  auto erase_by_id = [&](std::vector<Impl::RafEntry>& v) {
+    for (auto it = v.begin(); it != v.end(); ++it) {
+      if (it->id == id) {
+        JS_FreeValue(ctx, it->callback);
+        v.erase(it);
+        break;
+      }
+    }
+  };
+  erase_by_id(impl->raf_queue);
+  erase_by_id(impl->raf_pending);
+  return JS_UNDEFINED;
+}
+
+JSValue WindowScrollTo(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  if (ImplFor(ctx, this_val) == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  // The page viewport is managed by the GUI scroll area; script-initiated
+  // window scrolling is a no-op (documented).
+  return JS_UNDEFINED;
+}
+
+JSValue WindowScrollBy(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  if (ImplFor(ctx, this_val) == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  return JS_UNDEFINED;
+}
+
+JSValue HistoryBack(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  if (ImplFor(ctx, this_val) == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  // Script-driven history traversal is not wired to the browser navigation
+  // stack; no-op (documented).
+  return JS_UNDEFINED;
+}
+
+JSValue HistoryForward(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  if (ImplFor(ctx, this_val) == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  return JS_UNDEFINED;
+}
+
+JSValue HistoryGo(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  if (ImplFor(ctx, this_val) == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  return JS_UNDEFINED;
+}
+
+JSValue
+HistoryPushState(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  if (ImplFor(ctx, this_val) == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  // pushState/replaceState are accepted but do not change the URL (the
+  // navigation stack is not exposed to scripts); documented.
+  return JS_UNDEFINED;
+}
+
+JSValue
+HistoryReplaceState(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  if (ImplFor(ctx, this_val) == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  return JS_UNDEFINED;
+}
+
+JSValue HistoryGetLength(JSContext* ctx, JSValueConst this_val)
+{
+  if (ImplFor(ctx, this_val) == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  // The script-visible session history has exactly one entry (the current
+  // document); the browser back/forward stack is separate.
+  return JS_NewInt32(ctx, 1);
+}
+
+JSValue PerformanceNow(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  const auto elapsed = std::chrono::steady_clock::now() - impl->performance_origin;
+  return JS_NewFloat64(ctx, std::chrono::duration<double, std::milli>(elapsed).count());
+}
+
+// ---------------------------------------------------------------------------
+// window.getComputedStyle(element).
+//
+// Returns an object with getPropertyValue(name) plus camelCase accessors for
+// every property the style engine reports.  The computed values come from the
+// browser layer's PageApis::computed_style callback (serialized px strings);
+// without it, an empty object is returned.
+// ---------------------------------------------------------------------------
+
+JSValue
+ComputedStyleGetPropertyValue(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  JSValue map = JS_GetPropertyStr(ctx, this_val, "__props__");
+  if (JS_IsUndefined(map)) {
+    return JS_NewString(ctx, "");
+  }
+  if (argc < 1) {
+    JS_FreeValue(ctx, map);
+    return JS_NewString(ctx, "");
+  }
+  bool ok = false;
+  const std::string prop = ToLower(ArgString(ctx, argv[0], &ok));
+  if (!ok) {
+    JS_FreeValue(ctx, map);
+    return JS_EXCEPTION;
+  }
+  JSValue v = JS_GetPropertyStr(ctx, map, prop.c_str());
+  JS_FreeValue(ctx, map);
+  if (JS_IsUndefined(v)) {
+    return JS_NewString(ctx, "");
+  }
+  return v;
+}
+
+// Direct camelCase accessor: func_data[0] is the kebab-case property name.
+JSValue ComputedStyleGetByName(JSContext* ctx,
+                               JSValueConst this_val,
+                               int /*argc*/,
+                               JSValueConst* /*argv*/,
+                               int /*magic*/,
+                               JSValueConst* func_data)
+{
+  JSValue map = JS_GetPropertyStr(ctx, this_val, "__props__");
+  if (JS_IsUndefined(map)) {
+    return JS_NewString(ctx, "");
+  }
+  const char* name = JS_ToCString(ctx, func_data[0]);
+  JSValue v = name != nullptr ? JS_GetPropertyStr(ctx, map, name) : JS_UNDEFINED;
+  if (name != nullptr) {
+    JS_FreeCString(ctx, name);
+  }
+  JS_FreeValue(ctx, map);
+  if (JS_IsUndefined(v)) {
+    return JS_NewString(ctx, "");
+  }
+  return v;
+}
+
+// Converts "background-color" to "backgroundColor".
+std::string PropToCamel(std::string_view prop)
+{
+  std::string camel;
+  bool upper = false;
+  for (const char c : prop) {
+    if (c == '-') {
+      upper = true;
+      continue;
+    }
+    camel.push_back(upper ? static_cast<char>(std::toupper(static_cast<unsigned char>(c))) : c);
+    upper = false;
+  }
+  return camel;
+}
+
+JSValue WindowGetComputedStyle(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = argc >= 1 ? AsElement(UnwrapNode(argv[0])) : nullptr;
+  if (impl == nullptr || element == nullptr) {
+    return JS_ThrowTypeError(ctx, "getComputedStyle requires an element");
+  }
+  std::map<std::string, std::string> props;
+  if (impl->apis.computed_style) {
+    props = impl->apis.computed_style(*element);
+  }
+  // The property map (kebab-case keys) is stored as a hidden property so
+  // both getPropertyValue() and the camelCase accessors can read it.
+  JSValue map = JS_NewObject(ctx);
+  for (const auto& [name, value] : props) {
+    JS_SetPropertyStr(ctx, map, name.c_str(), JS_NewString(ctx, value.c_str()));
+  }
+  JSValue style = JS_NewObject(ctx);
+  JS_DefinePropertyValueStr(ctx, style, "__props__", JS_DupValue(ctx, map), JS_PROP_C_W_E);
+  JSValue get_prop = JS_NewCFunction(ctx, ComputedStyleGetPropertyValue, "getPropertyValue", 1);
+  JS_SetPropertyStr(ctx, style, "getPropertyValue", get_prop); // steals
+  for (const auto& [name, value] : props) {
+    (void)value;
+    const std::string camel = PropToCamel(name);
+    // The getter closure captures the kebab-case property name.
+    JSValue name_data = JS_NewString(ctx, name.c_str());
+    JSValue getter = JS_NewCFunctionData(ctx, ComputedStyleGetByName, 0, 0, 1, &name_data);
+    // DefineGetter (JS_DefinePropertyGetSet) steals the getter reference.
+    DefineGetter(ctx, style, camel.c_str(), getter);
+    JS_FreeValue(ctx, name_data);
+  }
+  JS_FreeValue(ctx, map);
+  return style;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -2337,6 +4712,34 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
     }
   }
   {
+    std::lock_guard<std::mutex> lock(g_event_class_mutex);
+    JS_NewClassID(rt, &g_event_class_id);
+    if (g_event_class_registered.find(rt) == g_event_class_registered.end()) {
+      JSClassDef def;
+      std::memset(&def, 0, sizeof(def));
+      def.class_name = "Event";
+      def.finalizer = &EventFinalizer;
+      JS_NewClass(rt, g_event_class_id, &def);
+      g_event_class_registered.insert(rt);
+    }
+  }
+  {
+    std::lock_guard<std::mutex> lock(g_dataset_class_mutex);
+    JS_NewClassID(rt, &g_dataset_class_id);
+    if (g_dataset_class_registered.find(rt) == g_dataset_class_registered.end()) {
+      g_dataset_exotic.get_property = &DatasetGetProperty;
+      g_dataset_exotic.set_property = &DatasetSetProperty;
+      g_dataset_exotic.get_own_property_names = &DatasetGetOwnPropertyNames;
+      JSClassDef def;
+      std::memset(&def, 0, sizeof(def));
+      def.class_name = "DOMStringMap";
+      def.finalizer = &DatasetFinalizer;
+      def.exotic = &g_dataset_exotic;
+      JS_NewClass(rt, g_dataset_class_id, &def);
+      g_dataset_class_registered.insert(rt);
+    }
+  }
+  {
     std::lock_guard<std::mutex> lock(g_ctx_mutex);
     g_ctx_to_impl[ctx] = this;
   }
@@ -2349,11 +4752,15 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   document_proto = JS_NewObjectProto(ctx, node_proto);
   fragment_proto = JS_NewObjectProto(ctx, node_proto);
   style_proto = JS_NewObject(ctx);
+  event_proto = JS_NewObject(ctx);
+  class_list_proto = JS_NewObject(ctx);
 
   DefineNodePrototype(ctx, *this);
   DefineElementPrototype(ctx, *this);
   DefineDocumentPrototype(ctx, *this);
   DefineStylePrototype(ctx, *this);
+  DefineEventPrototype(ctx, *this);
+  DefineClassListPrototype(ctx, *this);
 
   // Global scope: document, window, timers, DOM interface constructors.
   JSValue global = JS_GetGlobalObject(ctx);
@@ -2389,6 +4796,62 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
     JS_SetPropertyStr(ctx, global, name, fn); // steals fn
   }
 
+  // Window viewport/animations/history/services.
+  static const std::array<JSCFunctionListEntry, 8> kWindowExtensions = {{
+      JS_CFUNC_DEF("requestAnimationFrame", 1, WindowRequestAnimationFrame),
+      JS_CFUNC_DEF("cancelAnimationFrame", 1, WindowCancelAnimationFrame),
+      JS_CFUNC_DEF("scrollTo", 0, WindowScrollTo),
+      JS_CFUNC_DEF("scroll", 0, WindowScrollTo),
+      JS_CFUNC_DEF("scrollBy", 0, WindowScrollBy),
+      JS_CFUNC_DEF("getComputedStyle", 1, WindowGetComputedStyle),
+      JS_CFUNC_DEF("requestIdleCallback", 1, WindowRequestAnimationFrame),
+      JS_CFUNC_DEF("cancelIdleCallback", 1, WindowCancelAnimationFrame),
+  }};
+  JS_SetPropertyFunctionList(
+      ctx, window, kWindowExtensions.data(), static_cast<int>(kWindowExtensions.size()));
+  for (const char* name : {"requestAnimationFrame",
+                           "cancelAnimationFrame",
+                           "scrollTo",
+                           "scrollBy",
+                           "getComputedStyle",
+                           "requestIdleCallback",
+                           "cancelIdleCallback"}) {
+    JSValue fn = JS_GetPropertyStr(ctx, window, name);
+    JS_SetPropertyStr(ctx, global, name, fn); // steals fn
+  }
+
+  // window.history: a minimal History object (script-visible session length
+  // plus no-op traversal/mutation; the browser's navigation stack is separate
+  // and not script-exposed yet — documented).
+  {
+    JSValue history = JS_NewObject(ctx);
+    static const std::array<JSCFunctionListEntry, 5> kHistory = {{
+        JS_CFUNC_DEF("back", 0, HistoryBack),
+        JS_CFUNC_DEF("forward", 0, HistoryForward),
+        JS_CFUNC_DEF("go", 0, HistoryGo),
+        JS_CFUNC_DEF("pushState", 0, HistoryPushState),
+        JS_CFUNC_DEF("replaceState", 0, HistoryReplaceState),
+    }};
+    JS_SetPropertyFunctionList(ctx, history, kHistory.data(), static_cast<int>(kHistory.size()));
+    DefineGetter(ctx, history, "length", MakeGetter(ctx, "length", HistoryGetLength));
+    JS_SetPropertyStr(ctx, window, "history", JS_DupValue(ctx, history)); // steals dup
+    JS_SetPropertyStr(ctx, global, "history", history);                   // steals
+  }
+
+  // window.performance: now()/timeOrigin only (a documented subset; real
+  // navigation/resource timing is future work).
+  {
+    JSValue performance = JS_NewObject(ctx);
+    static const std::array<JSCFunctionListEntry, 1> kPerformance = {{
+        JS_CFUNC_DEF("now", 0, PerformanceNow),
+    }};
+    JS_SetPropertyFunctionList(
+        ctx, performance, kPerformance.data(), static_cast<int>(kPerformance.size()));
+    JSValue origin = JS_NewFloat64(ctx, 0.0);
+    JS_SetPropertyStr(ctx, performance, "timeOrigin", origin);  // steals origin
+    JS_SetPropertyStr(ctx, window, "performance", performance); // steals
+  }
+
   // DOM interface constructors backed by the live prototypes (see
   // DefineInterface above).  HTMLElement shares Element's prototype but does
   // not overwrite Element.prototype.constructor.
@@ -2400,6 +4863,14 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   DefineInterface(ctx, global, "CSSStyleDeclaration", style_proto);
   DefineInterface(ctx, global, "Element", element_proto);
   DefineInterface(ctx, global, "HTMLElement", element_proto, /*set_constructor=*/false);
+  // Event is constructable: new Event(type, {bubbles, cancelable}).
+  {
+    JSValue event_ctor =
+        JS_NewCFunction2(ctx, EventConstructor, "Event", 1, JS_CFUNC_constructor, 0);
+    JS_SetPropertyStr(ctx, event_ctor, "prototype", JS_DupValue(ctx, event_proto));   // steals
+    JS_SetPropertyStr(ctx, event_proto, "constructor", JS_DupValue(ctx, event_ctor)); // steals
+    JS_SetPropertyStr(ctx, global, "Event", event_ctor); // steals event_ctor
+  }
 
   // navigator: engine identity.  The UA matches what the network stack sends;
   // the rest are documented defaults (the browser UI language is not wired
@@ -2527,8 +4998,8 @@ Impl::~Impl()
   // Free listener callbacks.
   for (auto& entry : listeners) {
     for (auto& type_entry : entry.second) {
-      for (JSValue cb : type_entry.second) {
-        JS_FreeValue(ctx, cb);
+      for (Impl::Listener& l : type_entry.second) {
+        JS_FreeValue(ctx, l.callback);
       }
     }
   }
@@ -2539,6 +5010,16 @@ Impl::~Impl()
     JS_FreeValue(ctx, timer.callback);
   }
   timers.clear();
+
+  // Free requestAnimationFrame callbacks.
+  for (RafEntry& entry : raf_queue) {
+    JS_FreeValue(ctx, entry.callback);
+  }
+  raf_queue.clear();
+  for (RafEntry& entry : raf_pending) {
+    JS_FreeValue(ctx, entry.callback);
+  }
+  raf_pending.clear();
 
   // Release the global object's references to the objects we installed so the
   // GC below can collect and finalize them (reachable objects would otherwise
@@ -2562,10 +5043,12 @@ Impl::~Impl()
                            "CSSStyleDeclaration",
                            "Element",
                            "HTMLElement",
+                           "Event",
                            "navigator",
                            "screen",
                            "location",
                            "localStorage",
+                           "history",
                            "fetch"}) {
     JSAtom atom = JS_NewAtom(ctx, name);
     JS_DeleteProperty(ctx, global, atom, JS_PROP_THROW);
@@ -2587,23 +5070,34 @@ Impl::~Impl()
   JS_FreeValue(ctx, document_proto);
   JS_FreeValue(ctx, fragment_proto);
   JS_FreeValue(ctx, style_proto);
+  JS_FreeValue(ctx, event_proto);
+  JS_FreeValue(ctx, class_list_proto);
   JS_FreeValue(ctx, window);
 
   // Run the GC so the (now unreachable) wrappers are finalized while the
-  // runtime is still alive; this reclaims the NodeWrapper payloads and the
-  // QuickJS arena memory instead of leaking them at runtime teardown.
+  // runtime is still alive; this reclaims the NodeWrapper/EventWrapper
+  // payloads and the QuickJS arena memory instead of leaking them at runtime
+  // teardown.
   JS_RunGC(rt);
 
   {
     std::lock_guard<std::mutex> lock(g_ctx_mutex);
     g_ctx_to_impl.erase(ctx);
   }
-  // Forget the runtime in the class-registration set: a future runtime
-  // allocated at the same address must re-register the class, otherwise
+  // Forget the runtimes in the class-registration sets: a future runtime
+  // allocated at the same address must re-register the classes, otherwise
   // JS_NewObjectClass would use an unregistered class id.
   {
     std::lock_guard<std::mutex> lock(g_class_mutex);
     g_class_registered.erase(rt);
+  }
+  {
+    std::lock_guard<std::mutex> lock(g_event_class_mutex);
+    g_event_class_registered.erase(rt);
+  }
+  {
+    std::lock_guard<std::mutex> lock(g_dataset_class_mutex);
+    g_dataset_class_registered.erase(rt);
   }
 
   // Free owned C++ nodes.  Wrappers were detached and finalized above, so
@@ -2739,6 +5233,40 @@ int Impl::RunPendingTimers()
     engine.RunPendingJobs();
     ++ran;
   }
+  // requestAnimationFrame callbacks queued since the last pump also run here
+  // (the GUI pumps this on its frame timer).
+  ran += RunPendingRaf();
+  return ran;
+}
+
+int Impl::RunPendingRaf()
+{
+  if (raf_queue.empty()) {
+    return 0;
+  }
+  // Move the queued callbacks to a pending list (a callback may queue more
+  // frames, which must not run in the same pump).
+  for (RafEntry& entry : raf_queue) {
+    raf_pending.push_back(std::move(entry));
+  }
+  raf_queue.clear();
+  const auto elapsed = std::chrono::steady_clock::now() - performance_origin;
+  const double timestamp = std::chrono::duration<double, std::milli>(elapsed).count();
+  int ran = 0;
+  for (RafEntry& entry : raf_pending) {
+    JSValue argv[] = {JS_NewFloat64(ctx, timestamp)};
+    JSValue result = JS_Call(ctx, entry.callback, JS_UNDEFINED, 1, argv);
+    JS_FreeValue(ctx, argv[0]);
+    if (JS_IsException(result)) {
+      JS_FreeValue(ctx, JS_GetException(ctx));
+    } else {
+      JS_FreeValue(ctx, result);
+    }
+    JS_FreeValue(ctx, entry.callback);
+    engine.RunPendingJobs();
+    ++ran;
+  }
+  raf_pending.clear();
   return ran;
 }
 
@@ -2753,44 +5281,149 @@ std::optional<std::chrono::steady_clock::time_point> Impl::NextTimerDeadline() c
   return next;
 }
 
-// Shared dispatch: runs the listeners registered on |node| for |type| with a
-// fresh event object (no bubbling).
+JSValue Impl::MakeEvent(std::string type, bool bubbles, bool cancelable)
+{
+  auto* w = new EventWrapper{this, std::move(type), bubbles, cancelable};
+  JSValue obj = JS_NewObjectClass(ctx, g_event_class_id);
+  JS_SetOpaque(obj, w);
+  JS_SetPrototype(ctx, obj, event_proto);
+  return obj;
+}
+
+// Runs one event through capture -> target -> bubble propagation over the
+// ancestor path of |target|.  The event's target/currentTarget/eventPhase are
+// updated along the way; stopPropagation()/stopImmediatePropagation() are
+// honored between and within listener lists.  once listeners are removed
+// after firing.  Returns false when the event was canceled.
+bool Impl::DispatchPropagated(dom::Node* target, JSValue event)
+{
+  EventWrapper* w = UnwrapEvent(event);
+  if (w == nullptr || target == nullptr) {
+    return true;
+  }
+  // Ancestor path: [target, parent, ..., document].
+  std::vector<dom::Node*> path;
+  for (dom::Node* p = target; p != nullptr; p = p->parent()) {
+    path.push_back(p);
+  }
+  const std::string type = w->type;
+
+  // Reset the dispatch state (a single event may be dispatched repeatedly).
+  w->propagation_stopped = false;
+  w->immediate_stopped = false;
+  w->default_prevented = false;
+  w->event_phase = kEventNone;
+  if (!JS_IsUndefined(w->target)) {
+    JS_FreeValue(ctx, w->target);
+    w->target = JS_UNDEFINED;
+  }
+  if (!JS_IsUndefined(w->current_target)) {
+    JS_FreeValue(ctx, w->current_target);
+    w->current_target = JS_UNDEFINED;
+  }
+  w->target = WrapNode(target); // owned reference
+
+  // Fires the listeners registered on |node| for |phase| (capture or bubble).
+  // Listeners are snapshotted so additions/removals during dispatch do not
+  // mutate the list being iterated; once listeners are removed after firing.
+  auto fire = [&](dom::Node* node, bool capture_phase, int phase) {
+    if (w->immediate_stopped || w->propagation_stopped) {
+      return;
+    }
+    const auto el_it = listeners.find(node);
+    if (el_it == listeners.end()) {
+      return;
+    }
+    const auto type_it = el_it->second.find(type);
+    if (type_it == el_it->second.end()) {
+      return;
+    }
+    std::vector<Listener> snapshot;
+    snapshot.reserve(type_it->second.size());
+    for (const Listener& l : type_it->second) {
+      if (l.capture == capture_phase) {
+        snapshot.push_back(Listener{JS_DupValue(ctx, l.callback), l.capture, l.once});
+      }
+    }
+    if (snapshot.empty()) {
+      return;
+    }
+    if (!JS_IsUndefined(w->current_target)) {
+      JS_FreeValue(ctx, w->current_target);
+    }
+    w->current_target = WrapNode(node); // owned reference
+    w->event_phase = phase;
+    JSValue this_wrap = WrapNode(node);
+    for (const Listener& l : snapshot) {
+      if (w->immediate_stopped) {
+        break;
+      }
+      JSValue result = JS_Call(ctx, l.callback, this_wrap, 1, &event);
+      if (JS_IsException(result)) {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+      } else {
+        JS_FreeValue(ctx, result);
+      }
+      if (l.once) {
+        // Remove the once listener from the live list after it fires.
+        auto& live = type_it->second;
+        for (auto it = live.begin(); it != live.end(); ++it) {
+          if (it->once && JS_IsStrictEqual(ctx, it->callback, l.callback)) {
+            JS_FreeValue(ctx, it->callback);
+            live.erase(it);
+            break;
+          }
+        }
+      }
+    }
+    JS_FreeValue(ctx, this_wrap);
+    for (const Listener& l : snapshot) {
+      JS_FreeValue(ctx, l.callback);
+    }
+  };
+
+  // Capture phase: root -> target (the target itself is handled next).
+  for (auto it = path.rbegin(); it != path.rend(); ++it) {
+    if (*it == target) {
+      break;
+    }
+    fire(*it, /*capture=*/true, kEventCapturing);
+    if (w->immediate_stopped || w->propagation_stopped) {
+      break;
+    }
+  }
+  // Target phase: capture listeners then bubble listeners on the target.
+  if (!w->propagation_stopped) {
+    fire(target, /*capture=*/true, kEventAtTarget);
+    if (!w->propagation_stopped) {
+      fire(target, /*capture=*/false, kEventAtTarget);
+    }
+  }
+  // Bubble phase: target's ancestors, only when the event bubbles.
+  if (!w->propagation_stopped && w->bubbles) {
+    for (std::size_t i = 1; i < path.size(); ++i) {
+      fire(path[i], /*capture=*/false, kEventBubbling);
+      if (w->immediate_stopped || w->propagation_stopped) {
+        break;
+      }
+    }
+  }
+  w->event_phase = kEventNone;
+  return !w->default_prevented;
+}
+
+// Shared dispatch: runs the listeners registered on |node| (and its
+// ancestors, when the event bubbles) for |type|.
 void Impl::DispatchToNode(dom::Node* node, std::string_view type)
 {
-  const auto el_it = listeners.find(node);
-  if (el_it == listeners.end()) {
+  if (node == nullptr) {
     return;
   }
-  const std::string key(type);
-  const auto type_it = el_it->second.find(key);
-  if (type_it == el_it->second.end()) {
-    return;
-  }
-  std::vector<JSValue> callbacks;
-  callbacks.reserve(type_it->second.size());
-  for (JSValue cb : type_it->second) {
-    callbacks.push_back(JS_DupValue(ctx, cb));
-  }
-  JSValue event = JS_NewObject(ctx);
-  JS_SetPropertyStr(ctx, event, "type", JS_NewStringLen(ctx, type.data(), type.size()));
-  JSValue target = WrapNode(node);
-  JS_SetPropertyStr(ctx, event, "target", JS_DupValue(ctx, target));
-  JS_SetPropertyStr(ctx, event, "currentTarget", JS_DupValue(ctx, target));
-  JS_FreeValue(ctx, target);
-  JSValue this_wrap = WrapNode(node);
-  for (JSValue cb : callbacks) {
-    JSValue result = JS_Call(ctx, cb, this_wrap, 1, &event);
-    if (JS_IsException(result)) {
-      JS_FreeValue(ctx, JS_GetException(ctx));
-    } else {
-      JS_FreeValue(ctx, result);
-    }
-    JS_FreeValue(ctx, cb);
-  }
+  JSValue event = MakeEvent(std::string(type), /*bubbles=*/true, /*cancelable=*/false);
+  DispatchPropagated(node, event);
+  JS_FreeValue(ctx, event);
   // Promise continuations created by the listeners make progress.
   engine.RunPendingJobs();
-  JS_FreeValue(ctx, this_wrap);
-  JS_FreeValue(ctx, event);
 }
 
 void Impl::DispatchEvent(dom::Element& element, std::string_view type)

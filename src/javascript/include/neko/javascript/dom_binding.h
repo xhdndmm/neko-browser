@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -60,6 +61,12 @@ struct PageApis
   std::function<std::string()> location_href;
   std::function<void(const std::string&)> navigate;
   std::function<void()> reload;
+
+  // window.getComputedStyle(element): serialized computed style of an element
+  // (property -> resolved px value, kebab-case keys).  Wired by the browser
+  // layer from the renderer's style engine; when absent, getComputedStyle
+  // returns an empty object.
+  std::function<std::map<std::string, std::string>(const dom::Element&)> computed_style;
 };
 
 // Binds a DOM document into a JavaScript runtime, exposing a practical subset
@@ -70,15 +77,18 @@ struct PageApis
 //
 //   globals:    document, window, setTimeout, clearTimeout, setInterval,
 //               clearInterval, addEventListener, removeEventListener,
-//               dispatchEvent (window aliases), navigator, screen, plus the
-//               DOM interface constructors Node, Element, HTMLElement,
-//               Document, Text, Comment, DocumentFragment, CSSStyleDeclaration
+//               dispatchEvent (window aliases), navigator, screen, Event,
+//               requestAnimationFrame/cancelAnimationFrame, getComputedStyle,
+//               scrollTo/scrollBy, history, performance, plus the DOM
+//               interface constructors Node, Element, HTMLElement, Document,
+//               Text, Comment, DocumentFragment, CSSStyleDeclaration
 //               (whose .prototype is the live wrapper prototype, so `x
 //               instanceof Element` and prototype extension work; constructing
 //               them directly throws "Illegal constructor")
 //   window:     navigator, screen, innerWidth/innerHeight/devicePixelRatio
 //               (engine-default viewport 800x600@1x; real window-size wiring
-//               is future work)
+//               is future work), location, localStorage, fetch, history,
+//               performance.now(), requestAnimationFrame
 //   navigator:  userAgent (same string the network stack sends), platform,
 //               language/languages ("en-US" defaults), onLine, cookieEnabled,
 //               hardwareConcurrency, vendor
@@ -86,33 +96,49 @@ struct PageApis
 //               colorDepth/pixelDepth (24)
 //   Document:   documentElement, body, head, readyState ("complete"),
 //               title (get/set), getElementById, querySelector(All),
-//               createElement, createTextNode
+//               getElementsByTagName(All), getElementsByClassName,
+//               createElement, createElementNS, createTextNode,
+//               createDocumentFragment, createComment, URL, baseURI,
+//               documentURI, characterSet, contentType, referrer,
+//               forms/images/links/scripts (collections)
 //   Node:       nodeType, nodeName, textContent (get/set), parentNode,
-//               firstChild, lastChild, childNodes, appendChild, append,
-//               replaceChildren, insertBefore, removeChild, hasChildNodes,
-//               cloneNode, addEventListener, removeEventListener, dispatchEvent
-//   Element:    tagName, id (get/set), className (get/set), attributes,
-//               getAttribute/setAttribute/removeAttribute/hasAttribute,
-//               children, firstElementChild, querySelector(All),
-//               getElementsByTagName, getElementsByClassName,
-//               innerHTML (get/set), style (CSSStyleDeclaration)
+//               parentElement, firstChild, lastChild, childNodes,
+//               nextSibling, previousSibling, ownerDocument, isConnected,
+//               appendChild, append, replaceChildren, insertBefore,
+//               replaceChild, removeChild, hasChildNodes, cloneNode,
+//               contains, normalize, addEventListener, removeEventListener,
+//               dispatchEvent
+//   Element:    tagName, id (get/set), className (get/set), classList,
+//               dataset, attributes, getAttribute/setAttribute/removeAttribute/
+//               hasAttribute, children, firstElementChild, lastElementChild,
+//               nextElementSibling, previousElementSibling, querySelector(All),
+//               getElementsByTagName, getElementsByClassName, matches, closest,
+//               remove, innerHTML (get/set), outerHTML, style
+//               (CSSStyleDeclaration), hidden/title/lang, getBoundingClientRect
+//   Form/links: input/textarea/select/option value/checked/type/placeholder/
+//               disabled/name; a.href (resolved absolute)/target/rel;
+//               img.src (resolved)/currentSrc/alt/width/height/
+//               naturalWidth/naturalHeight/complete
 //   Style:      setProperty/getPropertyValue/removeProperty plus direct
 //               accessors for a documented subset of properties
+//   Events:     new Event(type, {bubbles, cancelable}) with type/target/
+//               currentTarget/bubbles/cancelable/defaultPrevented/eventPhase/
+//               timeStamp/isTrusted and preventDefault/stopPropagation/
+//               stopImmediatePropagation/composedPath; addEventListener
+//               options {capture, once}; full capture -> target -> bubble
+//               propagation; dispatchEvent returns false when canceled.
+//               Plain {type: ...} objects remain accepted by dispatchEvent as
+//               a non-bubbling shortcut.
 //
 // append/replaceChildren accept node arguments (DOM spec converts string
 // arguments to text nodes; that is a documented limitation here).
 //
-// addEventListener/removeEventListener/dispatchEvent work on any node
-// (elements and the document).  Window-level listeners (window.addEventListener
-// and the bare global aliases) are stored under the document node — the
-// window and the document share one event-target set in this minimal model —
-// and are fired by DispatchDocumentEvent (used by RunPageScripts to fire
-// DOMContentLoaded/load after the page's scripts run).
-//
 // NOT implemented (documented limitation): property getters beyond the above,
-// live NodeList objects (childNodes is a snapshot array), event propagation
-// (bubbling/capture/default actions), async script loading (async/defer),
-// module scripts, and full CSSOM.
+// live NodeList objects (childNodes/querySelectorAll return snapshot arrays),
+// event default actions for the browser's built-in behaviors, async script
+// loading (async/defer), module scripts, full CSSOM, real element geometry
+// (getBoundingClientRect returns a zero rect), and computed styles for
+// properties the style engine does not track.
 //
 // Ownership and lifetime:
 //   * The binder owns its own ScriptEngine (one runtime per document).

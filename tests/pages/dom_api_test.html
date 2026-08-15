@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>DOM API Test</title>
+<style>
+  body { font-family: sans-serif; }
+  .card { border: 1px solid #ccc; padding: 8px; margin: 4px; }
+  #list li { margin: 2px; }
+</style>
+</head>
+<body>
+  <div id="app" class="container main">
+    <h1>DOM API Test</h1>
+    <ul id="list">
+      <li data-role="item">One</li>
+      <li data-role="item">Two</li>
+    </ul>
+    <form id="form">
+      <input id="search" type="text" name="q" value="hello">
+      <input id="agree" type="checkbox" checked>
+      <button id="go">Go</button>
+    </form>
+    <a id="link" href="/docs">Docs</a>
+  </div>
+  <script>
+    // classList / dataset
+    var app = document.getElementById('app');
+    app.classList.add('loaded');
+    var list = document.getElementById('list');
+    var items = list.getElementsByTagName('li');
+    var roles = [];
+    for (var i = 0; i < items.length; i++) {
+      roles.push(items[i].dataset.role);
+    }
+    // querySelectorAll + matches + closest
+    var allLis = document.querySelectorAll('#list li');
+    var firstLi = allLis[0];
+    var closest = firstLi.closest('#app');
+    // form controls
+    var input = document.getElementById('search');
+    var checkbox = document.getElementById('agree');
+    var inputValue = input.value;
+    var checked = checkbox.checked;
+    // links / images
+    var link = document.getElementById('link');
+    var href = link.href;
+    // events with capture and bubble
+    var order = [];
+    document.addEventListener('evt', function(e) { order.push('doc'); });
+    list.addEventListener('evt', function(e) { order.push('list'); }, true); // capture
+    firstLi.addEventListener('evt', function(e) { order.push('target'); e.stopPropagation(); });
+    firstLi.dispatchEvent(new Event('evt', {bubbles: true}));
+    // getComputedStyle
+    var cs = getComputedStyle(firstLi);
+    var display = cs.display;
+    var bg = cs.backgroundColor;
+    // Node traversal
+    var second = firstLi.nextElementSibling;
+    var isConnected = firstLi.isConnected;
+    // createElement / append
+    var newItem = document.createElement('li');
+    newItem.textContent = 'Three';
+    newItem.classList.add('item');
+    list.appendChild(newItem);
+    // replaceChild
+    var rep = document.createElement('li');
+    rep.textContent = 'Two-bis';
+    list.replaceChild(rep, second);
+    // requestAnimationFrame
+    var rafRan = false;
+    requestAnimationFrame(function() { rafRan = true; });
+    // performance
+    var now = performance.now();
+
+    window.__result = JSON.stringify({
+      loaded: app.classList.contains('loaded'),
+      roleCount: roles.length,
+      roles: roles.join(','),
+      lis: allLis.length,
+      closestIsApp: closest === app,
+      inputValue: inputValue,
+      checked: checked,
+      hrefIsAbs: href.length > 0,
+      evtOrder: order.join(','),
+      display: display,
+      bg: bg,
+      isConnected: isConnected,
+      listChildren: list.children.length,
+      hasThree: list.children[2] !== undefined && list.children[2].textContent === 'Three',
+      replaced: list.children[1].textContent === 'Two-bis',
+      rafIsFunc: typeof requestAnimationFrame === 'function',
+      nowIsNumber: typeof now === 'number'
+    });
+  </script>
+</body>
+</html>

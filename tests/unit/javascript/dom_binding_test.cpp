@@ -345,6 +345,390 @@ TEST_F(DomBinderTest, DispatchEventFromCpp)
   EXPECT_EQ(EvalString("window._evType"), "app-hi");
 }
 
+TEST_F(DomBinderTest, EventConstructorAndProperties)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var ev = new Event('go', {bubbles: true, cancelable: true}); "
+                       "return ev.type === 'go' && ev.bubbles === true && ev.cancelable === true "
+                       "    && ev.defaultPrevented === false && ev.target === null "
+                       "    && ev.currentTarget === null && ev instanceof Event; })()"));
+  // Defaults are non-bubbling / non-cancelable.
+  EXPECT_TRUE(EvalBool("(function(){ var ev = new Event('x'); "
+                       "return ev.bubbles === false && ev.cancelable === false; })()"));
+  // preventDefault only affects cancelable events.
+  EXPECT_TRUE(EvalBool("(function(){ var a = new Event('a', {cancelable: true}); "
+                       "a.preventDefault(); "
+                       "var b = new Event('b'); b.preventDefault(); "
+                       "return a.defaultPrevented === true && b.defaultPrevented === false; })()"));
+}
+
+TEST_F(DomBinderTest, EventBubblesToAncestors)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var main = d.getElementById('main'); "
+                       "var p = d.getElementById('first'); "
+                       "var order = []; "
+                       "p.addEventListener('bub', function() { order.push('target'); }); "
+                       "main.addEventListener('bub', function() { order.push('ancestor'); }); "
+                       "d.addEventListener('bub', function(ev) { "
+                       "  order.push('document'); "
+                       "  window._cur = ev.currentTarget; "
+                       "}); "
+                       "p.dispatchEvent(new Event('bub', {bubbles: true})); "
+                       "return order.join(',') === 'target,ancestor,document' "
+                       "    && window._cur === d; })()"));
+  // Non-bubbling events do not reach ancestors.
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var p = d.getElementById('first'); "
+                       "var hits = 0; "
+                       "d.addEventListener('nb', function() { hits++; }); "
+                       "p.dispatchEvent(new Event('nb')); "
+                       "return hits === 0; })()"));
+}
+
+TEST_F(DomBinderTest, EventCapturePhaseRunsRootToTarget)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var main = d.getElementById('main'); "
+                       "var p = d.getElementById('first'); "
+                       "var order = []; "
+                       "d.addEventListener('cap', function() { order.push('doc'); }, true); "
+                       "main.addEventListener('cap', function() { order.push('main'); }, true); "
+                       "p.addEventListener('cap', function() { order.push('target'); }); "
+                       "p.dispatchEvent(new Event('cap', {bubbles: true})); "
+                       "return order.join(',') === 'doc,main,target'; })()"));
+}
+
+TEST_F(DomBinderTest, EventOnceOptionAutoRemoves)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var e = document.getElementById('first'); "
+                       "var hits = 0; "
+                       "e.addEventListener('once-ev', function() { hits++; }, {once: true}); "
+                       "e.dispatchEvent(new Event('once-ev')); "
+                       "e.dispatchEvent(new Event('once-ev')); "
+                       "return hits === 1; })()"));
+}
+
+TEST_F(DomBinderTest, EventPreventDefaultReturnsFalseFromDispatch)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var e = document.getElementById('first'); "
+                       "var cancelable = new Event('pd', {cancelable: true}); "
+                       "e.addEventListener('pd', function(ev) { ev.preventDefault(); }); "
+                       "var retCancel = e.dispatchEvent(cancelable); "
+                       "var notCancelable = new Event('nc'); "
+                       "e.addEventListener('nc', function(ev) { ev.preventDefault(); }); "
+                       "var retNot = e.dispatchEvent(notCancelable); "
+                       "return retCancel === false && cancelable.defaultPrevented === true "
+                       "    && retNot === true && notCancelable.defaultPrevented === false; })()"));
+}
+
+TEST_F(DomBinderTest, EventStopPropagationPreventsBubbling)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var p = d.getElementById('first'); "
+                       "var hits = 0; "
+                       "p.addEventListener('sp', function(ev) { ev.stopPropagation(); }); "
+                       "d.addEventListener('sp', function() { hits++; }); "
+                       "p.dispatchEvent(new Event('sp', {bubbles: true})); "
+                       "return hits === 0; })()"));
+}
+
+TEST_F(DomBinderTest, EventStopImmediatePropagationStopsCurrentNode)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var e = document.getElementById('first'); "
+                       "var order = []; "
+                       "e.addEventListener('sip', function(ev) { "
+                       "  order.push('first'); ev.stopImmediatePropagation(); }); "
+                       "e.addEventListener('sip', function() { order.push('second'); }); "
+                       "e.dispatchEvent(new Event('sip', {bubbles: true})); "
+                       "return order.join(',') === 'first'; })()"));
+}
+
+TEST_F(DomBinderTest, RemoveEventListenerMatchesCaptureFlag)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var e = document.getElementById('first'); "
+                       "var hits = 0; "
+                       "function cb() { hits++; } "
+                       "e.addEventListener('rc', cb, true); "
+                       "e.removeEventListener('rc', cb, false); "
+                       "e.dispatchEvent(new Event('rc')); "
+                       "return hits === 1; })()"));
+}
+
+// ---------------------------------------------------------------------------
+// Node traversal / relationship APIs.
+// ---------------------------------------------------------------------------
+
+TEST_F(DomBinderTest, NodeSiblingsAndParentElement)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var main = d.getElementById('main'); "
+                       "var first = d.getElementById('first'); "
+                       "var second = first.nextElementSibling; "
+                       "return first.parentNode === main && first.parentElement === main "
+                       "    && second !== first && second.classList.contains('para') "
+                       "    && second.previousElementSibling === first "
+                       "    && first.previousElementSibling === null "
+                       "    && main.nextElementSibling === null; })()"));
+}
+
+TEST_F(DomBinderTest, NodeOwnerDocumentAndIsConnected)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var el = d.getElementById('first'); "
+                       "var detached = d.createElement('div'); "
+                       "return el.ownerDocument === d && el.isConnected === true "
+                       "    && detached.ownerDocument === d && detached.isConnected === false "
+                       "    && d.ownerDocument === null; })()"));
+}
+
+TEST_F(DomBinderTest, NodeContains)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var main = d.getElementById('main'); "
+                       "var first = d.getElementById('first'); "
+                       "var detached = d.createElement('span'); "
+                       "return main.contains(first) && main.contains(main) "
+                       "    && !main.contains(detached) && !first.contains(main); })()"));
+}
+
+TEST_F(DomBinderTest, NodeReplaceChild)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var main = d.getElementById('main'); "
+                       "var first = d.getElementById('first'); "
+                       "var replacement = d.createElement('p'); replacement.id = 'repl'; "
+                       "replacement.textContent = 'new'; "
+                       "var returned = main.replaceChild(replacement, first); "
+                       "return returned === replacement && first.parentNode === null "
+                       "    && main.firstElementChild.id === 'repl'; })()"));
+}
+
+TEST_F(DomBinderTest, NodeNormalizeMergesTextNodes)
+{
+  EXPECT_TRUE(
+      EvalBool("(function(){ var d = document; "
+               "var el = d.createElement('div'); "
+               "el.appendChild(d.createTextNode('Hello ')); "
+               "el.appendChild(d.createTextNode('world')); "
+               "el.normalize(); "
+               "return el.childNodes.length === 1 && el.textContent === 'Hello world'; })()"));
+}
+
+// ---------------------------------------------------------------------------
+// Element classList / dataset / matches / closest / remove.
+// ---------------------------------------------------------------------------
+
+TEST_F(DomBinderTest, ClassListOperations)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var e = document.getElementById('first'); "
+                       "var l = e.classList; "
+                       "return l.contains('para') && l.length === 1; })()"));
+  EXPECT_TRUE(
+      EvalBool("(function(){ var e = document.getElementById('first'); "
+               "e.classList.add('a', 'b'); "
+               "var ok = e.classList.contains('a') && e.classList.contains('b') "
+               "    && e.classList.length === 3; "
+               "e.classList.remove('a'); "
+               "ok = ok && !e.classList.contains('a') && e.classList.length === 2; "
+               "ok = ok && e.classList.toggle('c') === true; "
+               "ok = ok && e.classList.toggle('c') === false; "
+               "ok = ok && e.classList.replace('b', 'bb'); "
+               "return ok && e.classList.contains('bb') && e.className === 'para bb'; })()"));
+}
+
+TEST_F(DomBinderTest, DatasetReadsAndWritesDataAttributes)
+{
+  // The fixture has <span data-x="1"></span>.
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var s = d.querySelector('span'); "
+                       "return s.dataset.x === '1'; })()"));
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var e = document.createElement('div'); "
+      "e.dataset.fooBar = 'baz'; "
+      "return e.dataset.fooBar === 'baz' && e.getAttribute('data-foo-bar') === 'baz'; })()"));
+  EXPECT_TRUE(EvalBool("(function(){ var e = document.createElement('div'); "
+                       "e.setAttribute('data-role', 'nav'); "
+                       "return e.dataset.role === 'nav'; })()"));
+}
+
+TEST_F(DomBinderTest, ElementMatchesAndClosest)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var e = document.getElementById('first'); "
+                       "return e.matches('.para') && e.matches('p') && !e.matches('.nope'); })()"));
+  EXPECT_TRUE(
+      EvalBool("(function(){ var d = document; "
+               "var b = d.getElementById('first').querySelector('b'); "
+               "return b.closest('#main').id === 'main' && b.closest('.para') !== null "
+               "    && b.closest('html') !== null && b.closest('.missing') === null; })()"));
+}
+
+TEST_F(DomBinderTest, ElementRemove)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var main = d.getElementById('main'); "
+                       "var first = d.getElementById('first'); "
+                       "first.remove(); "
+                       "return first.parentNode === null && main.children.length === 2; })()"));
+}
+
+TEST_F(DomBinderTest, ElementHiddenTitleLangOuterHTML)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var e = d.createElement('div'); "
+                       "e.hidden = true; "
+                       "var ok = e.hidden === true && e.hasAttribute('hidden'); "
+                       "e.title = 'hi'; e.lang = 'en'; "
+                       "ok = ok && e.title === 'hi' && e.lang === 'en'; "
+                       "ok = ok && e.outerHTML.indexOf('<div') === 0; "
+                       "return ok; })()"));
+}
+
+TEST_F(DomBinderTest, ElementGetBoundingClientRect)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var e = document.getElementById('first'); "
+                       "var r = e.getBoundingClientRect(); "
+                       "return r.width === 0 && r.height === 0 && r.left === 0 "
+                       "    && typeof r.toJSON === 'function'; })()"));
+}
+
+// ---------------------------------------------------------------------------
+// Form controls / links / images.
+// ---------------------------------------------------------------------------
+
+TEST_F(DomBinderTest, FormControlValueCheckedDisabled)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var input = d.createElement('input'); "
+                       "input.type = 'text'; input.value = 'abc'; "
+                       "var ok = input.type === 'text' && input.value === 'abc'; "
+                       "input.placeholder = 'hint'; input.name = 'q'; input.disabled = true; "
+                       "ok = ok && input.placeholder === 'hint' && input.name === 'q' "
+                       "    && input.disabled === true && input.hasAttribute('disabled'); "
+                       "var cb = d.createElement('input'); cb.type = 'checkbox'; "
+                       "cb.checked = true; "
+                       "ok = ok && cb.checked === true && cb.hasAttribute('checked'); "
+                       "return ok; })()"));
+  EXPECT_TRUE(
+      EvalBool("(function(){ var d = document; "
+               "var ta = d.createElement('textarea'); "
+               "ta.value = 'line1\\nline2'; "
+               "return ta.value === 'line1\\nline2' && ta.textContent === 'line1\\nline2'; })()"));
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var sel = d.createElement('select'); "
+                       "var opt = d.createElement('option'); opt.value = 'v'; "
+                       "opt.textContent = 'label'; "
+                       "sel.appendChild(opt); "
+                       "return opt.value === 'v'; })()"));
+}
+
+TEST_F(DomBinderTest, LinkHrefAndImageSrc)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var a = d.createElement('a'); "
+                       "a.href = '/path'; a.target = '_blank'; a.rel = 'nofollow'; "
+                       "return a.target === '_blank' && a.rel === 'nofollow' "
+                       "    && a.getAttribute('href') === '/path'; })()"));
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var img = d.createElement('img'); "
+                       "img.src = 'pic.png'; img.alt = 'pic'; img.width = 100; "
+                       "var ok = img.alt === 'pic' && img.width === 100 "
+                       "    && img.complete === true && img.naturalWidth === 0 "
+                       "    && img.getAttribute('src') === 'pic.png'; "
+                       "return ok; })()"));
+}
+
+// ---------------------------------------------------------------------------
+// Document extensions.
+// ---------------------------------------------------------------------------
+
+TEST_F(DomBinderTest, DocumentCreateFragmentCommentElementNS)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var frag = d.createDocumentFragment(); "
+                       "var div = d.createElement('div'); "
+                       "frag.appendChild(div); "
+                       "var ok = frag instanceof DocumentFragment && frag.childNodes.length === 1; "
+                       "var c = d.createComment('note'); "
+                       "ok = ok && c.nodeType === 8 && c.nodeName === '#comment'; "
+                       "var svg = d.createElementNS('http://www.w3.org/2000/svg', 'svg'); "
+                       "ok = ok && svg.tagName === 'SVG'; "
+                       "return ok; })()"));
+}
+
+TEST_F(DomBinderTest, DocumentGetElementsByTagAndClass)
+{
+  EXPECT_TRUE(
+      EvalBool("(function(){ var d = document; "
+               "var ps = d.getElementsByTagName('p'); "
+               "var paras = d.getElementsByClassName('para'); "
+               "return ps.length === 2 && paras.length === 2 && paras[0].id === 'first'; })()"));
+}
+
+TEST_F(DomBinderTest, DocumentMetaProperties)
+{
+  EXPECT_EQ(EvalString("document.characterSet"), "UTF-8");
+  EXPECT_EQ(EvalString("document.contentType"), "text/html");
+  EXPECT_EQ(EvalString("document.referrer"), "");
+  // URL/baseURI/documentURI reflect the page URL (empty when no PageApis).
+  EXPECT_TRUE(EvalBool("typeof document.URL === 'string' && document.baseURI === document.URL"));
+}
+
+TEST_F(DomBinderTest, DocumentElementCollections)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "return d.images instanceof Array && d.forms instanceof Array "
+                       "    && d.links instanceof Array && d.scripts instanceof Array; })()"));
+}
+
+// ---------------------------------------------------------------------------
+// Window extensions.
+// ---------------------------------------------------------------------------
+
+TEST_F(DomBinderTest, WindowAnimationFrameAndPerformance)
+{
+  EXPECT_TRUE(
+      EvalBool("(function(){ "
+               "window._raf = 0; "
+               "var id = requestAnimationFrame(function(t) { window._raf = 1; window._ts = t; }); "
+               "return typeof id === 'number'; })()"));
+  ASSERT_GT(binder_->RunPendingTimers(), 0);
+  EXPECT_EQ(EvalNumber("window._raf"), 1.0);
+  EXPECT_TRUE(EvalBool("typeof window._ts === 'number'"));
+  EXPECT_TRUE(EvalBool("typeof performance.now() === 'number' && performance.now() >= 0"));
+}
+
+TEST_F(DomBinderTest, WindowHistoryAndScroll)
+{
+  EXPECT_TRUE(EvalBool("(function(){ "
+                       "window.history.pushState({}, '', '/x'); "
+                       "window.history.replaceState({}, '', '/y'); "
+                       "window.scrollTo(0, 100); window.scrollBy(0, 10); "
+                       "return history.length === 1 "
+                       "    && typeof history.back === 'function' "
+                       "    && typeof history.forward === 'function'; })()"));
+}
+
+TEST_F(DomBinderTest, WindowGetComputedStyleWired)
+{
+  // A binder with a computed_style callback returns a style object with
+  // getPropertyValue and camelCase accessors.
+  javascript::PageApis apis;
+  apis.computed_style = [](const dom::Element&) -> std::map<std::string, std::string> {
+    return {{"display", "block"}, {"background-color", "rgb(255, 0, 0)"}};
+  };
+  DomBinder binder(*document_, apis);
+  binder.SetConsoleSink([this](std::string_view, std::string_view) {});
+  auto r = binder.Evaluate(
+      "(function(){ var e = document.getElementById('first'); "
+      "var cs = getComputedStyle(e); "
+      "return cs.getPropertyValue('display') === 'block' "
+      "    && cs.display === 'block' && cs.backgroundColor === 'rgb(255, 0, 0)'; })()");
+  ASSERT_TRUE(r.has_value()) << (r.has_value() ? "" : r.error().message());
+  auto s = r.value().ToString();
+  ASSERT_TRUE(s.has_value());
+  EXPECT_EQ(s.value(), "true");
+}
+
 TEST_F(DomBinderTest, SetTimeoutRunsAfterDeadline)
 {
   ASSERT_TRUE(EvalBool("(function(){ window._timerHits = 0; "

@@ -11,8 +11,10 @@
 #include "neko/browser/page_scripts.h"
 
 #include "neko/base/logging.h"
+#include "neko/style/computed_style.h"
 #include "neko/url/url.h"
 
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -22,6 +24,69 @@
 
 namespace neko::browser {
 namespace {
+
+// Serializes an element's computed style as property -> resolved value
+// (kebab-case keys, px strings) for window.getComputedStyle().  Covers the
+// box model, fonts, text and layout-relevant properties the engine computes;
+// values are human-readable (StyleEngine's ToString forms).
+std::map<std::string, std::string> SerializeComputedStyle(const style::ComputedStyle& s)
+{
+  std::map<std::string, std::string> out;
+  const auto size = [](const std::optional<style::SizeSpec>& spec) {
+    return spec.has_value() ? style::ToString(spec.value()) : std::string("auto");
+  };
+  const auto size4 = [](const style::SizeSpec& a,
+                        const style::SizeSpec& b,
+                        const style::SizeSpec& c,
+                        const style::SizeSpec& d) {
+    return style::ToString(a) + " " + style::ToString(b) + " " + style::ToString(c) + " " +
+           style::ToString(d);
+  };
+  out["display"] = std::string(style::ToString(s.display));
+  out["position"] = std::string(style::ToString(s.position));
+  out["float"] = s.floating == style::Float::kLeft    ? "left"
+                 : s.floating == style::Float::kRight ? "right"
+                                                      : "none";
+  out["width"] = size(s.width);
+  out["height"] = size(s.height);
+  out["min-width"] = size(s.min_width);
+  out["max-width"] = size(s.max_width);
+  out["min-height"] = size(s.min_height);
+  out["max-height"] = size(s.max_height);
+  out["margin"] = size4(s.margin_top, s.margin_right, s.margin_bottom, s.margin_left);
+  out["padding"] = size4(s.padding_top, s.padding_right, s.padding_bottom, s.padding_left);
+  out["border-top-width"] = style::ToString(s.border_top);
+  out["border-right-width"] = style::ToString(s.border_right);
+  out["border-bottom-width"] = style::ToString(s.border_bottom);
+  out["border-left-width"] = style::ToString(s.border_left);
+  out["font-size"] = style::ToString(style::SizeSpec{s.font_size});
+  out["font-family"] = s.font_family;
+  out["font-weight"] = std::to_string(s.font_weight);
+  out["line-height"] = std::to_string(s.line_height);
+  out["text-align"] = std::string(style::ToString(s.text_align));
+  out["color"] =
+      s.color.has_value() ? style::ToString(s.color.value()) : std::string("rgb(0, 0, 0)");
+  out["background-color"] = s.background_color.has_value()
+                                ? style::ToString(s.background_color.value())
+                                : std::string("rgba(0, 0, 0, 0)");
+  out["overflow"] = s.overflow == style::Overflow::kHidden   ? "hidden"
+                    : s.overflow == style::Overflow::kAuto   ? "auto"
+                    : s.overflow == style::Overflow::kScroll ? "scroll"
+                                                             : "visible";
+  out["white-space"] = s.white_space == style::WhiteSpace::kNowrap    ? "nowrap"
+                       : s.white_space == style::WhiteSpace::kPre     ? "pre"
+                       : s.white_space == style::WhiteSpace::kPreWrap ? "pre-wrap"
+                       : s.white_space == style::WhiteSpace::kPreLine ? "pre-line"
+                                                                      : "normal";
+  out["flex-direction"] = std::string(style::ToString(s.flex_direction));
+  out["flex-wrap"] = s.flex_wrap == style::FlexWrap::kWrap          ? "wrap"
+                     : s.flex_wrap == style::FlexWrap::kWrapReverse ? "wrap-reverse"
+                                                                    : "nowrap";
+  out["flex-grow"] = std::to_string(s.flex_grow);
+  out["flex-shrink"] = std::to_string(s.flex_shrink);
+  out["order"] = std::to_string(s.order);
+  return out;
+}
 
 // Collects <script> elements in document order (pre-order traversal), so
 // scripts run in the order the author wrote them (head before body).
@@ -127,6 +192,14 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
   } else {
     apis.location_href = [base_url]() { return base_url; };
   }
+
+  // window.getComputedStyle(element): serialize the element's computed style
+  // from the page's style engine (the engine keeps per-element styles after
+  // ApplyStyles, which RunPageScripts re-runs after DOM mutations).
+  apis.computed_style = [&page](const dom::Element& element) -> std::map<std::string, std::string> {
+    const style::ComputedStyle& style = page.styles().StyleFor(element);
+    return SerializeComputedStyle(style);
+  };
 
   auto binder = std::make_shared<javascript::DomBinder>(*document, apis);
   binder->SetConsoleSink(std::move(sink));
