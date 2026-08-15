@@ -2,14 +2,14 @@
 
 > 本文档诚实记录每个特性的支持状态。**禁止**把"接口存在"写成"已实现"。
 > 状态取值：Not Started / Planned / In Progress / Partial / Implemented / Tested。
-> 最后更新：2026-08（外部 `<link rel=stylesheet>`、浏览器 UA、window.location 导航、
-> SVG 解码、级联规则分桶、并行图片/样式表抓取）。
+> 最后更新：2026-08（box-sizing、white-space:nowrap、overflow 裁剪、HTTP 增量读取 +
+> 无 close_notify 关闭兼容、GUI 多标签页/快捷键/DevTools 增强、地址栏编辑保护）。
 
 | 特性 | 状态 | 测试证据 | 备注 |
 | --- | --- | --- | --- |
 | URL 解析 | Tested | 19 单元测试 | RFC 3986 相对解析样例 |
-| HTTP/1.1 | Tested | 8 单元测试 | GET、chunked、重定向、Content-Length |
-| HTTPS / TLS | Tested | 3 单元测试（本地 TLS 服务器 + 自签名 CA） | OpenSSL 封装（ADR 0010），证书+主机名校验、SNI、TLS≥1.2；gzip/deflate 协商 |
+| HTTP/1.1 | Tested | 8 单元测试 | GET、chunked、重定向、Content-Length；**增量读取**（按 framing 精确读取响应体，而非读到关闭），Content-Length 截断校验（防截断攻击的完整性兜底） |
+| HTTPS / TLS | Tested | 5 单元测试（本地 TLS 服务器 + 自签名 CA） | OpenSSL 封装（ADR 0010），证书+主机名校验、SNI、TLS≥1.2；gzip/deflate 协商；**兼容 CDN 无 close_notify 关闭**（sohu/bing 实测，完整性由 HTTP 层 Content-Length 校验兜底） |
 | gzip/deflate | Tested | 12 单元测试（含链式编码、raw deflate、服务器往返） | RFC 7231 内容编码解码，64 MiB 输出上限 |
 | HTML tokenizer | Tested | HTML 套件 | 完整 WHATWG 命名字符引用表（2125 项，含双码点，生成代码）+ RAWTEXT/RCDATA |
 | HTML parser | Tested | HTML 套件 | 插入模式子集（无 table 容错）；隐含 p 闭合按 button 作用域判定 |
@@ -22,7 +22,10 @@
 | CSS 数学函数 | Partial | 5 Style + 4 Layout 单元测试 | `calc()`（+/- 线性组合）、`min()`/`max()`/`clamp()`（可嵌套 calc 与 var()）、vw/vh/vmin/vmax 单位，布局时对包含块求值；无 calc * /、嵌套 min/max |
 | aspect-ratio | Partial | 2 Style + 2 Layout 单元测试 | `1`/`16/9` 形式；宽度确定+高度 auto 时推导高度；显式高度优先；双 auto 忽略 |
 | border-radius | Partial | 1 Style 单元测试 | 单一圆角（长度/百分比），背景按圆角绘制；无多值/椭圆/圆角边框 |
-| Block layout | Tested | Layout 套件 | 盒模型、堆叠、宽度填充 |
+| Block layout | Tested | Layout 套件 | 盒模型、堆叠、宽度填充；**box-sizing: border-box 全局生效**（现代站点普遍 `*{box-sizing:border-box}`，修复了真实站点布局溢出/塌陷） |
+| box-sizing | Implemented | 6 布局 + 3 样式单元测试 | content-box（初始）/ border-box：width/height、min/max、flex 项、absolute、表格、grid 尺寸均按 border-box 解析 |
+| white-space | Partial | 2 布局 + 3 样式单元测试 | normal（初始）/nowrap（整段视为不可断行、溢出不换行）/pre/pre-wrap/pre-line（解析但按 normal 处理——无预格式化文本）；继承 |
+| overflow | Partial | 2 绘制 + 3 样式单元测试 | visible（初始）/hidden/auto/scroll；hidden 与 scroll 按 padding box 裁剪（绘制级裁剪栈，嵌套交集），auto/scroll 无滚动溢出交互；`overflow-x/y` 简写未做 |
 | Inline layout | Tested | Layout 套件 | 文字换行、行盒 |
 | inline-block | Partial | Layout + Style + Paint 套件 | 行内原子块盒：显式/shrink-to-fit 宽度、内部块格式化上下文、background/border/padding、vertical-align 与行高参与行盒；精确基线对齐（多行内块按自身最后一行盒基线）未做 |
 | Flexbox | Partial | 25 布局单元测试 + 9 样式解析测试 + 端到端截图 | display:flex/inline-flex、flex-direction row/column(+reverse)、flex-wrap、flex-grow/shrink/basis（含 flex 简写）、justify-content（6 值）、align-items（含 baseline）、align-content（确定 cross 尺寸时）、gap、order、align-self、min/max-width/height、auto margin（主轴/交叉轴）；无 flex-basis 百分比精确高度、flex 容器自身 min/max、grow 后剩余空间再分配（max-width 截断不回流） |
@@ -56,8 +59,8 @@
 | IndexedDB | Not Started | — | — |
 | 多线程 | Partial | 7 base 单元测试 + TSan 通过 | `base::ThreadPool`（固定 worker、Post/Submit、WaitIdle、析构排空）、页内多 `<img>` 与外部 `<link rel=stylesheet>` **抓取+解析/解码并行**（FetchFn 需线程安全）；无多进程（Phase 12） |
 | 安全（Origin/SOP） | Partial | 8 security 单元测试 + 浏览器集成测试 | `security::Origin`（scheme+host+port 三元组、同源判定、不透明 origin）、标签页记录页面 origin；SOP 实施/CORS/CSP 未开始（Phase 10 后续） |
-| GUI（Qt6） | Partial | UI 冒烟测试（offscreen）+ 端到端截图 | 标签页/地址栏/工具栏/DevTools/历史/书签/下载/设置停靠面板；未做像素级渲染对比 |
-| DevTools | Partial | GUI 验证 | DOM 树 / 网络日志 / Console；无断点调试 |
+| GUI（Qt6） | Partial | UI 冒烟测试（offscreen）+ 端到端截图 | 标签页（含 **“+”新建按钮与 Ctrl+T/Ctrl+W/Alt+←/→/F5/Ctrl+L/Ctrl+1..9 快捷键**）/地址栏（**焦点期间周期刷新不再重置文本与光标，退格键编辑正常**）/工具栏/DevTools/历史/书签/下载/设置停靠面板；未做像素级渲染对比 |
+| DevTools | Partial | GUI 验证 | DOM 树（选中节点显示**计算样式面板**）/网络日志（含**清空按钮**）/**Cookies 查看**/Console（引擎日志 + JS REPL）；无断点调试 |
 | 日志系统 | Tested | 单元测试 | — |
 | Error/Result 模型 | Tested | 单元测试 | — |
 | CLI 参数解析 | Tested | 单元测试 | — |
