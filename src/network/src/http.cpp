@@ -17,6 +17,11 @@
 namespace neko::network {
 namespace {
 
+// Upper bound on a single response body, so a malicious Content-Length or
+// chunk size cannot trigger an unbounded allocation.  512 MiB is well above
+// any legitimate page body.
+constexpr std::size_t kMaxBodySize = 512u * 1024u * 1024u;
+
 // Parses a decimal byte count, rejecting values that overflow size_t.
 // Returns nullopt for empty or non-numeric input.
 std::optional<std::size_t> ParseByteCount(std::string_view text)
@@ -317,6 +322,9 @@ base::Result<BodyFraming> ClassifyBody(const HttpResponse& response)
         (response.status_code >= 100 && response.status_code < 200)) {
       return BodyFraming{BodyFraming::Kind::kNone, 0};
     }
+    if (length.value() > kMaxBodySize) {
+      return base::Err(base::Error::Parse("content-length too large"));
+    }
     return BodyFraming{BodyFraming::Kind::kContentLength, length.value()};
   }
 
@@ -441,6 +449,9 @@ template <typename Transport> struct ResponseReader
   // Exactly |count| bytes.
   base::Result<std::string> ReadExactly(std::size_t count)
   {
+    if (count > kMaxBodySize) {
+      return base::Err(base::Error::Parse("response body too large"));
+    }
     std::string out;
     out.reserve(count);
     while (out.size() < count) {

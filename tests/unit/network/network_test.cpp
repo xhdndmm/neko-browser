@@ -234,6 +234,10 @@ private:
     } else if (path == "/bad-gzip") {
       response = "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 4\r\n"
                  "\r\n\x1f\x8b\x08\x00";
+    } else if (path == "/huge-cl") {
+      // Content-Length above the 512 MiB body limit must be rejected by
+      // ClassifyBody before any allocation.
+      response = "HTTP/1.1 200 OK\r\nContent-Length: 1073741824\r\n\r\nx";
     } else {
       response = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nnot found";
     }
@@ -595,6 +599,20 @@ TEST(HttpTest, RejectsTruncatedContentLengthBody)
   // accepted silently.
   EXPECT_FALSE(ParseHttpResponse(
       "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nshort").has_value());
+}
+
+TEST(HttpTest, RejectsOversizedContentLength)
+{
+  // A Content-Length above the body limit must be rejected before any
+  // allocation (DoS guard); HttpGet must not try to read a 1 GiB body.
+  TestHttpServer server;
+  ASSERT_TRUE(server.IsValid());
+  const std::string host = "http://127.0.0.1:" + std::to_string(server.port()) + "/huge-cl";
+  const auto url = url::Url::Parse(host);
+  ASSERT_TRUE(url.has_value());
+  const auto result = HttpGet(url.value());
+  ASSERT_FALSE(result.has_value());
+  EXPECT_NE(result.error().message().find("content-length"), std::string::npos);
 }
 
 TEST(TlsTest, HttpsToHttpRedirectIsRefused)
