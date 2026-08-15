@@ -841,9 +841,28 @@ void StyleEngine::ApplyStyles(dom::Document& document)
   // <link rel=stylesheet> sheets (registered via SetExternalStylesheets) are
   // iterated directly by the cascade in ComputeElement — no per-Apply copy.
   author_sheets_.clear();
-  for (dom::Element* style : dom::QuerySelectorAll(document, "style")) {
-    css::StyleSheet sheet = css::ParseStyleSheet(style->TextContent());
-    author_sheets_.push_back(std::move(sheet));
+  std::vector<dom::Element*> style_elements = dom::QuerySelectorAll(document, "style");
+  for (dom::Element* style : style_elements) {
+    const std::string text = style->TextContent();
+    // Reuse the parsed sheet when the element's text is unchanged (scripts
+    // mutate the DOM every timer tick; re-parsing identical <style> content
+    // on each pass is wasted work).
+    auto it = author_parse_cache_.find(style);
+    if (it != author_parse_cache_.end() && it->second.first == text) {
+      author_sheets_.push_back(it->second.second); // copy; sheets are small
+      continue;
+    }
+    css::StyleSheet sheet = css::ParseStyleSheet(text);
+    author_sheets_.push_back(sheet);
+    author_parse_cache_[style] = std::make_pair(text, std::move(sheet));
+  }
+  // Prune cache entries for <style> elements that no longer exist.
+  if (author_parse_cache_.size() > style_elements.size()) {
+    for (auto it = author_parse_cache_.begin(); it != author_parse_cache_.end();) {
+      const bool alive = std::find(style_elements.begin(), style_elements.end(), it->first) !=
+                         style_elements.end();
+      it = alive ? std::next(it) : author_parse_cache_.erase(it);
+    }
   }
 
   // Rebuild the rule index (cheap relative to the cascade) so per-element

@@ -1,6 +1,7 @@
 #include "neko/paint/rasterizer.h"
 
 #include "neko/base/status.h"
+#include "neko/base/thread_pool.h"
 #include "neko/graphics/font_face.h"
 #include "neko/graphics/font_registry.h"
 #include "neko/graphics/font_selector.h"
@@ -11,7 +12,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
+#include <future>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -32,44 +35,198 @@ std::size_t PixelOffset(int x, int y, int width)
          4;
 }
 
-// Blends a source color onto a destination pixel.
+// Blends a source color onto a destination pixel using integer fixed-point
+// math (the floating-point reference algorithm produces the same result up to
+// rounding, without per-pixel float conversions).
 void BlendPixel(uint8_t& dr, uint8_t& dg, uint8_t& db, uint8_t& da, css::Color src)
 {
-  const float sa = static_cast<float>(src.a) / 255.0f;
-  const float da_float = static_cast<float>(da) / 255.0f;
-  const float out_a = sa + da_float * (1.0f - sa);
-  if (out_a <= 0.0f) {
+  const unsigned sa = src.a;
+  if (sa == 0) {
+    return;
+  }
+  const unsigned da_val = da;
+  const unsigned out_a = sa + ((da_val * (255 - sa) + 127) / 255);
+  if (out_a == 0) {
     return;
   }
   auto blend = [&](uint8_t dst, uint8_t s) -> uint8_t {
-    return static_cast<uint8_t>(
-        (static_cast<float>(s) * sa + static_cast<float>(dst) * da_float * (1.0f - sa)) / out_a +
-        0.5f);
+    const unsigned s_part = static_cast<unsigned>(s) * sa;
+    const unsigned d_part = (static_cast<unsigned>(dst) * da_val * (255 - sa) + 127) / 255;
+    return static_cast<uint8_t>((s_part + d_part) / out_a);
   };
   dr = blend(dr, src.r);
   dg = blend(dg, src.g);
   db = blend(db, src.b);
-  da = static_cast<uint8_t>(out_a * 255.0f + 0.5f);
+  da = static_cast<uint8_t>(out_a);
+}
+
+// 32-bit RGBA8888 pattern for a color (little-endian byte order r,g,b,a).
+std::uint32_t RgbaPattern(css::Color c)
+{
+  return (static_cast<std::uint32_t>(c.a) << 24) | (static_cast<std::uint32_t>(c.b) << 16) |
+         (static_cast<std::uint32_t>(c.g) << 8) | static_cast<std::uint32_t>(c.r);
 }
 
 } // namespace
 
-Rasterizer::Rasterizer(int width, int height) : width_(width), height_(height)
+Rasterizer::Rasterizer(int width, int height) : width_(width), height_(height), band_y1_(height)
 {
   pixels_.assign(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4, 0);
+  pixels_data_ = pixels_.data();
+}
+
+Rasterizer::Rasterizer(uint8_t* pixels, int width, int full_height, int band_y0, int band_height)
+    : owns_pixels_(false), pixels_data_(pixels), width_(width), height_(full_height),
+      band_y0_(band_y0), band_y1_(band_y0 + band_height), band_origin_y_(band_y0)
+{}
+
+Rasterizer::Rasterizer(const Rasterizer& other)
+    : owns_pixels_(other.owns_pixels_), pixels_data_(other.pixels_data_), width_(other.width_),
+      height_(other.height_), band_y0_(other.band_y0_), band_y1_(other.band_y1_),
+      scroll_offset_(other.scroll_offset_), pixels_(other.pixels_), registry_(other.registry_),
+      clips_(other.clips_)
+{
+  if (owns_pixels_) {
+    pixels_data_ = pixels_.data();
+  }
+}
+
+Rasterizer& Rasterizer::operator=(const Rasterizer& other)
+{
+  if (this == &other) {
+    return *this;
+  }
+  owns_pixels_ = other.owns_pixels_;
+  width_ = other.width_;
+  height_ = other.height_;
+  band_y0_ = other.band_y0_;
+  band_y1_ = other.band_y1_;
+  scroll_offset_ = other.scroll_offset_;
+  registry_ = other.registry_;
+  clips_ = other.clips_;
+  pixels_ = other.pixels_;
+  pixels_data_ = owns_pixels_ ? pixels_.data() : other.pixels_data_;
+  return *this;
+}
+
+Rasterizer::Rasterizer(Rasterizer&& other) noexcept
+    : owns_pixels_(other.owns_pixels_), pixels_data_(other.pixels_data_), width_(other.width_),
+      height_(other.height_), band_y0_(other.band_y0_), band_y1_(other.band_y1_),
+      scroll_offset_(other.scroll_offset_), pixels_(std::move(other.pixels_)),
+      registry_(other.registry_), clips_(std::move(other.clips_))
+{
+  if (owns_pixels_) {
+    pixels_data_ = pixels_.data();
+  }
+  other.pixels_data_ = other.pixels_.data();
+}
+
+Rasterizer& Rasterizer::operator=(Rasterizer&& other) noexcept
+{
+  if (this == &other) {
+    return *this;
+  }
+  owns_pixels_ = other.owns_pixels_;
+  width_ = other.width_;
+  height_ = other.height_;
+  band_y0_ = other.band_y0_;
+  band_y1_ = other.band_y1_;
+  scroll_offset_ = other.scroll_offset_;
+  registry_ = other.registry_;
+  clips_ = std::move(other.clips_);
+  pixels_ = std::move(other.pixels_);
+  pixels_data_ = owns_pixels_ ? pixels_.data() : other.pixels_data_;
+  other.pixels_data_ = other.pixels_.data();
+  return *this;
+}
+
+void Rasterizer::Resize(int width, int height)
+{
+  if (width == width_ && height == height_) {
+    return;
+  }
+  if (width < 0) {
+    width = 0;
+  }
+  if (height < 0) {
+    height = 0;
+  }
+  width_ = width;
+  height_ = height;
+  band_y0_ = 0;
+  band_y1_ = height;
+  pixels_.resize(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4);
+  pixels_data_ = pixels_.data();
 }
 
 void Rasterizer::Clear(css::Color color)
 {
-  for (int y = 0; y < height_; ++y) {
-    for (int x = 0; x < width_; ++x) {
-      const std::size_t offset = PixelOffset(x, y, width_);
-      pixels_[offset] = color.r;
-      pixels_[offset + 1] = color.g;
-      pixels_[offset + 2] = color.b;
-      pixels_[offset + 3] = color.a;
+  const std::size_t n = static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_);
+  const std::uint32_t pattern = RgbaPattern(color);
+  std::uint32_t* dst = reinterpret_cast<std::uint32_t*>(pixels_data_);
+  std::fill_n(dst, n, pattern);
+}
+
+void Rasterizer::ClearBand(int y0, int y1, css::Color color)
+{
+  y0 = Clamp(y0, 0, height_);
+  y1 = Clamp(y1, 0, height_);
+  if (y1 <= y0) {
+    return;
+  }
+  const std::uint32_t pattern = RgbaPattern(color);
+  std::uint32_t* base = reinterpret_cast<std::uint32_t*>(pixels_data_);
+  for (int y = y0; y < y1; ++y) {
+    std::fill_n(base + static_cast<std::size_t>(y) * static_cast<std::size_t>(width_),
+                static_cast<std::size_t>(width_),
+                pattern);
+  }
+}
+
+void Rasterizer::SetVisibleBand(int y0, int y1)
+{
+  band_y0_ = Clamp(y0, 0, height_);
+  band_y1_ = Clamp(y1, 0, height_);
+}
+
+void Rasterizer::ShiftRows(int delta)
+{
+  if (delta == 0) {
+    return;
+  }
+  const std::size_t row_bytes = static_cast<std::size_t>(width_) * 4;
+  if (delta > 0) {
+    // Content moves down; copy from the top of the buffer to avoid clobbering
+    // sources still needed further down.
+    for (int y = height_ - 1; y >= delta; --y) {
+      std::memcpy(pixels_data_ + static_cast<std::size_t>(y) * row_bytes,
+                  pixels_data_ + static_cast<std::size_t>(y - delta) * row_bytes,
+                  row_bytes);
+    }
+  } else {
+    const int d = -delta;
+    for (int y = 0; y + d < height_; ++y) {
+      std::memcpy(pixels_data_ + static_cast<std::size_t>(y) * row_bytes,
+                  pixels_data_ + static_cast<std::size_t>(y + d) * row_bytes,
+                  row_bytes);
     }
   }
+}
+
+void Rasterizer::ClampToBand(int& y0, int& y1) const
+{
+  if (band_y0_ <= 0 && band_y1_ >= height_) {
+    return;
+  }
+  y0 = std::max(y0, band_y0_);
+  y1 = std::min(y1, band_y1_);
+}
+
+std::size_t Rasterizer::BandOffset(int x, int y) const
+{
+  return (static_cast<std::size_t>(y - band_origin_y_) * static_cast<std::size_t>(width_) +
+          static_cast<std::size_t>(x)) *
+         4;
 }
 
 float Rasterizer::TextWidth(std::string_view text, float font_size)
@@ -119,6 +276,50 @@ void Rasterizer::Rasterize(const DisplayList& list)
   }
 }
 
+void Rasterizer::RasterizeParallel(const DisplayList& list,
+                                   base::ThreadPool& pool,
+                                   int min_band_height)
+{
+  const std::size_t workers = pool.thread_count();
+  if (workers <= 1 || height_ < min_band_height || !owns_pixels_) {
+    Rasterize(list);
+    return;
+  }
+  // Split the viewport into horizontal bands; each pixel belongs to exactly
+  // one band, so the bands rasterize independently and write disjoint rows.
+  const int num_bands =
+      std::min<int>(static_cast<int>(workers), std::max(1, height_ / min_band_height));
+  std::vector<int> band_starts(static_cast<std::size_t>(num_bands) + 1);
+  for (int i = 0; i <= num_bands; ++i) {
+    band_starts[static_cast<std::size_t>(i)] = height_ * i / num_bands;
+  }
+  std::vector<std::future<void>> futures;
+  futures.reserve(static_cast<std::size_t>(num_bands));
+  for (int i = 0; i < num_bands; ++i) {
+    const int y0 = band_starts[static_cast<std::size_t>(i)];
+    const int y1 = band_starts[static_cast<std::size_t>(i) + 1];
+    if (y1 <= y0) {
+      continue;
+    }
+    futures.push_back(pool.Submit([this, &list, y0, y1] {
+      // A band view: full-page coordinate space, writing only rows [y0, y1)
+      // of the shared buffer (translated by the band's origin).
+      Rasterizer view(pixels_data_ +
+                          static_cast<std::size_t>(y0) * static_cast<std::size_t>(width_) * 4,
+                      width_,
+                      height_,
+                      y0,
+                      y1 - y0);
+      view.registry_ = registry_;
+      view.scroll_offset_ = scroll_offset_;
+      view.Rasterize(list);
+    }));
+  }
+  for (std::future<void>& f : futures) {
+    f.wait();
+  }
+}
+
 void Rasterizer::SetScrollOffset(float offset)
 {
   scroll_offset_ = offset;
@@ -157,11 +358,17 @@ void Rasterizer::FillRect(float x, float y, float width, float height, css::Colo
   const int y0 = Clamp(static_cast<int>(std::floor(y)), 0, height_ - 1);
   const int x1 = Clamp(static_cast<int>(std::ceil(x + width)), 0, width_);
   const int y1 = Clamp(static_cast<int>(std::ceil(y + height)), 0, height_);
-  for (int py = y0; py < y1; ++py) {
+  int band_y0 = y0;
+  int band_y1 = y1;
+  ClampToBand(band_y0, band_y1);
+  for (int py = band_y0; py < band_y1; ++py) {
     for (int px = x0; px < x1; ++px) {
-      const std::size_t offset = PixelOffset(px, py, width_);
-      BlendPixel(
-          pixels_[offset], pixels_[offset + 1], pixels_[offset + 2], pixels_[offset + 3], color);
+      const std::size_t offset = BandOffset(px, py);
+      BlendPixel(pixels_data_[offset],
+                 pixels_data_[offset + 1],
+                 pixels_data_[offset + 2],
+                 pixels_data_[offset + 3],
+                 color);
     }
   }
 }
@@ -184,12 +391,15 @@ void Rasterizer::FillRoundRect(
   const float right = x + width - radius;
   const float top = y + radius;
   const float bottom = y + height - radius;
-  for (int py = y0; py < y1; ++py) {
+  int band_y0 = y0;
+  int band_y1 = y1;
+  ClampToBand(band_y0, band_y1);
+  for (int py = band_y0; py < band_y1; ++py) {
     for (int px = x0; px < x1; ++px) {
       // Pixel centre: inside the rounded region unless it falls in a corner
       // outside the corner's quarter circle.
-      const float cx = px + 0.5f;
-      const float cy = py + 0.5f;
+      const float cx = static_cast<float>(px) + 0.5f;
+      const float cy = static_cast<float>(py) + 0.5f;
       bool inside = true;
       if (cx < left && cy < top) {
         const float dx = cx - left;
@@ -211,9 +421,12 @@ void Rasterizer::FillRoundRect(
       if (!inside) {
         continue;
       }
-      const std::size_t offset = PixelOffset(px, py, width_);
-      BlendPixel(
-          pixels_[offset], pixels_[offset + 1], pixels_[offset + 2], pixels_[offset + 3], color);
+      const std::size_t offset = BandOffset(px, py);
+      BlendPixel(pixels_data_[offset],
+                 pixels_data_[offset + 1],
+                 pixels_data_[offset + 2],
+                 pixels_data_[offset + 3],
+                 color);
     }
   }
 }
@@ -296,17 +509,18 @@ void Rasterizer::DrawTextFreetype(const DrawCommand& command)
   float pen_x = command.x;
   float total_width = 0;
   for (const uint32_t code_point : code_points) {
-    const graphics::GlyphBitmap* glyph = selector->RenderGlyph(code_point, command.font_size);
-    if (glyph == nullptr) {
+    const std::optional<graphics::RasterizedGlyph> glyph =
+        selector->RenderGlyph(code_point, command.font_size);
+    if (!glyph.has_value()) {
       pen_x += command.font_size * 0.5f;
       continue;
     }
-    BlendGlyph(static_cast<int>(std::round(pen_x)) + glyph->left,
-               static_cast<int>(std::round(baseline)) - glyph->top,
-               *glyph,
+    BlendGlyph(static_cast<int>(std::round(pen_x)) + glyph->glyph.left,
+               static_cast<int>(std::round(baseline)) - glyph->glyph.top,
+               glyph->glyph,
                command.text_color);
-    pen_x += glyph->advance;
-    total_width += glyph->advance;
+    pen_x += glyph->glyph.advance;
+    total_width += glyph->glyph.advance;
   }
 
   if (command.underline) {
@@ -382,6 +596,10 @@ void Rasterizer::DrawImage(const DrawCommand& command)
       return;
     }
   }
+  ClampToBand(y0, y1);
+  if (x0 >= x1 || y0 >= y1) {
+    return;
+  }
   for (int py = y0; py < y1; ++py) {
     const int src_y =
         std::min(img.height - 1, static_cast<int>((static_cast<float>(py) - dst_y) / dst_h * ih));
@@ -392,9 +610,12 @@ void Rasterizer::DrawImage(const DrawCommand& command)
           std::min(img.width - 1, static_cast<int>((static_cast<float>(px) - dst_x) / dst_w * iw));
       const std::size_t so = static_cast<std::size_t>(src_x) * 4;
       const css::Color pixel{row[so], row[so + 1], row[so + 2], row[so + 3]};
-      const std::size_t offset = PixelOffset(px, py, width_);
-      BlendPixel(
-          pixels_[offset], pixels_[offset + 1], pixels_[offset + 2], pixels_[offset + 3], pixel);
+      const std::size_t offset = BandOffset(px, py);
+      BlendPixel(pixels_data_[offset],
+                 pixels_data_[offset + 1],
+                 pixels_data_[offset + 2],
+                 pixels_data_[offset + 3],
+                 pixel);
     }
   }
 }
@@ -402,13 +623,15 @@ void Rasterizer::DrawImage(const DrawCommand& command)
 void Rasterizer::BlendGlyph(int x, int y, const graphics::GlyphBitmap& glyph, css::Color color)
 {
   const int scroll = static_cast<int>(std::round(scroll_offset_));
-  for (int row = 0; row < glyph.height; ++row) {
-    const int py = y + row - scroll;
-    if (py < 0 || py >= height_) {
-      continue;
-    }
-    const uint8_t* src =
-        glyph.data + static_cast<std::size_t>(row) * static_cast<std::size_t>(glyph.pitch);
+  // |y| is in document coordinates; convert to screen space for clipping.
+  const int screen_top = y - scroll;
+  int py0 = std::max(0, screen_top);
+  int py1 = std::min(height_, screen_top + glyph.height);
+  ClampToBand(py0, py1);
+  for (int row = py0; row < py1; ++row) {
+    const int py = row;
+    const uint8_t* src = glyph.data + static_cast<std::size_t>(row - screen_top) *
+                                          static_cast<std::size_t>(glyph.pitch);
     for (int col = 0; col < glyph.width; ++col) {
       const int px = x + col;
       if (px < 0 || px >= width_) {
@@ -430,9 +653,12 @@ void Rasterizer::BlendGlyph(int x, int y, const graphics::GlyphBitmap& glyph, cs
       }
       const css::Color shaded{
           color.r, color.g, color.b, static_cast<uint8_t>((color.a * alpha) / 255)};
-      const std::size_t offset = PixelOffset(px, py, width_);
-      BlendPixel(
-          pixels_[offset], pixels_[offset + 1], pixels_[offset + 2], pixels_[offset + 3], shaded);
+      const std::size_t offset = BandOffset(px, py);
+      BlendPixel(pixels_data_[offset],
+                 pixels_data_[offset + 1],
+                 pixels_data_[offset + 2],
+                 pixels_data_[offset + 3],
+                 shaded);
     }
   }
 }

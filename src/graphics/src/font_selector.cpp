@@ -1,20 +1,21 @@
 #include "neko/graphics/font_selector.h"
 
+#include "neko/graphics/font_face.h"
+#include "neko/graphics/font_library.h"
+#include "neko/graphics/system_fonts.h"
+#include "neko/graphics/utf8.h"
+
 #include <algorithm>
 #include <cctype>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include "neko/graphics/font_face.h"
-#include "neko/graphics/font_library.h"
-#include "neko/graphics/system_fonts.h"
-#include "neko/graphics/utf8.h"
-
 namespace neko::graphics {
 namespace {
 
-std::string Trim(std::string_view s) {
+std::string Trim(std::string_view s)
+{
   std::size_t begin = 0;
   std::size_t end = s.size();
   while (begin < end && std::isspace(static_cast<unsigned char>(s[begin])) != 0) {
@@ -26,7 +27,8 @@ std::string Trim(std::string_view s) {
   return std::string(s.substr(begin, end - begin));
 }
 
-std::string Lower(std::string_view s) {
+std::string Lower(std::string_view s)
+{
   std::string out;
   out.reserve(s.size());
   for (const char c : s) {
@@ -36,19 +38,23 @@ std::string Lower(std::string_view s) {
 }
 
 // Strips surrounding quotes from a CSS family name ("Noto Sans" or 'Noto').
-std::string Unquote(std::string_view s) {
-  if (s.size() >= 2 && ((s.front() == '"' && s.back() == '"') ||
-                        (s.front() == '\'' && s.back() == '\''))) {
+std::string Unquote(std::string_view s)
+{
+  if (s.size() >= 2 &&
+      ((s.front() == '"' && s.back() == '"') || (s.front() == '\'' && s.back() == '\''))) {
     return std::string(s.substr(1, s.size() - 2));
   }
   return std::string(s);
 }
 
-}  // namespace
+} // namespace
 
-FontSelector::FontSelector(const FontLibrary& library, std::string_view family, int weight,
+FontSelector::FontSelector(const FontLibrary& library,
+                           std::string_view family,
+                           int weight,
                            bool italic)
-    : library_(library), weight_(weight), italic_(italic) {
+    : library_(library), weight_(weight), italic_(italic)
+{
   // Split the CSS family list on commas.
   std::size_t start = 0;
   while (start <= family.size()) {
@@ -70,15 +76,16 @@ FontSelector::FontSelector(const FontLibrary& library, std::string_view family, 
     if (face == nullptr) {
       continue;
     }
-    const bool already = std::any_of(faces_.begin(), faces_.end(),
-                                     [&](const FontFace* f) { return f->path() == path; });
+    const bool already = std::any_of(
+        faces_.begin(), faces_.end(), [&](const FontFace* f) { return f->path() == path; });
     if (!already) {
       faces_.push_back(face);
     }
   }
 }
 
-void FontSelector::AddFamily(const FontLibrary& library, std::string_view family_name) {
+void FontSelector::AddFamily(const FontLibrary& library, std::string_view family_name)
+{
   if (family_name.empty()) {
     return;
   }
@@ -114,43 +121,71 @@ void FontSelector::AddFamily(const FontLibrary& library, std::string_view family
   }
 }
 
-const FontFace* FontSelector::FaceForCodePoint(uint32_t code_point) const {
+const FontFace* FontSelector::FaceForCodePoint(uint32_t code_point) const
+{
   for (const FontFace* face : faces_) {
     if (face->HasGlyph(code_point)) {
       return face;
     }
   }
-  return faces_.empty() ? nullptr : faces_[0];  // last resort: .notdef
+  return faces_.empty() ? nullptr : faces_[0]; // last resort: .notdef
 }
 
-float FontSelector::TextWidth(std::string_view text, float px_size) const {
+float FontSelector::TextWidth(std::string_view text, float px_size) const
+{
+  // Memoize per (text, size): layout measures the same strings repeatedly.
+  // The key is a single string (text + size) so one allocation covers both.
+  std::string key;
+  key.reserve(text.size() + 8);
+  key.append(text);
+  key.push_back('\x1f');
+  key.append(std::to_string(px_size));
+
+  {
+    std::lock_guard<std::mutex> lock(width_mutex_);
+    const auto it = width_cache_.find(key);
+    if (it != width_cache_.end()) {
+      return it->second;
+    }
+  }
+
   std::vector<uint32_t> code_points;
   DecodeUtf8(text, code_points);
   float width = 0;
   for (const uint32_t code_point : code_points) {
     width += Advance(code_point, px_size);
   }
+
+  std::lock_guard<std::mutex> lock(width_mutex_);
+  if (width_cache_.size() >= kWidthCacheCap) {
+    width_cache_.clear();
+  }
+  width_cache_.emplace(std::move(key), width);
   return width;
 }
 
-float FontSelector::Advance(uint32_t code_point, float px_size) const {
+float FontSelector::Advance(uint32_t code_point, float px_size) const
+{
   const FontFace* face = FaceForCodePoint(code_point);
   return face != nullptr ? face->Advance(code_point, px_size) : 0.0f;
 }
 
-const GlyphBitmap* FontSelector::RenderGlyph(uint32_t code_point, float px_size) const {
+std::optional<RasterizedGlyph> FontSelector::RenderGlyph(uint32_t code_point, float px_size) const
+{
   const FontFace* face = FaceForCodePoint(code_point);
-  return face != nullptr ? face->RenderGlyph(code_point, px_size) : nullptr;
+  return face != nullptr ? face->RenderGlyph(code_point, px_size) : std::nullopt;
 }
 
-float FontSelector::Ascent(float px_size) const {
+float FontSelector::Ascent(float px_size) const
+{
   const FontFace* face = PrimaryFace();
   return face != nullptr ? face->Ascent(px_size) : 0.0f;
 }
 
-float FontSelector::Descent(float px_size) const {
+float FontSelector::Descent(float px_size) const
+{
   const FontFace* face = PrimaryFace();
   return face != nullptr ? face->Descent(px_size) : 0.0f;
 }
 
-}  // namespace neko::graphics
+} // namespace neko::graphics

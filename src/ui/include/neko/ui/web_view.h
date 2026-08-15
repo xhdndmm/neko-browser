@@ -1,8 +1,11 @@
 #pragma once
 
-#include <QAbstractScrollArea>
-
 #include "neko/browser/browser_controller.h"
+#include "neko/paint/rasterizer.h"
+
+#include <QAbstractScrollArea>
+#include <cstdint>
+#include <optional>
 
 class QPlainTextEdit;
 
@@ -21,21 +24,30 @@ class BrowserWorker;
 // events use the last snapshot, which owns its payload through shared
 // handles — so closing or navigating the tab can never invalidate what this
 // view is rendering.
-class WebView : public QAbstractScrollArea {
+//
+// Rendering performance: the viewport raster is cached and reused across
+// paint events.  Pure scrolls shift the cached buffer (memmove) and
+// re-rasterize only the newly exposed rows; full repaints happen only when
+// the viewport resizes or the page's layout version changes.
+class WebView : public QAbstractScrollArea
+{
   Q_OBJECT
- public:
+public:
   WebView(BrowserWorker* worker, int tab_id, QWidget* parent = nullptr);
 
-  void Refresh();  // re-read the tab snapshot; re-render and resync overlays
-  int tab_id() const { return tab_id_; }
+  void Refresh(); // re-read the tab snapshot; re-render and resync overlays
+  int tab_id() const
+  {
+    return tab_id_;
+  }
 
- protected:
+protected:
   void paintEvent(QPaintEvent* event) override;
   void resizeEvent(QResizeEvent* event) override;
   void wheelEvent(QWheelEvent* event) override;
   bool viewportEvent(QEvent* event) override;
 
- private:
+private:
   void PaintHtml(QPainter& painter);
   void PaintImage(QPainter& painter);
   void UpdateTextOverlay();
@@ -49,8 +61,15 @@ class WebView : public QAbstractScrollArea {
   // Last consistent copy of the tab's renderable state; GUI-thread only.
   browser::TabSnapshot snapshot_;
   QPlainTextEdit* text_view_;
-  int laid_out_width_ = -1;  // viewport width the page was last laid out at
-  int wheel_accum_ = 0;      // fractional wheel delta (eighths of a degree)
+  int laid_out_width_ = -1; // viewport width the page was last laid out at
+  int wheel_accum_ = 0;     // fractional wheel delta (eighths of a degree)
+
+  // Cached viewport raster + the state it was produced for (GUI thread).
+  std::optional<paint::Rasterizer> raster_cache_;
+  int cached_width_ = -1;
+  int cached_height_ = -1;
+  int cached_scroll_ = -1;
+  std::uint64_t cached_layout_version_ = 0;
 };
 
-}  // namespace neko::ui
+} // namespace neko::ui

@@ -72,6 +72,13 @@ private:
   std::vector<css::StyleSheet> author_sheets_;
   std::vector<css::StyleSheet> external_sheets_;
   std::unique_ptr<CascadeBuckets> buckets_;
+
+  // Parsed <style> element text, keyed by the element: re-parsing identical
+  // <style> content on every ReapplyStyles pass (scripts mutate the DOM every
+  // timer tick) is expensive, so sheets are reused while the text is
+  // unchanged.  Entries for removed elements are pruned each ApplyStyles.
+  std::unordered_map<const dom::Element*, std::pair<std::string, css::StyleSheet>>
+      author_parse_cache_;
 };
 
 } // namespace neko::style

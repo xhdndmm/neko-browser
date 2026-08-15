@@ -1,20 +1,21 @@
 #include "neko/graphics/font_face.h"
 
 #include <cstring>
-#include <vector>
-
 #include <ft2build.h>
+#include <vector>
 #include FT_FREETYPE_H
 
-#include "internal.h"
 #include "neko/graphics/glyph_cache.h"
 #include "neko/graphics/utf8.h"
+
+#include "internal.h"
 
 namespace neko::graphics {
 namespace {
 
 // Applies |px_size| to |face|; returns true on success.
-bool SetPixelSize(FT_Face face, float px_size) {
+bool SetPixelSize(FT_Face face, float px_size)
+{
   if (px_size <= 0.0f) {
     return false;
   }
@@ -22,13 +23,19 @@ bool SetPixelSize(FT_Face face, float px_size) {
   return FT_Set_Pixel_Sizes(face, 0, px) == 0;
 }
 
-}  // namespace
+} // namespace
 
-struct FontFace::Impl {
+struct FontFace::Impl
+{
   FT_Face face = nullptr;
+  // Serializes FreeType access on this face.  The face stores mutable state
+  // (current pixel size, glyph slot), so concurrent users must be serialized;
+  // this also keeps the font caches' rasterization atomic per face.
+  mutable std::mutex ft_mutex;
 };
 
-FontFace::FontFace(std::string path) : impl_(new Impl), path_(std::move(path)) {
+FontFace::FontFace(std::string path) : impl_(new Impl), path_(std::move(path))
+{
   FT_Library library = SharedFreeTypeLibrary();
   if (library == nullptr) {
     return;
@@ -38,27 +45,37 @@ FontFace::FontFace(std::string path) : impl_(new Impl), path_(std::move(path)) {
   }
 }
 
-FontFace::~FontFace() {
+FontFace::~FontFace()
+{
   if (impl_->face != nullptr) {
     FT_Done_Face(impl_->face);
   }
 }
 
-bool FontFace::valid() const { return impl_->face != nullptr; }
+bool FontFace::valid() const
+{
+  return impl_->face != nullptr;
+}
 
-bool FontFace::HasGlyph(uint32_t code_point) const {
+bool FontFace::HasGlyph(uint32_t code_point) const
+{
   if (!valid()) {
     return false;
   }
+  std::lock_guard<std::mutex> lock(impl_->ft_mutex);
   return FT_Get_Char_Index(impl_->face, static_cast<FT_ULong>(code_point)) != 0;
 }
 
-float FontFace::Advance(uint32_t code_point, float px_size) const {
-  if (!valid() || !SetPixelSize(impl_->face, px_size)) {
+float FontFace::Advance(uint32_t code_point, float px_size) const
+{
+  if (!valid()) {
     return 0.0f;
   }
-  const FT_UInt glyph_index =
-      FT_Get_Char_Index(impl_->face, static_cast<FT_ULong>(code_point));
+  std::lock_guard<std::mutex> lock(impl_->ft_mutex);
+  if (!SetPixelSize(impl_->face, px_size)) {
+    return 0.0f;
+  }
+  const FT_UInt glyph_index = FT_Get_Char_Index(impl_->face, static_cast<FT_ULong>(code_point));
   // glyph_index 0 is the .notdef glyph; loading it yields the missing-glyph
   // advance so unknown characters still take horizontal space.
   if (FT_Load_Glyph(impl_->face, glyph_index, FT_LOAD_DEFAULT) != 0) {
@@ -67,7 +84,8 @@ float FontFace::Advance(uint32_t code_point, float px_size) const {
   return static_cast<float>(impl_->face->glyph->advance.x) / 64.0f;
 }
 
-float FontFace::TextWidth(std::string_view text, float px_size) const {
+float FontFace::TextWidth(std::string_view text, float px_size) const
+{
   std::vector<uint32_t> code_points;
   DecodeUtf8(text, code_points);
   float width = 0;
@@ -77,54 +95,73 @@ float FontFace::TextWidth(std::string_view text, float px_size) const {
   return width;
 }
 
-const GlyphBitmap* FontFace::RenderGlyph(uint32_t code_point, float px_size) const {
+std::optional<RasterizedGlyph> FontFace::RenderGlyph(uint32_t code_point, float px_size) const
+{
   if (!valid() || px_size <= 0.0f) {
-    return nullptr;
+    return std::nullopt;
   }
   const int px = static_cast<int>(px_size + 0.5f);
   GlyphCache& cache = GlyphCache::Instance();
-  if (const GlyphBitmap* hit = cache.Find(*this, code_point, px)) {
+
+  // Cache hit: the cache returns an owned copy (data copied while its lock is
+  // held), so concurrent eviction by parallel band workers cannot invalidate
+  // what the caller uses.
+  if (std::optional<RasterizedGlyph> hit = cache.GetOwned(*this, code_point, px)) {
     return hit;
   }
+
+  // Rasterize under the face lock; the cache operations are internally
+  // thread-safe.
+  std::lock_guard<std::mutex> lock(impl_->ft_mutex);
   if (!SetPixelSize(impl_->face, px_size)) {
-    return nullptr;
+    return std::nullopt;
   }
-  const FT_UInt glyph_index =
-      FT_Get_Char_Index(impl_->face, static_cast<FT_ULong>(code_point));
+  const FT_UInt glyph_index = FT_Get_Char_Index(impl_->face, static_cast<FT_ULong>(code_point));
   if (FT_Load_Glyph(impl_->face, glyph_index, FT_LOAD_RENDER | FT_LOAD_TARGET_NORMAL) != 0) {
-    return nullptr;
+    return std::nullopt;
   }
   const FT_GlyphSlot slot = impl_->face->glyph;
   if (slot->bitmap.pixel_mode != FT_PIXEL_MODE_GRAY) {
-    return nullptr;  // color/other bitmap formats are out of scope for now
+    return std::nullopt; // color/other bitmap formats are out of scope for now
   }
   const int width = static_cast<int>(slot->bitmap.width);
   const int height = static_cast<int>(slot->bitmap.rows);
+  RasterizedGlyph out;
   if (width <= 0 || height <= 0 || slot->bitmap.buffer == nullptr) {
     // Whitespace glyphs have a zero-size bitmap but a valid advance.
-    GlyphBitmap empty;
-    empty.advance = static_cast<float>(slot->advance.x) / 64.0f;
-    return cache.Insert(*this, code_point, px, empty, {});
+    out.glyph.advance = static_cast<float>(slot->advance.x) / 64.0f;
+    out.glyph.data = nullptr;
+    cache.Insert(*this, code_point, px, out.glyph, {});
+    return out;
   }
-  std::vector<uint8_t> storage(static_cast<std::size_t>(width) * static_cast<std::size_t>(height));
+  out.storage.resize(static_cast<std::size_t>(width) * static_cast<std::size_t>(height));
   for (int row = 0; row < height; ++row) {
-    std::memcpy(storage.data() + static_cast<std::size_t>(row) * static_cast<std::size_t>(width),
+    std::memcpy(out.storage.data() +
+                    static_cast<std::size_t>(row) * static_cast<std::size_t>(width),
                 slot->bitmap.buffer + row * slot->bitmap.pitch,
                 static_cast<std::size_t>(width));
   }
-  GlyphBitmap glyph;
-  glyph.width = width;
-  glyph.height = height;
-  glyph.pitch = width;
-  glyph.left = slot->bitmap_left;
-  glyph.top = slot->bitmap_top;
-  glyph.advance = static_cast<float>(slot->advance.x) / 64.0f;
-  glyph.data = storage.data();
-  return cache.Insert(*this, code_point, px, glyph, std::move(storage));
+  out.glyph.width = width;
+  out.glyph.height = height;
+  out.glyph.pitch = width;
+  out.glyph.left = slot->bitmap_left;
+  out.glyph.top = slot->bitmap_top;
+  out.glyph.advance = static_cast<float>(slot->advance.x) / 64.0f;
+  out.glyph.data = out.storage.data();
+
+  // Store a copy in the cache (the cache fixes up its own data pointer) and
+  // return the caller's owned copy; no pointer into the cache escapes.
+  cache.Insert(*this, code_point, px, out.glyph, out.storage);
+  return out;
 }
 
-float FontFace::Ascent(float px_size) const {
-  if (!valid() || !SetPixelSize(impl_->face, px_size) || impl_->face->size == nullptr) {
+float FontFace::Ascent(float px_size) const
+{
+  if (!valid()) {
+    return 0.0f;
+  }
+  std::lock_guard<std::mutex> lock(impl_->ft_mutex);
+  if (!SetPixelSize(impl_->face, px_size) || impl_->face->size == nullptr) {
     return 0.0f;
   }
   // face->size->metrics are scaled to the current pixel size (26.6 fixed
@@ -132,8 +169,13 @@ float FontFace::Ascent(float px_size) const {
   return static_cast<float>(impl_->face->size->metrics.ascender) / 64.0f;
 }
 
-float FontFace::Descent(float px_size) const {
-  if (!valid() || !SetPixelSize(impl_->face, px_size) || impl_->face->size == nullptr) {
+float FontFace::Descent(float px_size) const
+{
+  if (!valid()) {
+    return 0.0f;
+  }
+  std::lock_guard<std::mutex> lock(impl_->ft_mutex);
+  if (!SetPixelSize(impl_->face, px_size) || impl_->face->size == nullptr) {
     return 0.0f;
   }
   // FreeType's descender is negative (below the baseline); report a positive
@@ -141,4 +183,4 @@ float FontFace::Descent(float px_size) const {
   return -static_cast<float>(impl_->face->size->metrics.descender) / 64.0f;
 }
 
-}  // namespace neko::graphics
+} // namespace neko::graphics

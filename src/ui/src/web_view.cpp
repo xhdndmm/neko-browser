@@ -1,7 +1,8 @@
 #include "neko/ui/web_view.h"
 
-#include <optional>
-#include <string>
+#include "neko/browser/hyperlink.h"
+#include "neko/paint/rasterizer.h"
+#include "neko/ui/browser_worker.h"
 
 #include <QEvent>
 #include <QImage>
@@ -11,15 +12,14 @@
 #include <QScrollBar>
 #include <QVBoxLayout>
 #include <QWheelEvent>
-
-#include "neko/browser/hyperlink.h"
-#include "neko/paint/rasterizer.h"
-#include "neko/ui/browser_worker.h"
+#include <optional>
+#include <string>
 
 namespace neko::ui {
 
 WebView::WebView(BrowserWorker* worker, int tab_id, QWidget* parent)
-    : QAbstractScrollArea(parent), worker_(worker), tab_id_(tab_id) {
+    : QAbstractScrollArea(parent), worker_(worker), tab_id_(tab_id)
+{
   viewport()->setAutoFillBackground(true);
   setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
@@ -27,9 +27,8 @@ WebView::WebView(BrowserWorker* worker, int tab_id, QWidget* parent)
   // scrolling is handled separately in wheelEvent().
   verticalScrollBar()->setSingleStep(50);
   // Re-render the visible region whenever the scroll position changes.
-  connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int) {
-    viewport()->update();
-  });
+  connect(
+      verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int) { viewport()->update(); });
 
   text_view_ = new QPlainTextEdit(viewport());
   text_view_->setReadOnly(true);
@@ -37,13 +36,14 @@ WebView::WebView(BrowserWorker* worker, int tab_id, QWidget* parent)
   text_view_->hide();
 }
 
-void WebView::Refresh() {
+void WebView::Refresh()
+{
   snapshot_ = worker_->SnapshotTab(tab_id_);
   // A freshly loaded page has no layout tree yet; treat it as a new
   // navigation and return to the top so we don't carry over the previous
   // page's scroll offset.
-  if (snapshot_.content_type == browser::ContentType::kHtml &&
-      snapshot_.page != nullptr && snapshot_.page->layout_root() == nullptr) {
+  if (snapshot_.content_type == browser::ContentType::kHtml && snapshot_.page != nullptr &&
+      snapshot_.page->layout_root() == nullptr) {
     verticalScrollBar()->setValue(0);
   }
   UpdateTextOverlay();
@@ -51,14 +51,16 @@ void WebView::Refresh() {
   viewport()->update();
 }
 
-void WebView::resizeEvent(QResizeEvent* event) {
+void WebView::resizeEvent(QResizeEvent* event)
+{
   QAbstractScrollArea::resizeEvent(event);
   UpdateScrollRange();
   text_view_->setGeometry(viewport()->rect());
   viewport()->update();
 }
 
-void WebView::wheelEvent(QWheelEvent* event) {
+void WebView::wheelEvent(QWheelEvent* event)
+{
   const int delta = event->angleDelta().y();
   if (delta == 0) {
     event->ignore();
@@ -79,7 +81,8 @@ void WebView::wheelEvent(QWheelEvent* event) {
   event->accept();
 }
 
-bool WebView::viewportEvent(QEvent* event) {
+bool WebView::viewportEvent(QEvent* event)
+{
   // The viewport (not the scroll area) resizes when a scroll bar appears or
   // disappears, so re-sync the scroll range here in addition to resizeEvent().
   if (event->type() == QEvent::Resize) {
@@ -93,11 +96,13 @@ bool WebView::viewportEvent(QEvent* event) {
   return QAbstractScrollArea::viewportEvent(event);
 }
 
-float WebView::ScrollY() const {
+float WebView::ScrollY() const
+{
   return static_cast<float>(verticalScrollBar()->value());
 }
 
-void WebView::HandleLinkClick(const QPointF& viewport_pos) {
+void WebView::HandleLinkClick(const QPointF& viewport_pos)
+{
   if (snapshot_.id < 0 || snapshot_.content_type != browser::ContentType::kHtml ||
       snapshot_.page == nullptr) {
     return;
@@ -108,24 +113,27 @@ void WebView::HandleLinkClick(const QPointF& viewport_pos) {
   const float doc_x = static_cast<float>(viewport_pos.x());
   const float doc_y = static_cast<float>(viewport_pos.y()) + ScrollY();
   const dom::Element* element = snapshot_.page->ElementAt(doc_x, doc_y);
-  const std::optional<std::string> target =
-      browser::HyperlinkTarget(element, snapshot_.url);
+  const std::optional<std::string> target = browser::HyperlinkTarget(element, snapshot_.url);
   if (target.has_value()) {
     worker_->Navigate(tab_id_, QString::fromStdString(*target));
   }
 }
 
-void WebView::EnsureLayout(int width) {
-  if (snapshot_.page == nullptr) return;
+void WebView::EnsureLayout(int width)
+{
+  if (snapshot_.page == nullptr)
+    return;
   // Re-layout only when the viewport width changes or the page was just
   // (re)loaded (a fresh page has no layout tree). This keeps scrolling from
   // rebuilding the whole layout tree on every repaint.
-  if (laid_out_width_ == width && snapshot_.page->layout_root() != nullptr) return;
+  if (laid_out_width_ == width && snapshot_.page->layout_root() != nullptr)
+    return;
   snapshot_.page->Layout(static_cast<float>(width));
   laid_out_width_ = width;
 }
 
-void WebView::UpdateScrollRange() {
+void WebView::UpdateScrollRange()
+{
   if (snapshot_.id < 0 || snapshot_.content_type != browser::ContentType::kHtml ||
       snapshot_.page == nullptr) {
     verticalScrollBar()->setRange(0, 0);
@@ -138,107 +146,157 @@ void WebView::UpdateScrollRange() {
   verticalScrollBar()->setRange(0, std::max(0, content_height - viewport_height));
 }
 
-void WebView::UpdateTextOverlay() {
+void WebView::UpdateTextOverlay()
+{
   if (snapshot_.id < 0) {
     text_view_->hide();
     return;
   }
   switch (snapshot_.content_type) {
-    case browser::ContentType::kPdf: {
-      if (snapshot_.pdf == nullptr) {
-        text_view_->hide();
-        return;
-      }
-      QString text;
-      for (const pdf::PdfPage& page : snapshot_.pdf->pages) {
-        text += QString("----- Page %1 (%2x%3) -----\n")
-                    .arg(page.index + 1)
-                    .arg(page.width)
-                    .arg(page.height);
-        text += QString::fromUtf8(page.text.c_str());
-        text += "\n\n";
-      }
-      text_view_->setPlainText(text);
-      text_view_->show();
-      break;
-    }
-    case browser::ContentType::kAudio:
-      if (snapshot_.audio == nullptr) {
-        text_view_->hide();
-        return;
-      }
-      text_view_->setPlainText(
-          QString("WAV audio\n  sample rate : %1 Hz\n  channels    : %2\n"
-                  "  bit depth   : %3\n  samples     : %4\n  duration    : %5 s\n\n"
-                  "Playback is not implemented yet (see src/media).")
-              .arg(snapshot_.audio->sample_rate)
-              .arg(snapshot_.audio->channels)
-              .arg(snapshot_.audio->bits_per_sample)
-              .arg(static_cast<qulonglong>(snapshot_.audio->samples.size()))
-              .arg(snapshot_.audio->duration_seconds(), 0, 'f', 2));
-      text_view_->show();
-      break;
-    case browser::ContentType::kText:
-    case browser::ContentType::kOther:
-      if (snapshot_.raw_text == nullptr) {
-        text_view_->hide();
-        return;
-      }
-      text_view_->setPlainText(QString::fromUtf8(snapshot_.raw_text->c_str()));
-      text_view_->show();
-      break;
-    case browser::ContentType::kError:
-      text_view_->setPlainText(
-          QString("Error\n\n%1\n\n%2")
-              .arg(QString::fromUtf8(snapshot_.url.c_str()))
-              .arg(QString::fromUtf8(snapshot_.error != nullptr ? snapshot_.error->c_str()
-                                                                : "")));
-      text_view_->show();
-      break;
-    default:
+  case browser::ContentType::kPdf: {
+    if (snapshot_.pdf == nullptr) {
       text_view_->hide();
-      break;
+      return;
+    }
+    QString text;
+    for (const pdf::PdfPage& page : snapshot_.pdf->pages) {
+      text += QString("----- Page %1 (%2x%3) -----\n")
+                  .arg(page.index + 1)
+                  .arg(page.width)
+                  .arg(page.height);
+      text += QString::fromUtf8(page.text.c_str());
+      text += "\n\n";
+    }
+    text_view_->setPlainText(text);
+    text_view_->show();
+    break;
+  }
+  case browser::ContentType::kAudio:
+    if (snapshot_.audio == nullptr) {
+      text_view_->hide();
+      return;
+    }
+    text_view_->setPlainText(
+        QString("WAV audio\n  sample rate : %1 Hz\n  channels    : %2\n"
+                "  bit depth   : %3\n  samples     : %4\n  duration    : %5 s\n\n"
+                "Playback is not implemented yet (see src/media).")
+            .arg(snapshot_.audio->sample_rate)
+            .arg(snapshot_.audio->channels)
+            .arg(snapshot_.audio->bits_per_sample)
+            .arg(static_cast<qulonglong>(snapshot_.audio->samples.size()))
+            .arg(snapshot_.audio->duration_seconds(), 0, 'f', 2));
+    text_view_->show();
+    break;
+  case browser::ContentType::kText:
+  case browser::ContentType::kOther:
+    if (snapshot_.raw_text == nullptr) {
+      text_view_->hide();
+      return;
+    }
+    text_view_->setPlainText(QString::fromUtf8(snapshot_.raw_text->c_str()));
+    text_view_->show();
+    break;
+  case browser::ContentType::kError:
+    text_view_->setPlainText(
+        QString("Error\n\n%1\n\n%2")
+            .arg(QString::fromUtf8(snapshot_.url.c_str()))
+            .arg(QString::fromUtf8(snapshot_.error != nullptr ? snapshot_.error->c_str() : "")));
+    text_view_->show();
+    break;
+  default:
+    text_view_->hide();
+    break;
   }
 }
 
-void WebView::paintEvent(QPaintEvent*) {
+void WebView::paintEvent(QPaintEvent*)
+{
   QPainter painter(viewport());
   painter.fillRect(viewport()->rect(), Qt::white);
-  if (snapshot_.id < 0) return;
+  if (snapshot_.id < 0)
+    return;
   switch (snapshot_.content_type) {
-    case browser::ContentType::kHtml:
-      PaintHtml(painter);
-      break;
-    case browser::ContentType::kImage:
-      PaintImage(painter);
-      break;
-    default:
-      break;  // text modes use the QPlainTextEdit overlay
+  case browser::ContentType::kHtml:
+    PaintHtml(painter);
+    break;
+  case browser::ContentType::kImage:
+    PaintImage(painter);
+    break;
+  default:
+    break; // text modes use the QPlainTextEdit overlay
   }
 }
 
-void WebView::PaintHtml(QPainter& painter) {
-  if (snapshot_.page == nullptr) return;
+void WebView::PaintHtml(QPainter& painter)
+{
+  if (snapshot_.page == nullptr)
+    return;
   const int viewport_width = std::max(1, viewport()->width());
   const int viewport_height = std::max(1, viewport()->height());
   EnsureLayout(viewport_width);
-  const paint::Rasterizer raster =
-      snapshot_.page->Rasterize(viewport_width, viewport_height, ScrollY());
-  if (raster.pixels().empty()) return;
-  QImage image(raster.pixels().data(), raster.width(), raster.height(),
+
+  const int scroll = verticalScrollBar()->value();
+  const std::uint64_t layout_version = snapshot_.page->layout_version();
+
+  // Full repaint when the cache is missing, the viewport resized or the
+  // page's content changed (navigation, style/DOM mutation, image load).
+  const bool need_full = !raster_cache_.has_value() || cached_width_ != viewport_width ||
+                         cached_height_ != viewport_height ||
+                         cached_layout_version_ != layout_version;
+  if (need_full) {
+    raster_cache_.emplace(viewport_width, viewport_height);
+    // Reuse the cached buffer; Page::RasterizeFull pulls the display list
+    // from its internal cache (parallel band rasterization on the
+    // controller's pool when the viewport is big enough).
+    snapshot_.page->RasterizeFull(*raster_cache_, static_cast<float>(scroll), &worker_->pool());
+    cached_width_ = viewport_width;
+    cached_height_ = viewport_height;
+    cached_scroll_ = scroll;
+    cached_layout_version_ = layout_version;
+  } else if (scroll != cached_scroll_) {
+    // Scroll blit: shift the cached buffer by the scroll delta, then
+    // re-rasterize only the newly exposed band.
+    const int delta = cached_scroll_ - scroll; // screen-space content shift
+    raster_cache_->ShiftRows(delta);
+    int band_y0 = 0;
+    int band_y1 = 0;
+    if (delta > 0) {
+      band_y0 = 0;
+      band_y1 = delta; // content moved down; top band exposed
+    } else if (delta < 0) {
+      band_y0 = viewport_height + delta;
+      band_y1 = viewport_height; // content moved up; bottom band exposed
+    }
+    if (band_y1 > band_y0) {
+      snapshot_.page->RasterizeInto(*raster_cache_, band_y0, band_y1, static_cast<float>(scroll));
+    }
+    cached_scroll_ = scroll;
+  }
+
+  const std::vector<uint8_t>& pixels = raster_cache_->pixels();
+  if (pixels.empty())
+    return;
+  QImage image(const_cast<uint8_t*>(pixels.data()),
+               raster_cache_->width(),
+               raster_cache_->height(),
                QImage::Format_RGBA8888);
   painter.drawImage(0, 0, image);
 }
 
-void WebView::PaintImage(QPainter& painter) {
-  if (snapshot_.image == nullptr || snapshot_.image->rgba.empty()) return;
-  QImage image(snapshot_.image->rgba.data(), snapshot_.image->width,
-               snapshot_.image->height, QImage::Format_RGBA8888);
+void WebView::PaintImage(QPainter& painter)
+{
+  if (snapshot_.image == nullptr || snapshot_.image->rgba.empty())
+    return;
+  QImage image(snapshot_.image->rgba.data(),
+               snapshot_.image->width,
+               snapshot_.image->height,
+               QImage::Format_RGBA8888);
   // Scale down to fit while keeping the aspect ratio.
   const QImage scaled =
       image.scaled(viewport()->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
   painter.drawImage((viewport()->width() - scaled.width()) / 2,
-                    (viewport()->height() - scaled.height()) / 2, scaled);
+                    (viewport()->height() - scaled.height()) / 2,
+                    scaled);
 }
 
-}  // namespace neko::ui
+} // namespace neko::ui

@@ -1,8 +1,10 @@
 #pragma once
 
+#include "neko/browser/browser_controller.h"
+#include "neko/javascript/script_engine.h"
+
 #include <QObject>
 #include <QString>
-
 #include <condition_variable>
 #include <deque>
 #include <functional>
@@ -12,8 +14,9 @@
 #include <thread>
 #include <vector>
 
-#include "neko/browser/browser_controller.h"
-#include "neko/javascript/script_engine.h"
+namespace neko::base {
+class ThreadPool;
+}
 
 namespace neko::ui {
 
@@ -26,9 +29,10 @@ namespace neko::ui {
 // lock briefly inside the controller and are safe to call at ANY time —
 // including from repaint/wheel events while the worker is navigating or
 // closing tabs.  StateChanged() is emitted after each action for refresh.
-class BrowserWorker : public QObject {
+class BrowserWorker : public QObject
+{
   Q_OBJECT
- public:
+public:
   explicit BrowserWorker(QString profile_dir, QObject* parent = nullptr);
   ~BrowserWorker() override;
 
@@ -47,7 +51,18 @@ class BrowserWorker : public QObject {
   std::vector<storage::Cookie> SnapshotCookies() const;
   std::vector<browser::NetworkLogEntry> SnapshotNetworkLog() const;
   std::vector<browser::ConsoleEntry> SnapshotConsoleLog() const;
-  std::string profile_dir() const { return controller_.profile_dir(); }
+  std::string profile_dir() const
+  {
+    return controller_.profile_dir();
+  }
+
+  // The controller's shared worker pool (parallel subresource fetching and
+  // parallel band rasterization).  Thread-safe; safe to call from the GUI
+  // thread.
+  base::ThreadPool& pool()
+  {
+    return controller_.pool();
+  }
 
   // -------------------------------------------------------------------------
   // Actions (thread-safe: queues an action on the worker thread and returns
@@ -77,7 +92,7 @@ class BrowserWorker : public QObject {
   // JavaScriptResult() with the formatted output.
   void EvaluateJavaScript(const QString& script);
 
- signals:
+signals:
   // Emitted (on the worker thread, connected queued) after any action that
   // may have changed state; the GUI should refresh everything.
   void StateChanged();
@@ -86,7 +101,7 @@ class BrowserWorker : public QObject {
   // result, |error| true when it was a JavaScript error.
   void JavaScriptResult(const QString& script, const QString& output, bool error);
 
- private:
+private:
   void Run();
   void Post(std::function<void()> fn);
 
@@ -100,4 +115,4 @@ class BrowserWorker : public QObject {
   std::unique_ptr<javascript::ScriptEngine> js_engine_;
 };
 
-}  // namespace neko::ui
+} // namespace neko::ui

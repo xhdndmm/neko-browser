@@ -5,12 +5,6 @@
 // desktop has one).  When no candidate font file exists the font-dependent
 // tests skip rather than fail, keeping CI green on minimal images.
 
-#include <cstdio>
-#include <optional>
-#include <string>
-
-#include <gtest/gtest.h>
-
 #include "neko/graphics/font_face.h"
 #include "neko/graphics/font_library.h"
 #include "neko/graphics/font_registry.h"
@@ -18,10 +12,16 @@
 #include "neko/graphics/glyph_cache.h"
 #include "neko/graphics/system_fonts.h"
 
+#include <cstdio>
+#include <gtest/gtest.h>
+#include <optional>
+#include <string>
+
 namespace neko::graphics {
 namespace {
 
-TEST(SystemFontsTest, FindsSansOrNone) {
+TEST(SystemFontsTest, FindsSansOrNone)
+{
   const std::vector<std::string> fonts = FindSystemFonts(GenericFamily::kSansSerif);
   if (!fonts.empty()) {
     EXPECT_FALSE(fonts[0].empty());
@@ -32,12 +32,14 @@ TEST(SystemFontsTest, FindsSansOrNone) {
   }
 }
 
-TEST(FontFaceTest, MissingFileIsInvalid) {
+TEST(FontFaceTest, MissingFileIsInvalid)
+{
   FontFace face("/nonexistent/neko_missing_font.ttf");
   EXPECT_FALSE(face.valid());
 }
 
-TEST(FontFaceTest, RendersAndCachesGlyphs) {
+TEST(FontFaceTest, RendersAndCachesGlyphs)
+{
   const std::vector<std::string> fonts = FindSystemFonts(GenericFamily::kSansSerif);
   if (fonts.empty()) {
     GTEST_SKIP() << "no system sans-serif font available";
@@ -61,19 +63,18 @@ TEST(FontFaceTest, RendersAndCachesGlyphs) {
   EXPECT_GT(face->TextWidth("hello", 16), 0.0f);
   EXPECT_TRUE(face->HasGlyph('A'));
 
-  const GlyphBitmap* first = face->RenderGlyph('A', 16);
-  ASSERT_NE(first, nullptr);
-  EXPECT_GT(first->width, 0);
-  EXPECT_GT(first->advance, 0.0f);
-  // The same glyph must come back from the cache (same pointer).
-  EXPECT_EQ(face->RenderGlyph('A', 16), first);
+  const auto first = face->RenderGlyph('A', 16);
+  ASSERT_TRUE(first.has_value());
+  EXPECT_GT(first->glyph.width, 0);
+  EXPECT_GT(first->glyph.advance, 0.0f);
   // A space has an advance but a zero-size bitmap.
-  const GlyphBitmap* space = face->RenderGlyph(' ', 16);
-  ASSERT_NE(space, nullptr);
-  EXPECT_GT(space->advance, 0.0f);
+  const auto space = face->RenderGlyph(' ', 16);
+  ASSERT_TRUE(space.has_value());
+  EXPECT_GT(space->glyph.advance, 0.0f);
 }
 
-TEST(FontSelectorTest, ResolvesFamilyAndFallsBackPerCharacter) {
+TEST(FontSelectorTest, ResolvesFamilyAndFallsBackPerCharacter)
+{
   if (FindSystemFonts(GenericFamily::kSansSerif).empty()) {
     GTEST_SKIP() << "no system sans-serif font available";
   }
@@ -88,7 +89,8 @@ TEST(FontSelectorTest, ResolvesFamilyAndFallsBackPerCharacter) {
   EXPECT_GT(selector->Advance('A', 16), 0.0f);
 }
 
-TEST(FontSelectorTest, CjkFallbackRendersHanGlyphs) {
+TEST(FontSelectorTest, CjkFallbackRendersHanGlyphs)
+{
   if (FindSystemFonts(GenericFamily::kCjkSans).empty()) {
     GTEST_SKIP() << "no system CJK font available";
   }
@@ -99,13 +101,14 @@ TEST(FontSelectorTest, CjkFallbackRendersHanGlyphs) {
   // provide it, and the width/rendering must work.
   EXPECT_NE(selector->FaceForCodePoint(0x4E2D), nullptr);
   EXPECT_GT(selector->Advance(0x4E2D, 16), 0.0f);
-  EXPECT_GT(selector->TextWidth("\xe4\xb8\xad", 16), 0.0f);  // "中" in UTF-8
-  const GlyphBitmap* glyph = selector->RenderGlyph(0x4E2D, 16);
-  ASSERT_NE(glyph, nullptr);
-  EXPECT_GT(glyph->width, 0);
+  EXPECT_GT(selector->TextWidth("\xe4\xb8\xad", 16), 0.0f); // "中" in UTF-8
+  const auto glyph = selector->RenderGlyph(0x4E2D, 16);
+  ASSERT_TRUE(glyph.has_value());
+  EXPECT_GT(glyph->glyph.width, 0);
 }
 
-TEST(FontSelectorTest, ResolveFamilyNameFindsCjk) {
+TEST(FontSelectorTest, ResolveFamilyNameFindsCjk)
+{
   if (FindSystemFonts(GenericFamily::kCjkSans).empty()) {
     GTEST_SKIP() << "no system CJK font available";
   }
@@ -113,7 +116,8 @@ TEST(FontSelectorTest, ResolveFamilyNameFindsCjk) {
   EXPECT_FALSE(path.empty());
 }
 
-TEST(FontFaceTest, UnknownCodePointStillAdvances) {
+TEST(FontFaceTest, UnknownCodePointStillAdvances)
+{
   const std::vector<std::string> fonts = FindSystemFonts(GenericFamily::kSansSerif);
   if (fonts.empty()) {
     GTEST_SKIP() << "no system sans-serif font available";
@@ -125,7 +129,8 @@ TEST(FontFaceTest, UnknownCodePointStillAdvances) {
   EXPECT_GE(face->Advance(0x10FFFF, 16), 0.0f);
 }
 
-TEST(FontVariantTest, BoldSelectsBoldVariant) {
+TEST(FontVariantTest, BoldSelectsBoldVariant)
+{
   const std::vector<std::string> fonts = FindSystemFonts(GenericFamily::kSansSerif);
   if (fonts.empty()) {
     GTEST_SKIP() << "no system sans-serif font available";
@@ -142,7 +147,8 @@ TEST(FontVariantTest, BoldSelectsBoldVariant) {
   EXPECT_EQ(FindFontVariant(fonts[0], 400, false), fonts[0]);
 }
 
-TEST(FontSelectorTest, BoldUsesDifferentFace) {
+TEST(FontSelectorTest, BoldUsesDifferentFace)
+{
   if (FindSystemFonts(GenericFamily::kSansSerif).empty()) {
     GTEST_SKIP() << "no system sans-serif font available";
   }
@@ -163,5 +169,5 @@ TEST(FontSelectorTest, BoldUsesDifferentFace) {
   }
 }
 
-}  // namespace
-}  // namespace neko::graphics
+} // namespace
+} // namespace neko::graphics
