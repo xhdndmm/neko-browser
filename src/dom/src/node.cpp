@@ -1,39 +1,41 @@
 #include "neko/dom/node.h"
 
+#include "neko/dom/element.h"
+
 #include <algorithm>
 #include <memory>
 #include <string>
 #include <utility>
 
-#include "neko/dom/element.h"
-
 namespace neko::dom {
 namespace {
 
 // Escapes text content for serialization.
-std::string EscapeText(std::string_view text) {
+std::string EscapeText(std::string_view text)
+{
   std::string out;
   out.reserve(text.size());
   for (const char c : text) {
     switch (c) {
-      case '&':
-        out += "&amp;";
-        break;
-      case '<':
-        out += "&lt;";
-        break;
-      case '>':
-        out += "&gt;";
-        break;
-      default:
-        out.push_back(c);
-        break;
+    case '&':
+      out += "&amp;";
+      break;
+    case '<':
+      out += "&lt;";
+      break;
+    case '>':
+      out += "&gt;";
+      break;
+    default:
+      out.push_back(c);
+      break;
     }
   }
   return out;
 }
 
-void FindFirstTitle(const Node* node, const Element** out) {
+void FindFirstTitle(const Node* node, const Element** out)
+{
   if (*out != nullptr) {
     return;
   }
@@ -50,28 +52,57 @@ void FindFirstTitle(const Node* node, const Element** out) {
   }
 }
 
-}  // namespace
+} // namespace
 
 Node::~Node() = default;
 
 Node::Node(NodeType type) : node_type_(type) {}
 
-Node* Node::first_child() const { return children_.empty() ? nullptr : children_.front().get(); }
+Node* Node::first_child() const
+{
+  return children_.empty() ? nullptr : children_.front().get();
+}
 
-Node* Node::last_child() const { return children_.empty() ? nullptr : children_.back().get(); }
+Node* Node::last_child() const
+{
+  return children_.empty() ? nullptr : children_.back().get();
+}
 
-Node* Node::child_at(std::size_t index) const {
+Node* Node::child_at(std::size_t index) const
+{
   return index < children_.size() ? children_[index].get() : nullptr;
 }
 
-void Node::AppendChild(std::unique_ptr<Node> child) {
+void Node::AppendChild(std::unique_ptr<Node> child)
+{
+  // The DOM "insert" algorithm (dom.spec.whatwg.org §4.2.3): inserting a
+  // DocumentFragment inserts its children instead of the fragment itself.
+  if (child->node_type() == NodeType::kDocumentFragment) {
+    while (child->first_child() != nullptr) {
+      Node* c = child->first_child();
+      std::unique_ptr<Node> detached = child->RemoveChild(c);
+      AppendChild(std::move(detached));
+    }
+    return;
+  }
   child->SetParent(this);
   children_.push_back(std::move(child));
 }
 
-void Node::InsertBefore(std::unique_ptr<Node> child, Node* reference) {
-  const auto it = std::find_if(children_.begin(), children_.end(),
-                               [&](const std::unique_ptr<Node>& c) { return c.get() == reference; });
+void Node::InsertBefore(std::unique_ptr<Node> child, Node* reference)
+{
+  if (child->node_type() == NodeType::kDocumentFragment) {
+    while (child->first_child() != nullptr) {
+      Node* c = child->first_child();
+      std::unique_ptr<Node> detached = child->RemoveChild(c);
+      InsertBefore(std::move(detached), reference);
+    }
+    return;
+  }
+  const auto it =
+      std::find_if(children_.begin(), children_.end(), [&](const std::unique_ptr<Node>& c) {
+        return c.get() == reference;
+      });
   if (it == children_.end()) {
     // Reference not found: append at the end (WHATWG: reference is nullptr).
     child->SetParent(this);
@@ -82,7 +113,8 @@ void Node::InsertBefore(std::unique_ptr<Node> child, Node* reference) {
   children_.insert(it, std::move(child));
 }
 
-std::unique_ptr<Node> Node::RemoveChild(Node* child) {
+std::unique_ptr<Node> Node::RemoveChild(Node* child)
+{
   for (auto it = children_.begin(); it != children_.end(); ++it) {
     if (it->get() == child) {
       std::unique_ptr<Node> removed = std::move(*it);
@@ -94,7 +126,8 @@ std::unique_ptr<Node> Node::RemoveChild(Node* child) {
   return nullptr;
 }
 
-std::string Node::TextContent() const {
+std::string Node::TextContent() const
+{
   std::string out;
   for (Node* child : ChildNodes()) {
     out += child->TextContent();
@@ -102,7 +135,13 @@ std::string Node::TextContent() const {
   return out;
 }
 
-std::string Node::ToString() const {
+const std::string* Node::NodeValue() const
+{
+  return nullptr;
+}
+
+std::string Node::ToString() const
+{
   std::string out;
   for (Node* child : ChildNodes()) {
     out += child->ToString();
@@ -114,17 +153,24 @@ std::string Node::ToString() const {
 
 Text::Text(std::string data) : Node(NodeType::kText), data_(std::move(data)) {}
 
-std::string Text::ToString() const { return EscapeText(data_); }
+std::string Text::ToString() const
+{
+  return EscapeText(data_);
+}
 
 Comment::Comment(std::string data) : Node(NodeType::kComment), data_(std::move(data)) {}
 
-std::string Comment::ToString() const { return "<!--" + data_ + "-->"; }
+std::string Comment::ToString() const
+{
+  return "<!--" + data_ + "-->";
+}
 
 DocumentFragment::DocumentFragment() : Node(NodeType::kDocumentFragment) {}
 
 Document::Document() : Node(NodeType::kDocument) {}
 
-Element* Document::document_element() const {
+Element* Document::document_element() const
+{
   for (Node* child : ChildNodes()) {
     if (child->node_type() == NodeType::kElement) {
       return static_cast<Element*>(child);
@@ -133,12 +179,16 @@ Element* Document::document_element() const {
   return nullptr;
 }
 
-std::string Document::Title() const {
+std::string Document::Title() const
+{
   const Element* title = nullptr;
   FindFirstTitle(this, &title);
   return title != nullptr ? title->TextContent() : std::string();
 }
 
-std::string Document::ToString() const { return Node::ToString(); }
+std::string Document::ToString() const
+{
+  return Node::ToString();
+}
 
-}  // namespace neko::dom
+} // namespace neko::dom
