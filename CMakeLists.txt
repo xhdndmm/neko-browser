@@ -55,6 +55,11 @@ if(NEKO_ENABLE_LTO)
   set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
 endif()
 
+# Prefer our bundled find modules (e.g. cmake/FindWebP.cmake) over CMake's
+# built-ins so find_package() behaves the same across CMake versions (some CI
+# toolchains ship a CMake older than the one that added FindWebP).
+list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
 find_package(Threads REQUIRED)
 # Image decoding infrastructure: zlib (inflate for PNG IDAT) and libjpeg
 # (baseline JPEG decode).  Both are wrapped behind neko::image's own

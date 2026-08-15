@@ -21,6 +21,6 @@ target_compile_features(neko_image PUBLIC cxx_std_20)
 target_include_directories(neko_image PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
-find_package(WebP)
+find_package(WebP REQUIRED)
 target_link_libraries(neko_image PUBLIC neko::base ZLIB::ZLIB JPEG::JPEG WebP::webp)
 apply_compiler_warnings(neko_image)
