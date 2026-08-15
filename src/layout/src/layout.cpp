@@ -1462,15 +1462,17 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       box->width = content_width + border_padding_w;
 
       // Border-box position, including the relative offset.  |origin_x| is the
-      // content-box origin of the parent; this box's own margin pushes it out.
+      // content-box origin of the parent; the border box sits at this box's
+      // margin edge, so border/padding extend right/down from there (they are
+      // not subtracted — doing so pushed padded/bordered boxes off-canvas).
       float rel_x = 0;
       float rel_y = 0;
       if (box->style.position == style::Position::kRelative) {
         rel_x = box->style.left;
         rel_y = box->style.top;
       }
-      box->x = origin_x + box->margin_left - box->border_left - box->padding_left + rel_x;
-      box->y = origin_y + box->margin_top - box->border_top - box->padding_top + rel_y;
+      box->x = origin_x + box->margin_left + rel_x;
+      box->y = origin_y + box->margin_top + rel_y;
 
       const float avail_width = box->width - box->border_left - box->border_right -
                                 box->padding_left - box->padding_right;

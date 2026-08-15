@@ -1936,6 +1936,23 @@ TEST(LayoutTest, ListItemHasMarkerRun)
   EXPECT_LT(li->lines[0].runs[0].x, li->lines[0].runs[1].x);
 }
 
+// Regression: the list marker must stay on-screen.  A padded block's border
+// box sits at its margin edge; its padding must not shift the border box (and
+// the marker drawn just left of the content) to a negative x off-canvas.
+TEST(LayoutTest, ListMarkerStaysOnScreen)
+{
+  Page page = Build("<body><ul><li>one</li></ul></body>");
+  const LayoutBox* ul = FindBox(*page.root, "ul", *page.doc);
+  ASSERT_NE(ul, nullptr);
+  ASSERT_EQ(ul->children.size(), 1u);
+  const LayoutBox* li = ul->children[0].get();
+  ASSERT_GE(li->lines.size(), 1u);
+  ASSERT_GE(li->lines[0].runs.size(), 2u);
+  EXPECT_GE(li->lines[0].runs[0].x, 0.0f); // marker run is within the viewport
+  EXPECT_GE(li->x, 0.0f);                  // <li> border box is within the viewport
+  EXPECT_GT(ul->content_x(), ul->x);       // <ul> padding pushes content right
+}
+
 // <ol> items are numbered (decimal) in order.
 TEST(LayoutTest, OrderedListItemsAreNumbered)
 {
