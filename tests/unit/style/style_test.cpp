@@ -904,5 +904,38 @@ TEST(StyleTest, BorderRadiusParses)
   EXPECT_TRUE(b.border_radius.value().percent);
   EXPECT_FLOAT_EQ(b.border_radius.value().value, 50.0f);
 }
+
+TEST(StyleTest, LinkPseudoClassOverridesUaUnderline)
+{
+  // UA styles <a> with an underline; author a:link { text-decoration: none }
+  // must override it (a:link has higher specificity than the bare type
+  // selector, and :link matches an <a> that has an href).
+  auto doc = MakeDoc("<body><style>a:link { text-decoration: none; }</style>"
+                     "<a href=\"https://example.com/\">x</a><a>y</a></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const std::vector<dom::Element*> as = dom::QuerySelectorAll(*doc, "a");
+  ASSERT_EQ(as.size(), 2u);
+  EXPECT_FALSE(engine.StyleFor(*as[0]).text_decoration_underline);
+  EXPECT_TRUE(engine.StyleFor(*as[1]).text_decoration_underline);
+}
+
+TEST(StyleTest, HoverPseudoClassChangesColor)
+{
+  auto doc = MakeDoc("<body><style>a:hover { color: red; }</style>"
+                     "<a href=\"https://example.com/\">x</a></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  dom::Element* a = dom::QuerySelector(*doc, "a");
+  ASSERT_NE(a, nullptr);
+  const css::Color red(255, 0, 0, 255);
+
+  // Not hovered: the author a:hover rule does not apply (UA blue remains).
+  EXPECT_NE(engine.StyleFor(*a).color, red);
+
+  engine.SetHoveredElement(a);
+  engine.ApplyStyles(*doc);
+  EXPECT_EQ(engine.StyleFor(*a).color, red);
+}
 } // namespace
 } // namespace neko::style

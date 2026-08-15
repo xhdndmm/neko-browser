@@ -53,6 +53,16 @@ public:
   // reflects the new state.
   void ReapplyStyles();
 
+  // Sets the element the pointer currently hovers over (or null), updating the
+  // :hover pseudo-class and re-running the cascade/layout so the change is
+  // reflected on the next rasterization.  |element| must be in this page's
+  // document (or null).
+  void SetHoveredElement(const dom::Element* element);
+
+  // Sets the element being activated (mouse button held down), or null,
+  // driving the :active pseudo-class.  See SetHoveredElement.
+  void SetActiveElement(const dom::Element* element);
+
   // Registers parsed external stylesheets (<link rel=stylesheet> content
   // fetched and parsed by the browser application layer) and re-runs the
   // cascade so layout reflects them.
@@ -129,6 +139,10 @@ private:
   const paint::DisplayList& EnsureDisplayList() const;
 
   void LoadHtmlImpl(std::string_view bytes, base::encoding::Charset charset);
+  // Re-runs the cascade and invalidates layout/paint; caller must hold mutex_.
+  void ReapplyStylesLocked();
+  // Rebuilds the layout tree; caller must hold mutex_.
+  void LayoutLocked(float viewport_width);
   void BumpVersion()
   {
     ++version_;

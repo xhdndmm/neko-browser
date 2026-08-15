@@ -212,6 +212,57 @@ TEST(CssSelectorTest, PseudoClasses)
   EXPECT_TRUE(MatchesSelector(*p2, ParseSelectorList("p:nth-child(2n)")[0]));
 }
 
+TEST(CssSelectorTest, LinkPseudoClasses)
+{
+  auto doc = std::make_unique<dom::Document>();
+  auto html = std::make_unique<dom::Element>("html");
+  auto body = std::make_unique<dom::Element>("body");
+  auto a = std::make_unique<dom::Element>("a");
+  a->SetAttribute("href", "https://example.com/");
+  dom::Element* a_raw = a.get();
+  body->AppendChild(std::move(a));
+  auto anchor = std::make_unique<dom::Element>("a"); // no href: not a hyperlink
+  dom::Element* anchor_raw = anchor.get();
+  body->AppendChild(std::move(anchor));
+  html->AppendChild(std::move(body));
+  doc->AppendChild(std::move(html));
+
+  // :link and :any-link match an <a> that has an href.
+  EXPECT_TRUE(MatchesSelector(*a_raw, ParseSelectorList("a:link")[0]));
+  EXPECT_TRUE(MatchesSelector(*a_raw, ParseSelectorList("a:any-link")[0]));
+  EXPECT_FALSE(MatchesSelector(*anchor_raw, ParseSelectorList("a:link")[0]));
+  // :visited never matches (no visited-state tracking; CSS2.2 §5.11.2).
+  EXPECT_FALSE(MatchesSelector(*a_raw, ParseSelectorList("a:visited")[0]));
+}
+
+TEST(CssSelectorTest, DynamicPseudoClasses)
+{
+  auto doc = MakeTree();
+  dom::Element* span = dom::QuerySelector(*doc, "span");
+  dom::Element* main = ById(*doc, "main");
+  const std::vector<dom::Element*> ps = dom::QuerySelectorAll(*doc, "p");
+  ASSERT_NE(span, nullptr);
+  ASSERT_NE(main, nullptr);
+  ASSERT_EQ(ps.size(), 2u);
+
+  // Without interaction state, :hover/:active never match.
+  EXPECT_FALSE(MatchesSelector(*span, ParseSelectorList("span:hover")[0]));
+  EXPECT_FALSE(MatchesSelector(*span, ParseSelectorList("span:active")[0]));
+
+  // With the span hovered, :hover matches the span and each of its ancestors
+  // (so ".dropdown:hover .dropdown-content" works), but not a sibling.
+  MatchState hover{span, nullptr};
+  EXPECT_TRUE(MatchesSelector(*span, ParseSelectorList("span:hover")[0], &hover));
+  EXPECT_TRUE(MatchesSelector(*ps[1], ParseSelectorList("p:hover")[0], &hover));
+  EXPECT_TRUE(MatchesSelector(*main, ParseSelectorList("div:hover")[0], &hover));
+  EXPECT_FALSE(MatchesSelector(*ps[0], ParseSelectorList("p:hover")[0], &hover));
+
+  // :active is independent of :hover.
+  MatchState active{nullptr, ps[0]};
+  EXPECT_TRUE(MatchesSelector(*ps[0], ParseSelectorList("p:active")[0], &active));
+  EXPECT_FALSE(MatchesSelector(*span, ParseSelectorList("span:active")[0], &active));
+}
+
 TEST(CssSelectorTest, NthChildWithPlusParses)
 {
   // The '+' inside :nth-child(An+B) must not be mistaken for a sibling

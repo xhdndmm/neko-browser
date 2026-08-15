@@ -66,8 +66,21 @@ struct Specificity
 // Parses a comma-separated selector list.  Returns empty on malformed input.
 std::vector<ComplexSelector> ParseSelectorList(std::string_view text);
 
+// Dynamic matching state for pseudo-classes that depend on user interaction
+// (:hover, :active).  Passed by the style engine; structural-only callers
+// (e.g. querySelector) pass nullptr, which treats those pseudo-classes as
+// never matching.
+struct MatchState
+{
+  const dom::Element* hovered = nullptr; // pointer is over this element
+  const dom::Element* active = nullptr;  // element is being activated
+};
+
 // True when |element| matches |selector| (any of its complex selectors).
-bool MatchesSelector(const dom::Element& element, const ComplexSelector& selector);
+// |state| (optional) carries the :hover/:active interaction state.
+bool MatchesSelector(const dom::Element& element,
+                     const ComplexSelector& selector,
+                     const MatchState* state = nullptr);
 
 // Specificity of a single complex selector, without matching it against any
 // element.  Used by the style engine's precomputed rule index.

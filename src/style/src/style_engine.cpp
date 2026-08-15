@@ -992,6 +992,7 @@ void StyleEngine::ComputeElement(dom::Element& element,
   };
   std::vector<Candidate> candidates;
   int order = 0;
+  const css::MatchState match_state{hovered_, active_};
 
   if (buckets_ != nullptr) {
     // Gather candidate rules from the buckets keyed by this element's id,
@@ -1032,7 +1033,7 @@ void StyleEngine::ComputeElement(dom::Element& element,
     for (const int rule_index : candidate_indices) {
       const IndexedCascadeRule& indexed = buckets.rules[static_cast<std::size_t>(rule_index)];
       for (std::size_t si = 0; si < indexed.rule->selectors.size(); ++si) {
-        if (!css::MatchesSelector(element, indexed.rule->selectors[si])) {
+        if (!css::MatchesSelector(element, indexed.rule->selectors[si], &match_state)) {
           continue;
         }
         const css::Specificity& specificity = indexed.specificities[si];

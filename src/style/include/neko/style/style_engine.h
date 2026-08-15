@@ -64,6 +64,19 @@ public:
   // returned.
   const ComputedStyle& StyleFor(const dom::Element& element) const;
 
+  // Dynamic interaction state driving the :hover / :active pseudo-classes.
+  // The pointers must reference elements in the styled document (or be null).
+  // Changing either state requires a subsequent ApplyStyles()/ReapplyStyles()
+  // for the new styles to take effect.
+  void SetHoveredElement(const dom::Element* element)
+  {
+    hovered_ = element;
+  }
+  void SetActiveElement(const dom::Element* element)
+  {
+    active_ = element;
+  }
+
 private:
   void ComputeElement(dom::Element& element, const ComputedStyle& inherited, float root_font_size);
   void BuildCascadeIndex(dom::Document& document);
@@ -72,6 +85,10 @@ private:
   std::vector<css::StyleSheet> author_sheets_;
   std::vector<css::StyleSheet> external_sheets_;
   std::unique_ptr<CascadeBuckets> buckets_;
+
+  // Dynamic interaction state for :hover / :active matching.
+  const dom::Element* hovered_ = nullptr;
+  const dom::Element* active_ = nullptr;
 
   // Parsed <style> element text, keyed by the element: re-parsing identical
   // <style> content on every ReapplyStyles pass (scripts mutate the DOM every

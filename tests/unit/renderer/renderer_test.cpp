@@ -1,4 +1,5 @@
 #include "neko/dom/query.h"
+#include "neko/base/thread_pool.h"
 #include "neko/html/parser.h"
 #include "neko/image/image.h"
 #include "neko/paint/rasterizer.h"
@@ -603,6 +604,100 @@ TEST(PageTest, RasterizeFullReusesBuffer)
   const std::size_t offset = (static_cast<std::size_t>(20) * 400 + 50) * 4;
   EXPECT_EQ(raster.pixels()[offset], 255);
   EXPECT_EQ(raster.pixels()[offset + 1], 0);
+}
+
+TEST(PageTest, HoverStateRestylesAndKeepsLayout)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body><style>a:hover { color: red; }</style>"
+                            "<a href=\"https://example.com/\">x</a></body>")
+                  .has_value());
+  page.Layout(400);
+  ASSERT_NE(page.layout_root(), nullptr);
+  const std::uint64_t before = page.layout_version();
+
+  dom::Element* a = dom::QuerySelector(*page.document(), "a");
+  ASSERT_NE(a, nullptr);
+  page.SetHoveredElement(a);
+
+  // Setting the hovered element re-runs the cascade and rebuilds the layout in
+  // place: the version is bumped, but the layout tree stays valid.  A null
+  // root here would make the UI's Refresh() treat the page as freshly loaded
+  // and reset the scroll position to the top.
+  EXPECT_GT(page.layout_version(), before);
+  EXPECT_NE(page.layout_root(), nullptr);
+
+  // Clearing the hover state also keeps the layout valid.
+  const std::uint64_t after = page.layout_version();
+  page.SetHoveredElement(nullptr);
+  EXPECT_GT(page.layout_version(), after);
+  EXPECT_NE(page.layout_root(), nullptr);
+}
+
+TEST(PageTest, ScrollBlitMatchesFullRasterize)
+{
+  Page page;
+  std::string html = "<body style=\"background:#ffffff\">";
+  for (int i = 0; i < 120; ++i) {
+    html += "<p style=\"font-size:16px\">The quick brown fox jumps " + std::to_string(i) + "</p>";
+  }
+  html += "</body>";
+  ASSERT_TRUE(page.LoadHtml(html).has_value());
+  page.Layout(400);
+
+  const int w = 400;
+  const int h = 300;
+  const auto count_diff = [](const paint::Rasterizer& a, const paint::Rasterizer& b) {
+    int diff = 0;
+    for (std::size_t o = 0; o < a.pixels().size(); o += 4) {
+      if (a.pixels()[o] != b.pixels()[o] || a.pixels()[o + 1] != b.pixels()[o + 1] ||
+          a.pixels()[o + 2] != b.pixels()[o + 2] || a.pixels()[o + 3] != b.pixels()[o + 3]) {
+        ++diff;
+      }
+    }
+    return diff;
+  };
+
+  // A single large scroll via blit + band re-raster must match a full render.
+  for (const int scroll : {1, 40, 53, 120, 200}) {
+    paint::Rasterizer ref(w, h);
+    page.RasterizeFull(ref, static_cast<float>(scroll), nullptr);
+    paint::Rasterizer blit(w, h);
+    page.RasterizeFull(blit, 0.0f, nullptr);
+    blit.ShiftRows(0 - scroll);
+    page.RasterizeInto(blit, h - scroll, h, static_cast<float>(scroll));
+    EXPECT_EQ(count_diff(ref, blit), 0);
+  }
+
+  // A sequence of small scrolls (accumulating blits) must match a full render.
+  {
+    paint::Rasterizer blit(w, h);
+    page.RasterizeFull(blit, 0.0f, nullptr);
+    int cached = 0;
+    for (const int scroll : {40, 80, 120, 160}) {
+      const int delta = cached - scroll;
+      blit.ShiftRows(delta);
+      if (delta > 0) {
+        page.RasterizeInto(blit, 0, delta, static_cast<float>(scroll));
+      } else {
+        page.RasterizeInto(blit, h + delta, h, static_cast<float>(scroll));
+      }
+      cached = scroll;
+    }
+    paint::Rasterizer ref(w, h);
+    page.RasterizeFull(ref, 160.0f, nullptr);
+    EXPECT_EQ(count_diff(ref, blit), 0);
+  }
+
+  // Parallel banded rasterization must match serial (FreeType text included).
+  {
+    base::ThreadPool pool(4);
+    paint::Rasterizer serial(w, h);
+    page.RasterizeFull(serial, 0.0f, nullptr);
+    paint::Rasterizer parallel(w, h);
+    page.RasterizeFull(parallel, 0.0f, &pool);
+    EXPECT_EQ(count_diff(serial, parallel), 0);
+  }
 }
 
 } // namespace

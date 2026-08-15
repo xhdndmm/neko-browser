@@ -60,6 +60,11 @@ void Page::LoadHtmlImpl(std::string_view bytes, base::encoding::Charset charset)
   // the BOM, if present, overrides the label) before parsing.
   const std::string utf8 = base::encoding::DecodeToUtf8(bytes, charset);
   document_ = html::Parser(utf8).Parse();
+  // The old document is gone: stale hover/active pointers must not survive
+  // into the next cascade pass (they would dangle and be dereferenced while
+  // matching :hover/:active).
+  styles_.SetHoveredElement(nullptr);
+  styles_.SetActiveElement(nullptr);
   styles_.ApplyStyles(*document_);
   root_.reset();
   // The old DOM is gone; image entries keyed by element address are stale.
@@ -85,6 +90,37 @@ base::Result<void> Page::LoadHtml(std::string_view bytes, base::encoding::Charse
 void Page::ReapplyStyles()
 {
   std::lock_guard<std::mutex> lock(mutex_);
+  ReapplyStylesLocked();
+}
+
+void Page::SetHoveredElement(const dom::Element* element)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (document_ == nullptr) {
+    return;
+  }
+  styles_.SetHoveredElement(element);
+  // Rebuild the layout immediately (rather than only invalidating root_) so
+  // the layout tree stays valid across a hover change.  Leaving root_ null
+  // would make the UI's Refresh() treat the page as freshly loaded and reset
+  // the scroll position to the top.
+  styles_.ApplyStyles(*document_);
+  LayoutLocked(viewport_width_);
+}
+
+void Page::SetActiveElement(const dom::Element* element)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (document_ == nullptr) {
+    return;
+  }
+  styles_.SetActiveElement(element);
+  styles_.ApplyStyles(*document_);
+  LayoutLocked(viewport_width_);
+}
+
+void Page::ReapplyStylesLocked()
+{
   if (document_ == nullptr) {
     return;
   }
@@ -120,6 +156,11 @@ base::Result<void> Page::LoadFile(std::string_view path)
 void Page::Layout(float viewport_width)
 {
   std::lock_guard<std::mutex> lock(mutex_);
+  LayoutLocked(viewport_width);
+}
+
+void Page::LayoutLocked(float viewport_width)
+{
   if (document_ == nullptr) {
     return;
   }

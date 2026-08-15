@@ -21,6 +21,7 @@ WebView::WebView(BrowserWorker* worker, int tab_id, QWidget* parent)
     : QAbstractScrollArea(parent), worker_(worker), tab_id_(tab_id)
 {
   viewport()->setAutoFillBackground(true);
+  viewport()->setMouseTracking(true); // receive MouseMove without a pressed button
   setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
   // Comfortable line step for the scroll-bar arrows / arrow keys. Wheel
@@ -39,11 +40,18 @@ WebView::WebView(BrowserWorker* worker, int tab_id, QWidget* parent)
 void WebView::Refresh()
 {
   snapshot_ = worker_->SnapshotTab(tab_id_);
-  // A freshly loaded page has no layout tree yet; treat it as a new
-  // navigation and return to the top so we don't carry over the previous
-  // page's scroll offset.
-  if (snapshot_.content_type == browser::ContentType::kHtml && snapshot_.page != nullptr &&
-      snapshot_.page->layout_root() == nullptr) {
+  // A navigation replaces the page's document (pointer); only then must the
+  // hover/active pointers be dropped and the scroll reset to the top.  Using
+  // the document pointer (instead of a null layout root) keeps script-driven
+  // refreshes from clobbering hover state or the scroll position.
+  const dom::Document* doc =
+      (snapshot_.content_type == browser::ContentType::kHtml && snapshot_.page != nullptr)
+          ? snapshot_.page->document()
+          : nullptr;
+  if (doc != cached_document_) {
+    cached_document_ = doc;
+    hovered_element_ = nullptr;
+    active_element_ = nullptr;
     verticalScrollBar()->setValue(0);
   }
   UpdateTextOverlay();
@@ -87,11 +95,22 @@ bool WebView::viewportEvent(QEvent* event)
   // disappears, so re-sync the scroll range here in addition to resizeEvent().
   if (event->type() == QEvent::Resize) {
     UpdateScrollRange();
+  } else if (event->type() == QEvent::MouseMove) {
+    const auto* mouse = static_cast<QMouseEvent*>(event);
+    HandleHover(mouse->position());
   } else if (event->type() == QEvent::MouseButtonPress) {
     const auto* mouse = static_cast<QMouseEvent*>(event);
     if (mouse->button() == Qt::LeftButton) {
       HandleLinkClick(mouse->position());
+      HandleActive(mouse->position());
     }
+  } else if (event->type() == QEvent::MouseButtonRelease) {
+    const auto* mouse = static_cast<QMouseEvent*>(event);
+    if (mouse->button() == Qt::LeftButton) {
+      HandleActiveClear();
+    }
+  } else if (event->type() == QEvent::Leave) {
+    HandleHoverClear();
   }
   return QAbstractScrollArea::viewportEvent(event);
 }
@@ -117,6 +136,64 @@ void WebView::HandleLinkClick(const QPointF& viewport_pos)
   if (target.has_value()) {
     worker_->Navigate(tab_id_, QString::fromStdString(*target));
   }
+}
+
+void WebView::HandleHover(const QPointF& viewport_pos)
+{
+  if (snapshot_.id < 0 || snapshot_.content_type != browser::ContentType::kHtml ||
+      snapshot_.page == nullptr) {
+    return;
+  }
+  const float doc_x = static_cast<float>(viewport_pos.x());
+  const float doc_y = static_cast<float>(viewport_pos.y()) + ScrollY();
+  const dom::Element* element = snapshot_.page->ElementAt(doc_x, doc_y);
+  if (element == hovered_element_) {
+    return;
+  }
+  hovered_element_ = element;
+  snapshot_.page->SetHoveredElement(element);
+  viewport()->update();
+}
+
+void WebView::HandleHoverClear()
+{
+  if (hovered_element_ == nullptr) {
+    return;
+  }
+  hovered_element_ = nullptr;
+  if (snapshot_.page != nullptr) {
+    snapshot_.page->SetHoveredElement(nullptr);
+  }
+  viewport()->update();
+}
+
+void WebView::HandleActive(const QPointF& viewport_pos)
+{
+  if (snapshot_.id < 0 || snapshot_.content_type != browser::ContentType::kHtml ||
+      snapshot_.page == nullptr) {
+    return;
+  }
+  const float doc_x = static_cast<float>(viewport_pos.x());
+  const float doc_y = static_cast<float>(viewport_pos.y()) + ScrollY();
+  const dom::Element* element = snapshot_.page->ElementAt(doc_x, doc_y);
+  if (element == active_element_) {
+    return;
+  }
+  active_element_ = element;
+  snapshot_.page->SetActiveElement(element);
+  viewport()->update();
+}
+
+void WebView::HandleActiveClear()
+{
+  if (active_element_ == nullptr) {
+    return;
+  }
+  active_element_ = nullptr;
+  if (snapshot_.page != nullptr) {
+    snapshot_.page->SetActiveElement(nullptr);
+  }
+  viewport()->update();
 }
 
 void WebView::EnsureLayout(int width)

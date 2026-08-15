@@ -7,8 +7,10 @@
 #include <QImage>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QMouseEvent>
 #include <QPixmap>
 #include <QPlainTextEdit>
+#include <QScrollBar>
 #include <QTabBar>
 #include <QWidget>
 
@@ -24,6 +26,7 @@
 #include "neko/storage/file_util.h"
 #include "neko/ui/browser_worker.h"
 #include "neko/ui/main_window.h"
+#include "neko/ui/web_view.h"
 
 int main(int argc, char** argv) {
   // These tests must run without a display; force the offscreen platform
@@ -332,6 +335,53 @@ TEST(UiSmokeTest, KeyboardShortcutOpensAndClosesTabs) {
   SendKey(&window, Qt::Key_W, Qt::ControlModifier);
   ASSERT_TRUE(WaitFor([&] { return window.TabBarWidget()->count() <= initial; }));
   EXPECT_EQ(window.TabBarWidget()->count(), initial);
+}
+
+TEST(UiSmokeTest, HoverDoesNotResetScroll) {
+  TempProfile tp;
+  std::string html = "<html><head><title>Scroll</title>"
+                     "<style>p:hover { color: red; }</style></head><body>";
+  for (int i = 0; i < 80; ++i) {
+    html += "<p>paragraph number " + std::to_string(i) + "</p>";
+  }
+  html += "</body></html>";
+  const std::string html_file = tp.path() + "/scroll.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(html_file, html).has_value());
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.resize(800, 600);
+  window.show();
+  worker.NavigateActive(QString::fromStdString(html_file));
+  window.AddressBar()->clearFocus();
+
+  // Wait until the page is laid out (so the scroll range is set).
+  ASSERT_TRUE(WaitFor([&] {
+    const auto snap = worker.SnapshotActiveTab();
+    return snap.content_type == neko::browser::ContentType::kHtml && snap.page != nullptr &&
+           snap.page->layout_root() != nullptr;
+  }));
+
+  auto* view = window.findChild<neko::ui::WebView*>();
+  ASSERT_NE(view, nullptr);
+  ASSERT_GT(view->verticalScrollBar()->maximum(), 0);
+
+  view->verticalScrollBar()->setValue(200);
+  ASSERT_EQ(view->verticalScrollBar()->value(), 200);
+
+  // Hover over the page (a MouseMove into the viewport); this changes the
+  // hovered element and re-runs the cascade/layout.
+  QMouseEvent move(QEvent::MouseMove, QPointF(100, 100), Qt::NoButton, Qt::NoButton,
+                   Qt::NoModifier);
+  QApplication::sendEvent(view->viewport(), &move);
+  QCoreApplication::processEvents();
+
+  // A script-pump / navigation refresh must not treat the hover-induced work
+  // as a fresh load and reset the scroll to the top.
+  view->Refresh();
+  QCoreApplication::processEvents();
+
+  EXPECT_EQ(view->verticalScrollBar()->value(), 200);
 }
 
 }  // namespace

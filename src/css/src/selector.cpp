@@ -425,7 +425,22 @@ bool AttributeMatches(const dom::Element& element, const AttributeSelector& attr
   return false;
 }
 
-bool PseudoClassMatches(const dom::Element& element, std::string_view pseudo)
+// True when |candidate| is |target| itself or an ancestor of |target|.  Used
+// for :hover/:active: an ancestor of the hovered/activated element is also in
+// that state, so selectors like ".dropdown:hover .dropdown-content" match.
+bool IsSelfOrAncestor(const dom::Element* candidate, const dom::Element* target)
+{
+  for (const dom::Node* n = target; n != nullptr; n = n->parent()) {
+    if (n == candidate) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool PseudoClassMatches(const dom::Element& element,
+                        std::string_view pseudo,
+                        const MatchState* state)
 {
   if (pseudo == "root") {
     // :root matches the document's root element (the <html> element).
@@ -456,12 +471,30 @@ bool PseudoClassMatches(const dom::Element& element, std::string_view pseudo)
     const int diff = index - b;
     return diff % a == 0 && (a > 0 ? diff >= 0 : diff <= 0) && diff / a >= 0;
   }
-  // Other pseudo-classes (:hover, :active, ...) are not matched yet; they are
-  // treated as never matching to avoid incorrect styling.
+  if (pseudo == "link" || pseudo == "any-link") {
+    // A hyperlink source anchor (HTML Living Standard): <a>/<area> with href.
+    const std::string_view tag = element.tag_name();
+    return (tag == "a" || tag == "area") && element.HasAttribute("href");
+  }
+  if (pseudo == "visited") {
+    // No visited-state tracking yet; treating all links as unvisited is
+    // explicitly permitted by CSS2.2 §5.11.2 as a privacy measure.
+    return false;
+  }
+  if (pseudo == "hover") {
+    return state != nullptr && state->hovered != nullptr &&
+           IsSelfOrAncestor(&element, state->hovered);
+  }
+  if (pseudo == "active") {
+    return state != nullptr && state->active != nullptr &&
+           IsSelfOrAncestor(&element, state->active);
+  }
   return false;
 }
 
-bool CompoundMatches(const dom::Element& element, const CompoundSelector& compound)
+bool CompoundMatches(const dom::Element& element,
+                     const CompoundSelector& compound,
+                     const MatchState* state)
 {
   if (compound.tag.has_value() && *compound.tag != element.tag_name()) {
     return false;
@@ -491,16 +524,19 @@ bool CompoundMatches(const dom::Element& element, const CompoundSelector& compou
     }
   }
   for (const std::string& pseudo : compound.pseudo_classes) {
-    if (!PseudoClassMatches(element, pseudo)) {
+    if (!PseudoClassMatches(element, pseudo, state)) {
       return false;
     }
   }
   return true;
 }
 
-bool MatchOnElement(const dom::Element& element, const ComplexSelector& selector, std::size_t index)
+bool MatchOnElement(const dom::Element& element,
+                    const ComplexSelector& selector,
+                    std::size_t index,
+                    const MatchState* state)
 {
-  if (!CompoundMatches(element, selector.compounds[index])) {
+  if (!CompoundMatches(element, selector.compounds[index], state)) {
     return false;
   }
   if (index == 0) {
@@ -512,16 +548,16 @@ bool MatchOnElement(const dom::Element& element, const ComplexSelector& selector
     if (parent == nullptr || parent->node_type() != dom::NodeType::kElement) {
       return false;
     }
-    return MatchOnElement(*static_cast<const dom::Element*>(parent), selector, index - 1);
+    return MatchOnElement(*static_cast<const dom::Element*>(parent), selector, index - 1, state);
   }
   if (combinator == Combinator::kNextSibling) {
     const dom::Element* prev = PreviousElementSibling(&element);
-    return prev != nullptr && MatchOnElement(*prev, selector, index - 1);
+    return prev != nullptr && MatchOnElement(*prev, selector, index - 1, state);
   }
   if (combinator == Combinator::kSubsequentSibling) {
     const dom::Element* prev = PreviousElementSibling(&element);
     while (prev != nullptr) {
-      if (MatchOnElement(*prev, selector, index - 1)) {
+      if (MatchOnElement(*prev, selector, index - 1, state)) {
         return true;
       }
       prev = PreviousElementSibling(prev);
@@ -531,7 +567,7 @@ bool MatchOnElement(const dom::Element& element, const ComplexSelector& selector
   // Descendant.
   for (const dom::Node* ancestor = parent; ancestor != nullptr; ancestor = ancestor->parent()) {
     if (ancestor->node_type() == dom::NodeType::kElement &&
-        MatchOnElement(*static_cast<const dom::Element*>(ancestor), selector, index - 1)) {
+        MatchOnElement(*static_cast<const dom::Element*>(ancestor), selector, index - 1, state)) {
       return true;
     }
   }
@@ -574,9 +610,11 @@ std::vector<ComplexSelector> ParseSelectorList(std::string_view text)
   return result;
 }
 
-bool MatchesSelector(const dom::Element& element, const ComplexSelector& selector)
+bool MatchesSelector(const dom::Element& element,
+                     const ComplexSelector& selector,
+                     const MatchState* state)
 {
-  return MatchOnElement(element, selector, selector.compounds.size() - 1);
+  return MatchOnElement(element, selector, selector.compounds.size() - 1, state);
 }
 
 Specificity MatchingSpecificity(const dom::Element& element, std::string_view selector_list)

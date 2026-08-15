@@ -54,6 +54,10 @@ private:
   void EnsureLayout(int width);
   void UpdateScrollRange();
   void HandleLinkClick(const QPointF& viewport_pos);
+  void HandleHover(const QPointF& viewport_pos);
+  void HandleHoverClear();
+  void HandleActive(const QPointF& viewport_pos);
+  void HandleActiveClear();
   float ScrollY() const;
 
   BrowserWorker* worker_;
@@ -63,6 +67,13 @@ private:
   QPlainTextEdit* text_view_;
   int laid_out_width_ = -1; // viewport width the page was last laid out at
   int wheel_accum_ = 0;     // fractional wheel delta (eighths of a degree)
+  // Element last reported as hovered/active (GUI thread); reset when the
+  // document is replaced by a navigation so the state re-resolves from scratch.
+  const dom::Element* hovered_element_ = nullptr;
+  const dom::Element* active_element_ = nullptr;
+  // Document the hover/active state was resolved against; a change signals a
+  // navigation (the document pointer is replaced), requiring a scroll reset.
+  const dom::Document* cached_document_ = nullptr;
 
   // Cached viewport raster + the state it was produced for (GUI thread).
   std::optional<paint::Rasterizer> raster_cache_;
