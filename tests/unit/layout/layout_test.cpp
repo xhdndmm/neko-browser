@@ -120,6 +120,101 @@ TEST(LayoutTest, BoxModelWithPaddingBorderMargin)
   EXPECT_FLOAT_EQ(div->padding_top, 10.0f);
 }
 
+TEST(LayoutTest, BorderBoxWidthIncludesPaddingAndBorder)
+{
+  // box-sizing: border-box — the specified width covers border+padding, so
+  // the content box is narrower and the total border box equals the width.
+  Page page = Build("<body><div style=\"box-sizing: border-box; width: 200px; "
+                    "padding: 10px; border: 2px solid\">x</div></body>");
+  const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(div, nullptr);
+  EXPECT_FLOAT_EQ(div->width, 200.0f); // border box == specified width
+  EXPECT_FLOAT_EQ(div->content_width(), 176.0f); // 200 - 2*10 - 2*2
+}
+
+TEST(LayoutTest, BorderBoxHeightIncludesPaddingAndBorder)
+{
+  Page page = Build("<body><div style=\"box-sizing: border-box; height: 100px; "
+                    "padding: 10px; border: 5px solid\">x</div></body>");
+  const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(div, nullptr);
+  EXPECT_FLOAT_EQ(div->height, 100.0f);
+  EXPECT_FLOAT_EQ(div->content_height(), 70.0f); // 100 - 2*10 - 2*5
+}
+
+TEST(LayoutTest, BorderBoxPercentWidth)
+{
+  // width: 100% with border-box must not overflow the containing block.
+  Page page = Build("<body><div style=\"box-sizing: border-box; width: 100%; "
+                    "padding: 16px\">x</div></body>");
+  const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(div, nullptr);
+  // Body content width is 800 - 2*8 (UA body margin) = 784.
+  EXPECT_FLOAT_EQ(div->width, 784.0f);
+  EXPECT_FLOAT_EQ(div->content_width(), 752.0f);
+}
+
+TEST(LayoutTest, BorderBoxFlexItemKeepsBorderBox)
+{
+  // A flex item with border-box sizing and padding: its border-box main size
+  // equals the resolved width; the content is narrower.
+  Page page = Build("<body><div style=\"display: flex\">"
+                    "<div id=\"a\" style=\"box-sizing: border-box; width: 150px; "
+                    "padding: 10px\">x</div></body>");
+  const LayoutBox* flex = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(flex, nullptr);
+  const LayoutBox* item = flex->children.empty() ? nullptr : flex->children[0].get();
+  ASSERT_NE(item, nullptr);
+  EXPECT_FLOAT_EQ(item->width, 150.0f);
+  EXPECT_FLOAT_EQ(item->content_width(), 130.0f);
+}
+
+TEST(LayoutTest, ContentBoxDefaultStillWorks)
+{
+  // Default (content-box) behavior is unchanged.
+  Page page = Build("<body><div style=\"width: 100px; padding: 5px\">x</div></body>");
+  const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(div, nullptr);
+  EXPECT_FLOAT_EQ(div->width, 110.0f);
+  EXPECT_FLOAT_EQ(div->content_width(), 100.0f);
+}
+
+TEST(LayoutTest, NowrapKeepsWordsOnOneLine)
+{
+  // white-space: nowrap — multiple words stay on a single line even when
+  // they overflow the narrow box (the run is one unbreakable word).
+  Page page =
+      Build("<body><div style=\"width: 60px\"><span style=\"white-space: nowrap\">"
+            "alpha beta gamma</span></div></body>");
+  const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(div, nullptr);
+  // The <span>'s content flows into the div's line box; all three words must
+  // be on the SAME line (one run set) rather than wrapped across lines.
+  ASSERT_EQ(div->lines.size(), 1u);
+  std::string joined;
+  for (const TextRun& run : div->lines[0].runs) {
+    joined += run.text;
+    if (&run != &div->lines[0].runs.back()) joined += ' ';
+  }
+  EXPECT_EQ(joined, "alpha beta gamma");
+}
+
+TEST(LayoutTest, NowrapCollapsesWhitespace)
+{
+  // nowrap collapses whitespace runs to a single space like normal.
+  Page page = Build("<body><div style=\"width: 200px\"><span style=\"white-space: nowrap\">"
+                    "alpha    beta\n\n gamma</span></div></body>");
+  const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(div, nullptr);
+  ASSERT_EQ(div->lines.size(), 1u);
+  std::string joined;
+  for (const TextRun& run : div->lines[0].runs) {
+    joined += run.text;
+    if (&run != &div->lines[0].runs.back()) joined += ' ';
+  }
+  EXPECT_EQ(joined, "alpha beta gamma");
+}
+
 TEST(LayoutTest, ExplicitHeight)
 {
   Page page = Build("<body><div style=\"height: 100px\">x</div></body>");

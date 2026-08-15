@@ -7,6 +7,7 @@
 
 add_library(neko_style
   src/style_engine.cpp
+  src/computed_style.cpp
 )
 add_library(neko::style ALIAS neko_style)
 

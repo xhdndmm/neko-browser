@@ -139,6 +139,14 @@ void Painter::PaintBox(const layout::LayoutBox& box, DisplayList& list) const
                    box.style.object_fit);
   }
 
+  // overflow: hidden/auto/scroll clips the box's content (and its
+  // descendants) to the padding box.  The box's own background/border paint
+  // above the clip boundary and are NOT clipped.
+  const bool clips = box.style.overflow != style::Overflow::kVisible;
+  if (clips) {
+    list.PushClip(box.content_x(), box.content_y(), box.content_width(), box.content_height());
+  }
+
   // Block children (back to front).
   for (const auto& child : box.children) {
     PaintBox(*child, list);
@@ -189,6 +197,10 @@ void Painter::PaintBox(const layout::LayoutBox& box, DisplayList& list) const
   // Absolutely positioned descendants paint above in-flow content.
   for (const auto& child : box.positioned_children) {
     PaintBox(*child, list);
+  }
+
+  if (clips) {
+    list.PopClip();
   }
 }
 

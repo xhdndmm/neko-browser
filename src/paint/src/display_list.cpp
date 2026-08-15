@@ -99,4 +99,22 @@ void DisplayList::DrawImage(float x,
   commands_.push_back(std::move(command));
 }
 
+void DisplayList::PushClip(float x, float y, float width, float height)
+{
+  DrawCommand command;
+  command.type = CommandType::kPushClip;
+  command.x = x;
+  command.y = y;
+  command.width = width;
+  command.height = height;
+  commands_.push_back(std::move(command));
+}
+
+void DisplayList::PopClip()
+{
+  DrawCommand command;
+  command.type = CommandType::kPopClip;
+  commands_.push_back(std::move(command));
+}
+
 } // namespace neko::paint

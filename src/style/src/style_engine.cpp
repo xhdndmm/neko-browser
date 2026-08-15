@@ -1081,6 +1081,7 @@ void StyleEngine::ComputeElement(dom::Element& element,
   out.line_height = inherited.line_height;
   out.text_align = inherited.text_align;
   out.text_decoration_underline = inherited.text_decoration_underline;
+  out.white_space = inherited.white_space;
   out.custom_properties = inherited.custom_properties;
 
   // CSS custom properties (CSS Custom Properties for Cascading Variables
@@ -1616,6 +1617,49 @@ void StyleEngine::ComputeElement(dom::Element& element,
         out.appearance = Appearance::kAuto;
       } else if (v.text == "button") {
         out.appearance = Appearance::kButton;
+      }
+    }
+  }
+
+  // box-sizing (CSS-UI-3 §6): content-box (initial) / border-box.  Unknown
+  // values are ignored (stay at the initial value).
+  if (const css::Declaration* d = find("box-sizing")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kKeyword && v.text == "border-box") {
+      out.box_sizing = BoxSizing::kBorderBox;
+    }
+  }
+
+  // white-space (CSS Text 3 §3): normal (initial) / nowrap / pre / pre-wrap /
+  // pre-line.  Layout honors normal and nowrap; the pre* values are parsed
+  // but treated as normal (documented limitation).
+  if (const css::Declaration* d = find("white-space")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kKeyword) {
+      if (v.text == "nowrap") {
+        out.white_space = WhiteSpace::kNowrap;
+      } else if (v.text == "pre") {
+        out.white_space = WhiteSpace::kPre;
+      } else if (v.text == "pre-wrap") {
+        out.white_space = WhiteSpace::kPreWrap;
+      } else if (v.text == "pre-line") {
+        out.white_space = WhiteSpace::kPreLine;
+      }
+    }
+  }
+
+  // overflow (CSS Overflow 3): visible (initial) / hidden / auto / scroll.
+  // The computed pair is stored on one axis for simplicity; auto/scroll are
+  // treated as hidden (they clip, but no scrollable overflow is exposed).
+  if (const css::Declaration* d = find("overflow")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kKeyword) {
+      if (v.text == "hidden") {
+        out.overflow = Overflow::kHidden;
+      } else if (v.text == "auto") {
+        out.overflow = Overflow::kAuto;
+      } else if (v.text == "scroll") {
+        out.overflow = Overflow::kScroll;
       }
     }
   }

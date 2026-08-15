@@ -574,6 +574,78 @@ TEST(StyleTest, AuthorAppearanceOverridesUa)
   EXPECT_EQ(Style(engine, *doc, "#y").appearance, Appearance::kButton);
 }
 
+TEST(StyleTest, BoxSizingParses)
+{
+  auto doc = MakeDoc("<body>"
+                     "<div id=\"a\">a</div>"
+                     "<div id=\"b\" style=\"box-sizing: border-box\">b</div>"
+                     "<div id=\"c\" style=\"box-sizing: content-box\">c</div>"
+                     "<div id=\"d\" style=\"box-sizing: bogus\">d</div>"
+                     "</body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  // Initial value is content-box.
+  EXPECT_EQ(Style(engine, *doc, "#a").box_sizing, BoxSizing::kContentBox);
+  EXPECT_EQ(Style(engine, *doc, "#b").box_sizing, BoxSizing::kBorderBox);
+  EXPECT_EQ(Style(engine, *doc, "#c").box_sizing, BoxSizing::kContentBox);
+  // Invalid values are ignored.
+  EXPECT_EQ(Style(engine, *doc, "#d").box_sizing, BoxSizing::kContentBox);
+}
+
+TEST(StyleTest, BoxSizingFromStylesheet)
+{
+  auto doc = MakeDoc("<html><head><style>* { box-sizing: border-box; }</style></head>"
+                     "<body><div id=\"x\">x</div></body></html>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  EXPECT_EQ(Style(engine, *doc, "#x").box_sizing, BoxSizing::kBorderBox);
+}
+
+TEST(StyleTest, WhiteSpaceParses)
+{
+  auto doc = MakeDoc("<body>"
+                     "<div id=\"a\">a</div>"
+                     "<div id=\"b\" style=\"white-space: nowrap\">b</div>"
+                     "<div id=\"c\" style=\"white-space: pre\">c</div>"
+                     "<div id=\"d\" style=\"white-space: pre-wrap\">d</div>"
+                     "<div id=\"e\" style=\"white-space: bogus\">e</div>"
+                     "</body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  EXPECT_EQ(Style(engine, *doc, "#a").white_space, WhiteSpace::kNormal);
+  EXPECT_EQ(Style(engine, *doc, "#b").white_space, WhiteSpace::kNowrap);
+  EXPECT_EQ(Style(engine, *doc, "#c").white_space, WhiteSpace::kPre);
+  EXPECT_EQ(Style(engine, *doc, "#d").white_space, WhiteSpace::kPreWrap);
+  EXPECT_EQ(Style(engine, *doc, "#e").white_space, WhiteSpace::kNormal);
+}
+
+TEST(StyleTest, WhiteSpaceInherits)
+{
+  auto doc = MakeDoc("<html><head><style>#p { white-space: nowrap; }</style></head>"
+                     "<body><div id=\"p\"><span id=\"c\">child</span></div></body></html>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  EXPECT_EQ(Style(engine, *doc, "#c").white_space, WhiteSpace::kNowrap);
+}
+
+TEST(StyleTest, OverflowParses)
+{
+  auto doc = MakeDoc("<body>"
+                     "<div id=\"a\">a</div>"
+                     "<div id=\"b\" style=\"overflow: hidden\">b</div>"
+                     "<div id=\"c\" style=\"overflow: auto\">c</div>"
+                     "<div id=\"d\" style=\"overflow: scroll\">d</div>"
+                     "<div id=\"e\" style=\"overflow: bogus\">e</div>"
+                     "</body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  EXPECT_EQ(Style(engine, *doc, "#a").overflow, Overflow::kVisible);
+  EXPECT_EQ(Style(engine, *doc, "#b").overflow, Overflow::kHidden);
+  EXPECT_EQ(Style(engine, *doc, "#c").overflow, Overflow::kAuto);
+  EXPECT_EQ(Style(engine, *doc, "#d").overflow, Overflow::kScroll);
+  EXPECT_EQ(Style(engine, *doc, "#e").overflow, Overflow::kVisible);
+}
+
 TEST(StyleTest, RootPseudoClassMatchesDocumentElement)
 {
   auto doc = MakeDoc("<style>:root { background-color: rgb(1, 2, 3); }</style>"

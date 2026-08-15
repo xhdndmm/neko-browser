@@ -163,6 +163,28 @@ float ResolveSize(const style::SizeSpec& spec, float containing)
   return spec.value;
 }
 
+// Resolves a specified width/height to a CONTENT-box size honoring
+// box-sizing (CSS-UI-3 §6): with border-box the specified size covers the
+// border+padding, so the content size is the specified size minus those.
+// |borders_paddings| is border+padding on the relevant axis.
+float SpecToContent(const style::SizeSpec& spec,
+                    float containing,
+                    float borders_paddings,
+                    style::BoxSizing sizing)
+{
+  const float resolved = ResolveSize(spec, containing);
+  if (sizing == style::BoxSizing::kBorderBox) {
+    return std::max(0.0f, resolved - borders_paddings);
+  }
+  return resolved;
+}
+
+// Border-box size that corresponds to a content-box size.
+float ContentToBox(float content, float borders_paddings)
+{
+  return content + borders_paddings;
+}
+
 void CollectText(std::string_view text,
                  const style::ComputedStyle& style,
                  const dom::Element* element,
@@ -513,8 +535,32 @@ void LayoutLines(std::vector<InlineItem>& items,
         registry != nullptr
             ? registry->SelectorFor(style.font_family, style.font_weight, style.font_italic)
             : nullptr;
-    std::size_t start = 0;
     const std::string& text = item.text;
+    // white-space: nowrap — collapse whitespace but never wrap: the entire
+    // run is one unbreakable word.  It may overflow the line box (the
+    // correct nowrap behavior for navbars, buttons and tab strips).
+    if (style.white_space == style::WhiteSpace::kNowrap) {
+      std::string collapsed;
+      bool first = true;
+      bool pending_space = false;
+      for (const char c : text) {
+        if (IsWordBreak(c)) {
+          pending_space = true;
+          continue;
+        }
+        if (pending_space && !first) {
+          collapsed.push_back(' ');
+        }
+        pending_space = false;
+        first = false;
+        collapsed.push_back(c);
+      }
+      if (!collapsed.empty()) {
+        add_word(collapsed, style, item.element, selector);
+      }
+      continue;
+    }
+    std::size_t start = 0;
     while (start < text.size()) {
       // Collapse a whitespace run (CSS white-space: normal) into a single
       // space; leading whitespace at a line start collapses to nothing (the
@@ -586,10 +632,18 @@ IntrinsicWidths MeasureContent(const dom::Element& element,
   if (replaced) {
     IntrinsicWidths w;
     // Only a definite plain length (not a percentage / calc / extremum) is a
-    // fixed intrinsic size.
+    // fixed intrinsic size.  With box-sizing: border-box the specified width
+    // covers border+padding, so the content intrinsic width is smaller.
     if (style.width.has_value() && !style.width.value().percent && !style.width.value().is_calc &&
         !style.width.value().is_extremum) {
-      w.min = w.max = style.width.value().value;
+      const float specified = style.width.value().value;
+      if (style.box_sizing == style::BoxSizing::kBorderBox) {
+        const float bp = ResolveSize(style.border_left, 0) + ResolveSize(style.border_right, 0) +
+                         ResolveSize(style.padding_left, 0) + ResolveSize(style.padding_right, 0);
+        w.min = w.max = std::max(0.0f, specified - bp);
+      } else {
+        w.min = w.max = specified;
+      }
     }
     return w;
   }
@@ -826,7 +880,12 @@ ComputeColumnWidths(const std::vector<CellInfo>& cells, int ncols, float table_w
     }
     const std::size_t c = static_cast<std::size_t>(cell.col);
     if (cell.style.width.has_value()) {
-      const float w = ResolveSize(cell.style.width.value(), table_width);
+      const float border_padding = ResolveSize(cell.style.border_left, table_width) +
+                                   ResolveSize(cell.style.border_right, table_width) +
+                                   ResolveSize(cell.style.padding_left, table_width) +
+                                   ResolveSize(cell.style.padding_right, table_width);
+      const float w = SpecToContent(
+          cell.style.width.value(), table_width, border_padding, cell.style.box_sizing);
       fixed[c] = std::max(fixed[c], w);
     } else {
       auto_max[c] = std::max(auto_max[c], cell.max_width);
@@ -915,18 +974,19 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       box->style = styles.StyleFor(element);
       ResolveBoxEdges(*box, containing_width);
 
+      const float border_padding_w =
+          box->border_left + box->border_right + box->padding_left + box->padding_right;
       float content_width;
       if (box->style.width.has_value()) {
-        content_width = ResolveSize(box->style.width.value(), containing_width);
+        content_width = SpecToContent(
+            box->style.width.value(), containing_width, border_padding_w, box->style.box_sizing);
       } else {
-        const float extras = box->margin_left + box->margin_right + box->border_left +
-                             box->border_right + box->padding_left + box->padding_right;
+        const float extras = box->margin_left + box->margin_right + border_padding_w;
         const float available = std::max(0.0f, containing_width - extras);
         const IntrinsicWidths w = MeasureContent(element, styles, registry);
         content_width = std::min(std::max(w.min, available), w.max);
       }
-      box->width = content_width + box->border_left + box->border_right + box->padding_left +
-                   box->padding_right;
+      box->width = content_width + border_padding_w;
 
       // Border-box origin at the margin edge; content is placed at
       // content_x()/content_y() = +border+padding.
@@ -938,14 +998,18 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       std::vector<dom::Element*> absolute_children;
       float content_height = LayoutBlockContent(
           *box, element, avail_width, 0, 0, avail_width, 0, kNoFloats, absolute_children);
+      const float border_padding_h =
+          box->border_top + box->border_bottom + box->padding_top + box->padding_bottom;
       if (box->style.height.has_value() && !box->style.height.value().percent) {
-        content_height = box->style.height.value().value; // specified height wins (10.6.2)
+        content_height = SpecToContent(box->style.height.value(),
+                                       containing_width,
+                                       border_padding_h,
+                                       box->style.box_sizing); // specified height wins (10.6.2)
       } else if (box->style.aspect_ratio.has_value() && box->style.width.has_value()) {
         // aspect-ratio (CSS Box Sizing 4): definite width, auto height.
         content_height = content_width / box->style.aspect_ratio.value();
       }
-      box->height = content_height + box->border_top + box->border_bottom + box->padding_top +
-                    box->padding_bottom;
+      box->height = content_height + border_padding_h;
       const float child_cb_h = box->height - box->border_top - box->border_bottom;
       for (dom::Element* child : absolute_children) {
         box->positioned_children.push_back(
@@ -967,18 +1031,19 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       box->style = styles.StyleFor(element);
       ResolveBoxEdges(*box, containing_width);
 
+      const float border_padding_w =
+          box->border_left + box->border_right + box->padding_left + box->padding_right;
       float content_width;
       if (box->style.width.has_value()) {
-        content_width = ResolveSize(box->style.width.value(), containing_width);
+        content_width = SpecToContent(
+            box->style.width.value(), containing_width, border_padding_w, box->style.box_sizing);
       } else {
-        const float extras = box->margin_left + box->margin_right + box->border_left +
-                             box->border_right + box->padding_left + box->padding_right;
+        const float extras = box->margin_left + box->margin_right + border_padding_w;
         const float available = std::max(0.0f, containing_width - extras);
         const IntrinsicWidths w = MeasureContent(element, styles, registry);
         content_width = std::min(std::max(w.min, available), w.max);
       }
-      box->width = content_width + box->border_left + box->border_right + box->padding_left +
-                   box->padding_right;
+      box->width = content_width + border_padding_w;
 
       // Horizontal placement: left float at the containing block's left edge,
       // right float at the right edge (aligned so its right margin box meets
@@ -1004,13 +1069,15 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
                                                 0,
                                                 kNoFloats,
                                                 absolute_children);
+      const float border_padding_h =
+          box->border_top + box->border_bottom + box->padding_top + box->padding_bottom;
       if (box->style.height.has_value() && !box->style.height.value().percent) {
-        content_height = box->style.height.value().value;
+        content_height = SpecToContent(
+            box->style.height.value(), containing_width, border_padding_h, box->style.box_sizing);
       } else if (box->style.aspect_ratio.has_value() && box->style.width.has_value()) {
         content_height = content_width / box->style.aspect_ratio.value();
       }
-      box->height = content_height + box->border_top + box->border_bottom + box->padding_top +
-                    box->padding_bottom;
+      box->height = content_height + border_padding_h;
       return box;
     }
 
@@ -1232,18 +1299,20 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       ResolveBoxEdges(*box, containing_width);
 
       // Width: explicit (px or %) or fill the containing block.
+      const float border_padding_w =
+          box->border_left + box->border_right + box->padding_left + box->padding_right;
       float content_width;
       if (box->style.width.has_value()) {
-        content_width = ResolveSize(box->style.width.value(), containing_width);
+        // box-sizing: with border-box the specified width covers border+padding.
+        content_width = SpecToContent(
+            box->style.width.value(), containing_width, border_padding_w, box->style.box_sizing);
       } else {
-        content_width = containing_width - box->margin_left - box->margin_right - box->border_left -
-                        box->border_right - box->padding_left - box->padding_right;
+        content_width = containing_width - box->margin_left - box->margin_right - border_padding_w;
         if (content_width < 0) {
           content_width = 0;
         }
       }
-      box->width = content_width + box->border_left + box->border_right + box->padding_left +
-                   box->padding_right;
+      box->width = content_width + border_padding_w;
 
       // Border-box position, including the relative offset.  |origin_x| is the
       // content-box origin of the parent; this box's own margin pushes it out.
@@ -1283,13 +1352,18 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
                                                 parent_floats,
                                                 absolute_children);
 
+      const float border_padding_h =
+          box->border_top + box->border_bottom + box->padding_top + box->padding_bottom;
       if (box->style.height.has_value() && !box->style.height.value().percent) {
-        content_height = std::max(content_height, box->style.height.value().value);
+        content_height = std::max(content_height,
+                                  SpecToContent(box->style.height.value(),
+                                                containing_width,
+                                                border_padding_h,
+                                                box->style.box_sizing));
       } else if (box->style.aspect_ratio.has_value() && box->style.width.has_value()) {
         content_height = content_width / box->style.aspect_ratio.value();
       }
-      box->height = content_height + box->border_top + box->border_bottom + box->padding_top +
-                    box->padding_bottom;
+      box->height = content_height + border_padding_h;
 
       const float child_cb_h = box->style.position != style::Position::kStatic
                                    ? box->height - box->border_top - box->border_bottom
@@ -1321,34 +1395,46 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       box->style = styles.StyleFor(element);
       ResolveBoxEdges(*box, containing_width);
 
+      const float border_padding_w =
+          box->border_left + box->border_right + box->padding_left + box->padding_right;
       float content_width;
       if (forced_content_width.has_value()) {
+        // The flex algorithm's main size is a content-box size.
         content_width = forced_content_width.value();
       } else if (box->style.width.has_value()) {
         const style::SizeSpec& width = box->style.width.value();
-        content_width = ResolveSize(width, containing_width);
+        content_width =
+            SpecToContent(width, containing_width, border_padding_w, box->style.box_sizing);
       } else {
-        content_width = containing_width - box->margin_left - box->margin_right - box->border_left -
-                        box->border_right - box->padding_left - box->padding_right;
+        content_width = containing_width - box->margin_left - box->margin_right - border_padding_w;
         if (content_width < 0) {
           content_width = 0;
         }
       }
-      // min/max-width clamp (CSS 2.2 §10.4); min wins over max.
+      // min/max-width clamp (CSS 2.2 §10.4); min wins over max.  The clamps
+      // constrain the same box as the width (content-box or border-box).
       if (box->style.min_width.has_value()) {
-        content_width =
-            std::max(content_width, ResolveSize(box->style.min_width.value(), containing_width));
+        content_width = std::max(content_width,
+                                 SpecToContent(box->style.min_width.value(),
+                                               containing_width,
+                                               border_padding_w,
+                                               box->style.box_sizing));
       }
       if (box->style.max_width.has_value()) {
-        content_width =
-            std::min(content_width, ResolveSize(box->style.max_width.value(), containing_width));
+        content_width = std::min(content_width,
+                                 SpecToContent(box->style.max_width.value(),
+                                               containing_width,
+                                               border_padding_w,
+                                               box->style.box_sizing));
       }
       if (box->style.min_width.has_value()) {
-        content_width =
-            std::max(content_width, ResolveSize(box->style.min_width.value(), containing_width));
+        content_width = std::max(content_width,
+                                 SpecToContent(box->style.min_width.value(),
+                                               containing_width,
+                                               border_padding_w,
+                                               box->style.box_sizing));
       }
-      box->width = content_width + box->border_left + box->border_right + box->padding_left +
-                   box->padding_right;
+      box->width = content_width + border_padding_w;
       // Margin-box origin at (0,0); content is placed at +border+padding.
       box->x = box->margin_left - box->border_left - box->padding_left;
       box->y = box->margin_top - box->border_top - box->padding_top;
@@ -1358,29 +1444,41 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       std::vector<dom::Element*> absolute_children;
       float content_height = LayoutBlockContent(
           *box, element, avail, cb_x, cb_y, cb_w, cb_h, kNoFloats, absolute_children);
+      const float border_padding_h =
+          box->border_top + box->border_bottom + box->padding_top + box->padding_bottom;
       if (forced_content_height.has_value()) {
         content_height = forced_content_height.value();
       } else if (box->style.height.has_value()) {
         const style::SizeSpec& height = box->style.height.value();
         if (!height.percent) {
-          content_height = std::max(content_height, height.value);
+          content_height = std::max(
+              content_height,
+              SpecToContent(height, containing_width, border_padding_h, box->style.box_sizing));
         }
       }
       // min/max-height clamp (CSS 2.2 §10.4); min wins over max.
       if (box->style.min_height.has_value()) {
-        content_height =
-            std::max(content_height, ResolveSize(box->style.min_height.value(), containing_width));
+        content_height = std::max(content_height,
+                                  SpecToContent(box->style.min_height.value(),
+                                                containing_width,
+                                                border_padding_h,
+                                                box->style.box_sizing));
       }
       if (box->style.max_height.has_value()) {
-        content_height =
-            std::min(content_height, ResolveSize(box->style.max_height.value(), containing_width));
+        content_height = std::min(content_height,
+                                  SpecToContent(box->style.max_height.value(),
+                                                containing_width,
+                                                border_padding_h,
+                                                box->style.box_sizing));
       }
       if (box->style.min_height.has_value()) {
-        content_height =
-            std::max(content_height, ResolveSize(box->style.min_height.value(), containing_width));
+        content_height = std::max(content_height,
+                                  SpecToContent(box->style.min_height.value(),
+                                                containing_width,
+                                                border_padding_h,
+                                                box->style.box_sizing));
       }
-      box->height = content_height + box->border_top + box->border_bottom + box->padding_top +
-                    box->padding_bottom;
+      box->height = content_height + border_padding_h;
       const float child_cb_h = box->height - box->border_top - box->border_bottom;
       for (dom::Element* child : absolute_children) {
         box->positioned_children.push_back(
@@ -1497,10 +1595,12 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
           }
         }
         if (min_main_spec != nullptr) {
-          item.min_main_clamp = ResolveSize(*min_main_spec, avail_width);
+          item.min_main_clamp =
+              SpecToContent(*min_main_spec, avail_width, item.border_padding_main, s.box_sizing);
         }
         if (max_main_spec != nullptr) {
-          item.max_main_clamp = ResolveSize(*max_main_spec, avail_width);
+          item.max_main_clamp =
+              SpecToContent(*max_main_spec, avail_width, item.border_padding_main, s.box_sizing);
         }
         // Flex base size: flex-basis, else the main-size property, else the
         // item's intrinsic content size.  Percentages resolve against the
@@ -1512,7 +1612,8 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
           main_spec = row ? &s.width.value() : &s.height.value();
         }
         if (main_spec != nullptr) {
-          item.base_main = ResolveSize(*main_spec, avail_width);
+          item.base_main =
+              SpecToContent(*main_spec, avail_width, item.border_padding_main, s.box_sizing);
           item.base_from_spec = true;
         } else if (row) {
           item.base_main = MeasureContent(child_el, styles, registry).max;
@@ -1535,7 +1636,10 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
         for (FlexItemData& item : items) {
           float cross_width;
           if (item.style->width.has_value()) {
-            cross_width = ResolveSize(item.style->width.value(), avail_width);
+            cross_width = SpecToContent(item.style->width.value(),
+                                        avail_width,
+                                        item.border_padding_cross,
+                                        item.style->box_sizing);
           } else if (align_items == style::AlignItems::kStretch) {
             cross_width = avail_width - item.margin_cross - item.border_padding_cross;
             if (cross_width < 0) {
@@ -1670,16 +1774,20 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       // indefinite (they depend on the containing block's resolved height,
       // which the engine does not track) and fall back to auto; treating them
       // as a definite 0 collapses the container.
+      const float container_bp_h =
+          box.border_top + box.border_bottom + box.padding_top + box.padding_bottom;
       float container_main = avail_width;
       if (!row && cs.height.has_value() && !cs.height.value().percent) {
-        container_main = cs.height.value().value;
+        container_main =
+            SpecToContent(cs.height.value(), avail_width, container_bp_h, cs.box_sizing);
       }
       const bool main_definite = row || (cs.height.has_value() && !cs.height.value().percent);
       // Container cross size: for a column it is the (definite) content
       // width; for a row it is the specified content height, else auto.
       float container_cross = avail_width;
       if (row && cs.height.has_value() && !cs.height.value().percent) {
-        container_cross = cs.height.value().value;
+        container_cross =
+            SpecToContent(cs.height.value(), avail_width, container_bp_h, cs.box_sizing);
       }
       const bool cross_definite = !row || (cs.height.has_value() && !cs.height.value().percent);
 
@@ -1999,8 +2107,13 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       const float container_width = avail_width;
       // The container content height is definite only for an explicit
       // non-percentage height (auto/percent rows then resolve like auto).
+      const float container_bp_h =
+          box.border_top + box.border_bottom + box.padding_top + box.padding_bottom;
       const bool height_definite = cs.height.has_value() && !cs.height.value().percent;
-      const float container_height = height_definite ? cs.height.value().value : 0.0f;
+      const float container_height =
+          height_definite
+              ? SpecToContent(cs.height.value(), avail_width, container_bp_h, cs.box_sizing)
+              : 0.0f;
 
       // One in-flow grid item with its resolved placement.
       struct GridItem
@@ -2340,8 +2453,9 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
       box->style = styles.StyleFor(element);
       ResolveBoxEdges(*box, cb_w);
 
-      const float extras = box->margin_left + box->margin_right + box->border_left +
-                           box->border_right + box->padding_left + box->padding_right;
+      const float border_padding_w =
+          box->border_left + box->border_right + box->padding_left + box->padding_right;
+      const float extras = box->margin_left + box->margin_right + border_padding_w;
       // Available width for shrink-to-fit is found by solving the constraint
       // equation with the unspecified inset set to 0, i.e. it excludes any
       // specified left/right inset (CSS2.2 §10.3.7).
@@ -2356,7 +2470,8 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
 
       float content_width;
       if (box->style.width.has_value()) {
-        content_width = ResolveSize(box->style.width.value(), cb_w);
+        content_width =
+            SpecToContent(box->style.width.value(), cb_w, border_padding_w, box->style.box_sizing);
       } else if (!box->style.left_auto && !box->style.right_auto) {
         // Constraint equation: left + width + right = containing block width.
         content_width = cb_w - box->style.left - box->style.right - extras;
@@ -2368,8 +2483,7 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
         const IntrinsicWidths w = MeasureContent(element, styles, registry);
         content_width = std::min(std::max(w.min, available), w.max);
       }
-      box->width = content_width + box->border_left + box->border_right + box->padding_left +
-                   box->padding_right;
+      box->width = content_width + border_padding_w;
       const float avail_width = box->width - box->border_left - box->border_right -
                                 box->padding_left - box->padding_right;
 
@@ -2383,11 +2497,15 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
                                                 /*cb_h*/ 0.0f,
                                                 parent_floats,
                                                 absolute_children);
+      const float border_padding_h =
+          box->border_top + box->border_bottom + box->padding_top + box->padding_bottom;
       if (box->style.height.has_value() && !box->style.height.value().percent) {
-        content_height = std::max(content_height, box->style.height.value().value);
+        content_height =
+            std::max(content_height,
+                     SpecToContent(
+                         box->style.height.value(), cb_w, border_padding_h, box->style.box_sizing));
       }
-      box->height = content_height + box->border_top + box->border_bottom + box->padding_top +
-                    box->padding_bottom;
+      box->height = content_height + border_padding_h;
 
       // Absolutely positioned descendants use this box's padding box (local).
       const float child_cb_h = box->height - box->border_top - box->border_bottom;
@@ -2454,19 +2572,22 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
 
       // Table width: explicit, or fill the containing block (auto is treated as
       // 100% rather than CSS shrink-to-fit; documented limitation).
+      const float border_padding_w =
+          table->border_left + table->border_right + table->padding_left + table->padding_right;
       float content_width;
       if (table->style.width.has_value()) {
-        content_width = ResolveSize(table->style.width.value(), containing_width);
+        content_width = SpecToContent(table->style.width.value(),
+                                      containing_width,
+                                      border_padding_w,
+                                      table->style.box_sizing);
       } else {
-        content_width = containing_width - table->margin_left - table->margin_right -
-                        table->border_left - table->border_right - table->padding_left -
-                        table->padding_right;
+        content_width =
+            containing_width - table->margin_left - table->margin_right - border_padding_w;
         if (content_width < 0) {
           content_width = 0;
         }
       }
-      table->width = content_width + table->border_left + table->border_right +
-                     table->padding_left + table->padding_right;
+      table->width = content_width + border_padding_w;
       table->x = origin_x + table->margin_left - table->border_left - table->padding_left;
       table->y = origin_y + table->margin_top - table->border_top - table->padding_top;
       const float table_x = table->content_x();

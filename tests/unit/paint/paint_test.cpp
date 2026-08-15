@@ -64,6 +64,37 @@ TEST(RasterizerTest, SetScrollOffsetClipsScrolledOutContent) {
   EXPECT_EQ(Pixel(image, 10, 10), (css::Color{255, 255, 255, 255}));
 }
 
+TEST(RasterizerTest, PushPopClipRestrictsFills) {
+  Rasterizer image(20, 20);
+  image.Clear(css::Color{255, 255, 255, 255});
+  DisplayList list;
+  // A red rect that overflows the clip (10..14) on all sides.
+  list.PushClip(4, 4, 12, 12);
+  list.FillRect(0, 0, 20, 20, css::Color{255, 0, 0, 255});
+  list.PopClip();
+  image.Rasterize(list);
+
+  EXPECT_EQ(Pixel(image, 10, 10), (css::Color{255, 0, 0, 255})); // inside clip
+  EXPECT_EQ(Pixel(image, 2, 2), (css::Color{255, 255, 255, 255})); // outside clip
+  EXPECT_EQ(Pixel(image, 17, 17), (css::Color{255, 255, 255, 255})); // outside clip
+}
+
+TEST(RasterizerTest, NestedClipsIntersect) {
+  Rasterizer image(20, 20);
+  image.Clear(css::Color{255, 255, 255, 255});
+  DisplayList list;
+  list.PushClip(2, 2, 16, 16);
+  list.PushClip(6, 6, 8, 8);
+  list.FillRect(0, 0, 20, 20, css::Color{255, 0, 0, 255});
+  list.PopClip();
+  list.PopClip();
+  image.Rasterize(list);
+
+  EXPECT_EQ(Pixel(image, 8, 8), (css::Color{255, 0, 0, 255}));   // inside both clips
+  EXPECT_EQ(Pixel(image, 4, 4), (css::Color{255, 255, 255, 255})); // only outer clip
+  EXPECT_EQ(Pixel(image, 14, 14), (css::Color{255, 255, 255, 255})); // only outer clip
+}
+
 TEST(RasterizerTest, AlphaBlend) {
   Rasterizer image(10, 10);
   image.Clear(css::Color{255, 255, 255, 255});

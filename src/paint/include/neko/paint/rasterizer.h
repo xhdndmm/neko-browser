@@ -67,6 +67,15 @@ public:
   static float TextWidth(std::string_view text, float font_size);
 
 private:
+  // An axis-aligned clip rectangle in document coordinates (before scroll).
+  struct ClipRect
+  {
+    float x = 0;
+    float y = 0;
+    float x2 = 0;
+    float y2 = 0;
+  };
+
   void FillRect(float x, float y, float width, float height, css::Color color);
   void FillRoundRect(float x, float y, float width, float height, float radius, css::Color color);
   void DrawBorder(const DrawCommand& command);
@@ -75,12 +84,16 @@ private:
   void DrawTextFreetype(const DrawCommand& command);
   void DrawImage(const DrawCommand& command);
   void BlendGlyph(int x, int y, const graphics::GlyphBitmap& glyph, css::Color color);
+  // Returns true when the rect (document coordinates) is inside the active
+  // clip after intersection; updates the rect in place.
+  bool ApplyClip(float& x, float& y, float& width, float& height) const;
 
   int width_;
   int height_;
   float scroll_offset_ = 0;
   std::vector<uint8_t> pixels_;
   const graphics::FontRegistry* registry_ = nullptr;
+  std::vector<ClipRect> clips_; // active overflow clips (innermost last)
 };
 
 // Writes an RGBA buffer as a binary PPM (P6) file.  Alpha is composited over

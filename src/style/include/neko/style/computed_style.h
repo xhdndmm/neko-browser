@@ -5,6 +5,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace neko::style {
@@ -138,6 +139,41 @@ enum class Appearance
   kButton
 };
 
+// box-sizing (CSS-UI-3 §6): whether a specified width/height (and the
+// min/max constraints) refer to the content box or the border box.  Real
+// pages almost universally reset `* { box-sizing: border-box }`, so without
+// this every sized box is wider than intended and layouts collapse.
+enum class BoxSizing
+{
+  kContentBox,
+  kBorderBox,
+};
+
+// white-space (CSS Text 3 §3): how whitespace and wrapping behave.  Only
+// kNormal (collapse + wrap) and kNowrap (collapse + no wrap) are honored by
+// layout; pre/pre-wrap/pre-line are parsed but treated as normal
+// (documented limitation — no preformatted text runs).
+enum class WhiteSpace
+{
+  kNormal,
+  kNowrap,
+  kPre,
+  kPreWrap,
+  kPreLine,
+};
+
+// overflow (CSS Overflow 3): what to do with content that overflows the
+// box.  kVisible paints overflow; kHidden/kAuto/kScroll clip it to the
+// padding box (no scrollable overflow handling yet — kAuto/kScroll behave
+// like kHidden).  Inherits? No.
+enum class Overflow
+{
+  kVisible,
+  kHidden,
+  kAuto,
+  kScroll,
+};
+
 // A calc() term: `percent% of the containing block + offset px`.  min()/max()
 // and clamp() arguments are also linear combinations of this form.
 struct CalcTerm
@@ -250,6 +286,15 @@ struct ComputedStyle
   // Native widget look (CSS-UI-4 §7.2).  Initial value: none.
   Appearance appearance = Appearance::kNone;
 
+  // box-sizing (CSS-UI-3 §6).  Initial value: content-box.
+  BoxSizing box_sizing = BoxSizing::kContentBox;
+
+  // white-space (CSS Text 3 §3).  Initial value: normal.
+  WhiteSpace white_space = WhiteSpace::kNormal;
+
+  // overflow (CSS Overflow 3).  Initial value: visible.
+  Overflow overflow = Overflow::kVisible;
+
   // Replaced content fitting (img).
   ObjectFit object_fit = ObjectFit::kFill;
   VerticalAlign vertical_align = VerticalAlign::kBaseline;
@@ -313,5 +358,14 @@ struct ComputedStyle
   // the parent and extended by declarations on the element itself.
   std::map<std::string, std::string> custom_properties;
 };
+
+// String forms of the style enums / SizeSpec, used by DevTools and debug
+// output.  Not CSS serialization — human-readable labels.
+std::string_view ToString(Display display);
+std::string_view ToString(Position position);
+std::string_view ToString(TextAlign align);
+std::string_view ToString(FlexDirection direction);
+std::string ToString(const SizeSpec& spec);
+std::string ToString(const css::Color& color);
 
 } // namespace neko::style

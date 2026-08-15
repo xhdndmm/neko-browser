@@ -81,6 +81,24 @@ void Rasterizer::Rasterize(const DisplayList& list)
 {
   for (const DrawCommand& command : list.commands()) {
     switch (command.type) {
+    case CommandType::kPushClip: {
+      ClipRect clip{command.x, command.y, command.x + command.width, command.y + command.height};
+      // Clips nest: the new clip is the intersection with the enclosing one.
+      if (!clips_.empty()) {
+        const ClipRect& c = clips_.back();
+        clip.x = std::max(clip.x, c.x);
+        clip.y = std::max(clip.y, c.y);
+        clip.x2 = std::min(clip.x2, c.x2);
+        clip.y2 = std::min(clip.y2, c.y2);
+      }
+      clips_.push_back(clip);
+      break;
+    }
+    case CommandType::kPopClip:
+      if (!clips_.empty()) {
+        clips_.pop_back();
+      }
+      break;
     case CommandType::kFillRect:
       FillRect(command.x, command.y, command.width, command.height, command.color);
       break;
@@ -106,8 +124,33 @@ void Rasterizer::SetScrollOffset(float offset)
   scroll_offset_ = offset;
 }
 
+bool Rasterizer::ApplyClip(float& x, float& y, float& width, float& height) const
+{
+  if (clips_.empty()) {
+    return true;
+  }
+  const ClipRect& c = clips_.back();
+  const float nx = std::max(x, c.x);
+  const float ny = std::max(y, c.y);
+  const float nx2 = std::min(x + width, c.x2);
+  const float ny2 = std::min(y + height, c.y2);
+  if (nx2 <= nx || ny2 <= ny) {
+    return false;
+  }
+  x = nx;
+  y = ny;
+  width = nx2 - nx;
+  height = ny2 - ny;
+  return true;
+}
+
 void Rasterizer::FillRect(float x, float y, float width, float height, css::Color color)
 {
+  // Intersect with the active overflow clip (document coordinates; the
+  // scroll offset is applied after clipping).
+  if (!ApplyClip(x, y, width, height)) {
+    return;
+  }
   // Shift up by the scroll offset; scrolled-out content is clipped by Clamp.
   y -= scroll_offset_;
   const int x0 = Clamp(static_cast<int>(std::floor(x)), 0, width_ - 1);
@@ -323,10 +366,22 @@ void Rasterizer::DrawImage(const DrawCommand& command)
   const float dst_y = command.y + (box_h - dst_h) / 2.0f - scroll_offset_;
   // ceil so the sampled source coordinate (px - dst_x)/dst_w never goes
   // negative (fractional origins from layout otherwise index rgba at -1).
-  const int x0 = std::max(0, static_cast<int>(std::ceil(dst_x)));
-  const int y0 = std::max(0, static_cast<int>(std::ceil(dst_y)));
-  const int x1 = std::min(width_, static_cast<int>(std::ceil(dst_x + dst_w)));
-  const int y1 = std::min(height_, static_cast<int>(std::ceil(dst_y + dst_h)));
+  int x0 = std::max(0, static_cast<int>(std::ceil(dst_x)));
+  int y0 = std::max(0, static_cast<int>(std::ceil(dst_y)));
+  int x1 = std::min(width_, static_cast<int>(std::ceil(dst_x + dst_w)));
+  int y1 = std::min(height_, static_cast<int>(std::ceil(dst_y + dst_h)));
+  // Clip the destination rect to the active overflow clip (document coords:
+  // the pixel at row |py| sits at document y = py + scroll).
+  if (!clips_.empty()) {
+    const ClipRect& c = clips_.back();
+    x0 = std::max(x0, static_cast<int>(std::ceil(c.x)));
+    x1 = std::min(x1, static_cast<int>(std::ceil(c.x2)));
+    y0 = std::max(y0, static_cast<int>(std::ceil(c.y - scroll_offset_)));
+    y1 = std::min(y1, static_cast<int>(std::ceil(c.y2 - scroll_offset_)));
+    if (x0 >= x1 || y0 >= y1) {
+      return;
+    }
+  }
   for (int py = y0; py < y1; ++py) {
     const int src_y =
         std::min(img.height - 1, static_cast<int>((static_cast<float>(py) - dst_y) / dst_h * ih));
@@ -358,6 +413,16 @@ void Rasterizer::BlendGlyph(int x, int y, const graphics::GlyphBitmap& glyph, cs
       const int px = x + col;
       if (px < 0 || px >= width_) {
         continue;
+      }
+      // Respect the active overflow clip: the pixel's document coordinates
+      // are (px, py + scroll).
+      if (!clips_.empty()) {
+        const ClipRect& c = clips_.back();
+        const float doc_x = static_cast<float>(px);
+        const float doc_y = static_cast<float>(py) + scroll_offset_;
+        if (doc_x < c.x || doc_x >= c.x2 || doc_y < c.y || doc_y >= c.y2) {
+          continue;
+        }
       }
       const uint8_t alpha = src[col];
       if (alpha == 0) {

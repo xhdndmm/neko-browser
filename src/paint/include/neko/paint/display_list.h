@@ -20,7 +20,9 @@ enum class CommandType
   kFillRoundRect,
   kBorderRect,
   kDrawText,
-  kDrawImage
+  kDrawImage,
+  kPushClip, // clip subsequent commands to the rect until kPopClip
+  kPopClip
 };
 
 struct DrawCommand
@@ -87,6 +89,11 @@ public:
                  float height,
                  const image::Image& image,
                  style::ObjectFit object_fit);
+  // Pushes a clip rectangle (padding box) that restricts every following
+  // command until the matching PopClip.  Clips nest; each is intersected
+  // with the enclosing clip.
+  void PushClip(float x, float y, float width, float height);
+  void PopClip();
 
   const std::vector<DrawCommand>& commands() const
   {

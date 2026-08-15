@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Layout Diagnostic</title>
+<style>
+  body { margin: 0; font-family: sans-serif; }
+  .navbar { display: flex; background: #333; color: #fff; }
+  .navbar .brand { padding: 12px 16px; font-weight: bold; }
+  .navbar .nav-item { padding: 12px 16px; }
+  .navbar .spacer { flex: 1; }
+  .row { display: flex; }
+  .col { flex: 1; padding: 16px; border: 1px solid #ccc; margin: 8px; }
+  .grid-demo { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  .grid-demo > div { background: #eef; padding: 16px; border: 1px solid #99c; }
+  .full { width: 100%; background: #ffd; padding: 16px; box-sizing: border-box; }
+  h1 { margin: 16px; }
+  p { margin: 16px; }
+  .center-box { max-width: 600px; margin: 0 auto; background: #dfd; padding: 16px; }
+</style>
+</head>
+<body>
+  <div class="navbar">
+    <div class="brand">Logo</div>
+    <div class="nav-item">Home</div>
+    <div class="nav-item">About</div>
+    <div class="nav-item">Contact</div>
+    <div class="spacer"></div>
+    <div class="nav-item">Login</div>
+  </div>
+  <h1>Layout Diagnostic Page</h1>
+  <p>This paragraph should span the full width of the viewport, wrapping normally at the right edge. It contains enough text to demonstrate that inline text layout works correctly across multiple lines with word wrapping.</p>
+  <div class="row">
+    <div class="col">Column one with some content.</div>
+    <div class="col">Column two with some content.</div>
+    <div class="col">Column three with some content.</div>
+  </div>
+  <div class="grid-demo">
+    <div>Grid A</div>
+    <div>Grid B</div>
+    <div>Grid C</div>
+    <div>Grid D</div>
+    <div>Grid E</div>
+    <div>Grid F</div>
+  </div>
+  <div class="full">A full-width block with box-sizing border-box.</div>
+  <div class="center-box">A centered max-width box.</div>
+</body>
+</html>
