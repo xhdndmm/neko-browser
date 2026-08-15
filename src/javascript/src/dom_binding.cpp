@@ -682,6 +682,49 @@ namespace {
 // Node methods and accessors.
 // ---------------------------------------------------------------------------
 
+// Throws a DOMException with the given WebIDL exception name (DOM spec §4.4,
+// WebIDL §3.5).  DOM tree operations report NotFoundError, HierarchyRequestError,
+// InvalidNodeTypeError, etc. rather than a plain TypeError.
+JSValue ThrowDomException(JSContext* ctx, std::string_view name, std::string_view message)
+{
+  JSValue err = JS_NewError(ctx);
+  JS_SetPropertyStr(ctx, err, "name", JS_NewStringLen(ctx, name.data(), name.size()));
+  JS_SetPropertyStr(ctx, err, "message", JS_NewStringLen(ctx, message.data(), message.size()));
+  // Legacy numeric code (DOMException §6): constants of the exception names
+  // used by the DOM APIs implemented here.
+  auto legacy_code = [](std::string_view n) -> int {
+    if (n == "IndexSizeError")
+      return 1;
+    if (n == "HierarchyRequestError")
+      return 3;
+    if (n == "WrongDocumentError")
+      return 4;
+    if (n == "InvalidCharacterError")
+      return 5;
+    if (n == "NoModificationAllowedError")
+      return 7;
+    if (n == "NotFoundError")
+      return 8;
+    if (n == "NotSupportedError")
+      return 9;
+    if (n == "InvalidStateError")
+      return 11;
+    if (n == "SyntaxError")
+      return 12;
+    if (n == "InvalidModificationError")
+      return 13;
+    if (n == "NamespaceError")
+      return 14;
+    if (n == "InvalidNodeTypeError")
+      return 24;
+    if (n == "InvalidAccessError")
+      return 15;
+    return 0;
+  };
+  JS_SetPropertyStr(ctx, err, "code", JS_NewInt32(ctx, legacy_code(name)));
+  return JS_Throw(ctx, err);
+}
+
 JSValue NodeAppendChild(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
@@ -697,13 +740,16 @@ JSValue NodeAppendChild(JSContext* ctx, JSValueConst this_val, int argc, JSValue
     return JS_ThrowTypeError(ctx, "appendChild: argument is not a node");
   }
   if (child == parent) {
-    return JS_ThrowTypeError(ctx, "appendChild: cannot append a node to itself");
+    return ThrowDomException(
+        ctx, "HierarchyRequestError", "appendChild: cannot append a node to itself");
   }
   if (child->node_type() == dom::NodeType::kDocument) {
-    return JS_ThrowTypeError(ctx, "appendChild: cannot append a Document node");
+    return ThrowDomException(
+        ctx, "HierarchyRequestError", "appendChild: cannot append a Document node");
   }
   if (IsAncestorOf(child, parent)) {
-    return JS_ThrowTypeError(ctx, "appendChild: cannot append an ancestor");
+    return ThrowDomException(
+        ctx, "HierarchyRequestError", "appendChild: cannot append an ancestor");
   }
   if (child->parent() != nullptr) {
     std::unique_ptr<dom::Node> removed = child->parent()->RemoveChild(child);
@@ -782,10 +828,11 @@ JSValue NodeInsertBefore(JSContext* ctx, JSValueConst this_val, int argc, JSValu
   }
   dom::Node* reference = argc >= 2 ? UnwrapNode(argv[1]) : nullptr;
   if (reference != nullptr && reference->parent() != parent) {
-    return JS_ThrowTypeError(ctx, "insertBefore: reference is not a child of this node");
+    return ThrowDomException(
+        ctx, "NotFoundError", "insertBefore: reference is not a child of this node");
   }
   if (child == parent || child->node_type() == dom::NodeType::kDocument) {
-    return JS_ThrowTypeError(ctx, "insertBefore: invalid node");
+    return ThrowDomException(ctx, "HierarchyRequestError", "insertBefore: invalid node");
   }
   if (child->parent() != nullptr) {
     std::unique_ptr<dom::Node> removed = child->parent()->RemoveChild(child);
@@ -811,7 +858,8 @@ JSValue NodeRemoveChild(JSContext* ctx, JSValueConst this_val, int argc, JSValue
   }
   dom::Node* child = UnwrapNode(argv[0]);
   if (child == nullptr || child->parent() != parent) {
-    return JS_ThrowTypeError(ctx, "removeChild: argument is not a child of this node");
+    return ThrowDomException(
+        ctx, "NotFoundError", "removeChild: argument is not a child of this node");
   }
   std::unique_ptr<dom::Node> removed = parent->RemoveChild(child);
   impl->TakeOwnership(child, std::move(removed));
@@ -1037,12 +1085,89 @@ JSValue NodeSetTextContent(JSContext* ctx, JSValueConst this_val, JSValueConst v
   if (!ok) {
     return JS_EXCEPTION;
   }
+  // Per DOM spec, setting textContent on a Text or Comment node replaces its
+  // data; it must not create child nodes (which a Text/Comment cannot have).
+  if (node->node_type() == dom::NodeType::kText) {
+    static_cast<dom::Text*>(node)->SetData(text);
+    return JS_UNDEFINED;
+  }
+  if (node->node_type() == dom::NodeType::kComment) {
+    static_cast<dom::Comment*>(node)->SetData(text);
+    return JS_UNDEFINED;
+  }
   while (node->first_child() != nullptr) {
     std::unique_ptr<dom::Node> removed = node->RemoveChild(node->first_child());
     impl->TakeOwnership(removed.get(), std::move(removed));
   }
   if (!text.empty()) {
     node->AppendChild(std::make_unique<dom::Text>(text));
+  }
+  return JS_UNDEFINED;
+}
+
+JSValue NodeGetNodeValue(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Node* node = UnwrapNode(this_val);
+  if (node == nullptr) {
+    return JS_ThrowTypeError(ctx, "detached node");
+  }
+  const std::string* value = node->NodeValue();
+  if (value == nullptr) {
+    return JS_NULL;
+  }
+  return JS_NewStringLen(ctx, value->data(), value->size());
+}
+
+JSValue NodeSetNodeValue(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Node* node = UnwrapNode(this_val);
+  if (node == nullptr) {
+    return JS_ThrowTypeError(ctx, "detached node");
+  }
+  bool ok = false;
+  const std::string text = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  if (node->node_type() == dom::NodeType::kText) {
+    static_cast<dom::Text*>(node)->SetData(text);
+  } else if (node->node_type() == dom::NodeType::kComment) {
+    static_cast<dom::Comment*>(node)->SetData(text);
+  }
+  return JS_UNDEFINED;
+}
+
+// CharacterData.data getter/setter (DOM spec §4.7): only Text and Comment
+// carry data; on other nodes the accessor is absent, so these are only wired
+// to the text and comment prototypes.
+JSValue CharacterDataGetData(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Node* node = UnwrapNode(this_val);
+  if (node == nullptr) {
+    return JS_ThrowTypeError(ctx, "detached node");
+  }
+  const std::string* value = node->NodeValue();
+  if (value == nullptr) {
+    return JS_UNDEFINED;
+  }
+  return JS_NewStringLen(ctx, value->data(), value->size());
+}
+
+JSValue CharacterDataSetData(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Node* node = UnwrapNode(this_val);
+  if (node == nullptr) {
+    return JS_ThrowTypeError(ctx, "detached node");
+  }
+  bool ok = false;
+  const std::string text = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  if (node->node_type() == dom::NodeType::kText) {
+    static_cast<dom::Text*>(node)->SetData(text);
+  } else if (node->node_type() == dom::NodeType::kComment) {
+    static_cast<dom::Comment*>(node)->SetData(text);
   }
   return JS_UNDEFINED;
 }
@@ -1227,11 +1352,12 @@ JSValue NodeReplaceChild(JSContext* ctx, JSValueConst this_val, int argc, JSValu
     return JS_ThrowTypeError(ctx, "replaceChild: arguments are not nodes");
   }
   if (old_child->parent() != parent) {
-    return JS_ThrowTypeError(ctx, "replaceChild: oldChild is not a child of this node");
+    return ThrowDomException(
+        ctx, "NotFoundError", "replaceChild: oldChild is not a child of this node");
   }
   if (new_child == parent || new_child->node_type() == dom::NodeType::kDocument ||
       IsAncestorOf(new_child, parent)) {
-    return JS_ThrowTypeError(ctx, "replaceChild: invalid newChild");
+    return ThrowDomException(ctx, "HierarchyRequestError", "replaceChild: invalid newChild");
   }
   // Insert the new child before the old one, then remove the old one.
   if (new_child->parent() != nullptr) {
@@ -3733,6 +3859,11 @@ void DefineNodePrototype(JSContext* ctx, Impl& impl)
                MakeGetter(ctx, "ownerDocument", NodeGetOwnerDocument));
   DefineGetter(
       ctx, impl.node_proto, "isConnected", MakeGetter(ctx, "isConnected", NodeGetIsConnected));
+  DefineAccessor(ctx,
+                 impl.node_proto,
+                 "nodeValue",
+                 MakeGetter(ctx, "nodeValue", NodeGetNodeValue),
+                 MakeSetter(ctx, "nodeValue", NodeSetNodeValue));
 }
 
 void DefineElementPrototype(JSContext* ctx, Impl& impl)
@@ -4864,6 +4995,17 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   // not overwrite Element.prototype.constructor.
   DefineInterface(ctx, global, "Node", node_proto);
   DefineInterface(ctx, global, "Document", document_proto);
+  // CharacterData.data is exposed on Text and Comment.
+  DefineAccessor(ctx,
+                 text_proto,
+                 "data",
+                 MakeGetter(ctx, "data", CharacterDataGetData),
+                 MakeSetter(ctx, "data", CharacterDataSetData));
+  DefineAccessor(ctx,
+                 comment_proto,
+                 "data",
+                 MakeGetter(ctx, "data", CharacterDataGetData),
+                 MakeSetter(ctx, "data", CharacterDataSetData));
   DefineInterface(ctx, global, "Text", text_proto);
   DefineInterface(ctx, global, "Comment", comment_proto);
   DefineInterface(ctx, global, "DocumentFragment", fragment_proto);
