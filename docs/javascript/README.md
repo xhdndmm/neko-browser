@@ -22,15 +22,22 @@
 
 - **全局对象**：`document`、`window`、`setTimeout`、`clearTimeout`、
   `setInterval`、`clearInterval`、`addEventListener`/`removeEventListener`/
-  `dispatchEvent`（window 别名，转发到 document）、`navigator`、`screen`，
-  以及 DOM 接口构造器
+  `dispatchEvent`（window 别名，转发到 document）、`navigator`、`screen`、
+  `matchMedia`，以及 DOM 接口构造器
   `Node`/`Element`/`HTMLElement`/`Document`/`Text`/`Comment`/
-  `DocumentFragment`/`CSSStyleDeclaration`（其 `.prototype` 指向真实 wrapper
-  原型，因此 `x instanceof Element` 与 `Element.prototype.foo = ...` 扩展都
-  可用；直接 `new` 会抛 "Illegal constructor"）。
+  `DocumentFragment`/`CSSStyleDeclaration`/`Event`/`CustomEvent`
+  （其 `.prototype` 指向真实 wrapper 原型，因此 `x instanceof Element` 与
+  `Element.prototype.foo = ...` 扩展都可用；直接 `new` 会抛 "Illegal
+  constructor"）。
+- **window === globalThis**：window 就是全局对象（浏览器语义），因此
+  `window._G = {...}` 落在全局作用域，下一个 `<script>` 可用裸 `_G` 读取，
+  反之亦然。这是 bing 那串 ~47 个脚本得以依次执行的前提：早期脚本定义全局、
+  后期脚本消费。**window.self/top/parent/frames 均 === window**（引擎无帧树）。
+  另外全局事件处理属性（HTML §8.1.7.2 的 `onload`/`onerror`/`onclick`/…）
+  以可写 null 槽暴露为全局属性，脚本可裸读/裸赋值（事件系统暂不自动触发它们）。
 - **window**：`navigator`、`screen`、`innerWidth`/`innerHeight`/
   `devicePixelRatio`（引擎默认视口 800×600@1x，与 `renderer::Page` 默认布局
-  宽度一致；真实窗口尺寸的接入是后续工作）。
+  宽度一致；真实窗口尺寸的接入是后续工作）、`matchMedia`。
 - **navigator**：`userAgent`（与网络栈发送的 UA 一致）、`platform`
   （按 OS 宏）、`language`/`languages`（默认 "en-US"）、`onLine`、
   `cookieEnabled`、`hardwareConcurrency`、`vendor`。缺失的接口（如
@@ -49,7 +56,10 @@
 - **Element**：`tagName`、`id`/`className`（读写）、`attributes`、
   `getAttribute/setAttribute/removeAttribute/hasAttribute`、`children`、
   `firstElementChild`、`querySelector(All)`、`getElementsByTagName`、
-  `getElementsByClassName`、`innerHTML`（读写）、`style`（CSSStyleDeclaration）。
+  `getElementsByClassName`、`innerHTML`（读写）、`innerText`（读；
+  **textContent 近似**——真实 innerText 是渲染文本：隐藏元素剔除、
+  空白归一化，本引擎暂未实现布局相关 innerText）、
+  `style`（CSSStyleDeclaration）。
 - **CSSStyleDeclaration**：`setProperty/getPropertyValue/removeProperty` 以及
   一组直接访问器（width/height/color/background-color/font-size/...），
   均以 style 属性为数据源（读写会改写 style 属性）。
@@ -71,6 +81,17 @@
   相对 URL 按页面 base 解析；网络错误 reject。同步网络调用立即 resolve，
   由 microtask 泵送推进 `await`/`.then` 链。无 Request/AbortController/
   FormData。
+- `window.matchMedia(query)`：按引擎固定视口（800×600）对常见媒体查询
+  求值（`(min|max)-(width|height): Npx`、`orientation`、`prefers-color-scheme`、
+  `prefers-reduced-motion`、`(any-)pointer`/`hover`），逗号列表按 OR 求值；
+  返回的 MediaQueryList 是静态的（`addEventListener`/`removeListener` 等
+  为 no-op），未知特性保守返回 `matches:false`。
+- `window.performance`：`now()`、`timeOrigin`、`timing.navigationStart`
+  （均为页面加载起点）。bing 的启动脚本读取 `performance.timing.
+  navigationStart`。
+- `new CustomEvent(type, {detail, bubbles, cancelable})`：Event 的子类构造器，
+  `detail` 默认 null；`CustomEvent.prototype` 继承 `Event.prototype`。
+  脚本间用 CustomEvent 携带数据派发事件。
 
 **Promise / 微任务**：`ScriptEngine::Evaluate`/`CallGlobal` 在求值后泵送
 QuickJS 的 job 队列（promise 的 `.then` 延续、async 函数），因此顶层启动的
@@ -96,10 +117,38 @@ CLI `--url` 路径同样执行脚本。
   （不抢占管线，无法先于更早的 classic 运行）。
 - 外部脚本经同一网络栈（生产带 Cookie）抓取；module 与动态 import 不支持。
 
-**测试**：66 个 JS 单元测试 + 浏览器集成测试（脚本执行/console/错误/
+**测试**：107 个 JS 单元测试 + 浏览器集成测试（脚本执行/console/错误/
 定时器/外部脚本/文档序/defer/async/失败不中断/生命周期事件/promise 泵送/
-未处理 rejection/localStorage/fetch/多图并行解码/页面 origin）。ASan 无泄漏、
-TSan 无数据竞争。
+未处理 rejection/localStorage/fetch/多图并行解码/页面 origin/`window ===
+globalThis` 全局互通/事件处理属性/CustomEvent/innerText/matchMedia/
+performance.timing）。ASan 无泄漏、TSan 无数据竞争。
+
+## 生命周期 / GC 注意点
+
+`DomBinder` 把 `window` 建成全局对象本身，因此页面在 `window`/全局上创建的
+任意属性（如 bing 的 `window._G`、事件对象的 `window._ev`）都直接挂在全局
+对象上，随页面 runtime 一起被 GC 回收。`Event` 类的 `gc_mark` 回调标记其
+opaque 中持有的 `target`/`current_target`，否则一个"活"事件的 target（如
+document wrapper）只靠 GC 看不到的引用计数存活，runtime 销毁时会触发
+`JS_FreeRuntime` 的 `gc_obj_list is empty` 断言。`~Impl` 显式删除它安装到
+全局对象的每个属性（含 window/self/top/parent/frames 自引用）以保持 teardown
+确定性。
+
+## bing.com 实测（阶段 1：脚本链打通）
+
+`window === globalThis` 修复后，bing 首页的脚本链从首个 `window._w` 处断开
+（随后 `_G`、`EventsToDuplicate`、`sj_evt`、`Feedback` 连环崩溃）变为仅剩 5
+个残余错误，搜索框 `<textarea id="sb_form_q">` 正常渲染：
+
+- `_w is not defined`：bing 脚本 1 在脚本 31 定义 `_w` **之前**就执行
+  `_w.sj_pt=sj_pt`。这是 bing 自身的问题——任何符合规范的浏览器都会在此抛
+  ReferenceError（bing 控制台常年有该报错），且不致命（后续脚本继续执行并
+  定义 `_w`）。
+- `Feedback is not defined` / `.controller` / `.trigger` / `.match` of
+  undefined：均来自 bing 的动态模块加载器（`_w.rms.js`）与遥测脚本，依赖其
+  异步模块时序；同步引擎不仿真该时序，故这些辅助脚本报错但不阻塞主渲染。
+- 搜索框本身是服务端渲染进 HTML 的（非纯 JS 现拼），脚本链负责的是建议、
+  IOTD、登录态、反馈等增强功能。
 
 ## 所有权与生命周期
 

@@ -55,7 +55,9 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
 - **媒体**：自研 WAV 解码（PCM+float，8/16/24/32-bit）
 - **PDF**：文本提取（xref/FlateDecode/文本操作符）—— **PARTIAL**
 - **JavaScript**：QuickJS（quickjs-ng）runtime 封装 —— 核心语言 + console
-  + 执行时限/内存上限；**无 DOM 绑定**（Phase 8 里程碑 1）
+  + 执行时限/内存上限 + **DOM 绑定与页内脚本执行**（`window === globalThis`、
+  事件/CustomEvent、setTimeout 事件循环、fetch/localStorage、matchMedia、
+  innerText 等子集，详见[兼容性矩阵](docs/compatibility/compatibility-matrix.md)）
 - **GUI（Qt6）**：标签页、地址栏、后退/前进/刷新/新标签/书签/下载、DevTools
   （DOM 树/网络日志/**JS Console REPL**）、历史/书签/下载/设置面板
 - **下载器**：Content-Disposition/URL 文件名、原子写入

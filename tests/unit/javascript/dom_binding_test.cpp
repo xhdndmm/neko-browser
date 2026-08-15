@@ -1128,5 +1128,104 @@ TEST_F(DomBinderTest, LocationReloadRequestsReload)
   EXPECT_TRUE(reloaded);
 }
 
+// The root cause of bing's broken script chain: window and the global scope
+// must be the same object, so `window._G = {...}` in one <script> is readable
+// as a bare `_G` in the next.  window.self/top/parent/frames must also point at
+// window (the engine has no frame tree).
+TEST_F(DomBinderTest, WindowIsTheGlobalObject)
+{
+  EXPECT_TRUE(EvalBool("window === globalThis"));
+  EXPECT_TRUE(EvalBool("window.self === window"));
+  EXPECT_TRUE(EvalBool("window.top === window"));
+  EXPECT_TRUE(EvalBool("window.parent === window"));
+  EXPECT_TRUE(EvalBool("window.frames === window"));
+  // Cross-script global definition: write via window, read as a bare global,
+  // and vice versa (exactly what bing's ~47-script bootstrap relies on).
+  EXPECT_TRUE(EvalBool("(function(){ window._G = { Region: 'US' }; "
+                       "var a = _G.Region === 'US'; "
+                       "_G.Lang = 'en-US'; "
+                       "var b = window._G.Lang === 'en-US'; "
+                       "var c = self._G.Region === 'US'; "
+                       "return a && b && c; })()"));
+}
+
+// Global event handler attributes (HTML spec §8.1.7.2) are global properties in
+// browsers: bare `onload`/`onerror`/... resolve without a declaration and are
+// assignable.  bing's scripts read `onload` as a bare identifier.
+TEST_F(DomBinderTest, GlobalEventHandlersAreGlobalProperties)
+{
+  EXPECT_TRUE(EvalBool("onload === null"));
+  EXPECT_TRUE(EvalBool("typeof onerror === 'object'"));
+  EXPECT_TRUE(EvalBool("window.onload === onload"));
+  EXPECT_TRUE(EvalBool("(function(){ onload = function(){}; "
+                       "var ok = typeof onload === 'function' && window.onload === onload; "
+                       "onload = null; return ok; })()"));
+}
+
+// innerText (read): approximated by textContent; bing sniffs page text with it.
+TEST_F(DomBinderTest, ElementInnerTextGetter)
+{
+  EXPECT_EQ(EvalString("document.getElementById('first').innerText"), "Hello world");
+  EXPECT_TRUE(EvalBool("document.getElementById('first').innerText === "
+                       "document.getElementById('first').textContent"));
+  // innerText is documented as a textContent approximation, so they agree even
+  // where real innerText would normalize whitespace / hide elements.
+  EXPECT_TRUE(EvalBool("document.body.innerText === document.body.textContent"));
+}
+
+// new CustomEvent(type, {detail, bubbles, cancelable}) — a constructable Event
+// subclass carrying a `detail` payload (bing dispatches these between scripts).
+TEST_F(DomBinderTest, CustomEventCarriesDetail)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var ev = new CustomEvent('hello', "
+                       "{ detail: { a: 1 }, bubbles: true, cancelable: true }); "
+                       "var got = null; var bubbles = false; "
+                       "document.addEventListener('hello', function(e){ "
+                       "  got = e.detail; bubbles = e.bubbles; }); "
+                       "document.dispatchEvent(ev); "
+                       "return ev instanceof CustomEvent && ev instanceof Event "
+                       "       && got && got.a === 1 && bubbles === true; })()"));
+  // detail defaults to null (CustomEventInit default), and constructor args are
+  // optional like Event.
+  EXPECT_TRUE(EvalBool("(function(){ var ev = new CustomEvent('x'); "
+                       "return ev.detail === null && ev.type === 'x'; })()"));
+  // CustomEvent.prototype inherits Event.prototype.
+  EXPECT_TRUE(EvalBool("CustomEvent.prototype instanceof Event"));
+}
+
+// window.matchMedia(query): returns a MediaQueryList evaluated against the
+// engine's fixed 800x600 viewport; the list exposes matches/media and the
+// standard no-op listener hooks (so scripts don't throw).
+TEST_F(DomBinderTest, MatchMediaEvaluatesBasicQueries)
+{
+  EXPECT_TRUE(EvalBool("matchMedia === window.matchMedia"));
+  EXPECT_TRUE(EvalBool("(function(){ "
+                       "var yes = matchMedia('(min-width: 800px)'); "
+                       "var no = matchMedia('(max-width: 600px)'); "
+                       "var h = matchMedia('(min-height: 500px) and (max-height: 700px)'); "
+                       "var or = matchMedia('(min-width: 2000px), (min-width: 800px)'); "
+                       "var notq = matchMedia('not (max-width: 600px)'); "
+                       "var portrait = matchMedia('(orientation: portrait)'); "
+                       "var dark = matchMedia('(prefers-color-scheme: dark)'); "
+                       "return yes.matches === true && no.matches === false "
+                       "       && h.matches === true && or.matches === true "
+                       "       && notq.matches === true && portrait.matches === false "
+                       "       && dark.matches === false "
+                       "       && yes.media === '(min-width: 800px)' "
+                       "       && typeof yes.addEventListener === 'function' "
+                       "       && typeof yes.removeListener === 'function'; })()"));
+}
+
+// performance.timing.navigationStart: the page load start (epoch ms).  bing's
+// bootstrap reads performance.timing.navigationStart; before this the read
+// threw "cannot read property 'navigationStart' of undefined".
+TEST_F(DomBinderTest, PerformanceTimingNavigationStart)
+{
+  EXPECT_TRUE(EvalBool("typeof performance.timing === 'object'"));
+  EXPECT_TRUE(EvalBool("typeof performance.timing.navigationStart === 'number'"));
+  EXPECT_TRUE(EvalNumber("performance.timing.navigationStart") > 1000000000000.0);
+  EXPECT_EQ(EvalString("performance.timing.navigationStart"), EvalString("performance.timeOrigin"));
+}
+
 } // namespace
 } // namespace neko::javascript

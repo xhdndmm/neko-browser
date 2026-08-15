@@ -110,6 +110,22 @@ void EventFinalizer(JSRuntime* rt, JSValue obj)
   }
 }
 
+// The EventWrapper holds owned JSValues (target/current_target) in its opaque
+// payload.  The GC cannot see those unless the class's gc_mark callback marks
+// them; without it a live event keeps its target reachable only through a
+// refcount that the GC treats as an external reference, so at runtime teardown
+// the target (e.g. the document wrapper) is never collected and JS_FreeRuntime
+// fails its "gc_obj_list is empty" assertion.
+void EventGcMark(JSRuntime* rt, JSValueConst val, JS_MarkFunc* mark_func)
+{
+  auto* w = static_cast<EventWrapper*>(JS_GetOpaque(val, g_event_class_id));
+  if (w == nullptr) {
+    return;
+  }
+  JS_MarkValue(rt, w->target, mark_func);
+  JS_MarkValue(rt, w->current_target, mark_func);
+}
+
 // Forward declarations (defined below with the other node/string helpers).
 std::string ArgString(JSContext* ctx, JSValueConst value, bool* ok);
 dom::Element* AsElement(dom::Node* node);
@@ -586,6 +602,7 @@ struct Impl
   JSValue fragment_proto = JS_UNDEFINED;
   JSValue style_proto = JS_UNDEFINED;
   JSValue event_proto = JS_UNDEFINED;
+  JSValue custom_event_proto = JS_UNDEFINED;
   JSValue class_list_proto = JS_UNDEFINED;
   JSValue window = JS_UNDEFINED;
 
@@ -627,6 +644,8 @@ struct Impl
 
   // performance.now() origin (steady clock at binder construction).
   std::chrono::steady_clock::time_point performance_origin = std::chrono::steady_clock::now();
+  // performance.timing.navigationStart (wall-clock epoch ms at construction).
+  double navigation_start_epoch_ms = 0.0;
 
   // Event listeners: node -> (type -> listeners).  Keyed by node (elements
   // and the document; window-level listeners are stored under the document,
@@ -3619,6 +3638,63 @@ JSValue EventConstructor(JSContext* ctx, JSValueConst /*this_val*/, int argc, JS
   return impl->MakeEvent(type, bubbles, cancelable);
 }
 
+// new CustomEvent(type, {detail, bubbles, cancelable}): an Event whose
+// prototype chain includes Event.prototype and which carries a `detail`
+// payload (CustomEventInit.detail, default null).  bing's instrumentation
+// dispatches CustomEvents between its scripts, so `detail` must round-trip.
+JSValue
+CustomEventConstructor(JSContext* ctx, JSValueConst /*this_val*/, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, JS_UNDEFINED);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  bool ok = false;
+  const std::string type = argc >= 1 ? ArgString(ctx, argv[0], &ok) : std::string();
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  bool bubbles = false;
+  bool cancelable = false;
+  JSValue detail = JS_NULL;
+  if (argc >= 2 && JS_IsObject(argv[1])) {
+    JSValue b = JS_GetPropertyStr(ctx, argv[1], "bubbles");
+    if (JS_IsBool(b)) {
+      const int v = JS_ToBool(ctx, b);
+      if (v < 0) {
+        JS_FreeValue(ctx, b);
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        return JS_EXCEPTION;
+      }
+      bubbles = v != 0;
+    }
+    JS_FreeValue(ctx, b);
+    JSValue c = JS_GetPropertyStr(ctx, argv[1], "cancelable");
+    if (JS_IsBool(c)) {
+      const int v = JS_ToBool(ctx, c);
+      if (v < 0) {
+        JS_FreeValue(ctx, c);
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        return JS_EXCEPTION;
+      }
+      cancelable = v != 0;
+    }
+    JS_FreeValue(ctx, c);
+    JSValue d = JS_GetPropertyStr(ctx, argv[1], "detail");
+    if (!JS_IsUndefined(d)) {
+      detail = d; // detail defaults to null (spec); explicit undefined -> null
+    } else {
+      JS_FreeValue(ctx, d);
+    }
+  }
+  JSValue event = impl->MakeEvent(type, bubbles, cancelable);
+  // CustomEvent instances use the derived prototype (spec: CustomEvent extends
+  // Event); MakeEvent wired event_proto, so point it at custom_event_proto.
+  JS_SetPrototype(ctx, event, impl->custom_event_proto);
+  JS_SetPropertyStr(ctx, event, "detail", detail); // steals detail
+  return event;
+}
+
 JSValue EventGetType(JSContext* ctx, JSValueConst this_val)
 {
   EventWrapper* w = UnwrapEvent(this_val);
@@ -3923,6 +3999,12 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
                  MakeSetter(ctx, "innerHTML", ElementSetInnerHTML));
   DefineGetter(
       ctx, impl.element_proto, "outerHTML", MakeGetter(ctx, "outerHTML", ElementGetOuterHTML));
+  // innerText (read-only): an approximation returning the element's
+  // textContent.  Real innerText reflects *rendered* text (hidden elements
+  // excluded, whitespace normalized); the engine has no layout-backed innerText
+  // yet, and bing reads innerText mainly to sniff page text during bootstrap.
+  DefineGetter(
+      ctx, impl.element_proto, "innerText", MakeGetter(ctx, "innerText", NodeGetTextContent));
   DefineGetter(ctx, impl.element_proto, "style", MakeGetter(ctx, "style", ElementGetStyle));
   DefineGetter(
       ctx, impl.element_proto, "classList", MakeGetter(ctx, "classList", ElementGetClassList));
@@ -4715,6 +4797,154 @@ JSValue PerformanceNow(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSVa
 }
 
 // ---------------------------------------------------------------------------
+// window.matchMedia(query).
+//
+// Returns a MediaQueryList evaluated against the engine's fixed viewport
+// (800x600@1x, see screen/innerWidth).  Supports the media-feature queries
+// real sites use at bootstrap: (min|max)-(width|height): Npx, orientation,
+// prefers-color-scheme, prefers-reduced-motion, and the (any-)pointer/hover
+// features; a comma-separated list matches when any alternative does.  Unknown
+// features resolve to false (conservative).  The list object is static (no
+// change events); add/removeListener are no-ops, documented.
+// ---------------------------------------------------------------------------
+namespace {
+
+bool MatchMediaQueryImpl(const std::string& query)
+{
+  // (min|max)-(width|height): <N>px  /  (orientation: portrait|landscape)  /
+  // (prefers-color-scheme: light|dark)  /  (prefers-reduced-motion: ...)  /
+  // (pointer|hover|any-pointer|any-hover: none|coarse|fine|hover).
+  auto num_feature = [](const std::string& q, const char* name) -> std::optional<double> {
+    const std::string prefix = name;
+    const auto pos = q.find(prefix);
+    if (pos == std::string::npos) {
+      return std::nullopt;
+    }
+    const auto colon = q.find(':', pos);
+    if (colon == std::string::npos) {
+      return std::nullopt;
+    }
+    const auto paren = q.find(')', colon);
+    const auto end = paren == std::string::npos ? q.size() : paren;
+    std::string val = q.substr(colon + 1, end - colon - 1);
+    val.erase(std::remove_if(
+                  val.begin(), val.end(), [](unsigned char c) { return std::isspace(c) != 0; }),
+              val.end());
+    if (val.size() < 3 || val.compare(val.size() - 2, 2, "px") != 0) {
+      return std::nullopt;
+    }
+    try {
+      return std::stod(val.substr(0, val.size() - 2));
+    } catch (...) {
+      return std::nullopt;
+    }
+  };
+  const bool landscape = 800.0 > 600.0;
+  bool negate = false;
+  std::string q = query;
+  // Trim, then honor a leading "not "/"only ".
+  const auto first = q.find_first_not_of(" \t");
+  q = first == std::string::npos ? "" : q.substr(first);
+  if (q.rfind("not ", 0) == 0) {
+    negate = true;
+    q = q.substr(4);
+  } else if (q.rfind("only ", 0) == 0) {
+    q = q.substr(5);
+  }
+  // A bare media type (all/screen/print) matches (print does not).
+  if (q.find('(') == std::string::npos) {
+    const bool type_match = q == "all" || q == "screen";
+    return negate ? !type_match : type_match;
+  }
+  bool matched = true;
+  for (std::size_t i = 0; i < q.size();) {
+    const auto open = q.find('(', i);
+    if (open == std::string::npos) {
+      break;
+    }
+    const auto close = q.find(')', open);
+    if (close == std::string::npos) {
+      break;
+    }
+    const std::string expr = q.substr(open + 1, close - open - 1);
+    if (auto w = num_feature(expr, "min-width")) {
+      matched = matched && 800.0 >= *w;
+    } else if (auto w = num_feature(expr, "max-width")) {
+      matched = matched && 800.0 <= *w;
+    } else if (auto h = num_feature(expr, "min-height")) {
+      matched = matched && 600.0 >= *h;
+    } else if (auto h = num_feature(expr, "max-height")) {
+      matched = matched && 600.0 <= *h;
+    } else if (expr.rfind("orientation:", 0) == 0) {
+      const bool p = expr.find("portrait") != std::string::npos;
+      matched = matched && (p ? !landscape : landscape);
+    } else if (expr.rfind("prefers-color-scheme:", 0) == 0) {
+      matched = matched && expr.find("light") != std::string::npos;
+    } else if (expr.rfind("prefers-reduced-motion:", 0) == 0) {
+      matched = matched && expr.find("no-preference") != std::string::npos;
+    } else if (expr.rfind("any-hover:", 0) == 0) {
+      matched = matched && expr.find("hover") != std::string::npos;
+    } else if (expr.rfind("hover:", 0) == 0) {
+      matched = matched && expr.find("hover") != std::string::npos;
+    } else if (expr.rfind("any-pointer:", 0) == 0 || expr.rfind("pointer:", 0) == 0) {
+      matched = matched && expr.find("fine") != std::string::npos;
+    } else {
+      // Unknown feature: conservative no-match for this expression.
+      matched = false;
+    }
+    i = close + 1;
+  }
+  return negate ? !matched : matched;
+}
+
+JSValue
+MatchMediaNoOp(JSContext* /*ctx*/, JSValueConst /*this_val*/, int /*argc*/, JSValueConst* /*argv*/)
+{
+  return JS_UNDEFINED;
+}
+
+} // namespace
+
+// window.matchMedia(query) -> MediaQueryList (static; see above).
+JSValue WindowMatchMedia(JSContext* ctx, JSValueConst /*this_val*/, int argc, JSValueConst* argv)
+{
+  bool ok = false;
+  const std::string query = argc >= 1 ? ArgString(ctx, argv[0], &ok) : std::string();
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  // A comma-separated list matches when any alternative does.
+  bool matches = false;
+  std::size_t start = 0;
+  while (start <= query.size()) {
+    const auto comma = query.find(',', start);
+    const auto part =
+        query.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+    if (MatchMediaQueryImpl(part)) {
+      matches = true;
+      break;
+    }
+    if (comma == std::string::npos) {
+      break;
+    }
+    start = comma + 1;
+  }
+
+  JSValue list = JS_NewObject(ctx);
+  JS_SetPropertyStr(ctx, list, "matches", JS_NewBool(ctx, matches));
+  JS_SetPropertyStr(ctx, list, "media", JS_NewStringLen(ctx, query.data(), query.size()));
+  JS_SetPropertyStr(ctx, list, "onchange", JS_NULL);
+  static const std::array<JSCFunctionListEntry, 4> kNoOps = {{
+      JS_CFUNC_DEF("addEventListener", 0, MatchMediaNoOp),
+      JS_CFUNC_DEF("removeEventListener", 0, MatchMediaNoOp),
+      JS_CFUNC_DEF("addListener", 0, MatchMediaNoOp),
+      JS_CFUNC_DEF("removeListener", 0, MatchMediaNoOp),
+  }};
+  JS_SetPropertyFunctionList(ctx, list, kNoOps.data(), static_cast<int>(kNoOps.size()));
+  return list;
+}
+
+// ---------------------------------------------------------------------------
 // window.getComputedStyle(element).
 //
 // Returns an object with getPropertyValue(name) plus camelCase accessors for
@@ -4831,6 +5061,10 @@ JSValue WindowGetComputedStyle(JSContext* ctx, JSValueConst this_val, int argc, 
 
 Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(page_apis)
 {
+  navigation_start_epoch_ms =
+      static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::system_clock::now().time_since_epoch())
+                              .count());
   ctx = static_cast<JSContext*>(ScriptEngineContext(engine));
   if (ctx == nullptr) {
     return;
@@ -4857,6 +5091,7 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
       std::memset(&def, 0, sizeof(def));
       def.class_name = "Event";
       def.finalizer = &EventFinalizer;
+      def.gc_mark = &EventGcMark;
       JS_NewClass(rt, g_event_class_id, &def);
       g_event_class_registered.insert(rt);
     }
@@ -4891,6 +5126,9 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   fragment_proto = JS_NewObjectProto(ctx, node_proto);
   style_proto = JS_NewObject(ctx);
   event_proto = JS_NewObject(ctx);
+  // CustomEvent.prototype inherits Event.prototype (spec: CustomEvent extends
+  // Event); instances are created with this prototype by CustomEventConstructor.
+  custom_event_proto = JS_NewObjectProto(ctx, event_proto);
   class_list_proto = JS_NewObject(ctx);
 
   DefineNodePrototype(ctx, *this);
@@ -4901,12 +5139,32 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   DefineClassListPrototype(ctx, *this);
 
   // Global scope: document, window, timers, DOM interface constructors.
+  //
+  // window IS the global object (browser semantics: window === globalThis).
+  // Making them the same object means `window._G = {...}` lands on the global
+  // scope and is readable as a bare `_G` in the next <script>.  bing's ~47
+  // scripts run in sequence, earlier ones defining globals the later ones
+  // read; with window as a separate object the chain broke at the first
+  // `window._w = ...` (bare `_w` read back as undefined, then _G,
+  // EventsToDuplicate, sj_evt, ... all failed downstream).
   JSValue global = JS_GetGlobalObject(ctx);
   JSValue doc_wrap = WrapNode(&document);
-  JSValue doc_for_window = JS_DupValue(ctx, doc_wrap);
   JS_SetPropertyStr(ctx, global, "document", doc_wrap); // steals doc_wrap
-  window = JS_NewObject(ctx);
-  JS_SetPropertyStr(ctx, window, "document", doc_for_window); // steals
+  window = JS_DupValue(ctx, global);
+
+  // Global event handler attributes (HTML spec §8.1.7.2).  In browsers these
+  // are global properties (`window.onload === onload`), so scripts may read or
+  // assign a bare `onload`/`onerror`/...  without declaring it.  They are
+  // exposed here as writable null slots; the engine does not auto-fire them
+  // from its event system yet (documented limitation).
+  static constexpr std::array<const char*, 24> kGlobalEventHandlers = {
+      "onload",      "onunload",   "onerror",     "onresize",    "onscroll",   "onbeforeunload",
+      "onpageshow",  "onpagehide", "onfocus",     "onblur",      "onclick",    "ondblclick",
+      "onmousedown", "onmouseup",  "onmousemove", "onmouseover", "onmouseout", "onkeydown",
+      "onkeyup",     "onkeypress", "onchange",    "oninput",     "onsubmit",   "onhashchange"};
+  for (const char* handler : kGlobalEventHandlers) {
+    JS_SetPropertyStr(ctx, window, handler, JS_NULL); // window === global
+  }
 
   static const std::array<JSCFunctionListEntry, 4> kTimers = {{
       JS_CFUNC_MAGIC_DEF("setTimeout", 2, TimerCreate, 0),
@@ -4935,7 +5193,7 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   }
 
   // Window viewport/animations/history/services.
-  static const std::array<JSCFunctionListEntry, 8> kWindowExtensions = {{
+  static const std::array<JSCFunctionListEntry, 9> kWindowExtensions = {{
       JS_CFUNC_DEF("requestAnimationFrame", 1, WindowRequestAnimationFrame),
       JS_CFUNC_DEF("cancelAnimationFrame", 1, WindowCancelAnimationFrame),
       JS_CFUNC_DEF("scrollTo", 0, WindowScrollTo),
@@ -4944,6 +5202,7 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
       JS_CFUNC_DEF("getComputedStyle", 1, WindowGetComputedStyle),
       JS_CFUNC_DEF("requestIdleCallback", 1, WindowRequestAnimationFrame),
       JS_CFUNC_DEF("cancelIdleCallback", 1, WindowCancelAnimationFrame),
+      JS_CFUNC_DEF("matchMedia", 1, WindowMatchMedia),
   }};
   JS_SetPropertyFunctionList(
       ctx, window, kWindowExtensions.data(), static_cast<int>(kWindowExtensions.size()));
@@ -4953,7 +5212,8 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
                            "scrollBy",
                            "getComputedStyle",
                            "requestIdleCallback",
-                           "cancelIdleCallback"}) {
+                           "cancelIdleCallback",
+                           "matchMedia"}) {
     JSValue fn = JS_GetPropertyStr(ctx, window, name);
     JS_SetPropertyStr(ctx, global, name, fn); // steals fn
   }
@@ -4985,8 +5245,19 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
     }};
     JS_SetPropertyFunctionList(
         ctx, performance, kPerformance.data(), static_cast<int>(kPerformance.size()));
-    JSValue origin = JS_NewFloat64(ctx, 0.0);
-    JS_SetPropertyStr(ctx, performance, "timeOrigin", origin);  // steals origin
+    // timeOrigin and timing.navigationStart are both the page-load start
+    // (epoch ms; same value as a real browser reports for a fresh load).
+    JSValue origin = JS_NewFloat64(ctx, navigation_start_epoch_ms);
+    JS_SetPropertyStr(ctx, performance, "timeOrigin", origin); // steals origin
+    // performance.timing.navigationStart: the page load start (epoch ms).
+    // bing's bootstrap reads performance.timing.navigationStart; without the
+    // timing object the read throws "cannot read property ... of undefined".
+    {
+      JSValue timing = JS_NewObject(ctx);
+      JS_SetPropertyStr(
+          ctx, timing, "navigationStart", JS_NewFloat64(ctx, navigation_start_epoch_ms));
+      JS_SetPropertyStr(ctx, performance, "timing", timing); // steals
+    }
     JS_SetPropertyStr(ctx, window, "performance", performance); // steals
   }
 
@@ -5019,6 +5290,16 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
     JS_SetPropertyStr(ctx, event_ctor, "prototype", JS_DupValue(ctx, event_proto));   // steals
     JS_SetPropertyStr(ctx, event_proto, "constructor", JS_DupValue(ctx, event_ctor)); // steals
     JS_SetPropertyStr(ctx, global, "Event", event_ctor); // steals event_ctor
+  }
+  // CustomEvent is constructable: new CustomEvent(type, {detail, ...}).
+  {
+    JSValue custom_event_ctor =
+        JS_NewCFunction2(ctx, CustomEventConstructor, "CustomEvent", 1, JS_CFUNC_constructor, 0);
+    JS_SetPropertyStr(
+        ctx, custom_event_ctor, "prototype", JS_DupValue(ctx, custom_event_proto)); // steals
+    JS_SetPropertyStr(
+        ctx, custom_event_proto, "constructor", JS_DupValue(ctx, custom_event_ctor)); // steals
+    JS_SetPropertyStr(ctx, global, "CustomEvent", custom_event_ctor);                 // steals
   }
 
   // navigator: engine identity.  The UA matches what the network stack sends;
@@ -5060,6 +5341,16 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   JS_SetPropertyStr(ctx, window, "innerWidth", JS_NewInt32(ctx, 800));
   JS_SetPropertyStr(ctx, window, "innerHeight", JS_NewInt32(ctx, 600));
   JS_SetPropertyStr(ctx, window, "devicePixelRatio", JS_NewInt32(ctx, 1));
+
+  // window.self/parent/top/frames: the engine has no frame tree, so each is a
+  // self-reference (top-level browsing context semantics).  Because window IS
+  // the global object, `self.performance` resolves (bing's bootstrap reads it
+  // before defining _G); a separate window object would leave bare `self`
+  // undefined and break the chain at `self.performance`.
+  JS_SetPropertyStr(ctx, window, "self", JS_DupValue(ctx, window));
+  JS_SetPropertyStr(ctx, window, "top", JS_DupValue(ctx, window));
+  JS_SetPropertyStr(ctx, window, "parent", JS_DupValue(ctx, window));
+  JS_SetPropertyStr(ctx, window, "frames", JS_DupValue(ctx, window));
 
   // window.location: href (get/set), read-only URL parts, assign()/replace()/
   // reload()/toString().  Navigation requests are deferred to the browser
@@ -5175,6 +5466,12 @@ Impl::~Impl()
   // be torn down by the runtime without running their finalizers, leaking the
   // NodeWrapper payloads).
   JSValue global = JS_GetGlobalObject(ctx);
+  // window IS the global object, so every property installed on it below is a
+  // top-level global.  Delete them here for deterministic teardown: the API
+  // objects are released and the window/self/top/parent/frames self-references
+  // are broken explicitly (page-created globals are reclaimed by the GC when
+  // the context is freed).  Keeping this list in sync with the constructor is
+  // what keeps JS_FreeRuntime's "gc_obj_list is empty" assertion green.
   for (const char* name : {"document",
                            "window",
                            "setTimeout",
@@ -5184,6 +5481,14 @@ Impl::~Impl()
                            "addEventListener",
                            "removeEventListener",
                            "dispatchEvent",
+                           "requestAnimationFrame",
+                           "cancelAnimationFrame",
+                           "requestIdleCallback",
+                           "cancelIdleCallback",
+                           "scrollTo",
+                           "scrollBy",
+                           "getComputedStyle",
+                           "matchMedia",
                            "Node",
                            "Document",
                            "Text",
@@ -5193,8 +5498,17 @@ Impl::~Impl()
                            "Element",
                            "HTMLElement",
                            "Event",
+                           "CustomEvent",
                            "navigator",
                            "screen",
+                           "innerWidth",
+                           "innerHeight",
+                           "devicePixelRatio",
+                           "self",
+                           "top",
+                           "parent",
+                           "frames",
+                           "performance",
                            "location",
                            "localStorage",
                            "history",
@@ -5204,12 +5518,8 @@ Impl::~Impl()
     JS_FreeAtom(ctx, atom);
   }
   JS_FreeValue(ctx, global);
-  // The window object also holds a reference to document.
-  if (JS_IsObject(window)) {
-    JSAtom atom = JS_NewAtom(ctx, "document");
-    JS_DeleteProperty(ctx, window, atom, JS_PROP_THROW);
-    JS_FreeAtom(ctx, atom);
-  }
+  // (window === global here, so "document" was already deleted above; the
+  // separate window object no longer exists.)
 
   // Free prototypes and window (own references).
   JS_FreeValue(ctx, node_proto);
@@ -5220,6 +5530,7 @@ Impl::~Impl()
   JS_FreeValue(ctx, fragment_proto);
   JS_FreeValue(ctx, style_proto);
   JS_FreeValue(ctx, event_proto);
+  JS_FreeValue(ctx, custom_event_proto);
   JS_FreeValue(ctx, class_list_proto);
   JS_FreeValue(ctx, window);
 
