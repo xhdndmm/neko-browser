@@ -306,6 +306,11 @@ size_t BrowserController::SnapshotCookieCount() const
   return cookies_.size();
 }
 
+std::vector<storage::Cookie> BrowserController::SnapshotCookies() const
+{
+  return cookies_.All();
+}
+
 std::vector<NetworkLogEntry> BrowserController::SnapshotNetworkLog() const
 {
   std::lock_guard<std::mutex> lock(mutex_);

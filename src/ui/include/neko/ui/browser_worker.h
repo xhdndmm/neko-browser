@@ -44,6 +44,7 @@ class BrowserWorker : public QObject {
   std::vector<storage::Bookmark> SnapshotBookmarks() const;
   std::vector<browser::Download> SnapshotDownloads() const;
   size_t SnapshotCookieCount() const;
+  std::vector<storage::Cookie> SnapshotCookies() const;
   std::vector<browser::NetworkLogEntry> SnapshotNetworkLog() const;
   std::vector<browser::ConsoleEntry> SnapshotConsoleLog() const;
   std::string profile_dir() const { return controller_.profile_dir(); }
@@ -64,6 +65,7 @@ class BrowserWorker : public QObject {
   void RemoveBookmark(const QString& url);
   void Download(const QString& url);
   void ClearStorage();
+  void ClearNetworkLog();
 
   // Runs the active tab's pending page-script timers on the worker thread
   // (see BrowserController::PumpScriptTimers).  The GUI calls this on a

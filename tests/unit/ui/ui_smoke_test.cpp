@@ -5,6 +5,7 @@
 
 #include <QApplication>
 #include <QImage>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QPixmap>
 #include <QPlainTextEdit>
@@ -69,6 +70,15 @@ bool WaitFor(Predicate predicate, int timeout_ms = 5000) {
     elapsed += step;
   }
   return predicate();
+}
+
+// Sends a real key press+release pair to |widget| through the Qt event
+// system, exactly as the platform would deliver it.
+void SendKey(QWidget* widget, int key, Qt::KeyboardModifiers mods = Qt::NoModifier) {
+  QKeyEvent press(QEvent::KeyPress, key, mods);
+  QKeyEvent release(QEvent::KeyRelease, key, mods);
+  QApplication::sendEvent(widget, &press);
+  QApplication::sendEvent(widget, &release);
 }
 
 TEST(UiSmokeTest, RendersLocalHtmlPage) {
@@ -200,6 +210,128 @@ TEST(UiSmokeTest, DevToolsConsoleEvaluatesJavaScript) {
   ASSERT_TRUE(WaitFor([&] {
     return window.ConsoleView()->toPlainText().contains("Error: ui boom");
   }));
+}
+
+TEST(UiSmokeTest, AddressBarBackspaceDeletesCharacter) {
+  TempProfile tp;
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.show();
+
+  QLineEdit* address = window.AddressBar();
+  ASSERT_NE(address, nullptr);
+  // Put a URL in the bar exactly as RefreshAll would (programmatic write).
+  address->setText("https://example.com/foo");
+  address->setFocus();
+  // Place the cursor at the end of the text, then delete the last character
+  // with Backspace — a plain QLineEdit must honor this.
+  address->setCursorPosition(address->text().size());
+  SendKey(address, Qt::Key_Backspace);
+  EXPECT_EQ(address->text(), QStringLiteral("https://example.com/fo"));
+}
+
+TEST(UiSmokeTest, AddressBarEditSurvivesPeriodicRefresh) {
+  TempProfile tp;
+  const std::string html_file = tp.path() + "/edit.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(
+      html_file, "<html><head><title>Edit</title></head><body>ok</body></html>")
+                    .has_value());
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.show();
+
+  // Navigate so the address bar is populated with a real URL, then simulate
+  // the user clicking into the bar (focus + cursor) and editing it.  The
+  // periodic StateChanged refresh (script timer) must not clobber an
+  // in-progress edit or reset the cursor position.
+  worker.NavigateActive(QString::fromStdString(html_file));
+  ASSERT_TRUE(WaitFor([&] { return window.AddressBar()->text().contains("edit.html"); }));
+
+  QLineEdit* address = window.AddressBar();
+  address->setFocus();
+  // Click in the MIDDLE of the text (a user editing the path, not the end).
+  const QString original = address->text();
+  const int mid = original.size() / 2;
+  address->setCursorPosition(mid);
+
+  // Give the periodic refresh timer a chance to fire several times.  The
+  // cursor must not be reset to the end (that is what makes typed edits land
+  // in the wrong place and makes Backspace appear to "not delete").
+  for (int i = 0; i < 6; ++i) {
+    QCoreApplication::processEvents();
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+
+  EXPECT_EQ(address->text(), original);
+  EXPECT_EQ(address->cursorPosition(), mid)
+      << "periodic refresh must not reset the address-bar cursor";
+
+  // Backspace must delete the character before the cursor.
+  SendKey(address, Qt::Key_Backspace);
+  EXPECT_EQ(address->text().size() + 1, original.size());
+  EXPECT_EQ(address->text(), original.left(mid - 1) + original.mid(mid));
+}
+
+TEST(UiSmokeTest, MultiTabNavigationWorks) {
+  TempProfile tp;
+  const std::string a = tp.path() + "/tab_a.html";
+  const std::string b = tp.path() + "/tab_b.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(
+      a, "<html><head><title>TabA</title></head><body>a</body></html>")
+                  .has_value());
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(
+      b, "<html><head><title>TabB</title></head><body>b</body></html>")
+                  .has_value());
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.show();
+
+  // The initial tab is created asynchronously on the worker thread; wait for
+  // the GUI to pick it up (a real launch race the GUI must survive).
+  ASSERT_TRUE(WaitFor([&] { return window.TabBarWidget()->count() >= 1; }));
+  ASSERT_EQ(window.TabBarWidget()->count(), 1);
+
+  // Open a second tab and navigate each tab to a different page.
+  window.TabBarWidget()->setCurrentIndex(0);
+  worker.NavigateActive(QString::fromStdString(a));
+  ASSERT_TRUE(WaitFor([&] { return window.TabBarWidget()->tabText(0).contains("TabA"); }));
+
+  worker.NewTab("", true);
+  ASSERT_TRUE(WaitFor([&] { return window.TabBarWidget()->count() >= 2; }));
+  ASSERT_EQ(window.TabBarWidget()->count(), 2);
+  ASSERT_EQ(window.TabBarWidget()->currentIndex(), 1);
+  worker.NavigateActive(QString::fromStdString(b));
+  ASSERT_TRUE(WaitFor([&] { return window.TabBarWidget()->tabText(1).contains("TabB"); }));
+
+  // Switching back to tab 0 must show tab A's title/URL again.
+  window.TabBarWidget()->setCurrentIndex(0);
+  QCoreApplication::processEvents();
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  QCoreApplication::processEvents();
+  EXPECT_EQ(worker.SnapshotTab(worker.SnapshotTabs()[0].id).title, "TabA");
+}
+
+TEST(UiSmokeTest, KeyboardShortcutOpensAndClosesTabs) {
+  TempProfile tp;
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.show();
+
+  // The initial tab is created asynchronously.
+  ASSERT_TRUE(WaitFor([&] { return window.TabBarWidget()->count() >= 1; }));
+  const int initial = window.TabBarWidget()->count();
+
+  // Ctrl+T opens a new tab (the same path the "+" button uses).
+  SendKey(&window, Qt::Key_T, Qt::ControlModifier);
+  ASSERT_TRUE(WaitFor([&] { return window.TabBarWidget()->count() >= initial + 1; }));
+  EXPECT_EQ(window.TabBarWidget()->count(), initial + 1);
+
+  // Ctrl+W closes the active tab.
+  SendKey(&window, Qt::Key_W, Qt::ControlModifier);
+  ASSERT_TRUE(WaitFor([&] { return window.TabBarWidget()->count() <= initial; }));
+  EXPECT_EQ(window.TabBarWidget()->count(), initial);
 }
 
 }  // namespace

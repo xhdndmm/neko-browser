@@ -9,9 +9,11 @@ class QListWidgetItem;
 class QStackedWidget;
 class QTabBar;
 class QTreeWidget;
+class QTreeWidgetItem;
 class QPlainTextEdit;
 class QLabel;
 class QTimer;
+class QToolButton;
 
 namespace neko::ui {
 
@@ -40,11 +42,13 @@ class MainWindow : public QMainWindow {
   void OnTabBarChanged(int index);
   void OnTabCloseRequested(int index);
   void OnNewTab();
+  void CloseCurrentTab();
   void OnBookmark();
   void OnDownloadActive();
   void OnHistoryActivated(QListWidgetItem* item);
   void OnBookmarkActivated(QListWidgetItem* item);
   void OnConsoleCommand();
+  void OnDomSelectionChanged();
 
  private:
   void BuildUi();
@@ -55,9 +59,12 @@ class MainWindow : public QMainWindow {
   void RefreshDevTools();
   void RefreshLists();
   void Navigate(const QString& input);
+  void FocusAddressBar();
 
   // DOM tree helpers.
   void PopulateDomTree(QTreeWidget* tree);
+  void PopulateComputedStyle(QTreeWidget* tree, QTreeWidgetItem* item);
+  void PopulateCookies(QListWidget* list);
 
   BrowserWorker* worker_;
   // Periodically pumps the active page's script timers on the worker thread
@@ -77,7 +84,9 @@ class MainWindow : public QMainWindow {
 
   // Docks.
   QTreeWidget* dom_tree_ = nullptr;
+  QTreeWidget* style_tree_ = nullptr;   // computed style of the selected node
   QListWidget* network_list_ = nullptr;
+  QListWidget* cookie_list_ = nullptr;  // cookies of the active page
   QPlainTextEdit* console_view_ = nullptr;   // engine DevTools console log
   QPlainTextEdit* js_console_view_ = nullptr;  // JS REPL output (not cleared)
   QLineEdit* console_input_ = nullptr;

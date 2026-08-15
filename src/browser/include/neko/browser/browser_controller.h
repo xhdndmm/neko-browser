@@ -181,6 +181,7 @@ public:
   std::vector<storage::Bookmark> SnapshotBookmarks() const;
   std::vector<Download> SnapshotDownloads() const;
   size_t SnapshotCookieCount() const;
+  std::vector<storage::Cookie> SnapshotCookies() const;
   std::vector<NetworkLogEntry> SnapshotNetworkLog() const;
   std::vector<ConsoleEntry> SnapshotConsoleLog() const;
 
