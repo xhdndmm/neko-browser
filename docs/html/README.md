@@ -24,6 +24,9 @@
 - **活动格式化元素列表的 marker**（td/th/caption 进入时插入，清栈回 table
   上下文时清除）+ Noah's Ark 条款 + adoption agency 算法（错嵌套格式化
   元素的领养/重建）
+- **列表项闭合**：`<li>` 按 WHATWG 13.2.6.4.7 规则闭合——逐节点向上找打开的
+  li，遇 special 元素（非 address/div/p，如嵌套 `<ul>/<ol>`）即停止，因此嵌套
+  列表的 li 不会错误关闭外层 li；`</li>` 结束标签按 list item scope 判定
 - after head 模式下 base/link/meta/style/script 等仍按 in head 规则追加到
   head 元素（head element pointer）
 - 作用域判定：默认作用域 + button 作用域 + table 作用域 + list item 作用域

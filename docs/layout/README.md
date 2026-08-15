@@ -44,6 +44,11 @@
   （grid-auto-flow: row）、grid-column/row 行与 span 放置（含简写与 longhand）、
   column/row gap；超出显式模板的隐式轨道按 auto 尺寸（auto 列按该列起始项目的
   max-content、auto 行按该行项目内容高；fr 列/行分享容器剩余空间）
+- **列表（list-item）**：`li { display: list-item }`；marker（圆点/序号）作为
+  首行文本 run 绘制在内容左侧的 gutter 内，`ul`→disc、嵌套 `ul`→circle→square、
+  `ol`→decimal、支持 lower/upper-alpha/roman；marker 按 li 在父列表中的位置编号
+- block 容器内 inline 内容先布局、block 级子元素（含嵌套列表/表格）随后在文本
+  行之下垂直排布
 
 ## 未实现
 
@@ -57,6 +62,8 @@
 - 表格：border-collapse/border-spacing、`vertical-align`、caption 的
   `caption-side: bottom`/定位样式、显式 `height`/`rowspan` 的完全行高分配
   （overflow 只加到最后一个跨行行）
+- 列表：`list-style-position: inside`、`::marker` 伪元素、`list-style` 简写、
+  alpha/roman 的完整字母/罗马编号（当前重复取模）
 
 ## 架构
 
