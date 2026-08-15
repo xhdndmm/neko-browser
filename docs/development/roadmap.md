@@ -152,10 +152,14 @@ graph LR
 - [ ] module 脚本与动态 import —— **后续**
 - [ ] LocalStorage 已就绪（`storage::LocalStorage`），等待 Web IDL 绑定
 
-## Phase 8 附注 — 多线程基础设施（已起步）
+## Phase 8 附注 — 多线程基础设施（已扩展）
 
 - [x] `base::ThreadPool`（固定 worker、Post/Submit、WaitIdle、析构排空），TSan 通过
 - [x] 页内多 `<img>` 并行解码（抓取串行、解码并行、主线程注入）
+- [x] **并行带栅格化**：大页面按水平带在共享线程池并行光栅化（与串行逐像素一致）
+- [x] **共享线程池**：BrowserController 持有，子资源抓取/解码/渲染复用同一池
+- [x] **字体缓存线程安全**：GlyphCache/FontFace/FontRegistry/TextWidth 记忆化
+      全部互斥锁保护（修复字形缓存 UAF）
 - [ ] 多进程架构 —— Phase 12（未开始）
 
 ## Phase 10 — Security（M1 已起步）
@@ -165,10 +169,23 @@ graph LR
 - [ ] SOP 实施（fetch/XHR 读取需 CORS）、CORS 头解析与预检 —— **后续**
 - [ ] CSP / Cookie 安全强制 / 权限系统 / 沙箱 / 导航下载安全 —— **后续**
 
-## Phase 11 — Performance
+## Phase 6 扩展 — 多语言字符编码（已完成）
 
-- [ ] HTTP cache、增量布局、增量绘制、合成器、GPU 后端
-- [ ] benchmark 基准建立（解析、布局、绘制、启动、内存）
+- [x] **WHATWG Encoding 解码全套**（`neko::base::encoding`，ADR 0012）：
+      UTF-8/UTF-16、gb18030/GBK、Big5、Shift_JIS、EUC-JP、EUC-KR、
+      ISO-2022-JP、28 种单字节表、x-user-defined、replacement；标签映射、
+      BOM 嗅探、HTML 预扫描、HTTP 提示优先级 —— 21 个单元测试
+- [x] 页面加载统一转码为 UTF-8（HTML + 纯文本），GBK 等中文站点可正确解码
+
+## Phase 11 — Performance（M1 已起步）
+
+- [x] **显示列表缓存**：Page 按版本号增量重建 Painter 输出（内容未变不重生成）
+- [x] **并行带栅格化** + 整数定点 alpha 混合 + 缓冲复用（Resize 不重分配）
+- [x] **滚动 blit**：WebView 视口光栅缓存，滚动仅内存搬移 + 补绘露出带
+- [x] **`<style>` 解析缓存**：StyleEngine 按文本内容记忆化
+- [x] **TextWidth 记忆化**（同 (text,px) 命中缓存，上限 4096）
+- [ ] HTTP cache、增量布局、增量绘制、合成器、GPU 后端 —— **后续**
+- [ ] benchmark 基准建立（解析、布局、绘制、启动、内存）—— **后续**
 
 ## Phase 12 — Multi-process
 

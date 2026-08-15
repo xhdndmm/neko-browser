@@ -16,6 +16,9 @@
 - 活动格式化元素列表（含 Noah's Ark 条款）+ adoption agency 算法
   （错嵌套格式化元素的领养/重建）
 - 畸形 HTML 作为普通输入处理
+- 字符集：解析前由 `neko::base::encoding` 完成检测与转码（BOM > HTTP
+  Content-Type > meta 预扫描 > UTF-8 默认；见 ADR 0012），解析器只接收
+  已转码的 UTF-8
 
 ## 未实现
 

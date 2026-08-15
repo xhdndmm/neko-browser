@@ -2,8 +2,8 @@
 
 > 本文档诚实记录每个特性的支持状态。**禁止**把"接口存在"写成"已实现"。
 > 状态取值：Not Started / Planned / In Progress / Partial / Implemented / Tested。
-> 最后更新：2026-08（box-sizing、white-space:nowrap、overflow 裁剪、HTTP 增量读取 +
-> 无 close_notify 关闭兼容、GUI 多标签页/快捷键/DevTools 增强、地址栏编辑保护）。
+> 最后更新：2026-08（WHATWG 字符编码、并行带栅格化、显示列表缓存、滚动 blit 视口缓存、
+> 字体缓存线程安全、`<style>` 解析缓存、多字节编码中文站点解码）。
 
 | 特性 | 状态 | 测试证据 | 备注 |
 | --- | --- | --- | --- |
@@ -36,7 +36,8 @@
 | `appearance` / `<button>` 原生外观 | Partial | Style + Paint + Renderer 套件 | appearance none/auto/button（CSS-UI-4 §7.2）：button UA 默认 inline-block + 文本居中 + buttonface 背景与 outset 边框（作者 background/border 优先，与浏览器一致），button 可强制任意元素；无 hover/active/disabled 状态、box-sizing:border-box、min 尺寸、内容垂直居中 |
 | position absolute | Partial | Layout 套件 | 包含块判定（最近 positioning 祖先 padding box）、top/left/right/bottom、shrink-to-fit 与 left+right 约束方程；fixed 暂按 absolute 处理，无 z-index/百分比 offset |
 | 文本（位图字体回退） | Tested | Paint 套件 | 无系统字体时的 8x8 ASCII 回退 |
-| 文本（FreeType） | Partial | Graphics + Paint 套件 | 系统字体、抗锯齿、任意字号、UTF-8、glyph 缓存、布局真实 advance、font-family 匹配、逐字符回退 + CJK 回退链（中文可显示）、粗体/斜体变体匹配；无 HarfBuzz 整形 |
+| 文本（FreeType） | Partial | Graphics + Paint 套件 | 系统字体、抗锯齿、任意字号、UTF-8、glyph 缓存、布局真实 advance、font-family 匹配、逐字符回退 + CJK 回退链（中文可显示）、粗体/斜体变体匹配；**glyph/字体选择器/字形缓存均线程安全（互斥锁，支持并行栅格化）**、**TextWidth 记忆化**（同 (text,px) 命中缓存）；无 HarfBuzz 整形 |
+| 字符编码（HTML/文本） | Tested | 21 编码单元测试（含全 GBK 文档往返） | **WHATWG Encoding 标准**：UTF-8（含截断序列边界）、UTF-16BE/LE、gb18030/GBK（2 字节 + 4 字节码点范围）、Big5、Shift_JIS（含 EUDC 私有区）、EUC-JP、EUC-KR、ISO-2022-JP、windows-125x/iso-8859-x/koi8-r/koi8-u/macintosh/ibm866/x-mac-cyrillic 等 28 种单字节表、x-user-defined、replacement；**HTML 字符集预扫描**（meta charset/http-equiv、UTF-16 签名、`<?xml`、注释）、**BOM 嗅探覆盖一切**、HTTP `Content-Type` 提示优先级高于预扫描；编码表由 `tools/gen_encoding_tables.py` 从 WHATWG 官方索引生成（离线提交，构建无需网络）；页面加载后统一转码为 UTF-8 再进解析器 |
 | 图像解码 PNG | Tested | 16 图像单元测试 | 自研解码器（chunk/CRC/滤波/Adam7/全部颜色类型） |
 | 图像解码 JPEG | Tested | 16 图像单元测试 | 封装 libjpeg，接口统一为 neko::image |
 | 图像解码 GIF | Tested | 8 图像单元测试（含测试内 LZW 编码器） | 自研解码器（GIF87a/89a、全局/局部色表、LZW 变长码宽、交错、GCE 透明）；仅渲染首帧（无动画） |
@@ -52,12 +53,14 @@
 | 历史记录 | Tested | 29 存储单元测试 | 去重访问、搜索、持久化 |
 | 书签 | Tested | 29 存储单元测试 | 增删改、文件夹、持久化 |
 | 下载器 | Tested | Browser 套件 | Content-Disposition/URL 文件名、原子写入 |
-| 绘制 / 光栅化 | Tested | Paint 套件 | 纯色、边框、文字、PPM |
+| 绘制 / 光栅化 | Tested | Paint 套件 | 纯色、边框、文字、PPM；**整数定点混合（替代浮点）**、**缓冲复用（Resize 不重分配）**、**分带 Clear/可见带裁剪**、**并行带栅格化**（`RasterizeParallel`，共享线程池，串/并行结果一致）、**滚动 blit**（`ShiftRows` 内存搬移复用上一帧像素，仅重绘露出带） |
+| 渲染管线缓存 | Tested | Renderer + UI 套件 | **显示列表缓存**（Painter 输出按版本号增量重建，仅在 DOM/样式变化时失效）、**WebView 视口光栅缓存**（滚动时 blit 复用，仅补绘露出带）；布局/绘制不再全量重做 |
 | 合成器 | Not Started | — | — |
 | JavaScript（runtime，QuickJS） | Partial | 97 JS 单元测试 + 浏览器集成测试 + CLI/GUI 集成 | ES2025 核心语言、console、执行时限/内存上限、**DOM 绑定**（document/Node/Element/Text/Comment/DocumentFragment/CSSStyleDeclaration/**Event**）、**页内 `<script>` 执行（内联 + 外部 src=、async/defer）**、**最小事件循环**（setTimeout/setInterval 同步泵、**requestAnimationFrame**）、**事件传播**（capture→target→bubble、preventDefault/stopPropagation/stopImmediatePropagation、once/capture 选项、composedPath）、**microtask 泵送**、**localStorage/fetch（Phase 8 M3 子集）**、**window.location 导航**、**classList/dataset/matches/closest**、**表单控件 value/checked/type/placeholder/disabled/name**、**a.href/img.src 绝对化与 img.naturalWidth/Height/complete**、**getComputedStyle**（浏览器层接线 StyleEngine）、**history/performance.now**；无完整 Web IDL、无 WebSocket/XHR/sessionStorage、module 脚本不执行 |
 | Fetch（浏览器 API） | Partial | JS 单元测试 + 浏览器集成测试 | window.fetch Promise<Response>（status/ok/headers.get/text/json）、相对 URL 解析、网络错误 reject；无 CORS preflight/streaming/FormData |
 | IndexedDB | Not Started | — | — |
-| 多线程 | Partial | 7 base 单元测试 + TSan 通过 | `base::ThreadPool`（固定 worker、Post/Submit、WaitIdle、析构排空）、页内多 `<img>` 与外部 `<link rel=stylesheet>` **抓取+解析/解码并行**（FetchFn 需线程安全）；无多进程（Phase 12） |
+| 多线程 | Partial | 7 base 单元测试 + TSan 通过 | `base::ThreadPool`（固定 worker、Post/Submit、WaitIdle、析构排空）、页内多 `<img>` 与外部 `<link rel=stylesheet>` **抓取+解析/解码并行**（FetchFn 需线程安全）、**并行带栅格化**（大页面渲染按水平带并行）、**共享线程池**（浏览器控制器持有，样式/图像抓取与渲染复用同一池）；无多进程（Phase 12） |
+| 样式解析缓存 | Tested | Style 套件 | `<style>` 元素按文本内容记忆化解析（内容未变不重解析，元素删除时清理）；选择器分桶 + 计算样式缓存配合下，重复样式应用不再重解析 |
 | 安全（Origin/SOP） | Partial | 8 security 单元测试 + 浏览器集成测试 | `security::Origin`（scheme+host+port 三元组、同源判定、不透明 origin）、标签页记录页面 origin；SOP 实施/CORS/CSP 未开始（Phase 10 后续） |
 | GUI（Qt6） | Partial | UI 冒烟测试（offscreen）+ 端到端截图 | 标签页（含 **“+”新建按钮与 Ctrl+T/Ctrl+W/Alt+←/→/F5/Ctrl+L/Ctrl+1..9 快捷键**）/地址栏（**焦点期间周期刷新不再重置文本与光标，退格键编辑正常**）/工具栏/DevTools/历史/书签/下载/设置停靠面板；未做像素级渲染对比 |
 | DevTools | Partial | GUI 验证 | DOM 树（选中节点显示**计算样式面板**）/网络日志（含**清空按钮**）/**Cookies 查看**/Console（引擎日志 + JS REPL）；无断点调试 |
