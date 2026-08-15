@@ -2772,6 +2772,91 @@ JSValue ElementSetInnerHTML(JSContext* ctx, JSValueConst this_val, JSValueConst 
   return JS_UNDEFINED;
 }
 
+// Parses |html| as a fragment and moves the parsed <body> children into a
+// fresh document, returning them in document order (scripts are not run).
+std::vector<std::unique_ptr<dom::Node>> TakeFragmentChildren(std::string_view html)
+{
+  std::unique_ptr<dom::Document> parsed = html::Parser(html).Parse();
+  std::vector<std::unique_ptr<dom::Node>> out;
+  dom::Element* body = nullptr;
+  for (dom::Node* child : parsed->ChildNodes()) {
+    if (dom::Element* el = AsElement(child)) {
+      if (el->tag_name() == "body") {
+        body = el;
+        break;
+      }
+      for (dom::Node* inner : el->ChildNodes()) {
+        if (dom::Element* in_el = AsElement(inner)) {
+          if (in_el->tag_name() == "body") {
+            body = in_el;
+            break;
+          }
+        }
+      }
+      if (body != nullptr) {
+        break;
+      }
+    }
+  }
+  if (body != nullptr) {
+    while (body->first_child() != nullptr) {
+      out.push_back(body->RemoveChild(body->first_child()));
+    }
+  }
+  return out;
+}
+
+// Element.insertAdjacentHTML(position, html): parses the fragment and inserts
+// it relative to the element — beforebegin/afterend outside (sibling) and
+// afterbegin/beforeend inside.
+JSValue ElementInsertAdjacentHTML(JSContext* ctx, JSValueConst this_val, int argc,
+                                  JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (impl == nullptr || element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  if (argc < 2) {
+    return JS_ThrowTypeError(ctx, "insertAdjacentHTML requires (position, text)");
+  }
+  bool ok = false;
+  const std::string position = ToLower(ArgString(ctx, argv[0], &ok));
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  const std::string html = ArgString(ctx, argv[1], &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  std::vector<std::unique_ptr<dom::Node>> nodes = TakeFragmentChildren(html);
+  const auto insert_before = [&](dom::Node* parent, std::unique_ptr<dom::Node>&& node,
+                                 dom::Node* reference) {
+    parent->InsertBefore(std::move(node), reference);
+  };
+  if (position == "beforeend") {
+    for (auto& node : nodes) {
+      element->AppendChild(std::move(node));
+    }
+  } else if (position == "afterbegin") {
+    dom::Node* first = element->first_child();
+    for (auto it = nodes.rbegin(); it != nodes.rend(); ++it) {
+      element->InsertBefore(std::move(*it), first);
+    }
+  } else if (position == "beforebegin" || position == "afterend") {
+    dom::Node* parent = element->parent();
+    if (parent == nullptr) {
+      return JS_UNDEFINED; // detached element: nothing to do
+    }
+    dom::Node* reference = position == "beforebegin" ? element : SiblingOf(element, +1);
+    for (auto it = nodes.rbegin(); it != nodes.rend(); ++it) {
+      insert_before(parent, std::move(*it), reference);
+    }
+  }
+  impl->MarkDomDirty();
+  return JS_UNDEFINED;
+}
+
 JSValue ElementGetStyle(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
@@ -4215,7 +4300,7 @@ void DefineNodePrototype(JSContext* ctx, Impl& impl)
 
 void DefineElementPrototype(JSContext* ctx, Impl& impl)
 {
-  static const std::array<JSCFunctionListEntry, 12> kMethods = {{
+  static const std::array<JSCFunctionListEntry, 13> kMethods = {{
       JS_CFUNC_DEF("getAttribute", 1, ElementGetAttribute),
       JS_CFUNC_DEF("setAttribute", 2, ElementSetAttribute),
       JS_CFUNC_DEF("removeAttribute", 1, ElementRemoveAttribute),
@@ -4227,6 +4312,7 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
       JS_CFUNC_DEF("matches", 1, ElementMatches),
       JS_CFUNC_DEF("closest", 1, ElementClosest),
       JS_CFUNC_DEF("remove", 0, ElementRemove),
+      JS_CFUNC_DEF("insertAdjacentHTML", 2, ElementInsertAdjacentHTML),
       JS_CFUNC_DEF("getBoundingClientRect", 0, ElementGetBoundingClientRect),
   }};
   JS_SetPropertyFunctionList(
