@@ -1238,9 +1238,25 @@ void Parser::ProcessStartTag(Token token)
       return;
     }
     if (tag == "li") {
-      if (FindInStack("li") != nullptr) {
-        PopThrough("li");
+      // WHATWG 13.2.6.4.7: walk the stack toward the root, looking for an
+      // open li element, but stop at the first special element that is not
+      // address, div or p (a nested <ul>/<ol> is special, so a <li> inside
+      // one does not close an outer list item).
+      bool done = false;
+      for (auto it = stack_.rbegin(); it != stack_.rend(); ++it) {
+        const std::string_view t = (*it)->tag_name();
+        if (t == "li") {
+          GenerateImpliedEndTags("li");
+          PopThrough("li");
+          done = true;
+          break;
+        }
+        if (IsSpecialElement(t) && t != "address" && t != "div" && t != "p") {
+          done = true;
+          break;
+        }
       }
+      (void)done;
       ClosePElement();
       InsertElement(CreateElement(token).release());
       return;
@@ -1528,7 +1544,8 @@ void Parser::ProcessEndTag(Token token)
       return;
     }
     if (tag == "li") {
-      if (InScope("li")) {
+      if (InListItemScope("li")) {
+        GenerateImpliedEndTags("li");
         PopThrough("li");
       }
       return;

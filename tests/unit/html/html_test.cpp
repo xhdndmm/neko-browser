@@ -267,6 +267,28 @@ TEST(HtmlTest, UnorderedListItems)
   EXPECT_EQ(items[1]->TextContent(), "two");
 }
 
+// A <li> inside a nested <ul>/<ol> must not close an outer <li> (WHATWG
+// 13.2.6.4.7: the li search stops at a special element other than
+// address/div/p, and <ul>/<ol> are special).
+TEST(HtmlTest, NestedListItemsDoNotCloseOuterLi)
+{
+  auto doc = ParseDoc("<ul><li>a<ul><li>x</li></ul></li><li>b</li></ul>");
+  const auto lis = dom::QuerySelectorAll(*doc, "li");
+  ASSERT_EQ(lis.size(), 3u);
+  // li[0] contains the nested ul, li[1] is inside it, li[2] is the outer
+  // second item.
+  EXPECT_EQ(lis[0]->TextContent(), "ax");
+  EXPECT_EQ(lis[1]->TextContent(), "x");
+  EXPECT_EQ(lis[2]->TextContent(), "b");
+  // The nested ul is a child of the first li, not a sibling.
+  dom::Element* inner_ul = dom::QuerySelector(*lis[0], "ul");
+  ASSERT_NE(inner_ul, nullptr);
+  EXPECT_EQ(inner_ul->parent(), lis[0]);
+  // Both the inner li and the outer second li share the outer ul ancestor.
+  EXPECT_EQ(lis[1]->parent(), inner_ul);
+  EXPECT_EQ(lis[2]->parent(), lis[0]->parent());
+}
+
 TEST(HtmlTest, HeadingsCloseEachOther)
 {
   auto doc = ParseDoc("<h1>a<h2>b<h3>c");
