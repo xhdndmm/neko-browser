@@ -1036,8 +1036,14 @@ void Parser::ProcessCharacter(Token token)
       }
     }
     foster_parenting_ = true;
-    mode_ = Mode::kInBody;
-    ProcessCharacter(std::move(token));
+    {
+      const Mode saved = mode_;
+      mode_ = Mode::kInBody;
+      ProcessCharacter(std::move(token));
+      if (mode_ == Mode::kInBody) {
+        mode_ = saved;
+      }
+    }
     foster_parenting_ = false;
     return;
 
@@ -1368,8 +1374,16 @@ void Parser::ProcessStartTag(Token token)
       Reprocess(std::move(token));
       return;
     }
-    mode_ = Mode::kInBody;
-    ProcessStartTag(std::move(token));
+    // Anything else: in-body rules without changing the insertion mode
+    // (13.2.6.4.11), so a following </caption> still closes the caption.
+    {
+      const Mode saved = mode_;
+      mode_ = Mode::kInBody;
+      ProcessStartTag(std::move(token));
+      if (mode_ == Mode::kInBody) {
+        mode_ = saved;
+      }
+    }
     return;
 
   case Mode::kInColumnGroup:
@@ -1461,8 +1475,18 @@ void Parser::ProcessStartTag(Token token)
       Reprocess(std::move(token));
       return;
     }
-    mode_ = Mode::kInBody;
-    ProcessStartTag(std::move(token));
+    // Anything else: process with the "in body" rules without changing the
+    // insertion mode (13.2.6.4.15).  Leaving mode_ at kInBody would make a
+    // following </td> take the in-body path (PopThrough) instead of closing
+    // the cell, leaking active formatting elements past the table.
+    {
+      const Mode saved = mode_;
+      mode_ = Mode::kInBody;
+      ProcessStartTag(std::move(token));
+      if (mode_ == Mode::kInBody) {
+        mode_ = saved;
+      }
+    }
     return;
 
   case Mode::kAfterBody:
@@ -1616,8 +1640,15 @@ void Parser::ProcessEndTag(Token token)
         tag == "td" || tag == "tfoot" || tag == "th" || tag == "thead" || tag == "tr") {
       return; // parse error; ignore
     }
-    mode_ = Mode::kInBody;
-    ProcessEndTag(std::move(token));
+    // Anything else: in-body rules without changing the insertion mode.
+    {
+      const Mode saved = mode_;
+      mode_ = Mode::kInBody;
+      ProcessEndTag(std::move(token));
+      if (mode_ == Mode::kInBody) {
+        mode_ = saved;
+      }
+    }
     return;
   }
 
@@ -1749,8 +1780,16 @@ void Parser::ProcessEndTag(Token token)
     if (tag == "body" || tag == "caption" || tag == "col" || tag == "colgroup" || tag == "html") {
       return; // parse error; ignore
     }
-    mode_ = Mode::kInBody;
-    ProcessEndTag(std::move(token));
+    // Anything else: in-body rules without changing the insertion mode
+    // (13.2.6.4.15), so a following </td> still closes the cell.
+    {
+      const Mode saved = mode_;
+      mode_ = Mode::kInBody;
+      ProcessEndTag(std::move(token));
+      if (mode_ == Mode::kInBody) {
+        mode_ = saved;
+      }
+    }
     return;
   }
 
@@ -1830,15 +1869,28 @@ void Parser::ProcessStartTagInTable(Token token)
       }
     }
     foster_parenting_ = true;
-    mode_ = Mode::kInBody;
-    ProcessStartTag(std::move(token));
+    {
+      const Mode saved = mode_;
+      mode_ = Mode::kInBody;
+      ProcessStartTag(std::move(token));
+      if (mode_ == Mode::kInBody) {
+        mode_ = saved;
+      }
+    }
     foster_parenting_ = false;
     return;
   }
-  // Anything else: enable foster parenting, process in body, then disable it.
+  // Anything else: enable foster parenting, process in body, then disable it
+  // (13.2.6.4.9), leaving the insertion mode unchanged.
   foster_parenting_ = true;
-  mode_ = Mode::kInBody;
-  ProcessStartTag(std::move(token));
+  {
+    const Mode saved = mode_;
+    mode_ = Mode::kInBody;
+    ProcessStartTag(std::move(token));
+    if (mode_ == Mode::kInBody) {
+      mode_ = saved;
+    }
+  }
   foster_parenting_ = false;
 }
 
@@ -1866,8 +1918,14 @@ void Parser::ProcessEndTagInTable(Token token)
   }
   // Anything else.
   foster_parenting_ = true;
-  mode_ = Mode::kInBody;
-  ProcessEndTag(std::move(token));
+  {
+    const Mode saved = mode_;
+    mode_ = Mode::kInBody;
+    ProcessEndTag(std::move(token));
+    if (mode_ == Mode::kInBody) {
+      mode_ = saved;
+    }
+  }
   foster_parenting_ = false;
 }
 

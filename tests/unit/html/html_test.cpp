@@ -837,5 +837,27 @@ TEST(HtmlTest, DoctypeQuirksConsumedWithoutBreakingParse)
   EXPECT_EQ(p->TextContent(), "z");
 }
 
+TEST(HtmlTest, UnclosedFormattingInCellDoesNotLeakPastTable)
+{
+  // Regression: an unclosed <b> inside a table cell must be closed when the
+  // cell closes, not leak past the table and swallow following content.
+  auto doc = ParseDoc("<!DOCTYPE html><html><head></head><body>\n"
+                      "<table><tr><td>x<b><b>y</b> z<br>\n"
+                      "<div>inner</div>\n"
+                      "</td></tr></table>\n"
+                      "<div>footer</div>\n"
+                      "</body></html>");
+  dom::Element* body = dom::QuerySelector(*doc, "body");
+  ASSERT_NE(body, nullptr);
+  const std::vector<dom::Element*> divs = dom::QuerySelectorAll(*doc, "div");
+  ASSERT_GE(divs.size(), 2u);
+  dom::Element* footer = divs.back();
+  EXPECT_EQ(footer->TextContent(), "footer");
+  // The footer must be a direct child of <body>, not nested inside a leaked <b>.
+  ASSERT_NE(footer->parent(), nullptr);
+  ASSERT_EQ(footer->parent()->node_type(), dom::NodeType::kElement);
+  EXPECT_EQ(static_cast<dom::Element*>(footer->parent())->tag_name(), "body");
+}
+
 } // namespace
 } // namespace neko::html
