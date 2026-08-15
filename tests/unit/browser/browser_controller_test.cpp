@@ -16,6 +16,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <map>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -56,6 +57,9 @@ private:
 int TempProfile::seq_ = 0;
 
 // Records every request (url + cookie header) and answers from a route map.
+// Thread-safe: the controller may fetch page subresources in parallel on a
+// thread pool (see FetchPageImages), so the recorded request lists are
+// mutex-guarded.
 class FakeFetcher
 {
 public:
@@ -75,22 +79,28 @@ public:
                                                  std::string_view cookie_header)
   {
     const std::string key = url.Serialize();
-    requests_.push_back(key);
-    cookies_seen_.push_back(std::string(cookie_header));
-    const auto it = routes_.find(key);
-    if (it == routes_.end()) {
-      return base::Err(base::Error::Network("no fake route for " + key));
-    }
     network::HttpResponse response;
-    response.status_code = it->second.status;
-    response.headers = it->second.headers;
-    response.body = it->second.body;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      requests_.push_back(key);
+      cookies_seen_.push_back(std::string(cookie_header));
+      const auto it = routes_.find(key);
+      if (it == routes_.end()) {
+        return base::Err(base::Error::Network("no fake route for " + key));
+      }
+      response.status_code = it->second.status;
+      response.headers = it->second.headers;
+      response.body = it->second.body;
+    }
     return response;
   }
 
   std::vector<std::string> requests_;
   std::vector<std::string> cookies_seen_;
   std::map<std::string, Route> routes_;
+
+private:
+  std::mutex mutex_;
 };
 
 std::string LastCookie(const FakeFetcher& f)

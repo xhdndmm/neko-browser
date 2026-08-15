@@ -884,15 +884,15 @@ void FetchPageImages(renderer::Page& page,
     }
   }
 
-  // Phase: fetch every subresource on the calling thread (the FetchFn may be
-  // stateful and is not guaranteed thread-safe), then decode the bodies in
-  // parallel on a thread pool, then inject the decoded images back on the
-  // calling thread (SetElementImage locks internally).
+  // Fetch every subresource and decode the bodies in parallel on a thread
+  // pool, then inject the decoded images back on the calling thread
+  // (SetElementImage locks internally).  The production FetchFn
+  // (network::HttpGet) is stateless per call and thread-safe; a custom
+  // FetchFn must be too (documented requirement).
   struct PendingImage
   {
     dom::Element* element = nullptr;
     std::string url;
-    std::string bytes;
   };
   std::vector<PendingImage> pending;
   pending.reserve(images.size());
@@ -909,22 +909,31 @@ void FetchPageImages(renderer::Page& page,
       NEKO_LOG_WARNING("img: cannot resolve src \"" + std::string(*src) + "\"");
       continue;
     }
-    const auto response = fetch(target.value(), {});
-    if (!response) {
-      NEKO_LOG_WARNING("img: fetch failed for " + target.value().Serialize());
-      continue;
-    }
-    pending.push_back(PendingImage{element, target.value().Serialize(), response.value().body});
+    pending.push_back(PendingImage{element, target.value().Serialize()});
   }
   if (pending.empty()) {
     return;
   }
 
+  auto fetch_and_decode = [&fetch](const std::string& url) -> base::Result<image::Image> {
+    const base::Result<url::Url> parsed = url::Url::Parse(url);
+    if (!parsed.has_value()) {
+      return base::Err(base::Error::InvalidArgument("invalid image URL"));
+    }
+    // Images are fetched without a cookie header (the fetch hook receives
+    // the same header set as the page's other subresources today).
+    const auto response = fetch(parsed.value(), {});
+    if (!response) {
+      return base::Err(response.error());
+    }
+    return image::DecodeImage(response.value().body);
+  };
+
   if (pending.size() == 1) {
-    // A single image: decode inline (no thread-pool overhead).
-    auto decoded = image::DecodeImage(pending[0].bytes);
+    // A single image: do it inline (no thread-pool overhead).
+    auto decoded = fetch_and_decode(pending[0].url);
     if (!decoded) {
-      NEKO_LOG_WARNING("img: decode failed for " + pending[0].url);
+      NEKO_LOG_WARNING("img: fetch/decode failed for " + pending[0].url);
       return;
     }
     page.SetElementImage(*pending[0].element, std::move(decoded.value()));
@@ -935,14 +944,15 @@ void FetchPageImages(renderer::Page& page,
   base::ThreadPool pool;
   std::vector<std::future<base::Result<image::Image>>> futures;
   futures.reserve(pending.size());
-  for (PendingImage& item : pending) {
-    futures.push_back(
-        pool.Submit([bytes = std::move(item.bytes)]() { return image::DecodeImage(bytes); }));
+  for (const PendingImage& item : pending) {
+    futures.push_back(pool.Submit([&fetch_and_decode, url = item.url]() {
+      return fetch_and_decode(url);
+    }));
   }
   for (std::size_t i = 0; i < pending.size(); ++i) {
     auto decoded = futures[i].get();
     if (!decoded) {
-      NEKO_LOG_WARNING("img: decode failed for " + pending[i].url);
+      NEKO_LOG_WARNING("img: fetch/decode failed for " + pending[i].url);
       continue;
     }
     page.SetElementImage(*pending[i].element, std::move(decoded.value()));
