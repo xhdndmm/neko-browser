@@ -1,0 +1,12 @@
+# LeakSanitizer suppressions for neko-browser tests.
+#
+# Only genuine third-party/sanitizer false positives may be listed here.
+# Never suppress leaks that originate in neko-browser code; fix those instead.
+#
+# UBSan dynamic-type-check false positive on Qt focusChanged lambdas
+# (src/ui/main_window.cpp address-bar focus tracking): the UBSan handler
+# __ubsan_handle_dynamic_type_cache_miss allocates demangled-name memory via
+# __cxa_demangle that LeakSanitizer reports at process exit.  The vptr check
+# itself is a documented UBSan false positive with Qt's internals, so the
+# demangle buffer it leaves behind is not a real leak.
+leak:__ubsan_handle_dynamic_type_cache_miss

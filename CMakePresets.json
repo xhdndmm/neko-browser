@@ -162,6 +162,9 @@
       "configurePreset": "asan",
       "output": { "outputOnFailure": true },
       "execution": { "noTestsAction": "error" },
+      "environment": {
+        "LSAN_OPTIONS": "suppressions=${sourceDir}/tools/lsan.supp"
+      },
       "configuration": "RelWithDebInfo"
     },
     {
