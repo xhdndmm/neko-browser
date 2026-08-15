@@ -2820,18 +2820,22 @@ std::unique_ptr<LayoutBox> LayoutEngine::BuildLayoutTree(dom::Document& document
                                             cb_h,
                                             kNoFloats,
                                             caption_absolute);
-        caption_box->x = table_x - caption_box->border_left - caption_box->padding_left;
-        caption_box->y = table_y - caption_box->border_top - caption_box->padding_top;
         caption_box->height = caption_height + caption_box->border_top +
                               caption_box->border_bottom + caption_box->padding_top +
                               caption_box->padding_bottom;
+        // Lay out at a local origin (0,0), then translate the whole box --
+        // including the text runs laid out by LayoutBlockContent -- so that
+        // its content box starts at the table's content origin (the same
+        // pattern LayoutCell uses).
+        TranslateBox(*caption_box,
+                     table_x - caption_box->border_left - caption_box->padding_left,
+                     table_y - caption_box->border_top - caption_box->padding_top);
         for (dom::Element* child : caption_absolute) {
           caption_box->positioned_children.push_back(
               BuildAbsolute(*child, table_x, table_y, cb_w, cb_h, kNoFloats));
         }
         break; // only the first caption participates in the table model
       }
-
       const std::vector<float> col_widths = ComputeColumnWidths(cells, ncols, content_width);
 
       // Lay out each cell (at a local origin) and derive row heights.

@@ -1894,7 +1894,7 @@ TEST(LayoutTest, TableExplicitWidthIsNotShrunk)
 // model; the caption participates in the table's intrinsic width).
 TEST(LayoutTest, TableCaptionLaidOutAboveRows)
 {
-  Page page = Build("<body><table><caption>My Caption</caption>"
+  Page page = Build("<body><table><caption>Cap</caption>"
                     "<tr><td>A</td><td>B</td></tr></table></body>");
   const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
   ASSERT_NE(table, nullptr);
@@ -1906,9 +1906,15 @@ TEST(LayoutTest, TableCaptionLaidOutAboveRows)
   EXPECT_FLOAT_EQ(caption->y, table->y);
   EXPECT_GT(table->children[1]->y, caption->y);
   EXPECT_FLOAT_EQ(caption->width, table->width);
-  // The table widened to hold the caption (wider than the two columns alone,
-  // which measure only ~32px with the monospace fallback).
-  EXPECT_GT(table->width, 100.0f);
+  // The caption widened the table to hold it (wider than the two columns
+  // alone, which measure only ~32px with the monospace fallback).
+  EXPECT_GT(table->width, 40.0f);
+  // The caption's text is laid out inside the caption box at the table's
+  // content origin -- not at the viewport origin or detached from the box.
+  ASSERT_GE(caption->lines.size(), 1u);
+  ASSERT_GE(caption->lines[0].runs.size(), 1u);
+  EXPECT_FLOAT_EQ(caption->lines[0].runs[0].x, caption->content_x());
+  EXPECT_GE(caption->lines[0].runs[0].y, caption->content_y());
 }
 
 } // namespace
