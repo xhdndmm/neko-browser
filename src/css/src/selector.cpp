@@ -551,6 +551,8 @@ void CompoundSpecificity(const CompoundSelector& compound, Specificity& out)
   out.b += static_cast<unsigned>(compound.pseudo_classes.size());
 }
 
+} // namespace
+
 Specificity SelectorSpecificity(const ComplexSelector& selector)
 {
   Specificity out;
@@ -559,8 +561,6 @@ Specificity SelectorSpecificity(const ComplexSelector& selector)
   }
   return out;
 }
-
-} // namespace
 
 std::vector<ComplexSelector> ParseSelectorList(std::string_view text)
 {

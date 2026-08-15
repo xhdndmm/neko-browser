@@ -358,6 +358,41 @@ TEST(StyleTest, InlineStyleBeatsSelectors)
   EXPECT_EQ(style.color.value(), (css::Color{0, 128, 0, 255}));
 }
 
+// The cascade rule index buckets rules by the key of their rightmost compound
+// selector (id / class / tag / universal); every path must still match.
+TEST(StyleTest, CascadeBucketsMatchByRightmostKey)
+{
+  auto doc = MakeDoc("<style>"
+                     "#by-id { color: red; }"              // id bucket
+                     ".by-class { color: blue; }"           // class bucket
+                     ".multi.a { font-size: 30px; }"        // each class bucket
+                     "em { color: green; }"                 // tag bucket
+                     "* { margin-top: 5px; }"               // universal bucket
+                     "</style>"
+                     "<body>"
+                     "<p id=\"by-id\">a</p>"
+                     "<p class=\"by-class\">b</p>"
+                     "<p class=\"multi\">c</p>"
+                     "<p class=\"a\">d</p>"
+                     "<p class=\"multi a\">e</p>"
+                     "<em>f</em>"
+                     "<b>g</b>"
+                     "</body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  EXPECT_EQ(Style(engine, *doc, "#by-id").color.value(), (css::Color{255, 0, 0, 255}));
+  EXPECT_EQ(Style(engine, *doc, ".by-class").color.value(), (css::Color{0, 0, 255, 255}));
+  // .multi.a requires BOTH classes: neither .multi nor .a alone matches.
+  EXPECT_FLOAT_EQ(Style(engine, *doc, ".multi").font_size, 16.0f);
+  EXPECT_FLOAT_EQ(Style(engine, *doc, ".a").font_size, 16.0f);
+  EXPECT_FLOAT_EQ(Style(engine, *doc, ".multi.a").font_size, 30.0f);
+  EXPECT_EQ(Style(engine, *doc, "em").color.value(), (css::Color{0, 128, 0, 255}));
+  // Universal bucket applies to every element (em/b have no UA margin).
+  EXPECT_FLOAT_EQ(Style(engine, *doc, "em").margin_top.value, 5.0f);
+  EXPECT_FLOAT_EQ(Style(engine, *doc, "b").margin_top.value, 5.0f);
+}
+
 TEST(StyleTest, ImportantBeatsInline)
 {
   auto doc = MakeDoc("<style>.note { color: blue !important; }</style>"

@@ -57,6 +57,10 @@ std::vector<ComplexSelector> ParseSelectorList(std::string_view text);
 // True when |element| matches |selector| (any of its complex selectors).
 bool MatchesSelector(const dom::Element& element, const ComplexSelector& selector);
 
+// Specificity of a single complex selector, without matching it against any
+// element.  Used by the style engine's precomputed rule index.
+Specificity SelectorSpecificity(const ComplexSelector& selector);
+
 // Specificity of the highest-specificity matching complex selector, or
 // Specificity{0,0,0} when nothing matches.
 Specificity MatchingSpecificity(const dom::Element& element, std::string_view selector_list);

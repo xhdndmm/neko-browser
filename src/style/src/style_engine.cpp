@@ -846,6 +846,10 @@ void StyleEngine::ApplyStyles(dom::Document& document)
     author_sheets_.push_back(std::move(sheet));
   }
 
+  // Rebuild the rule index (cheap relative to the cascade) so per-element
+  // matching only considers candidate rules.
+  BuildCascadeIndex(document);
+
   styles_.clear();
 
   dom::Element* root = document.document_element();
@@ -863,6 +867,79 @@ void StyleEngine::ApplyStyles(dom::Document& document)
 void StyleEngine::SetExternalStylesheets(std::vector<css::StyleSheet> sheets)
 {
   external_sheets_ = std::move(sheets);
+}
+
+// The parsed HTML user-agent stylesheet, parsed once.  Returns a reference to
+// a function-local static (NOT a copy — a `[] { static ...; return sheet; }()`
+// lambda deduces a by-value return and leaves the caller with a dangling
+// reference to a destroyed temporary, which is a use-after-free).
+const css::StyleSheet& UaSheet()
+{
+  static const css::StyleSheet sheet = css::ParseStyleSheet(kUaStylesheet);
+  return sheet;
+}
+
+void StyleEngine::BuildCascadeIndex(dom::Document& /*document*/)
+{
+  auto buckets = std::make_unique<CascadeBuckets>();
+
+  const css::StyleSheet& ua = UaSheet();
+
+  auto add_rule = [&buckets](const css::StyleRule& rule) {
+    const int rule_index = static_cast<int>(buckets->rules.size());
+    IndexedCascadeRule indexed;
+    indexed.rule = &rule;
+    indexed.order = rule_index;
+    for (const css::ComplexSelector& selector : rule.selectors) {
+      indexed.specificities.push_back(SelectorSpecificity(selector));
+      if (selector.compounds.empty()) {
+        continue;
+      }
+      // Bucket by the rightmost compound's key.  A compound that carries both
+      // an id and classes is keyed by the id only (most selective; an element
+      // without the id cannot match).  Class compounds are keyed by every
+      // class so an element carrying any of them finds the rule; full
+      // matching still runs on the candidates.  Tag/pseudo/attribute-only
+      // compounds use the tag bucket or the universal bucket.
+      const css::CompoundSelector& rightmost = selector.compounds.back();
+      if (rightmost.id.has_value()) {
+        buckets->by_id[*rightmost.id].push_back(rule_index);
+      } else if (!rightmost.classes.empty()) {
+        for (const std::string& cls : rightmost.classes) {
+          buckets->by_class[cls].push_back(rule_index);
+        }
+      } else if (rightmost.tag.has_value()) {
+        buckets->by_tag[*rightmost.tag].push_back(rule_index);
+      } else {
+        buckets->universal.push_back(rule_index);
+      }
+    }
+    buckets->rules.push_back(std::move(indexed));
+  };
+
+  auto add_sheet = [&add_rule](const css::StyleSheet& sheet) {
+    for (const css::StyleRule& rule : sheet.rules) {
+      add_rule(rule);
+    }
+    for (const css::AtRule& at_rule : sheet.at_rules) {
+      if (at_rule.name == "media" && !MediaQueryMatches(at_rule.prelude)) {
+        continue;
+      }
+      for (const css::StyleRule& rule : at_rule.rules) {
+        add_rule(rule);
+      }
+    }
+  };
+
+  add_sheet(ua);
+  for (const css::StyleSheet& sheet : author_sheets_) {
+    add_sheet(sheet);
+  }
+  for (const css::StyleSheet& sheet : external_sheets_) {
+    add_sheet(sheet);
+  }
+
+  buckets_ = std::move(buckets);
 }
 
 const ComputedStyle& StyleEngine::StyleFor(const dom::Element& element) const
@@ -889,73 +966,54 @@ void StyleEngine::ComputeElement(dom::Element& element,
   std::vector<Candidate> candidates;
   int order = 0;
 
-  const css::StyleSheet& ua = [] {
-    static const css::StyleSheet sheet = css::ParseStyleSheet(kUaStylesheet);
-    return sheet;
-  }();
+  if (buckets_ != nullptr) {
+    // Gather candidate rules from the buckets keyed by this element's id,
+    // classes and tag, plus the universal bucket.  A rule can be reachable
+    // through several buckets (id + class, or multiple classes); dedupe by
+    // sorting the indices, which also restores document order for the
+    // cascade tie-break.
+    const CascadeBuckets& buckets = *buckets_;
+    std::vector<int> candidate_indices;
+    candidate_indices.reserve(16);
+    candidate_indices.insert(
+        candidate_indices.end(), buckets.universal.begin(), buckets.universal.end());
+    if (const std::optional<std::string_view> id = element.Id()) {
+      const std::string id_key(*id);
+      const auto it = buckets.by_id.find(id_key);
+      if (it != buckets.by_id.end()) {
+        candidate_indices.insert(candidate_indices.end(), it->second.begin(), it->second.end());
+      }
+    }
+    for (const std::string_view cls : element.ClassList()) {
+      const std::string cls_key(cls);
+      const auto it = buckets.by_class.find(cls_key);
+      if (it != buckets.by_class.end()) {
+        candidate_indices.insert(candidate_indices.end(), it->second.begin(), it->second.end());
+      }
+    }
+    {
+      const std::string tag_key(element.tag_name());
+      const auto it = buckets.by_tag.find(tag_key);
+      if (it != buckets.by_tag.end()) {
+        candidate_indices.insert(candidate_indices.end(), it->second.begin(), it->second.end());
+      }
+    }
+    std::sort(candidate_indices.begin(), candidate_indices.end());
+    candidate_indices.erase(
+        std::unique(candidate_indices.begin(), candidate_indices.end()), candidate_indices.end());
 
-  auto collect = [&](const css::StyleSheet& sheet) {
-    for (const css::StyleRule& rule : sheet.rules) {
-      for (const css::ComplexSelector& selector : rule.selectors) {
-        if (!css::MatchesSelector(element, selector)) {
+    for (const int rule_index : candidate_indices) {
+      const IndexedCascadeRule& indexed = buckets.rules[static_cast<std::size_t>(rule_index)];
+      for (std::size_t si = 0; si < indexed.rule->selectors.size(); ++si) {
+        if (!css::MatchesSelector(element, indexed.rule->selectors[si])) {
           continue;
         }
-        const css::Specificity specificity = [&] {
-          // Reuse MatchingSpecificity is overkill here; compute per selector.
-          css::Specificity spec;
-          for (const css::CompoundSelector& compound : selector.compounds) {
-            if (compound.tag.has_value()) {
-              ++spec.c;
-            }
-            if (compound.id.has_value()) {
-              ++spec.a;
-            }
-            spec.b += static_cast<unsigned>(compound.classes.size());
-            spec.b += static_cast<unsigned>(compound.attributes.size());
-            spec.b += static_cast<unsigned>(compound.pseudo_classes.size());
-          }
-          return spec;
-        }();
-        for (const css::Declaration& declaration : rule.declarations) {
+        const css::Specificity& specificity = indexed.specificities[si];
+        for (const css::Declaration& declaration : indexed.rule->declarations) {
           candidates.push_back(Candidate{&declaration, specificity, order++});
         }
       }
     }
-    for (const css::AtRule& at_rule : sheet.at_rules) {
-      if (at_rule.name == "media" && !MediaQueryMatches(at_rule.prelude)) {
-        continue;
-      }
-      for (const css::StyleRule& rule : at_rule.rules) {
-        for (const css::ComplexSelector& selector : rule.selectors) {
-          if (!css::MatchesSelector(element, selector)) {
-            continue;
-          }
-          css::Specificity spec;
-          for (const css::CompoundSelector& compound : selector.compounds) {
-            if (compound.tag.has_value()) {
-              ++spec.c;
-            }
-            if (compound.id.has_value()) {
-              ++spec.a;
-            }
-            spec.b += static_cast<unsigned>(compound.classes.size());
-            spec.b += static_cast<unsigned>(compound.attributes.size());
-            spec.b += static_cast<unsigned>(compound.pseudo_classes.size());
-          }
-          for (const css::Declaration& declaration : rule.declarations) {
-            candidates.push_back(Candidate{&declaration, spec, order++});
-          }
-        }
-      }
-    }
-  };
-  collect(ua);
-  for (const css::StyleSheet& sheet : author_sheets_) {
-    collect(sheet);
-  }
-  // External <link rel=stylesheet> sheets, applied after <style> elements.
-  for (const css::StyleSheet& sheet : external_sheets_) {
-    collect(sheet);
   }
 
   // Inline style attribute (highest authority among normal declarations).

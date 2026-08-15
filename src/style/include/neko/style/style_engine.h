@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -10,11 +12,35 @@
 
 namespace neko::style {
 
+// Precomputed cascade index entry: one stylesheet rule with its per-selector
+// specificities (computed once instead of per element) and its global order.
+struct IndexedCascadeRule
+{
+  const css::StyleRule* rule = nullptr;
+  std::vector<css::Specificity> specificities;
+  int order = 0;
+};
+
+// Buckets rules by the key of their rightmost compound selector so per-element
+// matching only considers candidate rules instead of every rule in every
+// sheet (the standard CSS engine rule-hash).  A rule is added to the bucket of
+// each of its selectors' rightmost keys (id, or each class, or tag, or the
+// universal bucket), which never misses a match; full matching still runs on
+// the candidates.
+struct CascadeBuckets
+{
+  std::vector<IndexedCascadeRule> rules;
+  std::unordered_map<std::string, std::vector<int>> by_id;
+  std::unordered_map<std::string, std::vector<int>> by_class;
+  std::unordered_map<std::string, std::vector<int>> by_tag;
+  std::vector<int> universal;
+};
+
 // Computes per-element computed styles for a document.
 //
-// Pipeline: UA stylesheet + <style> author sheets + inline style attribute ->
-// selector matching -> cascade (importance > specificity > order) ->
-// inheritance -> computed style.  See docs/design/style.md.
+// Pipeline: UA stylesheet + <style> author sheets + external sheets + inline
+// style attribute -> selector matching -> cascade (importance > specificity >
+// order) -> inheritance -> computed style.  See docs/design/style.md.
 class StyleEngine {
  public:
   StyleEngine() = default;
@@ -39,10 +65,12 @@ class StyleEngine {
 
  private:
   void ComputeElement(dom::Element& element, const ComputedStyle& inherited, float root_font_size);
+  void BuildCascadeIndex(dom::Document& document);
 
   std::unordered_map<const dom::Element*, ComputedStyle> styles_;
   std::vector<css::StyleSheet> author_sheets_;
   std::vector<css::StyleSheet> external_sheets_;
+  std::unique_ptr<CascadeBuckets> buckets_;
 };
 
 }  // namespace neko::style
