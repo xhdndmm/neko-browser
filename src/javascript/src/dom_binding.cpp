@@ -1773,9 +1773,16 @@ JSValue ElementSetValue(JSContext* ctx, JSValueConst this_val, JSValueConst valu
     return JS_EXCEPTION;
   }
   if (element->tag_name() == "textarea") {
-    // Setting value on a textarea replaces its text child.
+    // Setting value on a textarea replaces its text child.  RemoveChild
+    // returns ownership; keep the removed subtree alive in the binder's
+    // retained set so JS references to the old children do not dangle.
+    Impl* impl = ImplFor(ctx, this_val);
     while (element->first_child() != nullptr) {
-      element->RemoveChild(element->first_child());
+      dom::Node* child = element->first_child();
+      std::unique_ptr<dom::Node> removed = element->RemoveChild(child);
+      if (impl != nullptr) {
+        impl->TakeOwnership(child, std::move(removed));
+      }
     }
     if (!text.empty()) {
       element->AppendChild(std::make_unique<dom::Text>(text));

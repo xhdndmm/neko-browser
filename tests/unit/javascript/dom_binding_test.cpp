@@ -621,6 +621,20 @@ TEST_F(DomBinderTest, FormControlValueCheckedDisabled)
                        "return opt.value === 'v'; })()"));
 }
 
+TEST_F(DomBinderTest, TextareaValueKeepsOldChildWrappersAlive)
+{
+  // Setting value on a textarea replaces its text child.  The old child may
+  // have been wrapped and referenced by JS; it must stay alive (retained by
+  // the binder) rather than being freed underneath a live wrapper.
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var ta = d.createElement('textarea'); "
+                       "ta.textContent = 'original'; "
+                       "var child = ta.firstChild; "
+                       "ta.value = 'new'; "
+                       "return ta.value === 'new' && ta.textContent === 'new' "
+                       "    && child !== null && child.nodeType === 3; })()"));
+}
+
 TEST_F(DomBinderTest, LinkHrefAndImageSrc)
 {
   EXPECT_TRUE(EvalBool("(function(){ var d = document; "
