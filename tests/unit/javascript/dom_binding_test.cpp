@@ -215,6 +215,60 @@ TEST_F(DomBinderTest, TextContentSet)
   EXPECT_NE(document_->ToString().find(">changed</p>"), std::string::npos);
 }
 
+// nodeValue / data on CharacterData and textContent on Text/Comment nodes
+// (DOM spec §4.7).  textContent writes data, not children.
+TEST_F(DomBinderTest, CharacterDataNodeValueAndData)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var t = d.createTextNode('hello'); "
+                       "var c = d.createComment('note'); "
+                       "var e = d.createElement('div'); "
+                       "var ok = t.nodeValue === 'hello' && c.nodeValue === 'note'; "
+                       "ok = ok && t.data === 'hello' && c.data === 'note'; "
+                       "ok = ok && e.nodeValue === null; " // Elements have no nodeValue
+                       "t.nodeValue = 'bye'; "
+                       "ok = ok && t.data === 'bye' && t.nodeValue === 'bye'; "
+                       "c.data = 'updated'; "
+                       "ok = ok && c.nodeValue === 'updated' && c.textContent === 'updated'; "
+                       "t.textContent = 'via text'; "
+                       "ok = ok && t.data === 'via text' && t.childNodes.length === 0; "
+                       "return ok; })()"));
+}
+
+// DocumentFragment appendChild/insertBefore move the fragment's children.
+TEST_F(DomBinderTest, DocumentFragmentInsertionMovesChildren)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var frag = d.createDocumentFragment(); "
+                       "var a = d.createElement('a'); a.textContent = 'A'; "
+                       "var b = d.createElement('b'); b.textContent = 'B'; "
+                       "frag.appendChild(a); frag.appendChild(b); "
+                       "var container = d.createElement('div'); "
+                       "d.body.appendChild(container); "
+                       "container.appendChild(frag); "
+                       "var ok = container.childNodes.length === 2 "
+                       "    && container.firstElementChild.tagName === 'A' "
+                       "    && container.textContent === 'AB'; "
+                       "return ok; })()"));
+}
+
+// DOM tree-mutation violations throw DOMException with the WebIDL exception
+// name (NotFoundError / HierarchyRequestError), not a plain TypeError.
+TEST_F(DomBinderTest, TreeMutationThrowsDomException)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var d = document; "
+                       "var a = d.createElement('div'); "
+                       "var b = d.createElement('span'); "
+                       "a.appendChild(b); "
+                       "try { b.appendChild(a); return false; } "
+                       "catch (e) { if (e.name !== 'HierarchyRequestError') return false; } "
+                       "try { b.removeChild(a); return false; } "
+                       "catch (e) { if (e.name !== 'NotFoundError') return false; } "
+                       "try { a.insertBefore(a, b); return false; } "
+                       "catch (e) { if (e.name !== 'HierarchyRequestError') return false; } "
+                       "return true; })()"));
+}
+
 TEST_F(DomBinderTest, CreateElementAppendAndInsert)
 {
   EXPECT_TRUE(EvalBool("(function(){ var d = document; "

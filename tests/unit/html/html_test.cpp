@@ -442,5 +442,343 @@ TEST(HtmlTest, OverDeepNestingIsCapped)
   EXPECT_LT(MaxDepth(doc.get()), 1000);
 }
 
+// ---- Newline normalization (13.2.3.5) ------------------------------------
+
+TEST(HtmlTest, CarriageReturnsNormalizedToLf)
+{
+  // CRLF and bare CR are both normalized to LF before tokenization; newlines
+  // in the DOM are always U+000A.
+  auto doc = ParseDoc("<p>a\r\nb\rc</p>");
+  dom::Element* p = dom::QuerySelector(*doc, "p");
+  ASSERT_NE(p, nullptr);
+  EXPECT_EQ(p->TextContent(), "a\nb\nc");
+
+  // Inside attributes too.
+  auto doc2 = ParseDoc("<div title=\"x\r\ny\"></div>");
+  dom::Element* div = dom::QuerySelector(*doc2, "div");
+  ASSERT_NE(div, nullptr);
+  EXPECT_EQ(div->GetAttribute("title").value(), "x\ny");
+}
+
+// ---- EOF in tag (eof-in-tag) ---------------------------------------------
+
+TEST(HtmlTest, UnclosedTagAtEofIsDropped)
+{
+  // An unterminated <div at EOF is ignored entirely (eof-in-tag), not emitted
+  // as a div element.
+  auto doc = ParseDoc("<p>a<div");
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "div").size(), 0u);
+  dom::Element* p = dom::QuerySelector(*doc, "p");
+  ASSERT_NE(p, nullptr);
+  EXPECT_EQ(p->TextContent(), "a");
+
+  // Unquoted attribute value at EOF: tag dropped, value not created.
+  auto doc2 = ParseDoc("<div a=");
+  EXPECT_EQ(dom::QuerySelectorAll(*doc2, "div").size(), 0u);
+}
+
+// ---- Character references in unquoted attribute values --------------------
+
+TEST(HtmlTest, CharacterReferenceInUnquotedAttribute)
+{
+  // A '&' in an unquoted attribute value starts a character reference
+  // (13.2.5.38).
+  auto doc = ParseDoc("<div href=a&amp;b></div>");
+  dom::Element* div = dom::QuerySelector(*doc, "div");
+  ASSERT_NE(div, nullptr);
+  EXPECT_EQ(div->GetAttribute("href").value(), "a&b");
+
+  auto doc2 = ParseDoc("<div href=a&#65;b></div>");
+  dom::Element* div2 = dom::QuerySelector(*doc2, "div");
+  ASSERT_NE(div2, nullptr);
+  EXPECT_EQ(div2->GetAttribute("href").value(), "aAb");
+}
+
+// A legacy no-semicolon named reference followed by '=' inside an attribute
+// is emitted literally (13.2.5.78 "for historical reasons").
+TEST(HtmlTest, LegacyReferenceBeforeEqualsInAttributeIsLiteral)
+{
+  auto doc = ParseDoc("<div title=\"&copy=x\"></div>");
+  dom::Element* div = dom::QuerySelector(*doc, "div");
+  ASSERT_NE(div, nullptr);
+  EXPECT_EQ(div->GetAttribute("title").value(), "&copy=x");
+
+  // In text content the same sequence is resolved (©=x).
+  auto doc2 = ParseDoc("<p>&copy=x</p>");
+  dom::Element* p = dom::QuerySelector(*doc2, "p");
+  ASSERT_NE(p, nullptr);
+  EXPECT_EQ(p->TextContent(), "\xC2\xA9=x");
+}
+
+// ---- DOCTYPE public/system identifiers ------------------------------------
+
+TEST(HtmlTest, DoctypePublicSystemIdentifiers)
+{
+  // A doctype with PUBLIC/SYSTEM identifiers must not confuse the parser;
+  // the skeleton is still built and the body follows.
+  auto doc = ParseDoc("<!DOCTYPE html PUBLIC \"-//W3C//DTD HTML 4.01//EN\" "
+                      "\"http://www.w3.org/TR/html4/strict.dtd\"><p>x</p>");
+  dom::Element* html = doc->document_element();
+  ASSERT_NE(html, nullptr);
+  EXPECT_EQ(html->tag_name(), "html");
+  EXPECT_EQ(html->child_count(), 2u); // head + body
+  dom::Element* p = dom::QuerySelector(*doc, "p");
+  ASSERT_NE(p, nullptr);
+  EXPECT_EQ(p->TextContent(), "x");
+
+  auto doc2 = ParseDoc("<!DOCTYPE html SYSTEM \"about:legacy-compat\"><p>y</p>");
+  dom::Element* p2 = dom::QuerySelector(*doc2, "p");
+  ASSERT_NE(p2, nullptr);
+  EXPECT_EQ(p2->TextContent(), "y");
+
+  // Single-quoted identifiers.
+  auto doc3 = ParseDoc("<!DOCTYPE html PUBLIC '-//W3C//DTD XHTML 1.0//EN'>z");
+  dom::Element* body = dom::QuerySelector(*doc3, "body");
+  ASSERT_NE(body, nullptr);
+  EXPECT_EQ(body->TextContent(), "z");
+}
+
+// A stray doctype after the head is a parse error and is ignored, not reset
+// back to "before html" (which would create a second html element).
+TEST(HtmlTest, StrayDoctypeIsIgnored)
+{
+  auto doc = ParseDoc("<html><head></head><body>x<!DOCTYPE html>y</body></html>");
+  dom::Element* html = doc->document_element();
+  ASSERT_NE(html, nullptr);
+  EXPECT_EQ(html->tag_name(), "html");
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "html").size(), 1u);
+  dom::Element* body = dom::QuerySelector(*doc, "body");
+  ASSERT_NE(body, nullptr);
+  EXPECT_EQ(body->TextContent(), "xy");
+}
+
+// ---- PLAINTEXT element ----------------------------------------------------
+
+TEST(HtmlTest, PlaintextElementConsumesRest)
+{
+  auto doc = ParseDoc("<p>before<plaintext>rest <div> not a tag</plaintext>after");
+  dom::Element* plaintext = dom::QuerySelector(*doc, "plaintext");
+  ASSERT_NE(plaintext, nullptr);
+  EXPECT_EQ(plaintext->TextContent(), "rest <div> not a tag</plaintext>after");
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "div").size(), 0u);
+}
+
+// ---- Raw text elements (xmp, iframe, noembed) -----------------------------
+
+TEST(HtmlTest, RawTextXmpIframeNoembed)
+{
+  auto doc = ParseDoc("<xmp><p>raw</xmp><p>after</p>");
+  dom::Element* xmp = dom::QuerySelector(*doc, "xmp");
+  ASSERT_NE(xmp, nullptr);
+  EXPECT_EQ(xmp->TextContent(), "<p>raw");
+  dom::Element* p = dom::QuerySelector(*doc, "body p");
+  ASSERT_NE(p, nullptr);
+  EXPECT_EQ(p->TextContent(), "after");
+
+  auto doc2 = ParseDoc("<iframe><div>hi</iframe><p>x</p>");
+  dom::Element* iframe = dom::QuerySelector(*doc2, "iframe");
+  ASSERT_NE(iframe, nullptr);
+  EXPECT_EQ(iframe->TextContent(), "<div>hi");
+  EXPECT_EQ(dom::QuerySelectorAll(*doc2, "div").size(), 0u);
+
+  auto doc3 = ParseDoc("<noembed><b>raw</noembed><p>y</p>");
+  dom::Element* noembed = dom::QuerySelector(*doc3, "noembed");
+  ASSERT_NE(noembed, nullptr);
+  EXPECT_EQ(noembed->TextContent(), "<b>raw");
+  EXPECT_EQ(dom::QuerySelectorAll(*doc3, "b").size(), 0u);
+}
+
+// ---- hr / center / dd / dt close a p --------------------------------------
+
+TEST(HtmlTest, HrCenterCloseOpenP)
+{
+  // <hr> and <center> close an open <p> (13.2.6.4.7).
+  auto doc = ParseDoc("<p>a<hr>b");
+  const auto ps = dom::QuerySelectorAll(*doc, "p");
+  ASSERT_EQ(ps.size(), 1u);
+  EXPECT_EQ(ps[0]->TextContent(), "a");
+  dom::Element* hr = dom::QuerySelector(*doc, "hr");
+  ASSERT_NE(hr, nullptr);
+  EXPECT_EQ(hr->parent(), dom::QuerySelector(*doc, "body"));
+
+  auto doc2 = ParseDoc("<p>a<center>b");
+  const auto ps2 = dom::QuerySelectorAll(*doc2, "p");
+  ASSERT_EQ(ps2.size(), 1u);
+  EXPECT_EQ(ps2[0]->TextContent(), "a");
+  dom::Element* center = dom::QuerySelector(*doc2, "center");
+  ASSERT_NE(center, nullptr);
+  EXPECT_EQ(center->parent(), dom::QuerySelector(*doc2, "body"));
+}
+
+TEST(HtmlTest, DdDtCloseEachOther)
+{
+  auto doc = ParseDoc("<dl><dt>a<dd>b<dt>c</dl>");
+  const auto dts = dom::QuerySelectorAll(*doc, "dt");
+  const auto dds = dom::QuerySelectorAll(*doc, "dd");
+  ASSERT_EQ(dts.size(), 2u);
+  ASSERT_EQ(dds.size(), 1u);
+  EXPECT_EQ(dts[0]->TextContent(), "a");
+  EXPECT_EQ(dds[0]->TextContent(), "b");
+  EXPECT_EQ(dts[1]->TextContent(), "c");
+  // dd is a sibling of both dt elements (all under dl).
+  dom::Element* dl = dom::QuerySelector(*doc, "dl");
+  ASSERT_NE(dl, nullptr);
+  EXPECT_EQ(dl->child_count(), 3u);
+}
+
+// ---- after-head content goes into head ------------------------------------
+
+TEST(HtmlTest, AfterHeadElementsGoIntoHead)
+{
+  // base/link/meta/style/script after </head> are still processed with the
+  // "in head" rules and end up in the head element (13.2.6.4.6).
+  auto doc = ParseDoc("<head></head><link rel=\"stylesheet\" href=\"a.css\">"
+                      "<meta charset=\"utf-8\"><body>x</body>");
+  dom::Element* head = dom::QuerySelector(*doc, "head");
+  ASSERT_NE(head, nullptr);
+  EXPECT_EQ(dom::QuerySelectorAll(*head, "link").size(), 1u);
+  EXPECT_EQ(dom::QuerySelectorAll(*head, "meta").size(), 1u);
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "body link").size(), 0u);
+}
+
+// ---- Self-closing flag on non-void elements is ignored --------------------
+
+TEST(HtmlTest, SelfClosingOnNonVoidElementIsIgnored)
+{
+  // <div/> is a parse error; the element stays open (no self-closing pop).
+  auto doc = ParseDoc("<div/>x");
+  dom::Element* div = dom::QuerySelector(*doc, "div");
+  ASSERT_NE(div, nullptr);
+  EXPECT_EQ(div->TextContent(), "x");
+}
+
+// ---- Tables ---------------------------------------------------------------
+
+TEST(HtmlTest, TableStructure)
+{
+  auto doc = ParseDoc("<table><caption>Cap</caption>"
+                      "<tr><td>A</td><td>B</td></tr>"
+                      "<tr><td>C</td></tr></table>");
+  dom::Element* table = dom::QuerySelector(*doc, "table");
+  ASSERT_NE(table, nullptr);
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "caption").size(), 1u);
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "tbody").size(), 1u);
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "tr").size(), 2u);
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "td").size(), 3u);
+  EXPECT_EQ(table->TextContent(), "CapABC");
+}
+
+TEST(HtmlTest, TableWithTheadTbodyTfoot)
+{
+  auto doc = ParseDoc("<table><thead><tr><th>H</th></tr></thead>"
+                      "<tbody><tr><td>D</td></tr></tbody>"
+                      "<tfoot><tr><td>F</td></tr></tfoot></table>");
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "thead").size(), 1u);
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "tbody").size(), 1u);
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "tfoot").size(), 1u);
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "th").size(), 1u);
+}
+
+TEST(HtmlTest, TableColgroup)
+{
+  auto doc = ParseDoc("<table><colgroup><col><col></colgroup>"
+                      "<tr><td>a</td><td>b</td></tr></table>");
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "colgroup").size(), 1u);
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "col").size(), 2u);
+  dom::Element* colgroup = dom::QuerySelector(*doc, "colgroup");
+  ASSERT_NE(colgroup, nullptr);
+  EXPECT_EQ(colgroup->child_count(), 2u);
+}
+
+TEST(HtmlTest, FosterParentingTextBeforeTable)
+{
+  // Text directly inside a table (not in a cell) is foster-parented to before
+  // the table (13.2.6.4.10).
+  auto doc = ParseDoc("<div>a<table>text<tr><td>c</td></tr></table>");
+  dom::Element* div = dom::QuerySelector(*doc, "div");
+  ASSERT_NE(div, nullptr);
+  dom::Element* table = dom::QuerySelector(*doc, "table");
+  ASSERT_NE(table, nullptr);
+  // The fostered text is a sibling of the table, before it, inside the div.
+  EXPECT_EQ(table->parent(), div);
+  dom::Node* before = nullptr;
+  for (dom::Node* child : div->ChildNodes()) {
+    if (child == table) {
+      break;
+    }
+    before = child;
+  }
+  ASSERT_NE(before, nullptr);
+  EXPECT_EQ(before->node_type(), dom::NodeType::kText);
+  EXPECT_EQ(before->TextContent(), "atext");
+  EXPECT_EQ(div->TextContent(), "atextc");
+}
+
+TEST(HtmlTest, FosterParentingMisnestedElement)
+{
+  // A block element inside a table is foster-parented out.
+  auto doc = ParseDoc("<table><div>hello</div><tr><td>c</td></tr></table>");
+  dom::Element* body = dom::QuerySelector(*doc, "body");
+  ASSERT_NE(body, nullptr);
+  dom::Element* div = dom::QuerySelector(*body, "div");
+  ASSERT_NE(div, nullptr);
+  EXPECT_EQ(div->parent(), body);
+  EXPECT_EQ(div->TextContent(), "hello");
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "table div").size(), 0u);
+}
+
+TEST(HtmlTest, TableWhitespaceStaysInRow)
+{
+  // Whitespace inside table structure is preserved in place; it must not
+  // create extra implicit tbody elements.
+  auto doc = ParseDoc("<table>\n  <tr>\n    <td>x</td>\n  </tr>\n</table>");
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "tbody").size(), 1u);
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "tr").size(), 1u);
+}
+
+TEST(HtmlTest, NestedTableInsideCell)
+{
+  auto doc = ParseDoc("<table><tr><td>a<table><tr><td>b</td></tr></table>c</td></tr></table>");
+  // The inner table is nested inside the outer td, not a sibling.
+  dom::Element* inner = dom::QuerySelector(*doc, "table table");
+  ASSERT_NE(inner, nullptr);
+  EXPECT_EQ(inner->parent(), dom::QuerySelector(*doc, "td"));
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "table").size(), 2u);
+  dom::Element* outer = dom::QuerySelector(*doc, "table");
+  ASSERT_NE(outer, nullptr);
+  EXPECT_EQ(dom::QuerySelectorAll(*outer, "td").size(), 2u);
+}
+
+TEST(HtmlTest, CloseTableCellStartsNewRow)
+{
+  // Two consecutive cells: the first cell is closed by the second td.
+  auto doc = ParseDoc("<table><tr><td>a<td>b</tr></table>");
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "tr").size(), 1u);
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "td").size(), 2u);
+  dom::Element* tr = dom::QuerySelector(*doc, "tr");
+  ASSERT_NE(tr, nullptr);
+  EXPECT_EQ(tr->child_count(), 2u);
+}
+
+TEST(HtmlTest, ImplicitTbodyForBareRows)
+{
+  // A bare <tr> (or <td>) is wrapped in an implicit tbody.
+  auto doc = ParseDoc("<table><tr><td>a</td></tr></table>");
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "tbody").size(), 1u);
+  dom::Element* tbody = dom::QuerySelector(*doc, "tbody");
+  ASSERT_NE(tbody, nullptr);
+  EXPECT_EQ(tbody->parent(), dom::QuerySelector(*doc, "table"));
+}
+
+// ---- doctype quirks flag is consumed (via tokenizer) -----------------------
+
+TEST(HtmlTest, DoctypeQuirksConsumedWithoutBreakingParse)
+{
+  auto doc = ParseDoc("<!DOCTYPE html PUBLIC \"x\" \"y\"><p>z</p>");
+  dom::Element* p = dom::QuerySelector(*doc, "p");
+  ASSERT_NE(p, nullptr);
+  EXPECT_EQ(p->TextContent(), "z");
+}
+
 } // namespace
 } // namespace neko::html
