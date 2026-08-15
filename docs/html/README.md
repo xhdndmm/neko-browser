@@ -6,15 +6,27 @@
 
 - 真实 tokenizer（非正则）：标签/属性（各引号风格）/注释/doctype/字符引用
   （数值 + **完整 WHATWG 命名字符引用表 2125 项**，含双码点序列，二分查找；
-  旧名无分号集合按 WHATWG entities.json 生成）/RAWTEXT(style)/
-  RCDATA(title,textarea)/script data（含 escape、double-escape 状态）
+  旧名无分号集合按 WHATWG entities.json 生成）/RAWTEXT(style,xmp,iframe,
+  noembed)/RCDATA(title,textarea)/PLAINTEXT(plaintext)/script data（含
+  escape、double-escape 状态）
+- 输入预处理：CRLF/CR → LF 归一化（§13.2.3.5）；EOF-in-tag 丢弃未闭合标签
+- DOCTYPE 完整状态机：public/system identifier（单/双引号）、bogus doctype、
+  force-quirks 标志（EOF/缺失标识符等错误置位）；属性值上下文按 §13.2.5.78
+  规则处理（legacy 无分号名后接 `=`/alnum 时按字面输出）
 - 树构建：initial → before html → before head → in head → after head →
-  in body → text → after body；隐含 html/head/body、隐含 p/li/标题闭合、
-  void 元素、游离结束标签、EOF 骨架
-- 作用域判定：默认作用域 + button 作用域（「关闭 p 元素」步骤按 button 作用域
-  判定，<button> 内部的 <p> 不会被后续块级元素（如 <div>）强行闭合）
-- 活动格式化元素列表（含 Noah's Ark 条款）+ adoption agency 算法
-  （错嵌套格式化元素的领养/重建）
+  in body → text → after body，外加完整表格模式链：
+  in table → in table text → in caption → in column group → in table body →
+  in row → in cell；隐含 html/head/body、隐含 p/li/标题闭合、void 元素、
+  hr/center 关闭 p、dd/dt 互闭、游离结束标签、EOF 骨架
+- **表格容错（foster parenting）**：表格内误置的文本/元素被「寄养」到表格之前
+  （§13.2.6.1、13.2.6.4.9-4.15），含 pending table character tokens 缓冲与
+  清空栈至 table/table body/table row 上下文的算法
+- **活动格式化元素列表的 marker**（td/th/caption 进入时插入，清栈回 table
+  上下文时清除）+ Noah's Ark 条款 + adoption agency 算法（错嵌套格式化
+  元素的领养/重建）
+- after head 模式下 base/link/meta/style/script 等仍按 in head 规则追加到
+  head 元素（head element pointer）
+- 作用域判定：默认作用域 + button 作用域 + table 作用域 + list item 作用域
 - 畸形 HTML 作为普通输入处理
 - 字符集：解析前由 `neko::base::encoding` 完成检测与转码（BOM > HTTP
   Content-Type > meta 预扫描 > UTF-8 默认；见 ADR 0012），解析器只接收
@@ -22,10 +34,11 @@
 
 ## 未实现
 
-- table 相关容错（foster parenting）——表格按普通块处理
-- 活动格式化元素列表的 marker（进入 applet/object/marquee/template/td/th/caption
-  时插入的标记）——依赖表格支持，尚未使用
 - CDATA section 状态、processing instruction 状态（依赖 foreign content）
+- in template / in frameset / in head noscript 模式（依赖 template/frameset
+  支持）
+- quirks mode 尚未接线到 CSS/布局（force-quirks 标志已由 tokenizer 计算，
+  但 Document 的渲染模式仍为 no-quirks）
 
 ## 命名字符引用（生成代码）
 

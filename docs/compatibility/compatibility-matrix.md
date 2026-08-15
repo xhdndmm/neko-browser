@@ -11,9 +11,9 @@
 | HTTP/1.1 | Tested | 8 单元测试 | GET、chunked、重定向、Content-Length；**增量读取**（按 framing 精确读取响应体，而非读到关闭），Content-Length 截断校验（防截断攻击的完整性兜底） |
 | HTTPS / TLS | Tested | 5 单元测试（本地 TLS 服务器 + 自签名 CA） | OpenSSL 封装（ADR 0010），证书+主机名校验、SNI、TLS≥1.2；gzip/deflate 协商；**兼容 CDN 无 close_notify 关闭**（sohu/bing 实测，完整性由 HTTP 层 Content-Length 校验兜底） |
 | gzip/deflate | Tested | 12 单元测试（含链式编码、raw deflate、服务器往返） | RFC 7231 内容编码解码，64 MiB 输出上限 |
-| HTML tokenizer | Tested | HTML 套件 | 完整 WHATWG 命名字符引用表（2125 项，含双码点，生成代码）+ RAWTEXT/RCDATA |
-| HTML parser | Tested | HTML 套件 | 插入模式子集（无 table 容错）；隐含 p 闭合按 button 作用域判定 |
-| DOM | Tested | DOM 套件 | 树操作、querySelector 子集 |
+| HTML tokenizer | Tested | HTML 套件 | 完整 WHATWG 命名字符引用表（2125 项，含双码点，生成代码）+ RAWTEXT(style/xmp/iframe/noembed)/RCDATA(title/textarea)/PLAINTEXT/script data；CRLF 归一化、EOF-in-tag 丢弃、属性上下文实体 `=`/alnum 字面规则、DOCTYPE public/system identifier 状态机 |
+| HTML parser | Tested | HTML 套件 | 插入模式：initial/before html/before head/in head/after head/in body/text/**in table/in table text/in caption/in column group/in table body/in row/in cell**；**表格容错（foster parenting）**、活动格式化元素 marker、hr/center 关闭 p、dd/dt 互闭、after head 元素进 head；隐含 p 闭合按 button 作用域判定 |
+| DOM | Tested | DOM 套件 | 树操作、querySelector 子集；CharacterData `data`/`nodeValue` getter/setter、Comment.textContent 返回数据、DocumentFragment 插入搬移子节点、树变更抛 **DOMException**（HierarchyRequestError/NotFoundError） |
 | CSS tokenizer/parser | Tested | CSS 套件 + 解析器健壮性回归 | 规则、声明、!important、@media；**分号/花括号/`@font-face` 等声明块不再导致死循环**（曾致 15 GB 内存暴涨）；外部 `<link rel=stylesheet>` 抓取+解析+应用（并行） |
 | 选择器匹配 | Tested | CSS 套件 | 属性/伪类(:first-child/:last-child/:nth-child/:root)/组合器子集 |
 | 级联 / 计算样式 | Tested | Style 套件 | 特异性、继承、内联样式；**规则按最右复合选择器分桶**（id/class/tag/universal），实测 6004 元素页面级联 0.688s→0.144s（约 5×） |
