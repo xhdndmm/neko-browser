@@ -1065,5 +1065,32 @@ TEST(SvgTest, NonFiniteDimensionsAreRejected)
                    .has_value());
 }
 
+TEST(WebpTest, DecodesSolidColors)
+{
+  // A 2x2 WebP with four solid corner colors (red, blue, green, yellow),
+  // generated with Pillow; decoded via libwebp.
+  static const unsigned char kWebp[] = {
+      0x52, 0x49, 0x46, 0x46, 0x30, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50,
+      0x38, 0x4c, 0x23, 0x00, 0x00, 0x00, 0x2f, 0x01, 0x40, 0x00, 0x00, 0x1f, 0x20, 0x10,
+      0x48, 0xda, 0x1f, 0x7a, 0x8d, 0xf9, 0x17, 0x10, 0x14, 0xf9, 0x3f, 0xda, 0xfc, 0x07,
+      0x5f, 0x24, 0x80, 0x4c, 0xda, 0x36, 0xd4, 0x76, 0xd7, 0x22, 0xfa, 0x1f, 0x3b, 0x00};
+  const std::string data(reinterpret_cast<const char*>(kWebp), sizeof(kWebp));
+  EXPECT_TRUE(IsWebp(data));
+  const auto r = DecodeWebp(data);
+  ASSERT_TRUE(r.has_value());
+  const Image& img = r.value();
+  EXPECT_EQ(img.width, 2);
+  EXPECT_EQ(img.height, 2);
+  // Lossless WebP (VP8L): the solid colors decode exactly.
+  ExpectPixels(img, {255, 0, 0, 255, 0, 0, 255, 255, 0, 255, 0, 255, 255, 255, 0, 255},
+               /*tolerance=*/0);
+}
+
+TEST(WebpTest, RejectsBadMagic)
+{
+  EXPECT_FALSE(IsWebp("not a webp"));
+  EXPECT_FALSE(DecodeWebp("RIFFxxxx").has_value());
+}
+
 } // namespace
 } // namespace neko::image

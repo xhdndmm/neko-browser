@@ -27,9 +27,10 @@ struct Image
 bool IsPng(std::string_view data);
 bool IsJpeg(std::string_view data);
 bool IsGif(std::string_view data);
+bool IsWebp(std::string_view data);
 
-// Detects the format from magic bytes and decodes.  PNG, JPEG and GIF are
-// supported; anything else yields a Parse error.
+// Detects the format from magic bytes and decodes.  PNG, JPEG, GIF, WebP and
+// SVG are supported; anything else yields a Parse error.
 base::Result<Image> DecodeImage(std::string_view data);
 
 // PNG: parsed and decoded in-house (chunks, CRC, filters, Adam7 interlace,
@@ -45,5 +46,9 @@ base::Result<Image> DecodeJpeg(std::string_view data);
 // disposal).  The first frame is composited onto the logical screen and
 // returned; animation is not yet supported.
 base::Result<Image> DecodeGif(std::string_view data);
+
+// WebP (lossy VP8 / lossless VP8L): decoded via libwebp, wrapped behind the
+// Image interface.
+base::Result<Image> DecodeWebp(std::string_view data);
 
 } // namespace neko::image

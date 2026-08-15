@@ -17,10 +17,12 @@ base::Result<Image> DecodeImage(std::string_view data)
     return DecodeJpeg(data);
   if (IsGif(data))
     return DecodeGif(data);
+  if (IsWebp(data))
+    return DecodeWebp(data);
   if (IsSvg(data))
     return DecodeSvg(data);
   return base::Error::NotImplemented(
-      "unsupported image format (only PNG/JPEG/GIF/SVG are supported)");
+      "unsupported image format (only PNG/JPEG/GIF/WebP/SVG are supported)");
 }
 
 } // namespace neko::image
