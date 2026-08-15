@@ -94,6 +94,30 @@ TEST(LayoutTest, BlockFillsContainingBlock)
   EXPECT_FLOAT_EQ(div->width, 784.0f);
 }
 
+// margin: 0 auto centers a block with a definite width (CSS 2.1 §10.3.3).
+TEST(LayoutTest, MarginAutoCentersBlock)
+{
+  Page page = Build("<body style=\"margin:0\">"
+                    "<div style=\"width:200px;margin:0 auto\">x</div></body>");
+  const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(div, nullptr);
+  // Leftover = 800 - 200 = 600, split into two margins of 300.
+  EXPECT_FLOAT_EQ(div->x, 300.0f);
+  EXPECT_FLOAT_EQ(div->width, 200.0f);
+}
+
+// margin: 0 auto centers a shrink-wrapped table.
+TEST(LayoutTest, MarginAutoCentersTable)
+{
+  Page page = Build("<body style=\"margin:0\">"
+                    "<table style=\"margin:0 auto\"><tr><td>hi</td></tr></table></body>");
+  const LayoutBox* table = FindBox(*page.root, "table", *page.doc);
+  ASSERT_NE(table, nullptr);
+  // The table shrink-wraps its content and sits centered: its centre on the
+  // 800px viewport is 400.
+  EXPECT_FLOAT_EQ(table->x + table->width / 2.0f, 400.0f);
+}
+
 TEST(LayoutTest, VerticalStacking)
 {
   Page page = Build("<body><div>one</div><div>two</div></body>");

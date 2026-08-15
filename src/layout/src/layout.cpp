@@ -1073,6 +1073,32 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       box.padding_left = ResolveSize(box.style.padding_left, containing_width);
     }
 
+    // Applies CSS 2.1 §10.3.3 auto horizontal margins: a block-level box with
+    // a definite width and auto left/right margins centers itself within its
+    // containing block by splitting the leftover space between the margins
+    // (the common `margin: 0 auto` pattern).  Must run after the box's width
+    // is final and before its x is derived from margin_left.
+    void CenterWithAutoMargins(LayoutBox& box, float containing_width)
+    {
+      const bool left_auto = box.style.margin_left_auto;
+      const bool right_auto = box.style.margin_right_auto;
+      if (!left_auto && !right_auto) {
+        return;
+      }
+      const float used = box.width + box.margin_left + box.margin_right;
+      const float leftover = containing_width - used;
+      if (leftover <= 0) {
+        return;
+      }
+      if (left_auto && right_auto) {
+        box.margin_left = box.margin_right = leftover / 2.0f;
+      } else if (left_auto) {
+        box.margin_left = leftover;
+      } else {
+        box.margin_right = leftover;
+      }
+    }
+
     // Lays out an inline-block (display:inline-block, CSS2.2 9.2.2.1) as an
     // atomic block-level box at a local origin.  Width is the explicit value,
     // else shrink-to-fit min(max(min-content, available), preferred)
@@ -1617,6 +1643,9 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         }
       }
       box->width = content_width + border_padding_w;
+
+      // Auto horizontal margins center the box within its containing block.
+      CenterWithAutoMargins(*box, containing_width);
 
       // Border-box position, including the relative offset.  |origin_x| is the
       // content-box origin of the parent; the border box sits at this box's
@@ -2928,8 +2957,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       table->width = content_width + border_padding_w;
       table->x = origin_x + table->margin_left - table->border_left - table->padding_left;
       table->y = origin_y + table->margin_top - table->border_top - table->padding_top;
-      const float table_x = table->content_x();
-      const float table_y = table->content_y();
+      float table_x = table->content_x();
+      float table_y = table->content_y();
 
       // Collect rows (flattening row groups) and cells, then place cells into a
       // grid honoring colspan/rowspan.  Row-group boundaries are kept so a
@@ -3125,6 +3154,14 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         content_width = std::max(0.0f, fit);
         table->width = content_width + border_padding_w;
       }
+
+      // Auto horizontal margins center the table within its containing block
+      // (the width is final now; recompute x and the content origin used for
+      // cells/caption from the resolved margin).
+      CenterWithAutoMargins(*table, containing_width);
+      table->x = origin_x + table->margin_left - table->border_left - table->padding_left;
+      table_x = table->content_x();
+      table_y = table->content_y();
 
       // The table's caption (display: table-caption), if any, is laid out as a
       // block above the rows at the table's final content width and becomes
