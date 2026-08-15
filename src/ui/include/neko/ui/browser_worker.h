@@ -77,6 +77,10 @@ public:
   // runtime on the worker thread; runs the cancelable "click" event and the
   // default action (hyperlink navigation) unless preventDefault was called.
   void DispatchPointerClick(int tab_id, float doc_x, float doc_y);
+  // Fires page-side hover events (mouseover/mouseout) when the hovered element
+  // changes; the worker hit-tests |doc_x|,|doc_y| against the current layout.
+  void DispatchHover(int tab_id, float doc_x, float doc_y);
+  void DispatchHoverClear(int tab_id);
   // Dispatches a wheel event (vertical delta px) to the page's script runtime.
   void DispatchWheel(int tab_id, double delta_y);
   // Dispatches a keyboard event (keydown/keyup) to the page's script runtime.

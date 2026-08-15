@@ -147,6 +147,18 @@ void BrowserWorker::DispatchPointerClick(int tab_id, float doc_x, float doc_y)
   });
 }
 
+void BrowserWorker::DispatchHover(int tab_id, float doc_x, float doc_y)
+{
+  Post([this, tab_id, doc_x, doc_y] {
+    (void)controller_.DispatchHover(tab_id, doc_x, doc_y);
+  });
+}
+
+void BrowserWorker::DispatchHoverClear(int tab_id)
+{
+  Post([this, tab_id] { controller_.DispatchHoverClear(tab_id); });
+}
+
 void BrowserWorker::DispatchWheel(int tab_id, double delta_y)
 {
   Post([this, tab_id, delta_y] {

@@ -74,6 +74,11 @@ struct Tab
   // current document; cleared on navigation (the document is replaced).
   dom::Element* focused_element = nullptr;
 
+  // The element the pointer currently hovers over (worker-thread only, used to
+  // fire mouseover/mouseout).  Points into the current document; the UI posts
+  // pointer positions and the worker hit-tests, so no pointers cross threads.
+  dom::Element* hovered_element = nullptr;
+
   // Live JavaScript runtime for the current HTML page (Phase 8 M2): holds the
   // DOM bindings, timers and event listeners of the page's scripts.  Worker
   // thread only — never exposed to the GUI.  Null for non-HTML content or
@@ -176,6 +181,16 @@ public:
   // thread (the page's script runtime is thread-confined).  Returns true when
   // the click was consumed (navigation started or preventDefault).
   bool DispatchPointerClick(int tab_id, float doc_x, float doc_y);
+
+  // Fires mouseout on the previously hovered element and mouseover on the
+  // element at |doc_x|,|doc_y| when the hovered element changed (worker thread,
+  // hit-testing against the current layout).  The UI posts positions; used for
+  // page-side hover reporting (tooltips, hover menus).
+  void DispatchHover(int tab_id, float doc_x, float doc_y);
+
+  // Fires mouseout on the hovered element and clears it (pointer left the
+  // view).
+  void DispatchHoverClear(int tab_id);
 
   // Dispatches a cancelable wheel event (vertical scroll delta in px) to the
   // tab's focused element (falling back to <body>) on the worker thread.

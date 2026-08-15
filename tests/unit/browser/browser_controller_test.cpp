@@ -1494,6 +1494,44 @@ TEST(BrowserControllerTest, FocusAndBlurFireOnClick)
   EXPECT_EQ(input->GetAttribute("data-f"), "2");
 }
 
+TEST(BrowserControllerTest, HoverFiresMouseOverAndOut)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+                               "<html><body style=\"margin:0\">"
+                               "<div id=\"a\" style=\"width:100px;height:50px\">A</div>"
+                               "<div id=\"b\" style=\"width:100px;height:50px\">B</div>"
+                               "<script>"
+                               "window.__log = [];"
+                               "function log(s){ window.__log.push(s);"
+                               "  document.body.setAttribute('data-log', window.__log.join(',')); }"
+                               "var a = document.getElementById('a');"
+                               "var b = document.getElementById('b');"
+                               "a.addEventListener('mouseover', function(){ log('over-a'); });"
+                               "a.addEventListener('mouseout', function(){ log('out-a'); });"
+                               "b.addEventListener('mouseover', function(){ log('over-b'); });"
+                               "b.addEventListener('mouseout', function(){ log('out-b'); });"
+                               "</script></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* body = dom::QuerySelector(*tab->page->document(), "body");
+  ASSERT_NE(body, nullptr);
+  // #a spans (0,0)-(100,50); #b is below it at y>=50.
+  controller.DispatchHover(tab->id, 10, 10);  // enter #a
+  controller.DispatchHover(tab->id, 110, 10); // leave #a -> body
+  controller.DispatchHover(tab->id, 10, 60);  // enter #b
+  EXPECT_EQ(body->GetAttribute("data-log"), "over-a,out-a,over-b");
+  // Clearing the hover fires mouseout on the current element (#b).
+  controller.DispatchHoverClear(tab->id);
+  EXPECT_EQ(body->GetAttribute("data-log"), "over-a,out-a,over-b,out-b");
+}
+
 // ---------------------------------------------------------------------------
 // DownloadManager
 // ---------------------------------------------------------------------------

@@ -63,6 +63,12 @@
     <span class="out" id="outH">—</span>
   </div>
 
+  <div class="card">
+    <b>9. mouseover / mouseout（鼠标移到控件上自动报告）</b><br>
+    <div id="hov" style="width:200px;height:60px;border:1px solid #999;background:#eee;padding:6px;display:inline-block">hover me</div>
+    <span class="out" id="outI">—</span>
+  </div>
+
   <pre id="log">(interactions appear here)</pre>
 
   <script>
@@ -116,6 +122,11 @@
       document.getElementById('outH').textContent = 'navigation blocked (preventDefault)';
       document.getElementById('log').textContent = 'link click intercepted, URL unchanged';
     });
+
+    // 9. mouseover / mouseout
+    var hov = document.getElementById('hov');
+    hov.onmouseover = function () { document.getElementById('outI').textContent = 'mouseover'; };
+    hov.onmouseout = function () { document.getElementById('outI').textContent = 'mouseout'; };
   </script>
 </body>
 </html>

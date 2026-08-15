@@ -672,6 +672,45 @@ bool BrowserController::DispatchPointerClick(int tab_id, float doc_x, float doc_
   return false;
 }
 
+void BrowserController::DispatchHover(int tab_id, float doc_x, float doc_y)
+{
+  Tab* tab = FindTab(tab_id);
+  if (tab == nullptr || tab->content_type != ContentType::kHtml || tab->page == nullptr) {
+    return;
+  }
+  const dom::Element* element = tab->page->ElementAt(doc_x, doc_y);
+  dom::Element* prev = tab->hovered_element;
+  if (element == prev) {
+    return;
+  }
+  if (prev != nullptr && tab->script_runtime != nullptr) {
+    tab->script_runtime->DispatchMouseEvent(*prev, "mouseout", doc_x, doc_y, 0);
+  }
+  tab->hovered_element = const_cast<dom::Element*>(element);
+  if (element != nullptr && tab->script_runtime != nullptr) {
+    tab->script_runtime->DispatchMouseEvent(*const_cast<dom::Element*>(element), "mouseover",
+                                            doc_x, doc_y, 0);
+  }
+  // A hover handler may mutate the DOM; reflect it.
+  if (tab->script_runtime != nullptr && tab->script_runtime->TakeDomDirty()) {
+    tab->page->ReapplyStyles();
+  }
+}
+
+void BrowserController::DispatchHoverClear(int tab_id)
+{
+  Tab* tab = FindTab(tab_id);
+  if (tab == nullptr) {
+    return;
+  }
+  if (tab->hovered_element != nullptr) {
+    if (tab->script_runtime != nullptr) {
+      tab->script_runtime->DispatchMouseEvent(*tab->hovered_element, "mouseout", 0, 0, 0);
+    }
+    tab->hovered_element = nullptr;
+  }
+}
+
 bool BrowserController::DispatchWheel(int tab_id, double delta_y)
 {
   Tab* tab = FindTab(tab_id);

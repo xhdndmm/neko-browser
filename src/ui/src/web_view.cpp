@@ -218,6 +218,9 @@ void WebView::HandleHover(const QPointF& viewport_pos)
   }
   hovered_element_ = element;
   snapshot_.page->SetHoveredElement(element);
+  // Report the hover change to the page (mouseover/mouseout) on the worker
+  // thread, which hit-tests against its own layout.
+  worker_->DispatchHover(tab_id_, doc_x, doc_y);
   // Pointing hand over hyperlinks (WHATWG HTML §4.6.5).
   const bool is_link =
       element != nullptr && browser::HyperlinkTarget(element, snapshot_.url).has_value();
@@ -235,6 +238,7 @@ void WebView::HandleHoverClear()
   if (snapshot_.page != nullptr) {
     snapshot_.page->SetHoveredElement(nullptr);
   }
+  worker_->DispatchHoverClear(tab_id_);
   viewport()->update();
 }
 

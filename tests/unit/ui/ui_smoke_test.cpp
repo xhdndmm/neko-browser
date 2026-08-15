@@ -764,6 +764,61 @@ TEST(UiSmokeTest, WheelFiresPageWheelEvent) {
   }));
 }
 
+TEST(UiSmokeTest, HoverOverElementFiresPageMouseOver) {
+  TempProfile tp;
+  const std::string html =
+      "<html><head><title>H</title></head>"
+      "<body style=\"margin:0\">"
+      "<div id=\"box\" style=\"width:200px;height:80px\">hover me</div>"
+      "<script>"
+      "var box = document.getElementById('box');"
+      "box.onmouseover = function(){ box.setAttribute('data-h', '1'); };"
+      "box.onmouseout = function(){ box.setAttribute('data-h', '0'); };"
+      "</script></body></html>";
+  const std::string html_file = tp.path() + "/hover.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(html_file, html).has_value());
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.resize(800, 600);
+  window.show();
+  worker.NavigateActive(QString::fromStdString(html_file));
+  window.AddressBar()->clearFocus();
+
+  ASSERT_TRUE(WaitFor([&] {
+    const auto snap = worker.SnapshotActiveTab();
+    return snap.page != nullptr && snap.page->layout_root() != nullptr;
+  }));
+  auto* view = window.findChild<neko::ui::WebView*>();
+  ASSERT_NE(view, nullptr);
+  view->Refresh();
+
+  // Move over the box (top-left of the page) -> page onmouseover.
+  QMouseEvent move(QEvent::MouseMove, QPointF(50, 10), Qt::NoButton, Qt::NoButton,
+                   Qt::NoModifier);
+  QApplication::sendEvent(view->viewport(), &move);
+  ASSERT_TRUE(WaitFor([&] {
+    const auto snap = worker.SnapshotActiveTab();
+    if (snap.page == nullptr || snap.page->document() == nullptr) {
+      return false;
+    }
+    neko::dom::Element* box = neko::dom::QuerySelector(*snap.page->document(), "#box");
+    return box != nullptr && box->GetAttribute("data-h").value_or("") == "1";
+  }));
+
+  // Leave the viewport -> onmouseout.
+  QEvent leave(QEvent::Leave);
+  QApplication::sendEvent(view->viewport(), &leave);
+  ASSERT_TRUE(WaitFor([&] {
+    const auto snap = worker.SnapshotActiveTab();
+    if (snap.page == nullptr || snap.page->document() == nullptr) {
+      return false;
+    }
+    neko::dom::Element* box = neko::dom::QuerySelector(*snap.page->document(), "#box");
+    return box != nullptr && box->GetAttribute("data-h").value_or("") == "0";
+  }));
+}
+
 
 TEST(UiSmokeTest, ClickLinkNavigates) {
   TempProfile tp;
