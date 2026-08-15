@@ -1642,6 +1642,24 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
           content_width = 0;
         }
       }
+      // min/max-width clamp (CSS 2.2 §10.4); min wins over max.  The clamps
+      // constrain the same box as the width (content-box or border-box).
+      if (box->style.min_width.has_value()) {
+        content_width = std::max(
+            content_width,
+            SpecToContent(box->style.min_width.value(),
+                          containing_width,
+                          border_padding_w,
+                          box->style.box_sizing));
+      }
+      if (box->style.max_width.has_value()) {
+        content_width = std::min(
+            content_width,
+            SpecToContent(box->style.max_width.value(),
+                          containing_width,
+                          border_padding_w,
+                          box->style.box_sizing));
+      }
       box->width = content_width + border_padding_w;
 
       // Auto horizontal margins center the box within its containing block.
@@ -3152,6 +3170,16 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         }
         const float fit = std::min(std::max(min_content, available_content), max_content);
         content_width = std::max(0.0f, fit);
+        table->width = content_width + border_padding_w;
+      }
+
+      // max-width clamp (CSS 2.2 §10.4) on the final width.
+      if (table->style.max_width.has_value()) {
+        const float max_w = SpecToContent(table->style.max_width.value(),
+                                          containing_width,
+                                          border_padding_w,
+                                          table->style.box_sizing);
+        content_width = std::min(content_width, std::max(0.0f, max_w));
         table->width = content_width + border_padding_w;
       }
 

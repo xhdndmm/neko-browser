@@ -118,6 +118,18 @@ TEST(LayoutTest, MarginAutoCentersTable)
   EXPECT_FLOAT_EQ(table->x + table->width / 2.0f, 400.0f);
 }
 
+// A block with max-width + margin:0 auto centers within a viewport wider than
+// the max-width (e.g. body { max-width:1200px; margin:0 auto }).
+TEST(LayoutTest, MaxWidthAutoMarginCentersBlock)
+{
+  Page page = Build("<body style=\"margin:0 auto;max-width:1200px\">x</body>", 1300.0f);
+  const LayoutBox* body = FindBox(*page.root, "body", *page.doc);
+  ASSERT_NE(body, nullptr);
+  EXPECT_FLOAT_EQ(body->width, 1200.0f);
+  // leftover 1300 - 1200 = 100 split into 50/50.
+  EXPECT_FLOAT_EQ(body->x, 50.0f);
+}
+
 TEST(LayoutTest, VerticalStacking)
 {
   Page page = Build("<body><div>one</div><div>two</div></body>");
