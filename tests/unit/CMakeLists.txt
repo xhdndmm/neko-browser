@@ -35,6 +35,7 @@ add_executable(neko_base_tests
   base/status_test.cpp
   base/string_util_test.cpp
   base/logging_test.cpp
+  base/encoding_test.cpp
   base/thread_pool_test.cpp
 )
 target_link_libraries(neko_base_tests PRIVATE neko::base gtest_main)
@@ -110,7 +111,7 @@ gtest_discover_tests(neko_layout_tests DISCOVERY_MODE PRE_TEST)
 add_executable(neko_paint_tests
   paint/paint_test.cpp
 )
-target_link_libraries(neko_paint_tests PRIVATE neko::paint neko::html gtest_main)
+target_link_libraries(neko_paint_tests PRIVATE neko::paint neko::html neko::base gtest_main)
 apply_compiler_warnings(neko_paint_tests)
 gtest_discover_tests(neko_paint_tests DISCOVERY_MODE PRE_TEST)
 
