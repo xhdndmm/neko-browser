@@ -680,11 +680,15 @@ void MainWindow::PopulateDomTree(QTreeWidget* tree)
       label = QString::fromUtf8(node->node_name().data());
     }
     QTreeWidgetItem* item = new QTreeWidgetItem({label, detail});
-    // Remember the element so the Computed panel can show its style.  The
-    // snapshot held by the caller keeps the DOM alive, so the pointer stays
-    // valid until the tree is cleared.
+    // Remember the element and the page it belongs to so the Computed panel
+    // can show its style.  The snapshot held by the caller keeps the DOM
+    // alive, but a later navigation replaces the page; store the page pointer
+    // so PopulateComputedStyle can detect a stale element instead of
+    // dereferencing freed memory.
     if (node->node_type() == dom::NodeType::kElement) {
       item->setData(0, Qt::UserRole, QVariant::fromValue(static_cast<const void*>(node)));
+      item->setData(0, Qt::UserRole + 1,
+                    QVariant::fromValue(static_cast<const void*>(tab.page.get())));
     }
     if (parent == nullptr) {
       tree->addTopLevelItem(item);
@@ -700,12 +704,20 @@ void MainWindow::PopulateDomTree(QTreeWidget* tree)
 
 void MainWindow::PopulateComputedStyle(QTreeWidget* tree, QTreeWidgetItem* item)
 {
+  const browser::TabSnapshot tab = worker_->SnapshotActiveTab();
+  if (tab.id < 0 || tab.page == nullptr)
+    return;
+  // The element pointer was captured when the DOM tree was built; if the
+  // page has since navigated, the pointer may dangle.  The item stores the
+  // page it came from — only use the pointer when it still belongs to the
+  // active page.
+  const void* item_page = item->data(0, Qt::UserRole + 1).value<void*>();
+  if (item_page != static_cast<const void*>(tab.page.get())) {
+    return;
+  }
   const auto* element =
       static_cast<const dom::Element*>(item->data(0, Qt::UserRole).value<void*>());
   if (element == nullptr)
-    return;
-  const browser::TabSnapshot tab = worker_->SnapshotActiveTab();
-  if (tab.id < 0 || tab.page == nullptr)
     return;
   const style::ComputedStyle& style = tab.page->styles().StyleFor(*element);
 
