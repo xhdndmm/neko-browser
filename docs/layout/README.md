@@ -47,6 +47,9 @@
 - **列表（list-item）**：`li { display: list-item }`；marker（圆点/序号）作为
   首行文本 run 绘制在内容左侧的 gutter 内，`ul`→disc、嵌套 `ul`→circle→square、
   `ol`→decimal、支持 lower/upper-alpha/roman；marker 按 li 在父列表中的位置编号
+- **描述列表（dl/dt/dd）**：`<dl>` 有块级上下边距，`<dt>` 术语与 `<dd>` 值按
+  源码顺序垂直排布，`<dd>` 值缩进（UA `margin-inline-start: 40px`）；支持一个
+  dt 对应多个 dd、多个 dt 共享值，以及 div 包装的组
 - block 容器内 inline 内容先布局、block 级子元素（含嵌套列表/表格）随后在文本
   行之下垂直排布
 

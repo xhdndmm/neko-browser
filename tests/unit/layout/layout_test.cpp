@@ -1965,5 +1965,36 @@ TEST(LayoutTest, OrderedListItemsAreNumbered)
   EXPECT_EQ(ol->children[2]->lines[0].runs[0].text, "3. ");
 }
 
+// A <dl> lays out its <dt> terms and <dd> values as blocks; the <dd> values
+// are indented (UA margin-inline-start: 40px) below their <dt>.
+TEST(LayoutTest, DlDtDdLayout)
+{
+  Page page = Build("<body><dl><dt>Term</dt><dd>Definition</dd>"
+                    "<dt>P</dt><dd>Two per day</dd><dd>More</dd></dl></body>");
+  const LayoutBox* dl = FindBox(*page.root, "dl", *page.doc);
+  ASSERT_NE(dl, nullptr);
+  // dl has vertical margins (UA margin-block: 1em).
+  EXPECT_GT(dl->margin_top, 0.0f);
+  EXPECT_GT(dl->margin_bottom, 0.0f);
+  // dt, dd, dt, dd, dd -- five block children in source order.
+  ASSERT_EQ(dl->children.size(), 5u);
+  const LayoutBox* dt1 = dl->children[0].get();
+  const LayoutBox* dd1 = dl->children[1].get();
+  const LayoutBox* dt2 = dl->children[2].get();
+  const LayoutBox* dd2 = dl->children[3].get();
+  const LayoutBox* dd3 = dl->children[4].get();
+  EXPECT_EQ(dt1->element->tag_name(), "dt");
+  EXPECT_EQ(dd1->element->tag_name(), "dd");
+  // dd is indented 40px from the dt's left edge.
+  EXPECT_NEAR(dd1->x - dt1->x, 40.0f, 0.01f);
+  EXPECT_NEAR(dd2->x - dt2->x, 40.0f, 0.01f);
+  EXPECT_NEAR(dd3->x - dt1->x, 40.0f, 0.01f);
+  // Each entry sits below the previous one.
+  EXPECT_GT(dd1->y, dt1->y);
+  EXPECT_GT(dt2->y, dd1->y);
+  EXPECT_GT(dd2->y, dt2->y);
+  EXPECT_GT(dd3->y, dd2->y);
+}
+
 } // namespace
 } // namespace neko::layout

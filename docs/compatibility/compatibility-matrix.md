@@ -23,7 +23,7 @@
 | aspect-ratio | Partial | 2 Style + 2 Layout 单元测试 | `1`/`16/9` 形式；宽度确定+高度 auto 时推导高度；显式高度优先；双 auto 忽略 |
 | border-radius | Partial | 1 Style 单元测试 | 单一圆角（长度/百分比），背景按圆角绘制；无多值/椭圆/圆角边框 |
 | Block layout | Tested | Layout 套件 | 盒模型、堆叠、宽度填充；**box-sizing: border-box 全局生效**（现代站点普遍 `*{box-sizing:border-box}`，修复了真实站点布局溢出/塌陷）；block 容器内 inline 内容先行、block 级子元素（嵌套列表/表格）随后垂直排布 |
-| Lists | Partial | Layout + HTML 套件 | `li { display: list-item }`；marker（`ul`→disc、嵌套 `ul`→circle→square、`ol`→decimal、alpha/roman）作为首行文本 run 绘制在内容左侧 gutter，`ol` 按序编号；`<li>` 闭合按 WHATWG（遇嵌套 `<ul>/<ol>` 不关闭外层 li）；无 `list-style-position: inside`/`::marker` |
+| Lists | Partial | Layout + HTML 套件 | `li { display: list-item }`；marker（`ul`→disc、嵌套 `ul`→circle→square、`ol`→decimal、alpha/roman）作为首行文本 run 绘制在内容左侧 gutter，`ol` 按序编号；`<li>` 闭合按 WHATWG（遇嵌套 `<ul>/<ol>` 不关闭外层 li）；`<dl>/<dt>/<dd>`：dd 缩进 40px、dl 块级边距、多 dt/dd 与 div 包装组；无 `list-style-position: inside`/`::marker` |
 | box-sizing | Implemented | 6 布局 + 3 样式单元测试 | content-box（初始）/ border-box：width/height、min/max、flex 项、absolute、表格、grid 尺寸均按 border-box 解析 |
 | white-space | Partial | 2 布局 + 3 样式单元测试 | normal（初始）/nowrap（整段视为不可断行、溢出不换行）/pre/pre-wrap/pre-line（解析但按 normal 处理——无预格式化文本）；继承 |
 | overflow | Partial | 2 绘制 + 3 样式单元测试 | visible（初始）/hidden/auto/scroll；hidden 与 scroll 按 padding box 裁剪（绘制级裁剪栈，嵌套交集），auto/scroll 无滚动溢出交互；`overflow-x/y` 简写未做 |

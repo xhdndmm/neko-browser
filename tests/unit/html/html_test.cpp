@@ -648,6 +648,41 @@ TEST(HtmlTest, DdDtCloseEachOther)
   EXPECT_EQ(dl->child_count(), 3u);
 }
 
+// A name-value group may have several dd elements (one dt, many values) and
+// several dt elements (many names, one or more dd values) -- WHATWG 4.4.9.
+TEST(HtmlTest, DlMultipleDtAndDd)
+{
+  auto doc = ParseDoc("<dl><dt>Authors<dd>John<dd>Luke<dt>Editor<dd>Frank</dl>");
+  const auto dts = dom::QuerySelectorAll(*doc, "dt");
+  const auto dds = dom::QuerySelectorAll(*doc, "dd");
+  ASSERT_EQ(dts.size(), 2u);
+  ASSERT_EQ(dds.size(), 3u);
+  EXPECT_EQ(dts[0]->TextContent(), "Authors");
+  EXPECT_EQ(dds[0]->TextContent(), "John");
+  EXPECT_EQ(dds[1]->TextContent(), "Luke");
+  EXPECT_EQ(dts[1]->TextContent(), "Editor");
+  EXPECT_EQ(dds[2]->TextContent(), "Frank");
+  dom::Element* dl = dom::QuerySelector(*doc, "dl");
+  ASSERT_NE(dl, nullptr);
+  EXPECT_EQ(dl->child_count(), 5u); // dt, dd, dd, dt, dd -- all siblings
+}
+
+// A dl may wrap name-value groups in div elements (WHATWG 4.4.9 content model
+// second form); the dt/dd inside a div child still nest under the dl.
+TEST(HtmlTest, DlGroupsWrappedInDiv)
+{
+  auto doc = ParseDoc("<dl><div><dt>Time<dd>2004</div>"
+                      "<div><dt>Author<dt>Editor<dd>Bob<dd>Ann</div></dl>");
+  const auto divs = dom::QuerySelectorAll(*doc, "dl > div");
+  ASSERT_EQ(divs.size(), 2u);
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "dt").size(), 3u);
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "dd").size(), 3u);
+  // The first div holds one dt + one dd.
+  EXPECT_EQ(divs[0]->child_count(), 2u);
+  // The second div holds two dt + two dd.
+  EXPECT_EQ(divs[1]->child_count(), 4u);
+}
+
 // ---- after-head content goes into head ------------------------------------
 
 TEST(HtmlTest, AfterHeadElementsGoIntoHead)

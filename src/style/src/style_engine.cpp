@@ -48,6 +48,9 @@ h4 { font-size: 1em; font-weight: bold; margin-top: 1.33em; margin-bottom: 1.33e
 h5 { font-size: 0.83em; font-weight: bold; margin-top: 1.67em; margin-bottom: 1.67em; }
 h6 { font-size: 0.67em; font-weight: bold; margin-top: 2.33em; margin-bottom: 2.33em; }
 ul, ol { margin-top: 1em; margin-bottom: 1em; padding-left: 40px; }
+dl { margin-top: 1em; margin-bottom: 1em; }
+dd { margin-left: 40px; }
+dl dl { margin-top: 0; margin-bottom: 0; }
 li { display: list-item; }
 ul { list-style-type: disc; }
 ol { list-style-type: decimal; }
