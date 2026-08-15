@@ -26,6 +26,18 @@ struct PageScriptServices
   std::string origin;
 };
 
+// A navigation requested by a page script through window.location (href
+// assignment, assign(), replace(), or reload()).  After RunPageScripts
+// returns, the caller should act on this instead of publishing the current
+// document (a redirect page navigates away).
+struct ScriptRequestedNavigation
+{
+  // Absolute URL to navigate to (empty when none was requested).
+  std::string url;
+  // When true, reload the current page instead of navigating to |url|.
+  bool is_reload = false;
+};
+
 // Executes the page's <script> elements (inline text or external src=) through
 // a fresh JavaScript runtime with DOM bindings, then re-applies the style
 // cascade so DOM mutations made by the scripts are reflected.
@@ -45,6 +57,11 @@ struct PageScriptServices
 // A failing script (parse/runtime/fetch) logs an error through |sink| (when
 // provided) and does not stop the remaining scripts.
 //
+// When a script requests a navigation (window.location), it is recorded in
+// |out_navigation| (last request wins).  The caller is expected to start that
+// navigation after this function returns; RunPageScripts itself never recurses
+// into the network stack.
+//
 // Returns the live runtime handle so the caller can keep it for the page's
 // lifetime and pump timers / dispatch events (see javascript::DomBinder), or
 // nullptr when the page has no scripts (or the runtime failed to start).
@@ -52,6 +69,8 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
                                                       const std::string& base_url,
                                                       ScriptFetcher fetch,
                                                       javascript::ScriptEngine::ConsoleSink sink,
-                                                      const PageScriptServices& services = {});
+                                                      const PageScriptServices& services = {},
+                                                      ScriptRequestedNavigation* out_navigation =
+                                                          nullptr);
 
 } // namespace neko::browser

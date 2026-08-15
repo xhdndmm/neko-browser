@@ -1,6 +1,7 @@
 #include "neko/network/http.h"
 
 #include "neko/base/string_util.h"
+#include "neko/base/version.h"
 #include "neko/network/compression.h"
 #include "neko/network/socket.h"
 #include "neko/network/tls_socket.h"
@@ -334,7 +335,9 @@ base::Result<HttpResponse> HttpGet(const url::Url& url,
   }
   request += "\r\n";
   request += "Connection: close\r\n";
-  request += "User-Agent: neko-browser/0.1.0\r\n";
+  request += "User-Agent: ";
+  request += base::GetUserAgent();
+  request += "\r\n";
   request += "Accept: text/html,application/xhtml+xml\r\n";
   request += "Accept-Encoding: gzip, deflate\r\n";
   if (extra_headers) {

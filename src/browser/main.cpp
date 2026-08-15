@@ -44,8 +44,17 @@ std::string DefaultProfileDir()
 }
 
 // Loads a URL (http via the network stack) or a local file into the page.
-neko::base::Result<void> LoadTarget(neko::renderer::Page& page, const std::string& target)
+// Follows page-script navigation requests (window.location) recursively, up to
+// a depth cap so a redirect loop terminates.
+neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
+                                    const std::string& target,
+                                    int depth = 0)
 {
+  constexpr int kMaxNavigationDepth = 20;
+  if (depth >= kMaxNavigationDepth) {
+    NEKO_LOG_WARNING("navigation chain too deep; stopped at " + target);
+    return neko::base::Ok();
+  }
   const auto parsed = neko::url::Url::Parse(target);
   if (parsed.has_value()) {
     const neko::url::Url& url = parsed.value();
@@ -64,13 +73,25 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page, const std::strin
       // Phase 8 M2: execute the page's scripts (inline + external src=,
       // async/defer); scripts may mutate the DOM and RunPageScripts
       // re-applies styles inside.
+      neko::browser::ScriptRequestedNavigation requested;
       neko::browser::RunPageScripts(
           page,
           url.Serialize(),
           [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
           [](std::string_view level, std::string_view text) {
             std::cout << "[" << level << "] " << text << "\n";
-          });
+          },
+          {},
+          &requested);
+      // A script may have redirected the page (e.g. location.replace()).
+      if (!requested.url.empty()) {
+        NEKO_LOG_INFO("script navigated to " + requested.url);
+        return LoadTarget(page, requested.url, depth + 1);
+      }
+      if (requested.is_reload) {
+        NEKO_LOG_INFO("script reloaded " + url.Serialize());
+        return LoadTarget(page, url.Serialize(), depth + 1);
+      }
       // Fetch and decode the page's <img> subresources (headless path).
       neko::browser::FetchPageImages(
           page, url.Serialize(), [](const neko::url::Url& u, std::string_view) {
@@ -83,13 +104,20 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page, const std::strin
       if (!r) {
         return r;
       }
+      neko::browser::ScriptRequestedNavigation requested;
       neko::browser::RunPageScripts(
           page,
           "",
           [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
           [](std::string_view level, std::string_view text) {
             std::cout << "[" << level << "] " << text << "\n";
-          });
+          },
+          {},
+          &requested);
+      if (!requested.url.empty()) {
+        NEKO_LOG_INFO("script navigated to " + requested.url);
+        return LoadTarget(page, requested.url, depth + 1);
+      }
       // Local pages may still reference absolute http(s) images; fetch those.
       neko::browser::FetchPageImages(
           page, /*base_url=*/"", [](const neko::url::Url& u, std::string_view) {
@@ -104,13 +132,20 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page, const std::strin
   if (!r) {
     return r;
   }
+  neko::browser::ScriptRequestedNavigation requested;
   neko::browser::RunPageScripts(
       page,
       "",
       [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
       [](std::string_view level, std::string_view text) {
         std::cout << "[" << level << "] " << text << "\n";
-      });
+      },
+      {},
+      &requested);
+  if (!requested.url.empty()) {
+    NEKO_LOG_INFO("script navigated to " + requested.url);
+    return LoadTarget(page, requested.url, depth + 1);
+  }
   return neko::base::Ok();
 }
 

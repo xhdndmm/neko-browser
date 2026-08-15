@@ -22,4 +22,12 @@ std::string_view GetVersionTriple();
 // Project display name, e.g. "neko-browser".
 std::string_view GetProjectName();
 
+// The User-Agent string sent on network requests and exposed to scripts via
+// navigator.userAgent.  It follows the conventional browser UA format that
+// web servers use to decide what content to serve: a bare "neko-browser/0.1.0"
+// UA makes many sites (e.g. Baidu) treat the engine as a bot and respond with
+// a reduced or script-redirect page.  The trailing NekoBrowser token keeps
+// requests identifiable.
+std::string_view GetUserAgent();
+
 }  // namespace neko::base

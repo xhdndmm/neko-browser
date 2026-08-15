@@ -283,6 +283,46 @@ TEST(CssParserTest, MalformedInputIsTolerated) {
   EXPECT_EQ(sheet.rules[0].declarations[0].property, "color");
 }
 
+// Regression: a stray ";" after a selector (no block follows) must not stall
+// the parser in an infinite loop pushing empty rules.  Real pages (e.g.
+// Baidu's homepage) contain "foo;" fragments and @font-face bodies made of
+// raw declarations separated by ";".
+TEST(CssParserTest, StraySemicolonAfterSelectorIsSkipped) {
+  const StyleSheet sheet = ParseStyleSheet("p; .note { color: red; }");
+  // "p" is a valid type selector (empty declaration block), ".note" follows.
+  ASSERT_EQ(sheet.rules.size(), 2u);
+  EXPECT_EQ(sheet.rules[0].selectors.size(), 1u);
+  EXPECT_TRUE(sheet.rules[0].declarations.empty());
+  EXPECT_EQ(sheet.rules[1].selectors.size(), 1u);
+  EXPECT_EQ(sheet.rules[1].declarations[0].property, "color");
+}
+
+TEST(CssParserTest, TrailingSemicolonDoesNotHang) {
+  const StyleSheet sheet = ParseStyleSheet("p { color: red };");
+  ASSERT_EQ(sheet.rules.size(), 1u);
+  EXPECT_EQ(sheet.rules[0].declarations[0].value, "red");
+}
+
+TEST(CssParserTest, FontFaceBodyDoesNotHang) {
+  // @font-face bodies are raw declarations separated by ";", not nested
+  // qualified rules.  This previously stalled the at-rule loop forever.
+  const StyleSheet sheet =
+      ParseStyleSheet("@font-face{font-family:cIconfont;src:url('a.eot');src:url('b.woff2') "
+                      "format('woff2')}.x{color:blue}");
+  ASSERT_EQ(sheet.at_rules.size(), 1u);
+  EXPECT_EQ(sheet.at_rules[0].name, "font-face");
+  // The following rule must still be parsed (the block was consumed).
+  ASSERT_EQ(sheet.rules.size(), 1u);
+  EXPECT_EQ(sheet.rules[0].declarations[0].property, "color");
+  EXPECT_EQ(sheet.rules[0].declarations[0].value, "blue");
+}
+
+TEST(CssParserTest, UnmatchedCloseBraceDoesNotHang) {
+  const StyleSheet sheet = ParseStyleSheet("} .a { color: red; }");
+  ASSERT_EQ(sheet.rules.size(), 1u);
+  EXPECT_EQ(sheet.rules[0].declarations[0].property, "color");
+}
+
 TEST(CssTokenizerTest, BasicTokens) {
   Tokenizer tokenizer("div.class { color: red; margin: 10px; }");
   const std::vector<CssToken> tokens = tokenizer.Tokenize();

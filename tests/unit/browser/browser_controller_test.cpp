@@ -640,6 +640,80 @@ TEST(BrowserControllerTest, FailedExternalScriptDoesNotStopOthers)
   EXPECT_NE(console[0].message.find("fetch failed"), std::string::npos);
 }
 
+// A page script can navigate the browser by assigning window.location (e.g.
+// a JS redirect page); the controller acts on it instead of publishing the
+// script's own document.
+TEST(BrowserControllerTest, PageScriptLocationHrefNavigates)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>Redirector</title>"
+                               "<script>location.href = 'http://example.com/final';</script>"
+                               "</head><body>redirecting</body></html>"});
+  fetch.Add("http://example.com/final",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>Final</title></head><body>done</body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  // The script's own page must not be published; the requested URL is loaded.
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  EXPECT_EQ(tab->url, "http://example.com/final");
+  EXPECT_EQ(tab->title, "Final");
+  EXPECT_EQ(tab->page->document()->Title(), "Final");
+  // Two network requests happened: the redirector page and the target.
+  EXPECT_EQ(fetch.requests_.size(), 2u);
+}
+
+// location.reload() from a script reloads the current page.
+TEST(BrowserControllerTest, PageScriptLocationReloadRefetches)
+{
+  TempProfile tp;
+  int served = 0;
+  struct CountingFetcher
+  {
+    int* served;
+    base::Result<network::HttpResponse> operator()(const url::Url& url,
+                                                   std::string_view cookie)
+    {
+      (void)url;
+      (void)cookie;
+      ++*served;
+      network::HttpResponse response;
+      response.status_code = 200;
+      response.headers = {{"content-type", "text/html"}};
+      if (*served == 1) {
+        // First response: a script that reloads once.
+        response.body = "<html><head><title>First</title>"
+                        "<script>location.reload();</script></head><body>f</body></html>";
+      } else {
+        // Second response: no script, the chain stops.
+        response.body = "<html><head><title>Second</title></head><body>s</body></html>";
+      }
+      return response;
+    }
+  } cf{&served};
+
+  BrowserController controller(tp.path(), std::ref(cf));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  // reload() refetches the current URL; the second response has no script, so
+  // the chain stops there.
+  EXPECT_EQ(served, 2);
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  EXPECT_EQ(tab->url, "http://example.com/");
+  EXPECT_EQ(tab->page->document()->Title(), "Second");
+}
+
 // In-page <img> subresources are decoded in parallel on a thread pool and
 // injected into the page.
 TEST(BrowserControllerTest, InjectsMultiplePageImages)

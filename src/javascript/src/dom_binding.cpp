@@ -20,6 +20,7 @@
 #include "neko/javascript/dom_binding.h"
 
 #include "neko/base/status.h"
+#include "neko/base/version.h"
 #include "neko/css/parser.h"
 #include "neko/dom/query.h"
 #include "neko/html/parser.h"
@@ -2004,6 +2005,192 @@ JSValue LocalStorageLength(JSContext* ctx, JSValueConst this_val)
   return JS_NewInt32(ctx, static_cast<int32_t>(impl->apis.storage_keys().size()));
 }
 
+// ---- location ---------------------------------------------------------------
+
+// Splits an absolute URL string into its Location components using simple
+// string parsing so the javascript layer stays decoupled from the url module.
+struct LocationParts
+{
+  std::string protocol;  // "https:"
+  std::string host;      // "www.example.com:8080"
+  std::string hostname;  // "www.example.com"
+  std::string port;      // "8080" (empty when the URL has no port)
+  std::string pathname;  // "/a/b" (empty when the URL has no path)
+  std::string search;    // "?x=1" (empty when absent)
+  std::string hash;      // "#frag" (empty when absent)
+  std::string origin;    // "https://www.example.com:8080"
+};
+
+LocationParts ParseLocationParts(std::string_view href)
+{
+  LocationParts out;
+  const std::size_t scheme_end = href.find("://");
+  if (scheme_end == std::string_view::npos) {
+    const std::size_t colon = href.find(':');
+    if (colon != std::string_view::npos) {
+      out.protocol = std::string(href.substr(0, colon + 1));
+    }
+    return out;
+  }
+  out.protocol = std::string(href.substr(0, scheme_end + 1));
+  std::size_t i = scheme_end + 3;
+  const std::size_t path_start = href.find_first_of("/?#", i);
+  const std::size_t host_end = path_start == std::string_view::npos ? href.size() : path_start;
+  out.host = std::string(href.substr(i, host_end - i));
+  out.origin = out.protocol + "//" + out.host;
+  const std::size_t colon = out.host.rfind(':');
+  if (colon != std::string::npos) {
+    out.hostname = out.host.substr(0, colon);
+    out.port = out.host.substr(colon + 1);
+  } else {
+    out.hostname = out.host;
+  }
+  if (path_start == std::string_view::npos) {
+    return out;
+  }
+  i = path_start;
+  const std::size_t q = href.find('?', i);
+  const std::size_t h = href.find('#', i);
+  const std::size_t path_end = std::min(q == std::string_view::npos ? href.size() : q,
+                                        h == std::string_view::npos ? href.size() : h);
+  out.pathname = std::string(href.substr(i, path_end - i));
+  if (q != std::string_view::npos) {
+    const std::size_t search_end =
+        h == std::string_view::npos ? href.size() : std::min(h, href.size());
+    out.search = std::string(href.substr(q, search_end - q));
+  }
+  if (h != std::string_view::npos) {
+    out.hash = std::string(href.substr(h));
+  }
+  return out;
+}
+
+// Resolves a (possibly relative) target against the page base, falling back to
+// the raw string when resolution is unavailable or fails.
+std::string ResolveLocationTarget(Impl* impl, std::string_view target)
+{
+  if (impl->apis.resolve_url) {
+    const std::string resolved = impl->apis.resolve_url(std::string(target));
+    if (!resolved.empty()) {
+      return resolved;
+    }
+  }
+  return std::string(target);
+}
+
+JSValue LocationHrefGetter(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.location_href) {
+    return JS_NewStringLen(ctx, "", 0);
+  }
+  const std::string href = impl->apis.location_href();
+  return JS_NewStringLen(ctx, href.data(), href.size());
+}
+
+JSValue LocationHrefSetter(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.navigate) {
+    return JS_UNDEFINED;
+  }
+  bool ok = false;
+  const std::string target = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  impl->apis.navigate(ResolveLocationTarget(impl, target));
+  return JS_UNDEFINED;
+}
+
+// Read-only Location parts, dispatched by magic (see kLocationMagic below).
+JSValue LocationPropGetter(JSContext* ctx, JSValueConst this_val, int magic)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.location_href) {
+    return JS_NewStringLen(ctx, "", 0);
+  }
+  const LocationParts parts = ParseLocationParts(impl->apis.location_href());
+  const std::string* value = nullptr;
+  switch (magic) {
+    case 0:
+      value = &parts.protocol;
+      break;
+    case 1:
+      value = &parts.host;
+      break;
+    case 2:
+      value = &parts.hostname;
+      break;
+    case 3:
+      value = &parts.port;
+      break;
+    case 4:
+      value = &parts.pathname;
+      break;
+    case 5:
+      value = &parts.search;
+      break;
+    case 6:
+      value = &parts.hash;
+      break;
+    case 7:
+      value = &parts.origin;
+      break;
+    default:
+      return JS_NewStringLen(ctx, "", 0);
+  }
+  return JS_NewStringLen(ctx, value->data(), value->size());
+}
+
+JSValue LocationAssign(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.navigate) {
+    return JS_UNDEFINED;
+  }
+  bool ok = false;
+  const std::string target = ArgString(ctx, argc >= 1 ? argv[0] : JS_UNDEFINED, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  impl->apis.navigate(ResolveLocationTarget(impl, target));
+  return JS_UNDEFINED;
+}
+
+JSValue LocationReplace(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.navigate) {
+    return JS_UNDEFINED;
+  }
+  bool ok = false;
+  const std::string target = ArgString(ctx, argc >= 1 ? argv[0] : JS_UNDEFINED, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  // Replace is a documented approximation: the synchronous engine has no
+  // back/forward entry for the navigating page to swap, so it behaves like
+  // assign().
+  impl->apis.navigate(ResolveLocationTarget(impl, target));
+  return JS_UNDEFINED;
+}
+
+JSValue LocationReload(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.reload) {
+    return JS_UNDEFINED;
+  }
+  impl->apis.reload();
+  return JS_UNDEFINED;
+}
+
+JSValue LocationToString(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  return LocationHrefGetter(ctx, this_val);
+}
+
 // ---- fetch -----------------------------------------------------------------
 
 // Response.text(): a promise resolved with the body (func_data[0]).
@@ -2217,7 +2404,8 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   // the rest are documented defaults (the browser UI language is not wired
   // yet).  Exposed on both the global scope and the window.
   JSValue navigator = JS_NewObject(ctx);
-  JS_SetPropertyStr(ctx, navigator, "userAgent", JS_NewString(ctx, "neko-browser/0.1.0"));
+  JS_SetPropertyStr(
+      ctx, navigator, "userAgent", JS_NewString(ctx, std::string(base::GetUserAgent()).c_str()));
   JS_SetPropertyStr(ctx, navigator, "platform", JS_NewString(ctx, NavigatorPlatform()));
   JS_SetPropertyStr(ctx, navigator, "language", JS_NewString(ctx, "en-US"));
   JSValue languages = JS_NewArray(ctx);
@@ -2251,6 +2439,39 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   JS_SetPropertyStr(ctx, window, "innerWidth", JS_NewInt32(ctx, 800));
   JS_SetPropertyStr(ctx, window, "innerHeight", JS_NewInt32(ctx, 600));
   JS_SetPropertyStr(ctx, window, "devicePixelRatio", JS_NewInt32(ctx, 1));
+
+  // window.location: href (get/set), read-only URL parts, assign()/replace()/
+  // reload()/toString().  Navigation requests are deferred to the browser
+  // layer via the PageApis callbacks (see dom_binding.h); scripts that assign
+  // location.href (e.g. Baidu's anti-bot redirect page) trigger a navigation
+  // that the controller acts on after the script run.
+  if (apis.location_href || apis.navigate || apis.reload) {
+    JSValue location = JS_NewObject(ctx);
+    // Magic values shared with LocationPropGetter.
+    static constexpr std::array<const char*, 8> kLocationMagic = {
+        "protocol", "host", "hostname", "port", "pathname", "search", "hash", "origin"};
+    for (int i = 0; i < static_cast<int>(kLocationMagic.size()); ++i) {
+      DefineGetter(ctx,
+                   location,
+                   kLocationMagic[static_cast<std::size_t>(i)],
+                   MakeGetterMagic(ctx, kLocationMagic[static_cast<std::size_t>(i)], LocationPropGetter, i));
+    }
+    DefineAccessor(ctx,
+                   location,
+                   "href",
+                   MakeGetter(ctx, "href", LocationHrefGetter),
+                   MakeSetter(ctx, "href", LocationHrefSetter));
+    JSValue assign_fn = JS_NewCFunction(ctx, LocationAssign, "assign", 1);
+    JS_SetPropertyStr(ctx, location, "assign", assign_fn); // steals assign_fn
+    JSValue replace_fn = JS_NewCFunction(ctx, LocationReplace, "replace", 1);
+    JS_SetPropertyStr(ctx, location, "replace", replace_fn); // steals replace_fn
+    JSValue reload_fn = JS_NewCFunction(ctx, LocationReload, "reload", 0);
+    JS_SetPropertyStr(ctx, location, "reload", reload_fn); // steals reload_fn
+    JSValue toString_fn = JS_NewCFunction(ctx, LocationToString, "toString", 0);
+    JS_SetPropertyStr(ctx, location, "toString", toString_fn); // steals toString_fn
+    JS_SetPropertyStr(ctx, window, "location", JS_DupValue(ctx, location)); // steals dup
+    JS_SetPropertyStr(ctx, global, "location", location);                   // steals
+  }
 
   // Page Web APIs (Phase 8 M3 subset): window.localStorage and window.fetch
   // are installed only when the browser layer wired the callbacks.
@@ -2341,6 +2562,7 @@ Impl::~Impl()
                            "HTMLElement",
                            "navigator",
                            "screen",
+                           "location",
                            "localStorage",
                            "fetch"}) {
     JSAtom atom = JS_NewAtom(ctx, name);

@@ -49,6 +49,17 @@ struct PageApis
   // window.fetch: performs the request for the (absolute) URL string; an Err
   // result rejects the returned promise (network error).
   std::function<base::Result<FetchResponse>(const std::string&)> fetch;
+
+  // window.location.  |location_href| returns the current document URL (used
+  // for the read-only parts of location and for resolving relative targets);
+  // |navigate| requests navigation to an absolute URL (location.href
+  // assignment, assign(), replace()); |reload| requests a reload of the
+  // current document.  When a navigation is requested the browser layer acts
+  // on it after the synchronous script run (see browser::RunPageScripts), so
+  // these never recurse into the network stack mid-script.
+  std::function<std::string()> location_href;
+  std::function<void(const std::string&)> navigate;
+  std::function<void()> reload;
 };
 
 // Binds a DOM document into a JavaScript runtime, exposing a practical subset

@@ -413,9 +413,12 @@ TEST_F(DomBinderTest, ConsoleFromPageScript)
 TEST_F(DomBinderTest, NavigatorGlobal)
 {
   // The UA matches what the network stack sends; the page can read it without
-  // a ReferenceError.
-  EXPECT_EQ(EvalString("navigator.userAgent"), "neko-browser/0.1.0");
-  EXPECT_EQ(EvalString("window.navigator.userAgent"), "neko-browser/0.1.0");
+  // a ReferenceError.  It follows the conventional browser UA format (see
+  // base::GetUserAgent) so servers serve full content.
+  const std::string ua = EvalString("navigator.userAgent");
+  EXPECT_EQ(ua, EvalString("window.navigator.userAgent"));
+  EXPECT_NE(ua.find("NekoBrowser/"), std::string::npos);
+  EXPECT_NE(ua.find("Mozilla/5.0"), std::string::npos);
   EXPECT_TRUE(EvalBool("navigator === window.navigator"));
   EXPECT_EQ(EvalString("navigator.language"), "en-US");
   EXPECT_EQ(EvalString("navigator.languages.join(',')"), "en-US");
@@ -603,6 +606,74 @@ TEST_F(DomBinderTest, FetchRejectsOnNetworkError)
   ASSERT_TRUE(caught.has_value());
   ASSERT_TRUE(caught.value().ToBoolean().has_value());
   EXPECT_TRUE(caught.value().ToBoolean().value());
+}
+
+TEST_F(DomBinderTest, LocationExposesCurrentUrlParts)
+{
+  PageApis apis;
+  apis.location_href = []() { return "https://www.example.com:8080/a/b?x=1#frag"; };
+  DomBinder binder(*document_, apis);
+  auto eval = [&binder](const std::string& code) {
+    auto r = binder.Evaluate(code);
+    if (!r.has_value()) {
+      return std::string("<error: ") + r.error().message() + ">";
+    }
+    auto s = r.value().ToString();
+    return s.has_value() ? s.value() : std::string("<tostring-error>");
+  };
+  auto eval_bool = [&binder](const std::string& code) {
+    auto r = binder.Evaluate(code);
+    if (!r.has_value()) {
+      return false;
+    }
+    auto b = r.value().ToBoolean();
+    return b.has_value() && b.value();
+  };
+  EXPECT_EQ(eval("location.href"), "https://www.example.com:8080/a/b?x=1#frag");
+  EXPECT_EQ(eval("location.protocol"), "https:");
+  EXPECT_EQ(eval("location.host"), "www.example.com:8080");
+  EXPECT_EQ(eval("location.hostname"), "www.example.com");
+  EXPECT_EQ(eval("location.port"), "8080");
+  EXPECT_EQ(eval("location.pathname"), "/a/b");
+  EXPECT_EQ(eval("location.search"), "?x=1");
+  EXPECT_EQ(eval("location.hash"), "#frag");
+  EXPECT_EQ(eval("location.origin"), "https://www.example.com:8080");
+  EXPECT_EQ(eval("location.toString()"), "https://www.example.com:8080/a/b?x=1#frag");
+  // window.location and the bare global are the same object.
+  EXPECT_TRUE(eval_bool("window.location === location"));
+}
+
+TEST_F(DomBinderTest, LocationHrefAssignmentRequestsNavigation)
+{
+  PageApis apis;
+  apis.location_href = []() { return "https://www.example.com/"; };
+  apis.resolve_url = [](const std::string& raw) {
+    return raw.rfind("http", 0) == 0 ? raw : "https://www.example.com/" + raw;
+  };
+  std::string requested;
+  apis.navigate = [&requested](const std::string& url) { requested = url; };
+  DomBinder binder(*document_, apis);
+  ASSERT_TRUE(binder.Evaluate("location.href = 'https://example.org/page';").has_value());
+  EXPECT_EQ(requested, "https://example.org/page");
+
+  requested.clear();
+  ASSERT_TRUE(binder.Evaluate("location.assign('next.html');").has_value());
+  EXPECT_EQ(requested, "https://www.example.com/next.html");
+
+  requested.clear();
+  ASSERT_TRUE(binder.Evaluate("location.replace('https://example.org/other');").has_value());
+  EXPECT_EQ(requested, "https://example.org/other");
+}
+
+TEST_F(DomBinderTest, LocationReloadRequestsReload)
+{
+  bool reloaded = false;
+  PageApis apis;
+  apis.location_href = []() { return "https://www.example.com/"; };
+  apis.reload = [&reloaded]() { reloaded = true; };
+  DomBinder binder(*document_, apis);
+  ASSERT_TRUE(binder.Evaluate("location.reload();").has_value());
+  EXPECT_TRUE(reloaded);
 }
 
 } // namespace

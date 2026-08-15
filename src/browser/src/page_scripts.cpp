@@ -45,7 +45,8 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
                                                       const std::string& base_url,
                                                       ScriptFetcher fetch,
                                                       javascript::ScriptEngine::ConsoleSink sink,
-                                                      const PageScriptServices& services)
+                                                      const PageScriptServices& services,
+                                                      ScriptRequestedNavigation* out_navigation)
 {
   dom::Document* document = page.document();
   if (document == nullptr) {
@@ -85,15 +86,16 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
       return keys;
     };
   }
+  // Resolve relative URLs against the page's base URL.  Used by fetch() and
+  // window.location assignments.
+  const base::Result<url::Url> base = url::Url::Parse(base_url);
+  apis.resolve_url = [base](const std::string& raw) -> std::string {
+    const base::Result<url::Url> parsed =
+        base.has_value() ? url::Url::Parse(raw, base.value()) : url::Url::Parse(raw);
+    return parsed.has_value() ? parsed.value().Serialize() : std::string();
+  };
   if (fetch != nullptr) {
-    // Resolve relative URLs against the page's base URL, then fetch through
-    // the same network path used for external scripts.
-    const base::Result<url::Url> base = url::Url::Parse(base_url);
-    apis.resolve_url = [base](const std::string& raw) -> std::string {
-      const base::Result<url::Url> parsed =
-          base.has_value() ? url::Url::Parse(raw, base.value()) : url::Url::Parse(raw);
-      return parsed.has_value() ? parsed.value().Serialize() : std::string();
-    };
+    // Fetch through the same network path used for external scripts.
     apis.fetch = [fetch](const std::string& url) -> base::Result<javascript::FetchResponse> {
       const base::Result<url::Url> parsed = url::Url::Parse(url);
       if (!parsed.has_value()) {
@@ -115,11 +117,19 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
       return base::Ok(std::move(out));
     };
   }
+  // window.location: expose the current document URL and record script
+  // navigation requests (last one wins) for the caller to act on after the
+  // script run.  Relative targets resolve against the page base URL.
+  if (out_navigation != nullptr) {
+    apis.location_href = [base_url]() { return base_url; };
+    apis.navigate = [out_navigation](const std::string& url) { out_navigation->url = url; };
+    apis.reload = [out_navigation]() { out_navigation->is_reload = true; };
+  } else {
+    apis.location_href = [base_url]() { return base_url; };
+  }
 
   auto binder = std::make_shared<javascript::DomBinder>(*document, apis);
   binder->SetConsoleSink(std::move(sink));
-
-  const base::Result<url::Url> base = url::Url::Parse(base_url);
 
   // Runs one script body (inline text or fetched external file); failures are
   // logged and do not stop the remaining scripts.

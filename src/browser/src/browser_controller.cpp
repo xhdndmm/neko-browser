@@ -50,6 +50,26 @@ bool StartsWith(std::string_view s, std::string_view prefix)
   return s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix;
 }
 
+// Guards the synchronous navigation chain against runaway JS-driven loops (a
+// page that keeps assigning window.location, or two pages that redirect to
+// each other).  Each hop is a real network fetch; the cap mirrors the HTTP
+// redirect limit.  Thread-local because each worker uses its own chain.
+class NavigationDepthGuard
+{
+public:
+  explicit NavigationDepthGuard(int limit) : limit_(limit) { ++depth_; }
+  ~NavigationDepthGuard() { --depth_; }
+  bool Exceeded() const { return depth_ > limit_; }
+  NavigationDepthGuard(const NavigationDepthGuard&) = delete;
+  NavigationDepthGuard& operator=(const NavigationDepthGuard&) = delete;
+
+private:
+  int limit_;
+  static thread_local int depth_;
+};
+
+thread_local int NavigationDepthGuard::depth_ = 0;
+
 // True when |bytes| begin with '<' (after optional whitespace/BOM), which we
 // take as a hint for HTML content when no Content-Type was provided.
 bool LooksLikeHtml(std::string_view bytes)
@@ -311,6 +331,15 @@ std::string BrowserController::ResolveInput(const std::string& input) const
 
 void BrowserController::NavigateToUrl(Tab& tab, const std::string& url_string)
 {
+  // Record the requested URL up front (under the controller mutex, like every
+  // other Tab field write).  A navigation triggered from inside LoadBytes
+  // (a page script assigning window.location) runs synchronously through this
+  // function again; tracking the URL here — instead of in the callers — keeps
+  // the final address bar correct no matter how deep the chain goes.
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    tab.url = url_string;
+  }
   // Local paths (and file:// URLs) are handled directly without the URL
   // parser (which does not support opaque file: URLs yet).
   if (StartsWith(url_string, "file://")) {
@@ -378,13 +407,6 @@ base::Result<void> BrowserController::Navigate(int tab_id, const std::string& in
 
   NavigateToUrl(*tab, target);
 
-  // Update the address-bar URL.  This covers file:// too (previously it was
-  // skipped, leaving the address bar blank and Reload/Back unable to show
-  // the current location).
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    tab->url = target;
-  }
   return base::Ok();
 }
 
@@ -404,8 +426,6 @@ void BrowserController::Back()
   --tab->history_index;
   const std::string target = tab->history[static_cast<size_t>(tab->history_index)];
   NavigateToUrl(*tab, target);
-  std::lock_guard<std::mutex> lock(mutex_);
-  tab->url = target;
 }
 
 void BrowserController::Forward()
@@ -416,8 +436,6 @@ void BrowserController::Forward()
   ++tab->history_index;
   const std::string target = tab->history[static_cast<size_t>(tab->history_index)];
   NavigateToUrl(*tab, target);
-  std::lock_guard<std::mutex> lock(mutex_);
-  tab->url = target;
 }
 
 void BrowserController::Reload()
@@ -449,6 +467,17 @@ void BrowserController::PumpScriptTimers()
 
 void BrowserController::FetchAndLoad(Tab& tab, const url::Url& url)
 {
+  NavigationDepthGuard guard(20);
+  if (guard.Exceeded()) {
+    NEKO_LOG_WARNING("navigation chain too deep; stopped at " + url.Serialize());
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      tab.content_type = ContentType::kError;
+      tab.error = std::make_shared<std::string>("navigation loop detected");
+      tab.title = "Navigation loop";
+    }
+    return;
+  }
   const auto start = std::chrono::steady_clock::now();
   const int64_t now = NowUnix();
   const std::string cookie = CookieHeader(url, now);
@@ -561,6 +590,7 @@ void BrowserController::LoadBytes(Tab& tab,
     browser::PageScriptServices services;
     services.local_storage = &local_storage_;
     services.origin = origin;
+    browser::ScriptRequestedNavigation requested;
     tab.script_runtime = RunPageScripts(
         *new_page,
         final_url,
@@ -568,7 +598,22 @@ void BrowserController::LoadBytes(Tab& tab,
           return fetch_(script_url, CookieHeader(script_url, NowUnix()));
         },
         [this](std::string_view level, std::string_view text) { LogConsole(level, text); },
-        services);
+        services,
+        &requested);
+
+    // A script may have requested a navigation (window.location.href=,
+    // assign()/replace(), or reload()) — e.g. Baidu's anti-bot page replaces
+    // the URL.  Act on it instead of publishing the script's own document;
+    // the requested navigation is already resolved to an absolute URL.
+    if (!requested.url.empty()) {
+      NavigateToUrl(tab, requested.url);
+      return;
+    }
+    if (requested.is_reload && !tab.url.empty()) {
+      NavigateToUrl(tab, tab.url);
+      return;
+    }
+
     // Fetch and decode the page's <img> subresources before publishing.
     FetchPageImages(*new_page, final_url, fetch_);
     std::string title = new_page->document()->Title();
