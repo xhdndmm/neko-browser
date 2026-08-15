@@ -12,6 +12,7 @@ add_library(neko_image
   src/png_decoder.cpp
   src/jpeg_decoder.cpp
   src/gif_decoder.cpp
+  src/svg_decoder.cpp
 )
 add_library(neko::image ALIAS neko_image)
 

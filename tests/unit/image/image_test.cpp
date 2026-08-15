@@ -6,6 +6,7 @@
 // produced by a tiny in-test GIF encoder (with a real LZW compressor).
 
 #include "neko/image/image.h"
+#include "neko/image/svg_decoder.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -932,6 +933,108 @@ TEST(DecodeImageTest, DispatchesByMagic)
   const auto unknown = DecodeImage("some other format");
   EXPECT_FALSE(unknown.has_value());
   EXPECT_EQ(unknown.error().category(), base::ErrorCategory::kNotImplemented);
+}
+
+// ---------------------------------------------------------------------------
+// SVG (minimal rasterizer)
+// ---------------------------------------------------------------------------
+
+TEST(SvgTest, IsSvgDetectsXmlDeclarationAndBareSvg)
+{
+  EXPECT_TRUE(IsSvg("<?xml version=\"1.0\"?><svg xmlns=\"http://www.w3.org/2000/svg\"></svg>"));
+  EXPECT_TRUE(IsSvg("<svg width=\"10\" height=\"10\"></svg>"));
+  EXPECT_FALSE(IsSvg("<html></html>"));
+  EXPECT_FALSE(IsSvg("not svg"));
+  EXPECT_FALSE(IsSvg(""));
+}
+
+TEST(SvgTest, RendersSolidRect)
+{
+  const std::string svg =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"10\">"
+      "<rect x=\"2\" y=\"2\" width=\"16\" height=\"6\" fill=\"red\"/>"
+      "</svg>";
+  const auto result = DecodeSvg(svg);
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  const Image& img = result.value();
+  EXPECT_EQ(img.width, 20);
+  EXPECT_EQ(img.height, 10);
+  // Interior pixel is opaque red.
+  const size_t idx = (2 * 20 + 5) * 4;
+  EXPECT_EQ(img.rgba[idx + 0], 255);
+  EXPECT_EQ(img.rgba[idx + 1], 0);
+  EXPECT_EQ(img.rgba[idx + 2], 0);
+  EXPECT_GT(img.rgba[idx + 3], 200);
+  // A pixel far outside the rect is transparent.
+  const size_t outside = (0 * 20 + 0) * 4;
+  EXPECT_LT(img.rgba[outside + 3], 10);
+}
+
+TEST(SvgTest, RendersCircleAndViewBox)
+{
+  const std::string svg =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"40\" "
+      "viewBox=\"0 0 20 20\">"
+      "<circle cx=\"10\" cy=\"10\" r=\"8\" fill=\"#0000ff\"/>"
+      "</svg>";
+  const auto result = DecodeSvg(svg);
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  const Image& img = result.value();
+  EXPECT_EQ(img.width, 40);
+  EXPECT_EQ(img.height, 40);
+  // Center of the viewBox maps to the center of the 40x40 image.
+  const size_t center = (20 * 40 + 20) * 4;
+  EXPECT_GT(img.rgba[center + 3], 200);
+  EXPECT_EQ(img.rgba[center + 2], 255); // blue channel
+  // A corner is outside the circle.
+  const size_t corner = (0 * 40 + 0) * 4;
+  EXPECT_LT(img.rgba[corner + 3], 10);
+}
+
+TEST(SvgTest, RendersPathFillWithTransform)
+{
+  const std::string svg =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"30\" height=\"30\">"
+      "<g transform=\"translate(10, 10)\">"
+      "<path d=\"M0 0 L10 0 L10 10 Z\" fill=\"#00ff00\"/>"
+      "</g>"
+      "</svg>";
+  const auto result = DecodeSvg(svg);
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  const Image& img = result.value();
+  EXPECT_EQ(img.width, 30);
+  EXPECT_EQ(img.height, 30);
+  // Inside the translated triangle (center of it).
+  const size_t inside = (15 * 30 + 15) * 4;
+  EXPECT_GT(img.rgba[inside + 3], 100);
+  EXPECT_GT(img.rgba[inside + 1], 200); // green channel
+  // Outside the triangle (top-left, before translate region).
+  const size_t outside = (0 * 30 + 0) * 4;
+  EXPECT_LT(img.rgba[outside + 3], 10);
+}
+
+TEST(SvgTest, RendersStrokeAndHexColor)
+{
+  const std::string svg =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"20\">"
+      "<line x1=\"2\" y1=\"10\" x2=\"18\" y2=\"10\" stroke=\"#f00\" stroke-width=\"2\"/>"
+      "</svg>";
+  const auto result = DecodeSvg(svg);
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  const Image& img = result.value();
+  // On the line: opaque red.
+  const size_t on = (10 * 20 + 10) * 4;
+  EXPECT_GT(img.rgba[on + 3], 150);
+  EXPECT_GT(img.rgba[on + 0], 200);
+  // Above the line (y=1, line is at y=10 with half-width 1): transparent.
+  const size_t above = (1 * 20 + 10) * 4;
+  EXPECT_LT(img.rgba[above + 3], 10);
+}
+
+TEST(SvgTest, RejectsInvalidInput)
+{
+  EXPECT_FALSE(DecodeSvg("not svg at all").has_value());
+  EXPECT_FALSE(DecodeSvg("<rect/>").has_value()); // no <svg> root
 }
 
 } // namespace
