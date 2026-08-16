@@ -4,11 +4,14 @@
 #include "neko/base/status.h"
 #include "neko/media/audio.h"
 #include "neko/media/media_source.h"
+#include "neko/media/video.h"
 
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -231,15 +234,114 @@ TEST(WavTest, RejectsDataSizeNotMultipleOfBlock)
 }
 
 // ---------------------------------------------------------------------------
-// MediaSource (video) — must fail loudly, not pretend.
+// MediaSource (video) — invalid input must fail loudly, not pretend.
 // ---------------------------------------------------------------------------
 
-TEST(MediaSourceTest, VideoOpenReturnsNotImplemented)
+TEST(MediaSourceTest, VideoOpenRejectsInvalidInput)
 {
   const std::string fake_mp4 = std::string("\x00\x00\x00\x18", 4) + "ftypmp42";
   auto r = MediaSource::Open(fake_mp4);
   EXPECT_FALSE(r.has_value());
-  EXPECT_EQ(r.error().category(), base::ErrorCategory::kNotImplemented);
+  EXPECT_EQ(r.error().category(), base::ErrorCategory::kParse);
+}
+
+// ---------------------------------------------------------------------------
+// Video (FFmpeg-backed demuxing + decoding).  Fixtures are tiny videos
+// committed under tests/pages (sample_8x6_h264.mp4: 8x6 testsrc, 2 fps,
+// 3 s; sample_4x4_vp9.webm: 4x4 testsrc, 1 fps, 2 s).
+// ---------------------------------------------------------------------------
+
+// Reads a committed test fixture (NEKO_TEST_PAGES_DIR is injected by CMake).
+std::string ReadFixture(const char* name)
+{
+  const std::string path = std::string(NEKO_TEST_PAGES_DIR) + "/" + name;
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    return {};
+  }
+  return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+TEST(MediaVideoTest, DecodesH264Mp4)
+{
+  const std::string data = ReadFixture("sample_8x6_h264.mp4");
+  ASSERT_FALSE(data.empty());
+  base::Result<VideoClip> clip = DecodeVideo(data);
+  ASSERT_TRUE(clip.has_value()) << clip.error().message();
+  EXPECT_EQ(clip.value().width, 8);
+  EXPECT_EQ(clip.value().height, 6);
+  EXPECT_GT(clip.value().duration_seconds, 2.0);
+  EXPECT_NEAR(clip.value().frame_rate, 2.0, 0.1);
+  EXPECT_NE(clip.value().format_name.find("mp4"), std::string::npos);
+  EXPECT_EQ(clip.value().codec_name, "h264");
+  // 2 fps over 3 s: at least 5 frames decoded.
+  EXPECT_GE(clip.value().frames.size(), 5u);
+  for (const VideoFrame& frame : clip.value().frames) {
+    EXPECT_EQ(frame.image.width, 8);
+    EXPECT_EQ(frame.image.height, 6);
+    EXPECT_EQ(frame.image.rgba.size(), 8u * 6u * 4u);
+  }
+  // testsrc frames differ from each other (the moving pattern).
+  EXPECT_NE(clip.value().frames.front().image.rgba, clip.value().frames.back().image.rgba);
+}
+
+TEST(MediaVideoTest, DecodesVp9Webm)
+{
+  const std::string data = ReadFixture("sample_4x4_vp9.webm");
+  ASSERT_FALSE(data.empty());
+  base::Result<VideoClip> clip = DecodeVideo(data);
+  ASSERT_TRUE(clip.has_value()) << clip.error().message();
+  EXPECT_EQ(clip.value().width, 4);
+  EXPECT_EQ(clip.value().height, 4);
+  EXPECT_GT(clip.value().duration_seconds, 1.0);
+  EXPECT_NEAR(clip.value().frame_rate, 1.0, 0.1);
+  EXPECT_NE(clip.value().format_name.find("webm"), std::string::npos);
+  EXPECT_EQ(clip.value().codec_name, "vp9");
+  EXPECT_GE(clip.value().frames.size(), 1u);
+}
+
+TEST(MediaVideoTest, StreamingSourceIteratesAllFrames)
+{
+  const std::string data = ReadFixture("sample_8x6_h264.mp4");
+  ASSERT_FALSE(data.empty());
+  base::Result<MediaSource> source = MediaSource::Open(data);
+  ASSERT_TRUE(source.has_value()) << source.error().message();
+  EXPECT_EQ(source.value().width(), 8);
+  EXPECT_EQ(source.value().height(), 6);
+  EXPECT_EQ(source.value().codec_name(), "h264");
+  int frames = 0;
+  double last_pts = -1;
+  for (;;) {
+    base::Result<std::optional<VideoFrame>> frame = source.value().NextFrame();
+    ASSERT_TRUE(frame.has_value()) << frame.error().message();
+    if (!frame.value().has_value()) {
+      break;
+    }
+    ++frames;
+    EXPECT_GE(frame.value()->pts_seconds, last_pts);
+    last_pts = frame.value()->pts_seconds;
+  }
+  EXPECT_GE(frames, 5);
+  // EOF is sticky.
+  base::Result<std::optional<VideoFrame>> again = source.value().NextFrame();
+  ASSERT_TRUE(again.has_value());
+  EXPECT_FALSE(again.value().has_value());
+}
+
+TEST(MediaVideoTest, RejectsNonVideoInput)
+{
+  EXPECT_FALSE(DecodeVideo("this is not a video").has_value());
+  const std::string empty;
+  EXPECT_FALSE(MediaSource::Open(empty).has_value());
+}
+
+TEST(MediaVideoTest, RespectsFrameBudget)
+{
+  const std::string data = ReadFixture("sample_8x6_h264.mp4");
+  ASSERT_FALSE(data.empty());
+  base::Result<VideoClip> clip = DecodeVideo(data, /*max_frames=*/2);
+  ASSERT_TRUE(clip.has_value()) << clip.error().message();
+  EXPECT_EQ(clip.value().frames.size(), 2u);
 }
 
 } // namespace

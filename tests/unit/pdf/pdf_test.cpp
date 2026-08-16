@@ -5,6 +5,7 @@
 #include "neko/base/status.h"
 #include "neko/pdf/pdf.h"
 
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <gmock/gmock.h>
@@ -335,6 +336,206 @@ TEST(PdfTest, MissingInfoTitleIsEmpty)
   auto r = ExtractText(pdf);
   ASSERT_TRUE(r.has_value()) << r.error().message();
   EXPECT_TRUE(r.value().title.empty());
+}
+
+// ---------------------------------------------------------------------------
+// Page rendering
+// ---------------------------------------------------------------------------
+
+// RGB at (x, y) of a rendered page (screen space, y down).
+std::array<uint8_t, 3> PixelAt(const image::Image& img, int x, int y)
+{
+  const std::size_t o = (static_cast<std::size_t>(y) * static_cast<std::size_t>(img.width) +
+                         static_cast<std::size_t>(x)) *
+                        4;
+  return {img.rgba[o], img.rgba[o + 1], img.rgba[o + 2]};
+}
+
+TEST(PdfRenderTest, RendersSolidRectangle)
+{
+  const std::string pdf = BuildSimplePdf({"1 0 0 rg 100 100 50 30 re f"}, "R");
+  auto r = RenderPage(pdf, 0, 1.0f);
+  ASSERT_TRUE(r.has_value()) << r.error().message();
+  const image::Image& img = r.value();
+  ASSERT_EQ(img.width, 612);
+  ASSERT_EQ(img.height, 792);
+  // The rectangle spans PDF y ∈ [100, 130) → screen y ∈ (792-130, 792-100].
+  const auto inside = PixelAt(img, 110, 677);
+  EXPECT_EQ(inside[0], 255);
+  EXPECT_EQ(inside[1], 0);
+  EXPECT_EQ(inside[2], 0);
+  // Above and below the rectangle stay white.
+  EXPECT_EQ(PixelAt(img, 110, 700), (std::array<uint8_t, 3>{255, 255, 255}));
+  EXPECT_EQ(PixelAt(img, 110, 640), (std::array<uint8_t, 3>{255, 255, 255}));
+}
+
+TEST(PdfRenderTest, RendersStrokedLine)
+{
+  const std::string pdf = BuildSimplePdf({"2 w 0 0 1 RG 50 50 m 250 50 l S"}, "R");
+  auto r = RenderPage(pdf, 0, 1.0f);
+  ASSERT_TRUE(r.has_value()) << r.error().message();
+  const auto at = PixelAt(r.value(), 150, 742); // PDF (150, 50)
+  EXPECT_EQ(at[2], 255);                        // blue stroke
+  EXPECT_EQ(at[0], 0);
+  // Away from the line: white.
+  EXPECT_EQ(PixelAt(r.value(), 150, 700), (std::array<uint8_t, 3>{255, 255, 255}));
+}
+
+TEST(PdfRenderTest, RendersEvenOddRing)
+{
+  // Two nested rectangles with even-odd fill: the inner square is a hole.
+  const std::string pdf = BuildSimplePdf({"1 0 0 rg 0 0 100 100 re 20 20 60 60 re f*"}, "R");
+  auto r = RenderPage(pdf, 0, 1.0f);
+  ASSERT_TRUE(r.has_value()) << r.error().message();
+  // Inside the outer ring (red) ...
+  EXPECT_EQ(PixelAt(r.value(), 10, 782), (std::array<uint8_t, 3>{255, 0, 0}));
+  // ... and the inner hole stays white.
+  EXPECT_EQ(PixelAt(r.value(), 50, 742), (std::array<uint8_t, 3>{255, 255, 255}));
+}
+
+TEST(PdfRenderTest, RendersTextWithDefaultFont)
+{
+  // No /Resources /Font: text still renders through the default sans stack.
+  const std::string pdf = BuildSimplePdf({"BT /F1 24 Tf 24 0 0 24 50 500 Tm (Hello) Tj ET"}, "R");
+  auto r = RenderPage(pdf, 0, 1.0f);
+  ASSERT_TRUE(r.has_value()) << r.error().message();
+  const image::Image& img = r.value();
+  // The baseline sits at PDF (50, 500) → screen y ≈ 792 - 500 = 292; glyphs
+  // rise above it.
+  int nonwhite = 0;
+  for (int y = 260; y < 310; ++y) {
+    for (int x = 50; x < 220; ++x) {
+      const auto p = PixelAt(img, x, y);
+      if (p[0] < 200 || p[1] < 200 || p[2] < 200) {
+        ++nonwhite;
+      }
+    }
+  }
+  EXPECT_GT(nonwhite, 40); // the glyphs paint many non-white pixels
+}
+
+TEST(PdfRenderTest, AppliesTransform)
+{
+  const std::string pdf = BuildSimplePdf({"q 1 0 0 1 300 0 cm 0 0 100 50 re f Q"}, "R");
+  auto r = RenderPage(pdf, 0, 1.0f);
+  ASSERT_TRUE(r.has_value()) << r.error().message();
+  // Default fill color is black; the translated rectangle covers x ∈ [300, 400).
+  EXPECT_EQ(PixelAt(r.value(), 350, 767), (std::array<uint8_t, 3>{0, 0, 0}));
+  EXPECT_EQ(PixelAt(r.value(), 250, 767), (std::array<uint8_t, 3>{255, 255, 255}));
+}
+
+TEST(PdfRenderTest, RendersSelectedPage)
+{
+  const std::string pdf =
+      BuildSimplePdf({"1 0 0 rg 0 0 100 100 re f", "0 0 1 rg 0 0 100 100 re f"}, "R");
+  auto page0 = RenderPage(pdf, 0, 1.0f);
+  ASSERT_TRUE(page0.has_value()) << page0.error().message();
+  EXPECT_EQ(PixelAt(page0.value(), 50, 742), (std::array<uint8_t, 3>{255, 0, 0}));
+  auto page1 = RenderPage(pdf, 1, 1.0f);
+  ASSERT_TRUE(page1.has_value()) << page1.error().message();
+  EXPECT_EQ(PixelAt(page1.value(), 50, 742), (std::array<uint8_t, 3>{0, 0, 255}));
+}
+
+TEST(PdfRenderTest, RejectsOutOfRangePage)
+{
+  const std::string pdf = BuildSimplePdf({"1 0 0 rg 0 0 10 10 re f"}, "R");
+  EXPECT_FALSE(RenderPage(pdf, 7, 1.0f).has_value());
+  EXPECT_FALSE(RenderPage(pdf, -1, 1.0f).has_value());
+  EXPECT_FALSE(RenderPage(pdf, 0, 0.0f).has_value());
+}
+
+// ---------------------------------------------------------------------------
+// PDF 1.5 xref streams + object streams
+// ---------------------------------------------------------------------------
+
+// Builds a PDF 1.5 document whose cross-reference is a compressed xref
+// stream (W [1 2 0]) and whose catalog/pages/page dictionaries live inside
+// an /ObjStm object stream.  /MediaBox lives on /Pages (inherited) and uses
+// real numbers.
+std::string BuildXrefStreamPdf()
+{
+  std::string doc = "%PDF-1.5\n";
+
+  auto write_u16 = [](std::string& out, size_t v) {
+    out.push_back(static_cast<char>((v >> 8) & 0xFF));
+    out.push_back(static_cast<char>(v & 0xFF));
+  };
+
+  // Object 4: the page content stream (a regular stream object).
+  const std::string content = "1 0 0 rg 0 0 300.25 100 re f";
+  const size_t obj4_offset = doc.size();
+  const std::string compressed = Deflate(content);
+  doc += "4 0 obj\n<< /Length " + std::to_string(compressed.size()) +
+         " /Filter /FlateDecode >>\nstream\n" + compressed + "\nendstream\nendobj\n";
+
+  // Object 5: object stream holding objects 1 (catalog), 2 (pages), 3 (page).
+  const std::string obj1 = "<< /Type /Catalog /Pages 2 0 R >>";
+  const std::string obj2 =
+      "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300.25 400.75] >>";
+  const std::string obj3 = "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>";
+  // Pair offsets are relative to the first object (== header length).
+  const std::string header = "1 0 2 " + std::to_string(obj1.size()) + " 3 " +
+                             std::to_string(obj1.size() + obj2.size()) + "\n";
+  const std::string body = header + obj1 + obj2 + obj3;
+  const std::string objstm_compressed = Deflate(body);
+  const size_t obj5_offset = doc.size();
+  doc += "5 0 obj\n<< /Type /ObjStm /N 3 /First " + std::to_string(header.size()) + " /Length " +
+         std::to_string(objstm_compressed.size()) + " /Filter /FlateDecode >>\nstream\n" +
+         objstm_compressed + "\nendstream\nendobj\n";
+
+  // Object 6: the xref stream itself.  Entries are [type 1 byte][field 2
+  // bytes] (W = [1 2 0]); type 2 field = container object stream number.
+  const size_t obj6_offset = doc.size();
+  std::string xref_data;
+  xref_data.push_back(0);
+  write_u16(xref_data, 0); // 0: free
+  xref_data.push_back(2);
+  write_u16(xref_data, 5); // 1: in ObjStm 5
+  xref_data.push_back(2);
+  write_u16(xref_data, 5); // 2: in ObjStm 5
+  xref_data.push_back(2);
+  write_u16(xref_data, 5); // 3: in ObjStm 5
+  xref_data.push_back(1);
+  write_u16(xref_data, obj4_offset); // 4
+  xref_data.push_back(1);
+  write_u16(xref_data, obj5_offset); // 5
+  xref_data.push_back(1);
+  write_u16(xref_data, obj6_offset); // 6
+  const std::string xref_compressed = Deflate(xref_data);
+  doc += "6 0 obj\n<< /Type /XRef /Size 7 /W [1 2 0] /Root 1 0 R /Length " +
+         std::to_string(xref_compressed.size()) + " /Filter /FlateDecode >>\nstream\n" +
+         xref_compressed + "\nendstream\nendobj\n";
+
+  doc += "startxref\n" + std::to_string(obj6_offset) + "\n%%EOF\n";
+  return doc;
+}
+
+TEST(PdfTest, ExtractsFromXrefStreamDocument)
+{
+  const std::string pdf = BuildXrefStreamPdf();
+  ASSERT_TRUE(IsPdf(pdf));
+  auto r = ExtractText(pdf);
+  ASSERT_TRUE(r.has_value()) << r.error().message();
+  ASSERT_EQ(r.value().page_count, 1);
+  ASSERT_EQ(r.value().pages.size(), 1u);
+  // MediaBox inherited from /Pages, with real numbers.
+  EXPECT_EQ(r.value().pages[0].width, 300);
+  EXPECT_EQ(r.value().pages[0].height, 400);
+}
+
+TEST(PdfRenderTest, RendersXrefStreamDocument)
+{
+  const std::string pdf = BuildXrefStreamPdf();
+  auto r = RenderPage(pdf, 0, 1.0f);
+  ASSERT_TRUE(r.has_value()) << r.error().message();
+  const image::Image& img = r.value();
+  // 300.25 → 300 px, 400.75 → 401 px at 72 dpi.
+  ASSERT_EQ(img.width, 300);
+  ASSERT_EQ(img.height, 401);
+  // The red rectangle covers PDF y ∈ [0, 100) → screen y ∈ (301, 401].
+  EXPECT_EQ(PixelAt(img, 150, 350), (std::array<uint8_t, 3>{255, 0, 0}));
+  // Above the rectangle: white.
+  EXPECT_EQ(PixelAt(img, 150, 100), (std::array<uint8_t, 3>{255, 255, 255}));
 }
 
 } // namespace

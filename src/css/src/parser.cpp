@@ -68,6 +68,18 @@ void AppendTokenText(const CssToken& token, std::string& out)
     out.push_back('@');
     out += token.text;
     break;
+  case CssTokenType::kString:
+    // Preserve the quotes so consumers that depend on row/string boundaries
+    // (grid-template-areas) can see them; inner quotes/backslashes escaped.
+    out.push_back('"');
+    for (const char c : token.text) {
+      if (c == '"' || c == '\\') {
+        out.push_back('\\');
+      }
+      out.push_back(c);
+    }
+    out.push_back('"');
+    break;
   case CssTokenType::kComma:
     out.push_back(',');
     break;

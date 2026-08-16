@@ -4,6 +4,7 @@
 #include "neko/javascript/script_engine.h"
 #include "neko/network/http.h"
 #include "neko/renderer/page.h"
+#include "neko/storage/indexed_db.h"
 #include "neko/storage/local_storage.h"
 #include "neko/url/url.h"
 
@@ -18,11 +19,13 @@ namespace neko::browser {
 using ScriptFetcher = std::function<base::Result<network::HttpResponse>(const url::Url& url)>;
 
 // Optional browser services exposed to the page's scripts (Phase 8 M3):
-// per-origin localStorage and the JS fetch() API.
+// per-origin localStorage, window.indexedDB and the JS fetch() API.
 struct PageScriptServices
 {
   // When non-null, window.localStorage is installed, scoped to |origin|.
   storage::LocalStorage* local_storage = nullptr;
+  // When non-null, window.indexedDB is installed, scoped to |origin|.
+  storage::IndexedDbStore* indexed_db = nullptr;
   std::string origin;
 };
 

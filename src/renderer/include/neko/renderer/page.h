@@ -126,9 +126,50 @@ public:
   // Total content height in px after Layout(); 0 before Layout().
   float ContentHeight() const;
 
-  // Attaches a decoded image to an <img> element and invalidates the layout
-  // so the replaced box picks up its intrinsic size.
-  void SetElementImage(const dom::Element& element, image::Image image);
+  // Attaches a decoded image to an <img> element (or any element whose
+  // computed style has a background-image, which layout resolves through the
+  // same ImageProvider lookup) and invalidates the layout so the replaced
+  // box picks up its intrinsic size.  |animation| carries the full frame set
+  // of an animated GIF; its first frame is installed as the initial image.
+  void SetElementImage(const dom::Element& element,
+                       image::Image image,
+                       std::shared_ptr<image::GifAnimation> animation = nullptr);
+
+  // A fully decoded video: frame strip + playback metadata.  The browser
+  // layer decodes the clip (budgeted) and hands it over together with the
+  // first frame.
+  struct VideoStrip
+  {
+    std::shared_ptr<std::vector<image::Image>> frames;
+    double frame_rate = 0; // frames per second
+    bool loop = false;     // <video loop>
+  };
+
+  // Attaches a decoded video to a <video> element: |first_frame| becomes the
+  // displayed image (the layout's replaced box uses its intrinsic size); the
+  // frame strip drives playback.  |autoplay| starts playback on the next
+  // AdvanceAnimations tick.
+  void SetElementVideo(const dom::Element& element,
+                       image::Image first_frame,
+                       VideoStrip strip,
+                       bool autoplay);
+
+  // Playback controls (driven by the JS binding through the browser layer).
+  void PlayVideo(const dom::Element& element);
+  void PauseVideo(const dom::Element& element);
+  void SeekVideo(const dom::Element& element, double seconds);
+  bool IsVideoPlaying(const dom::Element& element) const;
+  std::optional<double> VideoDuration(const dom::Element& element) const;
+  std::optional<double> VideoCurrentTime(const dom::Element& element) const;
+
+  // Advances every animated image registered via SetElementImage to the
+  // frame for the current time (steady clock; frame durations come from the
+  // GIF graphic control extension), and every playing video registered via
+  // SetElementVideo to its current frame.  Returns true when at least one
+  // frame changed.  A changed frame bumps the layout version so the UI
+  // repaints.  Must be driven by a periodic tick (the GUI's 50 ms timer);
+  // headless screenshots show the first frame.
+  bool AdvanceAnimations();
 
   // layout::ImageProvider.
   const image::Image* Find(const dom::Element& element) const override;
@@ -188,6 +229,35 @@ private:
 
   graphics::FontRegistry fonts_;
   std::unordered_map<const dom::Element*, image::Image> images_;
+
+  // Playback state for one animated image (per element).  The frame pixels
+  // are kept in |images_| and overwritten in place on each advance so the
+  // raw pointers the display list holds stay valid.
+  struct ImageAnimationState
+  {
+    std::shared_ptr<image::GifAnimation> animation;
+    double start_ms = 0;   // steady clock of the first display
+    std::size_t frame = 0; // currently displayed frame index
+    std::size_t loops = 0; // completed full passes
+    bool finished = false; // loop count reached; stays on the last frame
+  };
+  std::unordered_map<const dom::Element*, ImageAnimationState> animation_states_;
+
+  // Playback state for one video (per element).  Frame pixels live in
+  // |images_| and are overwritten in place on each advance (same scheme as
+  // animated GIFs).
+  struct VideoAnimationState
+  {
+    std::shared_ptr<std::vector<image::Image>> frames;
+    double frame_rate = 0;
+    bool loop = false;
+    bool playing = false; // autoplay starts it on the first advance
+    bool autoplay = false;
+    double start_ms = 0;    // steady clock when playback (re)started
+    double paused_time = 0; // playback position when paused
+    std::size_t frame = 0;  // currently displayed frame index
+  };
+  std::unordered_map<const dom::Element*, VideoAnimationState> video_states_;
 
   // Cached paint output: rebuilt only when version_ changes.
   mutable std::optional<paint::DisplayList> display_list_;

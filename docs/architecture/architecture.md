@@ -126,8 +126,10 @@ graph LR
 - 存储：Cookie、HTTP Cache、LocalStorage、SessionStorage、IndexedDB、History、
   Bookmarks、Downloads；Profile 结构。
 - 安全：Origin、SOP、CORS、CSP、Cookie 安全、TLS 校验、沙箱、权限、进程隔离。
-- 多进程：Browser / Renderer / Network / GPU / Utility 进程 + IPC。
-  Phase 0–11 单进程，但代码架构必须允许平滑迁移到多进程。
+- 多进程：Browser / Renderer / Network / GPU / Utility 进程 + IPC（ADR 0016）。
+  M1 已落地：`neko::ipc`（帧协议 Channel + Subprocess）+ Renderer 子进程
+  （完整页面管线在独立地址空间，位图 + DOM 经 IPC 回传，CLI 接入）；
+  Network/GPU 进程、沙箱、GUI 接入为后续里程碑。
 
 ### storage（已落地，Phase 7 前）
 
@@ -249,13 +251,16 @@ src/style/      UA 表 + 级联 + 继承 + 计算样式 —— Tested
 src/layout/     盒模型、block/inline 布局、表格、换行 —— Tested
 src/graphics/   FreeType 封装：FontLibrary/FontFace/GlyphCache/系统字体发现/FontSelector+FontRegistry（font-family 匹配与 CJK 回退）—— Tested
 src/paint/      显示列表、软件光栅化、FreeType 文本 + 8x8 回退、PPM —— Tested
+src/compositor/ 软件合成器抽象（Surface + Compositor 接口 + SoftwareCompositor，ADR 0015）—— Tested
 src/renderer/   页面管线编排（headless）—— Tested
 src/storage/    CookieStore / HistoryStore / BookmarkStore（行式文件 + 原子写）—— Tested
 src/image/      PNG 自研解码 + JPEG(libjpeg) —— Tested
-src/media/      WAV 解码（自研）—— Tested；视频 NOT IMPLEMENTED
-src/pdf/        PDF 文本提取（FlateDecode、xref、文本操作符）—— Partial
+src/media/      WAV 解码（自研）—— Tested；视频（FFmpeg，ADR 0014）—— Tested
+src/pdf/        PDF 文本提取 + 页面渲染（xref stream/ObjStm/矢量/文本）—— Partial
 src/javascript/ QuickJS runtime 封装（ScriptEngine/ScriptValue）—— Tested
-src/browser/    BrowserController + DownloadManager + CLI —— Tested
+src/security/   Origin 三元组 + 同源判定 —— Tested
+src/ipc/        帧协议 Channel + Subprocess（ADR 0016）—— Tested
+src/browser/    BrowserController + DownloadManager + RendererHost + CLI —— Tested
 src/ui/         Qt6 GUI（标签页/地址栏/DevTools/历史/书签/下载/设置）—— Partial
 ```
 

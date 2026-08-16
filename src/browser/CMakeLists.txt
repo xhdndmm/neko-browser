@@ -23,6 +23,8 @@ add_library(neko_browser_core
   src/download_manager.cpp
   src/hyperlink.cpp
   src/page_scripts.cpp
+  src/renderer_host.cpp
+  src/renderer_protocol.cpp
 )
 add_library(neko::browser ALIAS neko_browser_core)
 target_compile_features(neko_browser_core PUBLIC cxx_std_20)
@@ -40,6 +42,7 @@ target_link_libraries(neko_browser_core PUBLIC
   neko::media
   neko::javascript
   neko::security
+  neko::ipc
 )
 apply_compiler_warnings(neko_browser_core)
 

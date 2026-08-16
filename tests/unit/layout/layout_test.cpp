@@ -1895,6 +1895,163 @@ TEST(GridLayoutTest, MixedFrAndFixedColumns)
   EXPECT_FLOAT_EQ(grid->children[1]->x, 8.0f + 100.0f);
 }
 
+TEST(GridLayoutTest, MinmaxMinimumWinsForTinyContent)
+{
+  Page page = Build("<body><div style=\"display:grid; grid-template-columns:minmax(120px, 200px)\">"
+                    "<div>a</div></div></body>");
+  const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_EQ(grid->children.size(), 1u);
+  // The auto-sized track clamps up to the 120px minimum.
+  EXPECT_FLOAT_EQ(grid->children[0]->width, 120.0f);
+}
+
+TEST(GridLayoutTest, MinmaxMaximumClampsLongContent)
+{
+  Page page = Build("<body><div style=\"display:grid; grid-template-columns:minmax(120px, 200px)\">"
+                    "<div>abcdefghijklmnopqrstuvwxyz</div></div></body>");
+  const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_EQ(grid->children.size(), 1u);
+  // The 26-character word would size an auto track to 416px; the 200px max
+  // clamps it.
+  EXPECT_FLOAT_EQ(grid->children[0]->width, 200.0f);
+}
+
+TEST(GridLayoutTest, MinmaxMinContentBeatsMax)
+{
+  Page page =
+      Build("<body><div style=\"display:grid; grid-template-columns:minmax(min-content, 100px)\">"
+            "<div>abcdefghijklmnopqrstuvwxyz</div></div></body>");
+  const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_EQ(grid->children.size(), 1u);
+  // min-content (416px) is larger than the 100px max: the minimum wins
+  // (spec §5.1).
+  EXPECT_FLOAT_EQ(grid->children[0]->width, 416.0f);
+}
+
+TEST(GridLayoutTest, NamedLinesPlaceItems)
+{
+  Page page = Build("<body><div style=\"display:grid; "
+                    "grid-template-columns:[left] 100px [main] 1fr [right]\">"
+                    "<div style=\"grid-column:main\">a</div>"
+                    "<div style=\"grid-column:right\">b</div></div></body>");
+  const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_EQ(grid->children.size(), 2u);
+  // a starts at the "main" line (after the 100px track) and fills the 1fr
+  // track; b starts at "right".  The right track itself is an implicit
+  // auto track sized to b's content (16px), so the fr track gets the
+  // remaining 784 - 100 - 16 = 668px.
+  EXPECT_FLOAT_EQ(grid->children[0]->x, 8.0f + 100.0f);
+  EXPECT_NEAR(grid->children[0]->width, 668.0f, 0.01f);
+  EXPECT_NEAR(grid->children[1]->x, 8.0f + 100.0f + 668.0f, 0.01f);
+}
+
+TEST(GridLayoutTest, NamedAreasPlaceItems)
+{
+  Page page = Build("<body><div style=\"display:grid; grid-template-columns:100px 100px; "
+                    "grid-template-rows:40px 40px; grid-template-areas:'h h' 's m'\">"
+                    "<div style=\"grid-area:m\">a</div>"
+                    "<div style=\"grid-area:h\">b</div></div></body>");
+  const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_EQ(grid->children.size(), 2u);
+  // b (area h) spans both columns of row 0; a (area m) sits at row 1,
+  // column 2.
+  EXPECT_FLOAT_EQ(grid->children[1]->x, 8.0f);
+  EXPECT_FLOAT_EQ(grid->children[1]->y, 8.0f);
+  EXPECT_FLOAT_EQ(grid->children[1]->width, 200.0f);
+  EXPECT_FLOAT_EQ(grid->children[0]->x, 8.0f + 100.0f);
+  EXPECT_FLOAT_EQ(grid->children[0]->y, 8.0f + 40.0f);
+}
+
+TEST(GridLayoutTest, TemplateAreasDefineImplicitTracks)
+{
+  Page page = Build("<body><div style=\"display:grid; grid-template-areas:'a b' 'a c'\">"
+                    "<div style=\"grid-area:c\">x</div>"
+                    "<div style=\"grid-area:a\">y</div></div></body>");
+  const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_EQ(grid->children.size(), 2u);
+  // The areas create 2 implicit columns and 2 implicit rows.  Area a spans
+  // both rows of column 0 (sized to y's 16px text); c sits at row 1,
+  // column 2.
+  EXPECT_NEAR(grid->children[1]->width, 16.0f, 0.01f); // a = column 0 only
+  EXPECT_FLOAT_EQ(grid->children[0]->x, 8.0f + 16.0f);
+  EXPECT_NEAR(grid->children[0]->y, 8.0f + 19.2f, 0.01f); // below row 0
+}
+
+TEST(GridLayoutTest, AutoFlowColumnPlacesDownColumns)
+{
+  Page page = Build("<body><div style=\"display:grid; grid-auto-flow:column; "
+                    "grid-template-columns:100px 100px; grid-template-rows:40px 40px\">"
+                    "<div>a</div><div>b</div><div>c</div><div>d</div></div></body>");
+  const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_EQ(grid->children.size(), 4u);
+  // Column flow fills down each column first: a,b in column 0, c,d in
+  // column 1.
+  EXPECT_FLOAT_EQ(grid->children[0]->x, 8.0f);
+  EXPECT_FLOAT_EQ(grid->children[1]->x, 8.0f);
+  EXPECT_FLOAT_EQ(grid->children[1]->y, 8.0f + 40.0f);
+  EXPECT_FLOAT_EQ(grid->children[2]->x, 8.0f + 100.0f);
+  EXPECT_FLOAT_EQ(grid->children[2]->y, 8.0f);
+  EXPECT_FLOAT_EQ(grid->children[3]->x, 8.0f + 100.0f);
+  EXPECT_FLOAT_EQ(grid->children[3]->y, 8.0f + 40.0f);
+}
+
+TEST(GridLayoutTest, AutoFlowDenseBackfillsHoles)
+{
+  Page page = Build("<body><div style=\"display:grid; grid-auto-flow:row dense; "
+                    "grid-template-columns:100px 100px 100px\">"
+                    "<div style=\"grid-column: span 2\">a</div>"
+                    "<div>b</div><div>c</div></div></body>");
+  const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_EQ(grid->children.size(), 3u);
+  // a occupies row 0 columns 0-1; dense placement backfills b into the
+  // hole at row 0 column 2, then c wraps to row 1.
+  EXPECT_FLOAT_EQ(grid->children[0]->width, 200.0f);
+  EXPECT_FLOAT_EQ(grid->children[1]->x, 8.0f + 200.0f);
+  EXPECT_FLOAT_EQ(grid->children[1]->y, 8.0f);
+  EXPECT_FLOAT_EQ(grid->children[2]->x, 8.0f);
+  EXPECT_NEAR(grid->children[2]->y, 8.0f + 19.2f, 0.01f);
+}
+
+TEST(GridLayoutTest, NegativeLineSpansToEnd)
+{
+  Page page = Build("<body><div style=\"display:grid; grid-template-columns:repeat(4, 100px)\">"
+                    "<div style=\"grid-column:2 / -1\">a</div></div></body>");
+  const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_EQ(grid->children.size(), 1u);
+  // Start at line 2 (index 1); end at line -1 (the last line, index 4):
+  // the item spans 3 tracks = 300px.
+  EXPECT_FLOAT_EQ(grid->children[0]->x, 8.0f + 100.0f);
+  EXPECT_FLOAT_EQ(grid->children[0]->width, 300.0f);
+}
+
+TEST(GridLayoutTest, InlineGridRendersAsAtomicInlineBox)
+{
+  Page page =
+      Build("<body><div>t<span style=\"display:inline-grid; grid-template-columns:50px 50px\">"
+            "<i>a</i><i>b</i></span>z</div></body>");
+  const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(div, nullptr);
+  dom::Element* span = dom::QuerySelector(*page.doc, "span");
+  ASSERT_NE(span, nullptr);
+  const InlineBox* holder = nullptr;
+  const LayoutBox* grid = FindInlineBlock(*div, span, holder);
+  ASSERT_NE(grid, nullptr);
+  // The inline grid lays its children out as grid items inside the atomic
+  // inline box.
+  ASSERT_EQ(grid->children.size(), 2u);
+  EXPECT_FLOAT_EQ(grid->children[0]->width, 50.0f);
+  EXPECT_FLOAT_EQ(grid->children[1]->width, 50.0f);
+}
+
 // A table with width:auto shrink-wraps its content instead of stretching
 // across the full containing block (CSS2.1 17.5.2).  This prevents its
 // columns from being spread apart with large gaps.

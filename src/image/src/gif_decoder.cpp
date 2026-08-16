@@ -2,11 +2,15 @@
 //
 // Supports: header, logical screen descriptor, global/local color tables,
 // LZW decompression (variable code width, sub-block data), interlace, graphic
-// control extension (transparency + disposal), comment/application/plain-text
-// extensions (skipped).  The first frame is composited onto the logical
-// screen and returned as a single RGBA image; animation is not yet supported.
+// control extension (transparency + disposal + delay), comment/application/
+// plain-text extensions, and the NETSCAPE2.0/ANIMEXTS1.0 loop extension.
+// Every frame is composited onto the logical screen (disposal methods 0-3
+// with 4 normalized to 3, matching Blink/Gecko) and snapshotted, so an
+// animated GIF decodes into a complete RGBA image per frame.  Frame delays
+// below 2 cs are clamped to 10 cs (100 ms), matching browser behavior.
 //
-// All parsing is bounds-checked: untrusted input must not be able to trigger
+// All parsing is bounds-checked and pixel memory is capped (canvas 128 MiB,
+// retained frames 64 MiB): untrusted input must not be able to trigger
 // out-of-bounds reads or unbounded allocation.
 
 #include "neko/base/status.h"
@@ -328,7 +332,19 @@ bool IsGif(std::string_view data)
   return data.size() >= 6 && (data.substr(0, 6) == "GIF87a" || data.substr(0, 6) == "GIF89a");
 }
 
-base::Result<Image> DecodeGif(std::string_view data)
+namespace {
+
+// Decoded-pixel budgets so crafted GIFs cannot balloon memory (AGENTS.md §67):
+// a single canvas may hold up to 128 MiB of pixels; the sum of all retained
+// animation frames is capped at 64 MiB (the first frame is always kept) and
+// at 2048 frames.
+constexpr std::size_t kMaxCanvasBytes = 128u * 1024u * 1024u;
+constexpr std::size_t kMaxAnimationBytes = 64u * 1024u * 1024u;
+constexpr std::size_t kMaxAnimationFrames = 2048;
+
+// Parses and decodes a GIF into a GifAnimation.  |first_frame_only| stops
+// decoding after the first frame (the DecodeGif still-image path).
+base::Result<GifAnimation> DecodeGifImpl(std::string_view data, bool first_frame_only)
 {
   if (!IsGif(data)) {
     return base::Err(base::Error::Parse("gif: bad magic"));
@@ -346,6 +362,11 @@ base::Result<Image> DecodeGif(std::string_view data)
   if (screen_width == 0 || screen_height == 0) {
     return base::Err(base::Error::Parse("gif: invalid logical screen size"));
   }
+  const std::size_t canvas_bytes =
+      static_cast<std::size_t>(screen_width) * static_cast<std::size_t>(screen_height) * 4;
+  if (canvas_bytes > kMaxCanvasBytes) {
+    return base::Err(base::Error::Parse("gif: logical screen too large"));
+  }
 
   ColorTable global_table;
   const bool has_global = (packed & 0x80) != 0;
@@ -355,27 +376,39 @@ base::Result<Image> DecodeGif(std::string_view data)
     }
   }
 
-  // The canvas is initialized to the background color (or transparent when
-  // the GIF has no usable background).
-  Image out;
-  out.width = screen_width;
-  out.height = screen_height;
-  out.rgba.assign(static_cast<std::size_t>(screen_width) * screen_height * 4, 0);
+  // The canvas starts at the background color (or fully transparent when the
+  // GIF has no usable background entry).  The same color is restored by
+  // disposal method 2.
+  std::array<uint8_t, 4> background_rgba{0, 0, 0, 0};
   if (has_global && background_index < global_table.size) {
     const int i = static_cast<int>(background_index) * 3;
-    for (std::size_t p = 0; p < out.rgba.size(); p += 4) {
-      out.rgba[p + 0] = global_table.rgb[static_cast<std::size_t>(i) + 0];
-      out.rgba[p + 1] = global_table.rgb[static_cast<std::size_t>(i) + 1];
-      out.rgba[p + 2] = global_table.rgb[static_cast<std::size_t>(i) + 2];
-      out.rgba[p + 3] = 255;
-    }
+    background_rgba = {global_table.rgb[static_cast<std::size_t>(i) + 0],
+                       global_table.rgb[static_cast<std::size_t>(i) + 1],
+                       global_table.rgb[static_cast<std::size_t>(i) + 2],
+                       255};
+  }
+  std::vector<uint8_t> canvas(canvas_bytes, 0);
+  for (std::size_t p = 0; p < canvas.size(); p += 4) {
+    canvas[p + 0] = background_rgba[0];
+    canvas[p + 1] = background_rgba[1];
+    canvas[p + 2] = background_rgba[2];
+    canvas[p + 3] = background_rgba[3];
   }
 
-  // Current graphic control extension state (applies to the next frame).
+  GifAnimation anim;
+  anim.width = screen_width;
+  anim.height = screen_height;
+
+  // Graphic control extension state: applies to the next frame and is reset
+  // after each frame (matching Blink/Gecko).
   bool transparent = false;
   uint8_t transparent_index = 0;
   uint8_t disposal = 0;
+  int delay_cs = 0;
+
   bool saw_frame = false;
+  std::size_t total_frame_bytes = 0;
+  bool budget_exhausted = false;
 
   for (;;) {
     uint8_t block = 0;
@@ -406,11 +439,65 @@ base::Result<Image> DecodeGif(std::string_view data)
           return base::Err(base::Error::Parse("gif: malformed graphic control extension"));
         }
         disposal = static_cast<uint8_t>((g_packed >> 2) & 0x07);
+        if (disposal == 4) {
+          disposal = 3; // some encoders use 4 for "restore to previous"
+        } else if (disposal > 4) {
+          disposal = 0; // undefined in the spec: treat as unspecified
+        }
         transparent = (g_packed & 0x01) != 0;
         transparent_index = t_index;
-        (void)delay; // animation timing is not supported yet
+        // Browsers clamp delays below 20 ms to 100 ms so zero-delay frames
+        // cannot flash as fast as possible (Blink/WebKit/Gecko behavior).
+        delay_cs = static_cast<int>(delay);
+        if (delay_cs < 2) {
+          delay_cs = 10;
+        }
+      } else if (label == 0xFF) {
+        // Application extension.  NETSCAPE2.0/ANIMEXTS1.0 carries the loop
+        // count; anything else is skipped.
+        uint8_t size = 0;
+        if (!r.ReadU8(size)) {
+          return base::Err(base::Error::Parse("gif: truncated application extension"));
+        }
+        std::array<char, 11> identifier{};
+        if (size == 11) {
+          for (char& c : identifier) {
+            uint8_t b = 0;
+            if (!r.ReadU8(b)) {
+              return base::Err(base::Error::Parse("gif: truncated application extension"));
+            }
+            c = static_cast<char>(b);
+          }
+        } else if (!r.Skip(size)) {
+          return base::Err(base::Error::Parse("gif: truncated application extension"));
+        }
+        const bool is_netscape =
+            size == 11 && (std::memcmp(identifier.data(), "NETSCAPE2.0", 11) == 0 ||
+                           std::memcmp(identifier.data(), "ANIMEXTS1.0", 11) == 0);
+        if (!is_netscape) {
+          std::vector<uint8_t> ignored;
+          if (!ReadAllSubBlocks(r, ignored)) {
+            return base::Err(base::Error::Parse("gif: malformed extension data"));
+          }
+        } else {
+          // Netscape sub-blocks: sub-block id 1 holds the loop count
+          // (0 = loop forever, the browser default when the extension is
+          // absent).
+          for (;;) {
+            std::vector<uint8_t> sub;
+            if (!ReadSubBlock(r, sub)) {
+              return base::Err(base::Error::Parse("gif: malformed netscape extension"));
+            }
+            if (sub.empty()) {
+              break; // terminator
+            }
+            if (sub.size() >= 3 && (sub[0] & 0x07) == 1) {
+              anim.loop_count = static_cast<int>(sub[1]) | (static_cast<int>(sub[2]) << 8);
+            }
+          }
+        }
       } else {
-        // Comment / plain-text / application extension: skip sub-blocks.
+        // Comment / plain-text extension: skip sub-blocks.
         std::vector<uint8_t> ignored;
         if (!ReadAllSubBlocks(r, ignored)) {
           return base::Err(base::Error::Parse("gif: malformed extension data"));
@@ -468,6 +555,13 @@ base::Result<Image> DecodeGif(std::string_view data)
       return base::Err(base::Error::Parse("gif: LZW output too short"));
     }
 
+    // Disposal 3 ("restore to previous") needs the canvas as it was before
+    // this frame was composited.
+    std::vector<uint8_t> previous;
+    if (disposal == 3) {
+      previous = canvas;
+    }
+
     // Composite this frame onto the canvas.
     for (int row = 0; row < height; ++row) {
       const int dst_row = interlace ? DeinterlaceRow(row, height) : row;
@@ -491,20 +585,81 @@ base::Result<Image> DecodeGif(std::string_view data)
                     index,
                     /*transparent=*/false,
                     0,
-                    &out.rgba[dst_base + static_cast<std::size_t>(col) * 4]);
+                    &canvas[dst_base + static_cast<std::size_t>(col) * 4]);
       }
     }
     saw_frame = true;
-    // Only the first frame is rendered (animation is not supported); a
-    // disposal of "restore to previous" (3) for later frames is irrelevant.
-    (void)disposal;
-    break;
+
+    // Snapshot the composited canvas as this frame's image.  The first frame
+    // is always kept; further frames are retained until the pixel budget or
+    // the frame cap is reached (the animation is then truncated).
+    if (first_frame_only || !budget_exhausted) {
+      if (first_frame_only || total_frame_bytes + canvas_bytes <= kMaxAnimationBytes) {
+        if (first_frame_only || anim.frames.size() < kMaxAnimationFrames) {
+          anim.frames.push_back(GifFrame{canvas, delay_cs});
+          total_frame_bytes += canvas_bytes;
+        } else {
+          budget_exhausted = true;
+        }
+      } else {
+        budget_exhausted = true;
+      }
+    }
+    if (first_frame_only) {
+      break;
+    }
+
+    // Apply the frame's disposal method to the canvas for the next frame.
+    if (disposal == 2) {
+      // Restore to background: repaint this frame's rectangle with the
+      // background color.
+      for (int row = 0; row < height; ++row) {
+        const std::size_t base = (static_cast<std::size_t>(top) + static_cast<std::size_t>(row)) *
+                                     static_cast<std::size_t>(screen_width) * 4 +
+                                 static_cast<std::size_t>(left) * 4;
+        for (int col = 0; col < width; ++col) {
+          const std::size_t o = base + static_cast<std::size_t>(col) * 4;
+          canvas[o + 0] = background_rgba[0];
+          canvas[o + 1] = background_rgba[1];
+          canvas[o + 2] = background_rgba[2];
+          canvas[o + 3] = background_rgba[3];
+        }
+      }
+    } else if (disposal == 3) {
+      canvas = std::move(previous);
+    }
+    // Reset the graphic control extension state between frames (Blink/Gecko
+    // do the same; stale state must not leak into the next frame).
+    transparent = false;
+    transparent_index = 0;
+    disposal = 0;
+    delay_cs = 0;
   }
 
   if (!saw_frame) {
     return base::Err(base::Error::Parse("gif: no image data"));
   }
+  return anim;
+}
+
+} // namespace
+
+base::Result<Image> DecodeGif(std::string_view data)
+{
+  const base::Result<GifAnimation> anim = DecodeGifImpl(data, /*first_frame_only=*/true);
+  if (!anim.has_value()) {
+    return base::Err(anim.error());
+  }
+  Image out;
+  out.width = anim.value().width;
+  out.height = anim.value().height;
+  out.rgba = std::move(anim.value().frames[0].rgba);
   return out;
+}
+
+base::Result<GifAnimation> DecodeGifAnimation(std::string_view data)
+{
+  return DecodeGifImpl(data, /*first_frame_only=*/false);
 }
 
 } // namespace neko::image

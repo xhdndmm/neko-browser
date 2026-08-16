@@ -1,6 +1,7 @@
 #include "neko/ui/web_view.h"
 
 #include "neko/browser/hyperlink.h"
+#include "neko/css/color.h"
 #include "neko/layout/layout_tree.h"
 #include "neko/paint/rasterizer.h"
 #include "neko/ui/browser_worker.h"
@@ -441,6 +442,21 @@ void WebView::PaintHtml(QPainter& painter)
   const int scroll = verticalScrollBar()->value();
   const std::uint64_t layout_version = snapshot_.page->layout_version();
 
+  // The compositor (ADR 0015) owns the presented output: layer 0 is the
+  // rasterized page, layer 1 the caret overlay.  Recreate on viewport
+  // resizes (and on first paint).
+  if (compositor_ == nullptr || compositor_->Output().width() != viewport_width ||
+      compositor_->Output().height() != viewport_height) {
+    compositor_ = std::make_unique<compositor::SoftwareCompositor>(viewport_width, viewport_height);
+    compositor_->LayerSurface(0).Resize(viewport_width, viewport_height);
+    compositor_->SetLayerPlacement(0, 0, 0);
+    compositor_->SetLayerVisible(0, true);
+    compositor_->SetLayerPlacement(1, 0, 0);
+    compositor_->SetLayerOpacity(1, 1.0f);
+    compositor_->SetLayerVisible(1, false);
+    caret_drawn_ = false;
+  }
+
   // Full repaint when the cache is missing, the viewport resized or the
   // page's content changed (navigation, style/DOM mutation, image load).
   const bool need_full = !raster_cache_.has_value() || cached_width_ != viewport_width ||
@@ -452,39 +468,62 @@ void WebView::PaintHtml(QPainter& painter)
     // from its internal cache (parallel band rasterization on the
     // controller's pool when the viewport is big enough).
     snapshot_.page->RasterizeFull(*raster_cache_, static_cast<float>(scroll), &worker_->pool());
+    compositor_->LayerSurface(0).CopyPixels(
+        raster_cache_->pixels().data(), viewport_width, viewport_height);
+    UpdateCaretLayer();
+    compositor_->Composite(neko::css::Color{255, 255, 255, 255});
     cached_width_ = viewport_width;
     cached_height_ = viewport_height;
     cached_scroll_ = scroll;
     cached_layout_version_ = layout_version;
   } else if (scroll != cached_scroll_) {
-    // Scroll blit: shift the cached buffer by the scroll delta, then
-    // re-rasterize only the newly exposed band.
+    // Scroll blit: shift the output AND the page layer (overlays shift with
+    // the content), then re-rasterize only the newly exposed band and copy
+    // it into both.  The page layer stays an exact mirror of the visible
+    // page pixels, so later dirty-rect recomposition never restores stale
+    // rows.
     const int delta = cached_scroll_ - scroll; // screen-space content shift
-    raster_cache_->ShiftRows(delta);
+    compositor_->LayerSurface(0).ShiftRows(delta);
     int band_y0 = 0;
     int band_y1 = 0;
-    if (delta > 0) {
-      band_y0 = 0;
-      band_y1 = delta; // content moved down; top band exposed
-    } else if (delta < 0) {
-      band_y0 = viewport_height + delta;
-      band_y1 = viewport_height; // content moved up; bottom band exposed
-    }
+    compositor_->ScrollOutput(delta, &band_y0, &band_y1);
     if (band_y1 > band_y0) {
       snapshot_.page->RasterizeInto(*raster_cache_, band_y0, band_y1, static_cast<float>(scroll));
+      compositor_->LayerSurface(0).CopyPixelsBand(
+          raster_cache_->pixels().data(), viewport_width, band_y0, band_y1);
+      compositor_->Output().CopyPixelsBand(
+          raster_cache_->pixels().data(), viewport_width, band_y0, band_y1);
     }
+    // The caret's screen position follows the document; only the layer
+    // metadata moves (its pixels already shifted with the content).
+    UpdateCaretLayer();
     cached_scroll_ = scroll;
+  } else {
+    // Neither repaint nor scroll: only caret blink/geometry changes land
+    // here, recomposited incrementally over the old and new rects.
+    const int old_x = caret_x_;
+    const int old_y = caret_y_;
+    const int old_h = caret_h_;
+    const bool old_drawn = caret_drawn_;
+    const bool changed = UpdateCaretLayer();
+    if (changed) {
+      if (old_drawn && old_h > 0) {
+        compositor_->CompositeRect(old_x, old_y, 1, old_h);
+      }
+      if (caret_drawn_ && caret_h_ > 0) {
+        compositor_->CompositeRect(caret_x_, caret_y_, 1, caret_h_);
+      }
+    }
   }
 
-  const std::vector<uint8_t>& pixels = raster_cache_->pixels();
+  const std::vector<uint8_t>& pixels = compositor_->Output().pixels();
   if (pixels.empty())
     return;
   QImage image(const_cast<uint8_t*>(pixels.data()),
-               raster_cache_->width(),
-               raster_cache_->height(),
+               compositor_->Output().width(),
+               compositor_->Output().height(),
                QImage::Format_RGBA8888);
   painter.drawImage(0, 0, image);
-  PaintCaret(painter);
 }
 
 // Finds the caret point for |target|: the end of its first laid-out text run
@@ -520,28 +559,53 @@ bool FindCaretPosition(
   return false;
 }
 
-void WebView::PaintCaret(QPainter& painter)
+bool WebView::UpdateCaretLayer()
 {
-  if (!caret_visible_ || snapshot_.content_type != browser::ContentType::kHtml ||
-      snapshot_.page == nullptr || snapshot_.page->layout_root() == nullptr) {
-    return;
+  if (compositor_ == nullptr) {
+    return false;
   }
-  const dom::Element* focused = snapshot_.page->FocusedElement();
-  if (focused == nullptr || focused->tag_name() != "input") {
-    return;
+  // The caret overlay is layer 1: recompute its rect from the focused input
+  // element and the current scroll, then sync the layer metadata.
+  bool visible = caret_visible_ && snapshot_.content_type == browser::ContentType::kHtml &&
+                 snapshot_.page != nullptr && snapshot_.page->layout_root() != nullptr;
+  int new_x = -1;
+  int new_y = -1;
+  int new_h = 0;
+  if (visible) {
+    const dom::Element* focused = snapshot_.page->FocusedElement();
+    visible = focused != nullptr && focused->tag_name() == "input";
+    if (visible) {
+      float x = 0;
+      float y = 0;
+      float h = 0;
+      visible = FindCaretPosition(*snapshot_.page->layout_root(), focused, x, y, h);
+      if (visible) {
+        const int scroll = verticalScrollBar()->value();
+        new_x = static_cast<int>(x);
+        new_y = static_cast<int>(y - static_cast<float>(scroll));
+        new_h = std::max(1, static_cast<int>(h));
+        visible = new_y + new_h > 0 && new_y < compositor_->Output().height();
+      }
+    }
   }
-  float x = 0;
-  float y = 0;
-  float h = 0;
-  if (!FindCaretPosition(*snapshot_.page->layout_root(), focused, x, y, h)) {
-    return;
+
+  if (visible) {
+    compositor::Surface& layer = compositor_->LayerSurface(1);
+    layer.Resize(1, new_h);
+    layer.Clear(neko::css::Color{0, 0, 0, 255});
+    compositor_->SetLayerPlacement(1, new_x, new_y);
+    compositor_->SetLayerVisible(1, true);
+  } else {
+    compositor_->SetLayerVisible(1, false);
   }
-  const int scroll = verticalScrollBar()->value();
-  painter.fillRect(QRect(static_cast<int>(x),
-                         static_cast<int>(y - static_cast<float>(scroll)),
-                         1,
-                         std::max(1, static_cast<int>(h))),
-                   QColor(0, 0, 0));
+
+  const bool changed =
+      visible != caret_drawn_ || new_x != caret_x_ || new_y != caret_y_ || new_h != caret_h_;
+  caret_drawn_ = visible;
+  caret_x_ = new_x;
+  caret_y_ = new_y;
+  caret_h_ = visible ? new_h : 0;
+  return changed;
 }
 
 void WebView::OnCaretBlink()

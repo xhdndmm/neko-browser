@@ -81,11 +81,28 @@
   相对 URL 按页面 base 解析；网络错误 reject。同步网络调用立即 resolve，
   由 microtask 泵送推进 `await`/`.then` 链。无 Request/AbortController/
   FormData。
+- `window.indexedDB`：`open(name[, version])`/`deleteDatabase(name)`（返回带
+  `onsuccess`/`onerror`/`onupgradeneeded` 与 `result`/`error`/`readyState`
+  的 IDBRequest 风格对象，回调经 microtask 派发）；`IDBDatabase` 提供
+  `createObjectStore`/`deleteObjectStore`（仅升级事务内）/`transaction`/
+  `objectStoreNames`；`IDBTransaction` 提供 `objectStore`/`oncomplete`/
+  `onabort`/`abort`（只读事务写入同步抛 `ReadOnlyError`，auto-commit）； 
+  `IDBObjectStore` 提供 `add`/`put`/`get`/`delete`/`clear`/`count`/`getAll`
+  （keyPath/autoIncrement 支持，键为 number|string，值走 JSON 结构化克隆
+  子集，重复 add 报 `ConstraintError`）。数据由 C++ `storage::IndexedDbStore`
+  按 origin 持久化到 `indexed_db.txt`（跨导航保留）。无游标/索引/范围、
+  无 Date/BinaryData/循环克隆；错误对象带 DOMException 风格 `.name`。
 - `window.matchMedia(query)`：按引擎固定视口（800×600）对常见媒体查询
   求值（`(min|max)-(width|height): Npx`、`orientation`、`prefers-color-scheme`、
   `prefers-reduced-motion`、`(any-)pointer`/`hover`），逗号列表按 OR 求值；
   返回的 MediaQueryList 是静态的（`addEventListener`/`removeListener` 等
   为 no-op），未知特性保守返回 `matches:false`。
+- **HTMLMediaElement（`<video>` 子集）**：`play()`/`pause()`（非媒体元素
+  上调用抛 TypeError）、`currentTime`（读写，秒）、`duration`/`paused`
+  （只读，无媒体时 duration/currentTime 为 NaN、paused 为 true）。状态由
+  页面的视频帧时钟驱动（与 GIF/定时器同泵），对应
+  `Page::PlayVideo/PauseVideo/SeekVideo/VideoDuration/VideoCurrentTime`。
+  无 `controls`/音轨/缓冲（buffered/readyState 未实现）。
 - `window.performance`：`now()`、`timeOrigin`、`timing.navigationStart`
   （均为页面加载起点）。bing 的启动脚本读取 `performance.timing.
   navigationStart`。

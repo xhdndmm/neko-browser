@@ -8,6 +8,8 @@
 #include "neko/paint/painter.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstring>
 #include <fstream>
 #include <optional>
 #include <string>
@@ -15,6 +17,14 @@
 
 namespace neko::renderer {
 namespace {
+
+// Monotonic clock in milliseconds (drives animated-image frame advance).
+double NowMs()
+{
+  return std::chrono::duration<double, std::milli>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
 
 // Depth-first search for the first layout box owned by |target| (block-level
 // boxes and atomic inline boxes carry the element's own geometry).
@@ -186,6 +196,7 @@ void Page::LoadHtmlImpl(std::string_view bytes, base::encoding::Charset charset)
   root_.reset();
   // The old DOM is gone; image entries keyed by element address are stale.
   images_.clear();
+  animation_states_.clear();
   display_list_.reset();
   BumpVersion();
 }
@@ -304,13 +315,231 @@ void Page::LayoutLocked(float viewport_width, float viewport_height)
   BumpVersion();
 }
 
-void Page::SetElementImage(const dom::Element& element, image::Image image)
+void Page::SetElementImage(const dom::Element& element,
+                           image::Image image,
+                           std::shared_ptr<image::GifAnimation> animation)
 {
   std::lock_guard<std::mutex> lock(mutex_);
   images_[&element] = std::move(image);
-  root_.reset(); // the replaced box's intrinsic size may have changed
+  if (animation != nullptr && animation->frames.size() > 1) {
+    animation_states_[&element] = ImageAnimationState{std::move(animation), NowMs(), 0, 0, false};
+  } else {
+    animation_states_.erase(&element);
+  }
+  video_states_.erase(&element); // a static image replaces any video frame
+  root_.reset();                 // the replaced box's intrinsic size may have changed
   display_list_.reset();
   BumpVersion();
+}
+
+void Page::SetElementVideo(const dom::Element& element,
+                           image::Image first_frame,
+                           VideoStrip strip,
+                           bool autoplay)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (strip.frames == nullptr || strip.frames->empty()) {
+    return;
+  }
+  images_[&element] = std::move(first_frame);
+  animation_states_.erase(&element);
+  VideoAnimationState state;
+  state.frames = std::move(strip.frames);
+  state.frame_rate = strip.frame_rate > 0 ? strip.frame_rate : 24.0;
+  state.loop = strip.loop;
+  state.autoplay = autoplay;
+  video_states_[&element] = std::move(state);
+  root_.reset();
+  display_list_.reset();
+  BumpVersion();
+}
+
+void Page::PlayVideo(const dom::Element& element)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto it = video_states_.find(&element);
+  if (it == video_states_.end() || it->second.playing) {
+    return;
+  }
+  VideoAnimationState& state = it->second;
+  state.playing = true;
+  // Resume from the frozen media clock (paused time or the seek target) so
+  // that pause/play round-trips keep sub-frame progress.
+  state.start_ms = NowMs() - state.paused_time * 1000.0;
+  display_list_.reset();
+  BumpVersion();
+}
+
+void Page::PauseVideo(const dom::Element& element)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto it = video_states_.find(&element);
+  if (it == video_states_.end() || !it->second.playing) {
+    return;
+  }
+  VideoAnimationState& state = it->second;
+  state.playing = false;
+  // Freeze the actual media clock (not the snapped frame time) so that
+  // pause/play round-trips preserve sub-frame progress.
+  state.paused_time = state.frame_rate > 0 ? (NowMs() - state.start_ms) / 1000.0 : 0.0;
+}
+
+void Page::SeekVideo(const dom::Element& element, double seconds)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto it = video_states_.find(&element);
+  if (it == video_states_.end() || it->second.frames == nullptr || it->second.frame_rate <= 0) {
+    return;
+  }
+  VideoAnimationState& state = it->second;
+  const std::size_t count = state.frames->size();
+  const double total = static_cast<double>(count) / state.frame_rate;
+  const double clamped = std::clamp(seconds, 0.0, total > 0 ? total : 0.0);
+  state.frame = static_cast<std::size_t>(clamped * state.frame_rate);
+  if (state.frame >= count) {
+    state.frame = count - 1;
+  }
+  state.start_ms = NowMs() - clamped * 1000.0;
+  state.paused_time = clamped;
+  const auto image_it = images_.find(&element);
+  if (image_it != images_.end()) {
+    const image::Image& frame_image = (*state.frames)[state.frame];
+    if (image_it->second.rgba.size() == frame_image.rgba.size()) {
+      std::memcpy(image_it->second.rgba.data(), frame_image.rgba.data(), frame_image.rgba.size());
+    }
+  }
+  display_list_.reset();
+  BumpVersion();
+}
+
+bool Page::IsVideoPlaying(const dom::Element& element) const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto it = video_states_.find(&element);
+  return it != video_states_.end() && it->second.playing;
+}
+
+std::optional<double> Page::VideoDuration(const dom::Element& element) const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto it = video_states_.find(&element);
+  if (it == video_states_.end() || it->second.frames == nullptr || it->second.frame_rate <= 0) {
+    return std::nullopt;
+  }
+  return static_cast<double>(it->second.frames->size()) / it->second.frame_rate;
+}
+
+std::optional<double> Page::VideoCurrentTime(const dom::Element& element) const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto it = video_states_.find(&element);
+  if (it == video_states_.end() || it->second.frame_rate <= 0) {
+    return std::nullopt;
+  }
+  const VideoAnimationState& state = it->second;
+  if (state.playing) {
+    return (NowMs() - state.start_ms) / 1000.0;
+  }
+  return state.paused_time;
+}
+
+bool Page::AdvanceAnimations()
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  const bool has_images = !animation_states_.empty();
+  const bool has_videos = !video_states_.empty();
+  if (!has_images && !has_videos) {
+    return false;
+  }
+  const double now_ms = NowMs();
+  bool changed = false;
+  for (auto& [element, state] : animation_states_) {
+    if (state.finished || state.animation == nullptr || state.animation->frames.size() < 2) {
+      continue;
+    }
+    const std::vector<image::GifFrame>& frames = state.animation->frames;
+    std::size_t f = state.frame;
+    double elapsed = now_ms - state.start_ms;
+    // Walk the frame schedule: each frame displays for its delay (centiseconds
+    // to milliseconds); at the end of a pass the loop count decides between
+    // restarting (0 = forever) and stopping on the last frame.
+    for (;;) {
+      const double duration = static_cast<double>(frames[f].delay_cs) * 10.0;
+      if (duration <= 0 || elapsed < duration) {
+        break;
+      }
+      elapsed -= duration;
+      ++f;
+      if (f >= frames.size()) {
+        ++state.loops;
+        const int loop_count = state.animation->loop_count;
+        if (loop_count > 0 && static_cast<int>(state.loops) >= loop_count) {
+          f = frames.size() - 1;
+          state.finished = true;
+          break;
+        }
+        f = 0;
+      }
+    }
+    if (f == state.frame) {
+      continue;
+    }
+    state.frame = f;
+    // Overwrite the displayed image in place: the display list holds a raw
+    // pointer to images_[element], so its storage must not be reallocated
+    // (all frames share the canvas size; a size guard keeps this safe).
+    const auto image_it = images_.find(element);
+    if (image_it != images_.end() && image_it->second.rgba.size() == frames[f].rgba.size()) {
+      std::memcpy(image_it->second.rgba.data(), frames[f].rgba.data(), frames[f].rgba.size());
+      display_list_.reset();
+      BumpVersion();
+      changed = true;
+    }
+  }
+  // Videos: autoplay starts on the first tick; while playing, pick the frame
+  // for the elapsed time (looping when <video loop>, ending on the last
+  // frame otherwise).  Frames overwrite the displayed image in place.
+  for (auto& [element, state] : video_states_) {
+    if (!state.playing && state.autoplay) {
+      state.playing = true;
+      state.start_ms = now_ms;
+    }
+    if (!state.playing || state.frames == nullptr || state.frames->size() < 2 ||
+        state.frame_rate <= 0) {
+      continue;
+    }
+    const std::size_t count = state.frames->size();
+    const double elapsed = now_ms - state.start_ms;
+    double position = elapsed / 1000.0 * state.frame_rate;
+    if (position < 0) {
+      position = 0;
+    }
+    std::size_t f = static_cast<std::size_t>(position);
+    if (f >= count) {
+      if (state.loop) {
+        f = f % count;
+        // Rewind the clock so the loop phase stays accurate.
+        state.start_ms = now_ms - (position - static_cast<double>(f)) / state.frame_rate * 1000.0;
+      } else {
+        f = count - 1;
+        state.playing = false;
+        state.paused_time = static_cast<double>(f) / state.frame_rate;
+      }
+    }
+    if (f == state.frame) {
+      continue;
+    }
+    state.frame = f;
+    const auto image_it = images_.find(element);
+    const image::Image& frame_image = (*state.frames)[f];
+    if (image_it != images_.end() && image_it->second.rgba.size() == frame_image.rgba.size()) {
+      std::memcpy(image_it->second.rgba.data(), frame_image.rgba.data(), frame_image.rgba.size());
+      display_list_.reset();
+      BumpVersion();
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 // NOTE: called only from LayoutEngine while Layout() holds the mutex, so this

@@ -13,6 +13,8 @@ add_library(neko_storage
   src/history_store.cpp
   src/bookmark_store.cpp
   src/local_storage.cpp
+  src/json_value.cpp
+  src/indexed_db.cpp
 )
 add_library(neko::storage ALIAS neko_storage)
 

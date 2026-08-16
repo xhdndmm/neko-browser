@@ -93,7 +93,9 @@ graph LR
 - [x] background / border / text / 裁剪
 - [x] 文本：内嵌公有领域 8x8 位图字体（ASCII）
 - [ ] FreeType/HarfBuzz 文本整形与 Unicode 回退 —— 后续
-- [ ] 图像解码 / 合成器 / GPU —— 后续
+- [x] 图像解码（PNG/JPEG/GIF/WebP/AVIF/SVG）
+- [x] 软件合成器抽象（ADR 0015，`neko::compositor`，GUI 已接线）
+- [ ] GPU 后端 —— 后续
 
 **里程碑 M1–M6 达成**：`neko_browser --url http://example.com/ --screenshot out.ppm`
 可抓取、解析、样式化、布局并光栅化真实网页（已在本地端到端验证）。
@@ -113,9 +115,10 @@ graph LR
 - [x] **pdf**：文本提取器（xref 含 /Prev 链、对象、FlateDecode + 预测器、
       页面树、内容流文本操作符 BT/ET/Td/TJ/Tj 等）—— 12 个单元测试
       （**PARTIAL**：无 xref stream / 渲染 / CMap）
-- [ ] **视频解码**（H.264/VP9 等）—— **未实现**，`media::MediaSource::Open`
-      返回显式 NOT IMPLEMENTED，架构预留
-- [ ] WebP / AVIF —— **未实现**，返回显式 NOT IMPLEMENTED
+- [x] **视频解码**（H.264/VP9 等）：FFmpeg（ADR 0014）解复用/解码/像素转换 +
+      `<video>` 元素接入（子资源抓取、autoplay/loop 帧时钟、JS 子集）——
+      **PARTIAL**（无 controls/音轨/缓冲）
+- [x] WebP / AVIF：libwebp / libavif 封装（动画 AVIF 仅首帧）
 
 ## Phase 7 — Browser UI ✅（已完成，范围见下）
 
@@ -184,12 +187,23 @@ graph LR
 - [x] **滚动 blit**：WebView 视口光栅缓存，滚动仅内存搬移 + 补绘露出带
 - [x] **`<style>` 解析缓存**：StyleEngine 按文本内容记忆化
 - [x] **TextWidth 记忆化**（同 (text,px) 命中缓存，上限 4096）
-- [ ] HTTP cache、增量布局、增量绘制、合成器、GPU 后端 —— **后续**
+- [x] **合成器**：软件合成器抽象（ADR 0015）+ GUI 接线（图层 0 页面 +
+      caret 覆盖层、脏矩形重合成、滚动带级 blit）
+- [ ] HTTP cache、增量布局、增量绘制、GPU 后端 —— **后续**
 - [ ] benchmark 基准建立（解析、布局、绘制、启动、内存）—— **后续**
 
 ## Phase 12 — Multi-process
 
-- [ ] Browser/Renderer/Network/GPU/Utility 进程模型 + IPC + 序列化
+- [x] **M1（ADR 0016）**：`neko::ipc`（帧协议 Channel + 跨平台 Subprocess）+
+      **Renderer 子进程**（`--renderer-child` 独立地址空间跑完整页面管线，
+      位图 + DOM 经 IPC 回传，子进程崩溃不带走浏览器）；CLI
+      `--renderer-process` 接入；12 IPC + 9 协议 + 1 端到端子进程测试
+- [ ] M2：GUI/BrowserController 接入 RendererHost（每站点子进程、崩溃
+      重建、会话复用）
+- [ ] M3：Network 进程（HTTP/TLS/DNS 搬出 Browser；cookie 裁决留在 Browser）
+- [ ] M4：GPU 进程（SoftwareCompositor 的 GPU 后端 + 共享内存大帧传输）
+- [ ] M5：沙箱（Linux seccomp/namespace、Windows AppContainer、macOS
+      sandbox-exec）+ 站点隔离
 - [ ] 崩溃处理与沙箱
 
 ## Phase 13 — Compatibility
