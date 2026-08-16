@@ -6,16 +6,15 @@
 // RGBA.  Errors surface through libjpeg's error handler (setjmp/longjmp)
 // and are converted to base::Error.
 
+#include "neko/base/status.h"
+#include "neko/image/image.h"
+
 #include <csetjmp>
 #include <cstdint>
+#include <jpeglib.h>
 #include <string>
 #include <string_view>
 #include <vector>
-
-#include <jpeglib.h>
-
-#include "neko/base/status.h"
-#include "neko/image/image.h"
 
 // libjpeg's error handling relies on setjmp/longjmp, and its public structs
 // impose alignment padding. Both are the standard libjpeg idiom and trigger
@@ -29,7 +28,8 @@
 namespace neko::image {
 namespace {
 
-struct JpegErrorMgr {
+struct JpegErrorMgr
+{
   jpeg_error_mgr pub;
   std::jmp_buf setjmp_buffer;
   std::string message;
@@ -37,7 +37,8 @@ struct JpegErrorMgr {
 
 // Called by libjpeg on any fatal error.  Must be a plain function with C
 // linkage so it can be invoked through the jpeg_error_mgr function pointer.
-extern "C" void JpegErrorExit(j_common_ptr cinfo) {
+extern "C" void JpegErrorExit(j_common_ptr cinfo)
+{
   auto* err = reinterpret_cast<JpegErrorMgr*>(cinfo->err);
   char buffer[JMSG_LENGTH_MAX];
   (*cinfo->err->format_message)(cinfo, buffer);
@@ -45,14 +46,16 @@ extern "C" void JpegErrorExit(j_common_ptr cinfo) {
   std::longjmp(err->setjmp_buffer, 1);
 }
 
-}  // namespace
+} // namespace
 
-bool IsJpeg(std::string_view data) {
+bool IsJpeg(std::string_view data)
+{
   return data.size() >= 3 && static_cast<uint8_t>(data[0]) == 0xFF &&
          static_cast<uint8_t>(data[1]) == 0xD8 && static_cast<uint8_t>(data[2]) == 0xFF;
 }
 
-base::Result<Image> DecodeJpeg(std::string_view data) {
+base::Result<Image> DecodeJpeg(std::string_view data)
+{
   if (!IsJpeg(data)) {
     return base::Error::InvalidArgument("not a JPEG file");
   }
@@ -69,7 +72,8 @@ base::Result<Image> DecodeJpeg(std::string_view data) {
   }
 
   jpeg_create_decompress(&cinfo);
-  jpeg_mem_src(&cinfo, reinterpret_cast<unsigned char*>(const_cast<char*>(data.data())),
+  jpeg_mem_src(&cinfo,
+               reinterpret_cast<unsigned char*>(const_cast<char*>(data.data())),
                static_cast<unsigned long>(data.size()));
   jpeg_read_header(&cinfo, TRUE);
 
@@ -107,7 +111,7 @@ base::Result<Image> DecodeJpeg(std::string_view data) {
   return out;
 }
 
-}  // namespace neko::image
+} // namespace neko::image
 
 #if defined(_MSC_VER)
 #pragma warning(pop)

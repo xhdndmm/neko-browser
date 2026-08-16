@@ -11,7 +11,6 @@
 #include "neko/image/image.h"
 
 #include <avif/avif.h>
-
 #include <cstdint>
 #include <string_view>
 
@@ -74,8 +73,8 @@ base::Result<Image> DecodeAvif(std::string_view data)
   if (source == nullptr || source->width <= 0 || source->height <= 0) {
     return base::Err(base::Error::Parse("avif: bad dimensions"));
   }
-  const std::size_t pixel_bytes = static_cast<std::size_t>(source->width) *
-                                  static_cast<std::size_t>(source->height) * 4;
+  const std::size_t pixel_bytes =
+      static_cast<std::size_t>(source->width) * static_cast<std::size_t>(source->height) * 4;
   if (pixel_bytes > kMaxCanvasBytes) {
     return base::Err(base::Error::Parse("avif: image too large"));
   }

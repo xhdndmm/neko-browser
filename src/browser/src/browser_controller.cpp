@@ -1,13 +1,13 @@
 #include "neko/browser/browser_controller.h"
-#include "neko/browser/hyperlink.h"
-#include "neko/dom/query.h"
 
 #include "neko/base/logging.h"
 #include "neko/base/string_util.h"
 #include "neko/base/thread_pool.h"
+#include "neko/browser/hyperlink.h"
 #include "neko/browser/page_scripts.h"
 #include "neko/css/parser.h"
 #include "neko/dom/element.h"
+#include "neko/dom/query.h"
 #include "neko/image/image.h"
 #include "neko/network/http.h"
 #include "neko/security/origin.h"
@@ -49,8 +49,8 @@ std::string ResolveUrlAgainstBase(std::string_view ref, std::string_view base_ur
       return is_file ? "file://" + std::string(ref) : std::string(ref);
     }
     const std::size_t slash = base_url.find_last_of('/');
-    return std::string(base_url.substr(0, slash != std::string_view::npos ? slash + 1
-                                                                          : base_url.size())) +
+    return std::string(
+               base_url.substr(0, slash != std::string_view::npos ? slash + 1 : base_url.size())) +
            std::string(ref);
   }
   const auto base = url::Url::Parse(base_url);
@@ -118,8 +118,7 @@ std::string CollectFormData(const dom::Element& form)
         dom::Element& opt = static_cast<dom::Element&>(*c);
         if (opt.tag_name() == "option") {
           const std::optional<std::string_view> val = opt.GetAttribute("value");
-          add_field(std::string(*name),
-                    val.has_value() ? std::string(*val) : opt.TextContent());
+          add_field(std::string(*name), val.has_value() ? std::string(*val) : opt.TextContent());
           break;
         }
       }
@@ -131,8 +130,8 @@ std::string CollectFormData(const dom::Element& form)
         }
         const std::optional<std::string_view> val = e.GetAttribute("value");
         add_field(std::string(*name), val.has_value() ? std::string(*val) : "on");
-      } else if (type == "hidden" || type == "text" || type == "search" ||
-                 type == "password" || type == "email" || type == "url") {
+      } else if (type == "hidden" || type == "text" || type == "search" || type == "password" ||
+                 type == "email" || type == "url") {
         const std::optional<std::string_view> val = e.GetAttribute("value");
         add_field(std::string(*name), val.has_value() ? std::string(*val) : "");
       }
@@ -644,10 +643,12 @@ bool BrowserController::DispatchPointerClick(int tab_id, float doc_x, float doc_
   // default action.  The document owns the element, so const_cast is safe.
   if (tab->script_runtime != nullptr) {
     dom::Element& el = const_cast<dom::Element&>(*element);
-    (void)tab->script_runtime->DispatchMouseEvent(el, "mousedown", doc_x, doc_y, 0);
-    (void)tab->script_runtime->DispatchMouseEvent(el, "mouseup", doc_x, doc_y, 0);
-    const bool not_canceled =
-        tab->script_runtime->DispatchMouseEvent(el, "click", doc_x, doc_y, 0);
+    (void)tab->script_runtime->DispatchMouseEvent(
+        el, "mousedown", static_cast<double>(doc_x), static_cast<double>(doc_y), 0);
+    (void)tab->script_runtime->DispatchMouseEvent(
+        el, "mouseup", static_cast<double>(doc_x), static_cast<double>(doc_y), 0);
+    const bool not_canceled = tab->script_runtime->DispatchMouseEvent(
+        el, "click", static_cast<double>(doc_x), static_cast<double>(doc_y), 0);
     // A pointer handler may have mutated the DOM; reflect it before the
     // default action (which may navigate away).
     if (tab->script_runtime->TakeDomDirty()) {
@@ -661,7 +662,7 @@ bool BrowserController::DispatchPointerClick(int tab_id, float doc_x, float doc_
   // nested inside one).
   const std::optional<std::string> target = HyperlinkTarget(element, tab->url);
   if (target.has_value()) {
-    Navigate(tab_id, target.value());
+    static_cast<void>(Navigate(tab_id, target.value()));
     return true;
   }
   // Default action: a submit button submits its enclosing form.
@@ -684,12 +685,16 @@ void BrowserController::DispatchHover(int tab_id, float doc_x, float doc_y)
     return;
   }
   if (prev != nullptr && tab->script_runtime != nullptr) {
-    tab->script_runtime->DispatchMouseEvent(*prev, "mouseout", doc_x, doc_y, 0);
+    tab->script_runtime->DispatchMouseEvent(
+        *prev, "mouseout", static_cast<double>(doc_x), static_cast<double>(doc_y), 0);
   }
   tab->hovered_element = const_cast<dom::Element*>(element);
   if (element != nullptr && tab->script_runtime != nullptr) {
-    tab->script_runtime->DispatchMouseEvent(*const_cast<dom::Element*>(element), "mouseover",
-                                            doc_x, doc_y, 0);
+    tab->script_runtime->DispatchMouseEvent(*const_cast<dom::Element*>(element),
+                                            "mouseover",
+                                            static_cast<double>(doc_x),
+                                            static_cast<double>(doc_y),
+                                            0);
   }
   // A hover handler may mutate the DOM; reflect it.
   if (tab->script_runtime != nullptr && tab->script_runtime->TakeDomDirty()) {
@@ -735,7 +740,9 @@ bool BrowserController::DispatchWheel(int tab_id, double delta_y)
   return not_canceled;
 }
 
-bool BrowserController::DispatchKeyboard(int tab_id, std::string_view type, std::string_view key,
+bool BrowserController::DispatchKeyboard(int tab_id,
+                                         std::string_view type,
+                                         std::string_view key,
                                          std::string_view code)
 {
   Tab* tab = FindTab(tab_id);
@@ -760,13 +767,13 @@ bool BrowserController::DispatchKeyboard(int tab_id, std::string_view type, std:
   // Default actions: a printable character inserts into a focused text input,
   // Backspace deletes, Enter submits the enclosing form (implicit submission).
   dom::Element* control = tab->focused_element;
-  const bool input_is_text =
-      control != nullptr && control->tag_name() == "input";
+  const bool input_is_text = control != nullptr && control->tag_name() == "input";
   bool value_changed = false;
   if (input_is_text) {
-    const std::string type = std::string(control->GetAttribute("type").value_or("text"));
-    const bool text_like = type == "text" || type == "search" || type == "password" ||
-                           type == "email" || type == "url" || type == "hidden";
+    const std::string input_type = std::string(control->GetAttribute("type").value_or("text"));
+    const bool text_like = input_type == "text" || input_type == "search" ||
+                           input_type == "password" || input_type == "email" ||
+                           input_type == "url" || input_type == "hidden";
     if (text_like) {
       std::string value = std::string(control->GetAttribute("value").value_or(""));
       if (key == "Backspace") {
@@ -794,8 +801,7 @@ bool BrowserController::DispatchKeyboard(int tab_id, std::string_view type, std:
   // Reflect DOM changes from the keydown/input handlers or the value edit
   // (the layout rebuilds and the UI repaints on the next StateChanged).  The
   // value edit always rebuilds, even on pages with no scripts.
-  if (value_changed ||
-      (tab->script_runtime != nullptr && tab->script_runtime->TakeDomDirty())) {
+  if (value_changed || (tab->script_runtime != nullptr && tab->script_runtime->TakeDomDirty())) {
     tab->page->ReapplyStyles();
   }
   return not_canceled;
@@ -821,12 +827,13 @@ void BrowserController::SubmitForm(int tab_id, dom::Element* form)
     target = tab->url;
   }
   target += (target.find('?') != std::string::npos ? "&" : "?") + data;
-  Navigate(tab_id, target);
+  static_cast<void>(Navigate(tab_id, target));
 }
 
 base::Result<void> BrowserController::NavigateActive(const std::string& input)
 {
-  Tab* tab = ActiveTab();  if (tab == nullptr)
+  Tab* tab = ActiveTab();
+  if (tab == nullptr)
     return base::Err(base::Error::InvalidArgument("no active tab"));
   return Navigate(tab->id, input);
 }
@@ -1636,9 +1643,8 @@ void FetchPageVideos(renderer::Page& page,
     const std::size_t frame_count = strip.frames->size();
     const image::Image first_frame = (*strip.frames)[0]; // copy: strip moves below
     page.SetElementVideo(*item.element, first_frame, std::move(strip), item.autoplay);
-    NEKO_LOG_INFO("video: injected " + item.url + " (" +
-                  std::to_string(frame_count) + " frames) -> <" +
-                  std::string(item.element->tag_name()) + ">");
+    NEKO_LOG_INFO("video: injected " + item.url + " (" + std::to_string(frame_count) +
+                  " frames) -> <" + std::string(item.element->tag_name()) + ">");
   };
 
   if (pending.size() == 1) {

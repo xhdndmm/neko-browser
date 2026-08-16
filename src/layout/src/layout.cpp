@@ -185,7 +185,7 @@ float SpecToContent(const style::SizeSpec& spec,
 }
 
 // Border-box size that corresponds to a content-box size.
-float ContentToBox(float content, float borders_paddings)
+[[maybe_unused]] float ContentToBox(float content, float borders_paddings)
 {
   return content + borders_paddings;
 }
@@ -1201,8 +1201,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         box->padding_top = box->padding_bottom = 2;
       }
 
-      const float border_padding_w = box->border_left + box->border_right + box->padding_left +
-                                     box->padding_right;
+      const float border_padding_w =
+          box->border_left + box->border_right + box->padding_left + box->padding_right;
       float content_width = 0;
       if (box->style.width.has_value() && !box->style.width.value().percent &&
           !box->style.width.value().is_calc && !box->style.width.value().is_extremum) {
@@ -1213,8 +1213,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       box->width = content_width + border_padding_w;
 
       const float line_h = std::max(1.0f, box->style.font_size * 1.2f);
-      box->height = line_h + box->padding_top + box->padding_bottom + box->border_top +
-                    box->border_bottom;
+      box->height =
+          line_h + box->padding_top + box->padding_bottom + box->border_top + box->border_bottom;
       box->x = box->margin_left;
       box->y = box->margin_top;
 
@@ -1255,10 +1255,9 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         // offset is included), matching how the painter draws runs.
         run.x = box->x + box->border_left + box->padding_left;
         run.y = box->y + box->border_top + box->padding_top;
-        run.color = is_placeholder ? css::Color{160, 160, 160, 255}
-                                   : css::Color{0, 0, 0, 255};
-        run.width = MeasureTextWidth(registry, run.font_family, run.font_weight, run.font_italic,
-                                     run.text, run.font_size);
+        run.color = is_placeholder ? css::Color{160, 160, 160, 255} : css::Color{0, 0, 0, 255};
+        run.width = MeasureTextWidth(
+            registry, run.font_family, run.font_weight, run.font_italic, run.text, run.font_size);
         run.element = &element;
         Line line;
         line.height = line_h;
@@ -1671,20 +1670,18 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       // min/max-width clamp (CSS 2.2 §10.4); min wins over max.  The clamps
       // constrain the same box as the width (content-box or border-box).
       if (box->style.min_width.has_value()) {
-        content_width = std::max(
-            content_width,
-            SpecToContent(box->style.min_width.value(),
-                          containing_width,
-                          border_padding_w,
-                          box->style.box_sizing));
+        content_width = std::max(content_width,
+                                 SpecToContent(box->style.min_width.value(),
+                                               containing_width,
+                                               border_padding_w,
+                                               box->style.box_sizing));
       }
       if (box->style.max_width.has_value()) {
-        content_width = std::min(
-            content_width,
-            SpecToContent(box->style.max_width.value(),
-                          containing_width,
-                          border_padding_w,
-                          box->style.box_sizing));
+        content_width = std::min(content_width,
+                                 SpecToContent(box->style.max_width.value(),
+                                               containing_width,
+                                               border_padding_w,
+                                               box->style.box_sizing));
       }
       box->width = content_width + border_padding_w;
 
@@ -2547,8 +2544,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       std::map<std::string, AreaRect> area_rects;
       for (int r = 0; r < area_rows; ++r) {
         for (int c = 0; c < area_cols; ++c) {
-          const std::string& name = areas[static_cast<std::size_t>(r)]
-                                         [static_cast<std::size_t>(c)];
+          const std::string& name = areas[static_cast<std::size_t>(r)][static_cast<std::size_t>(c)];
           if (name.empty() || name == ".") {
             continue;
           }
@@ -2566,44 +2562,39 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
 
       // Named lines per axis: the explicit [name] lines plus the implicit
       // <name>-start / <name>-end lines the template areas create.
-      const auto build_line_names =
-          [](const std::vector<std::vector<std::string>>& explicit_lines,
-             int track_count,
-             const std::vector<std::vector<std::string>>& areas,
-             bool horizontal,
-             const std::map<std::string, AreaRect>& rects) {
-            std::vector<std::vector<std::string>> lines(
-                static_cast<std::size_t>(track_count) + 1);
-            for (std::size_t i = 0; i < explicit_lines.size() && i < lines.size(); ++i) {
-              lines[i] = explicit_lines[i];
-            }
-            for (const auto& [name, rect] : rects) {
-              const int start = horizontal ? rect.c0 : rect.r0;
-              const int end = horizontal ? rect.c1 + 1 : rect.r1 + 1;
-              if (start >= 0 && start < static_cast<int>(lines.size())) {
-                lines[static_cast<std::size_t>(start)].push_back(name + "-start");
-              }
-              if (end >= 0 && end < static_cast<int>(lines.size())) {
-                lines[static_cast<std::size_t>(end)].push_back(name + "-end");
-              }
-            }
-            return lines;
-          };
-      const std::vector<std::vector<std::string>> col_lines =
-          build_line_names(cs.grid_column_lines, explicit_cols, areas, /*horizontal=*/true,
-                           area_rects);
-      const std::vector<std::vector<std::string>> row_lines =
-          build_line_names(cs.grid_row_lines, explicit_rows, areas, /*horizontal=*/false,
-                           area_rects);
+      const auto build_line_names = [](const std::vector<std::vector<std::string>>& explicit_lines,
+                                       int track_count,
+                                       const std::vector<std::vector<std::string>>& areas,
+                                       bool horizontal,
+                                       const std::map<std::string, AreaRect>& rects) {
+        std::vector<std::vector<std::string>> lines(static_cast<std::size_t>(track_count) + 1);
+        for (std::size_t i = 0; i < explicit_lines.size() && i < lines.size(); ++i) {
+          lines[i] = explicit_lines[i];
+        }
+        for (const auto& [name, rect] : rects) {
+          const int start = horizontal ? rect.c0 : rect.r0;
+          const int end = horizontal ? rect.c1 + 1 : rect.r1 + 1;
+          if (start >= 0 && start < static_cast<int>(lines.size())) {
+            lines[static_cast<std::size_t>(start)].push_back(name + "-start");
+          }
+          if (end >= 0 && end < static_cast<int>(lines.size())) {
+            lines[static_cast<std::size_t>(end)].push_back(name + "-end");
+          }
+        }
+        return lines;
+      };
+      const std::vector<std::vector<std::string>> col_lines = build_line_names(
+          cs.grid_column_lines, explicit_cols, areas, /*horizontal=*/true, area_rects);
+      const std::vector<std::vector<std::string>> row_lines = build_line_names(
+          cs.grid_row_lines, explicit_rows, areas, /*horizontal=*/false, area_rects);
 
       // Resolves one placement to a 0-based line index, or -1 when it does
       // not resolve (treated as auto).  Per §8.3 an ident matches a template
       // area first (its edge on this axis), then a named line.
-      const auto resolve_line =
-          [&](const style::GridPlacement& p,
-              const std::vector<std::vector<std::string>>& lines,
-              bool horizontal,
-              int track_count) -> int {
+      const auto resolve_line = [&](const style::GridPlacement& p,
+                                    const std::vector<std::vector<std::string>>& lines,
+                                    bool horizontal,
+                                    int track_count) -> int {
         if (p.kind == style::GridPlacement::Kind::kLine) {
           if (!p.name.empty()) {
             const auto area_it = area_rects.find(p.name);
@@ -2630,10 +2621,9 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       };
       // Resolves a named span ("span <name>"): the first line with |name|
       // after |start_line|, or -1.
-      const auto resolve_span_named =
-          [](const style::GridPlacement& p,
-             const std::vector<std::vector<std::string>>& lines,
-             int start_line) -> int {
+      const auto resolve_span_named = [](const style::GridPlacement& p,
+                                         const std::vector<std::vector<std::string>>& lines,
+                                         int start_line) -> int {
         if (p.kind != style::GridPlacement::Kind::kSpan || p.name.empty()) {
           return -1;
         }
@@ -2787,8 +2777,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       };
 
       const auto flow = cs.grid_auto_flow;
-      const bool flow_column = flow == style::GridAutoFlow::kColumn ||
-                               flow == style::GridAutoFlow::kColumnDense;
+      const bool flow_column =
+          flow == style::GridAutoFlow::kColumn || flow == style::GridAutoFlow::kColumnDense;
       const bool dense =
           flow == style::GridAutoFlow::kRowDense || flow == style::GridAutoFlow::kColumnDense;
       int grid_rows = 0;
@@ -2810,8 +2800,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
           // placement there.  (Column flow scans from the top as an
           // approximation of the per-column cursor.)
           const int col = item.col_start;
-          const int row_from = (!flow_column && !dense && col < cursor_col) ? cursor_row + 1
-                                                                           : 0;
+          const int row_from = (!flow_column && !dense && col < cursor_col) ? cursor_row + 1 : 0;
           for (int row = row_from; row <= grid_rows; ++row) {
             ensure_cells(row + row_span, col + col_span);
             if (cells_free(row, col, col_span, row_span)) {
@@ -2909,9 +2898,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       std::vector<float> col_sizes(static_cast<std::size_t>(grid_cols), 0.0f);
       // Phase 1: fixed tracks.
       for (int c = 0; c < grid_cols; ++c) {
-        const style::GridTrack* t = c < template_cols
-                                        ? &cs.grid_template_columns[static_cast<std::size_t>(c)]
-                                        : nullptr;
+        const style::GridTrack* t =
+            c < template_cols ? &cs.grid_template_columns[static_cast<std::size_t>(c)] : nullptr;
         if (t != nullptr && t->kind == style::GridTrack::Kind::kFixed) {
           col_sizes[static_cast<std::size_t>(c)] =
               t->percent > 0 ? container_width * t->percent / 100.0f : t->length;
@@ -2921,9 +2909,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       // tracks) sized to the items starting in each column (a spanning item
       // contributes to its start column only — documented simplification).
       for (int c = 0; c < grid_cols; ++c) {
-        const style::GridTrack* t = c < template_cols
-                                        ? &cs.grid_template_columns[static_cast<std::size_t>(c)]
-                                        : nullptr;
+        const style::GridTrack* t =
+            c < template_cols ? &cs.grid_template_columns[static_cast<std::size_t>(c)] : nullptr;
         style::GridTrack::Kind kind = t != nullptr ? t->kind : style::GridTrack::Kind::kAuto;
         if (kind == style::GridTrack::Kind::kFixed || kind == style::GridTrack::Kind::kFr) {
           continue;
@@ -2947,9 +2934,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         used += column_gap * static_cast<float>(std::max(0, grid_cols - 1));
         float total_fr = 0;
         for (int c = 0; c < grid_cols; ++c) {
-          const style::GridTrack* t = c < template_cols
-                                          ? &cs.grid_template_columns[static_cast<std::size_t>(c)]
-                                          : nullptr;
+          const style::GridTrack* t =
+              c < template_cols ? &cs.grid_template_columns[static_cast<std::size_t>(c)] : nullptr;
           if (t != nullptr && t->kind == style::GridTrack::Kind::kFr) {
             total_fr += t->fr;
           }
@@ -2982,9 +2968,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         return extent;
       };
       for (int c = 0; c < grid_cols; ++c) {
-        const style::GridTrack* t = c < template_cols
-                                        ? &cs.grid_template_columns[static_cast<std::size_t>(c)]
-                                        : nullptr;
+        const style::GridTrack* t =
+            c < template_cols ? &cs.grid_template_columns[static_cast<std::size_t>(c)] : nullptr;
         if (t == nullptr) {
           continue;
         }
@@ -3032,9 +3017,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       // ---- Row track sizing ----
       std::vector<float> row_sizes(static_cast<std::size_t>(grid_rows), 0.0f);
       for (int r = 0; r < grid_rows; ++r) {
-        const style::GridTrack* t = r < template_rows
-                                        ? &cs.grid_template_rows[static_cast<std::size_t>(r)]
-                                        : nullptr;
+        const style::GridTrack* t =
+            r < template_rows ? &cs.grid_template_rows[static_cast<std::size_t>(r)] : nullptr;
         if (t != nullptr && t->kind == style::GridTrack::Kind::kFixed) {
           row_sizes[static_cast<std::size_t>(r)] = t->percent > 0 && height_definite
                                                        ? container_height * t->percent / 100.0f
@@ -3042,9 +3026,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         }
       }
       for (int r = 0; r < grid_rows; ++r) {
-        const style::GridTrack* t = r < template_rows
-                                        ? &cs.grid_template_rows[static_cast<std::size_t>(r)]
-                                        : nullptr;
+        const style::GridTrack* t =
+            r < template_rows ? &cs.grid_template_rows[static_cast<std::size_t>(r)] : nullptr;
         style::GridTrack::Kind kind = t != nullptr ? t->kind : style::GridTrack::Kind::kAuto;
         if (kind == style::GridTrack::Kind::kFixed || kind == style::GridTrack::Kind::kFr) {
           continue;
@@ -3067,9 +3050,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         used += row_gap * static_cast<float>(std::max(0, grid_rows - 1));
         float total_fr = 0;
         for (int r = 0; r < grid_rows; ++r) {
-          const style::GridTrack* t = r < template_rows
-                                          ? &cs.grid_template_rows[static_cast<std::size_t>(r)]
-                                          : nullptr;
+          const style::GridTrack* t =
+              r < template_rows ? &cs.grid_template_rows[static_cast<std::size_t>(r)] : nullptr;
           if (t != nullptr && t->kind == style::GridTrack::Kind::kFr) {
             total_fr += t->fr;
           }
@@ -3077,9 +3059,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         if (total_fr > 0) {
           const float leftover = std::max(0.0f, container_height - used);
           for (int r = 0; r < grid_rows; ++r) {
-            const style::GridTrack* t = r < template_rows
-                                            ? &cs.grid_template_rows[static_cast<std::size_t>(r)]
-                                            : nullptr;
+            const style::GridTrack* t =
+                r < template_rows ? &cs.grid_template_rows[static_cast<std::size_t>(r)] : nullptr;
             if (t != nullptr && t->kind == style::GridTrack::Kind::kFr) {
               row_sizes[static_cast<std::size_t>(r)] = leftover * t->fr / total_fr;
             }
@@ -3095,16 +3076,14 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
           if (item.row_start != r) {
             continue;
           }
-          extent = std::max(extent,
-                            item.layout->margin_top + item.layout->height +
-                                item.layout->margin_bottom);
+          extent = std::max(
+              extent, item.layout->margin_top + item.layout->height + item.layout->margin_bottom);
         }
         return extent;
       };
       for (int r = 0; r < grid_rows; ++r) {
-        const style::GridTrack* t = r < template_rows
-                                        ? &cs.grid_template_rows[static_cast<std::size_t>(r)]
-                                        : nullptr;
+        const style::GridTrack* t =
+            r < template_rows ? &cs.grid_template_rows[static_cast<std::size_t>(r)] : nullptr;
         if (t == nullptr) {
           continue;
         }
@@ -3479,8 +3458,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         float min_content = 0; // widest single column content per column
         float max_content = 0; // natural (unwrapped) content width per column
         // Sum the per-column extrema of the non-spanning cells.
-        std::vector<float> col_min(ncols, 0.0f);
-        std::vector<float> col_max(ncols, 0.0f);
+        std::vector<float> col_min(static_cast<std::size_t>(ncols), 0.0f);
+        std::vector<float> col_max(static_cast<std::size_t>(ncols), 0.0f);
         for (const CellInfo& cell : cells) {
           if (cell.colspan != 1) {
             continue;
@@ -3574,9 +3553,9 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         TranslateBox(*caption_box,
                      table_x - caption_box->border_left - caption_box->padding_left,
                      table_y - caption_box->border_top - caption_box->padding_top);
-        for (dom::Element* child : caption_absolute) {
+        for (dom::Element* abs_child : caption_absolute) {
           caption_box->positioned_children.push_back(
-              BuildAbsolute(*child, table_x, table_y, cb_w, cb_h, kNoFloats));
+              BuildAbsolute(*abs_child, table_x, table_y, cb_w, cb_h, kNoFloats));
         }
         break; // only the first caption participates in the table model
       }

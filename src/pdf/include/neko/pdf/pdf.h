@@ -1,25 +1,27 @@
 #pragma once
 
+#include "neko/base/status.h"
+#include "neko/image/image.h"
+
 #include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include "neko/base/status.h"
-#include "neko/image/image.h"
-
 namespace neko::pdf {
 
 // One extracted page of text.
-struct PdfPage {
-  int index = 0;          // 0-based page number
-  int width = 0;          // from /MediaBox (points), 0 if absent
+struct PdfPage
+{
+  int index = 0; // 0-based page number
+  int width = 0; // from /MediaBox (points), 0 if absent
   int height = 0;
-  std::string text;       // best-effort extraction, "\n"-separated lines
+  std::string text; // best-effort extraction, "\n"-separated lines
 };
 
-struct PdfDocument {
-  std::string title;      // from /Info /Title, empty if absent
+struct PdfDocument
+{
+  std::string title; // from /Info /Title, empty if absent
   int page_count = 0;
   std::vector<PdfPage> pages;
 };
@@ -54,4 +56,4 @@ bool IsPdf(std::string_view data);
 // patterns/shadings, CMap/Type1-font-aware text, encryption.
 base::Result<image::Image> RenderPage(std::string_view data, int page_index, float scale);
 
-}  // namespace neko::pdf
+} // namespace neko::pdf

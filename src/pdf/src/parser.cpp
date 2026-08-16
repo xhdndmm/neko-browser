@@ -9,12 +9,19 @@
 // Threading: pure functions, no shared state (each RenderPage/ExtractText
 // call parses its own document).
 
+#include "neko/base/status.h"
+#include "neko/base/utf8.h"
+#include "neko/graphics/font_face.h"
+#include "neko/graphics/font_registry.h"
+#include "neko/graphics/font_selector.h"
+#include "neko/pdf/pdf.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <cstdio>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
@@ -25,15 +32,7 @@
 #include <utility>
 #include <variant>
 #include <vector>
-
 #include <zlib.h>
-
-#include "neko/base/status.h"
-#include "neko/base/utf8.h"
-#include "neko/graphics/font_face.h"
-#include "neko/graphics/font_registry.h"
-#include "neko/graphics/font_selector.h"
-#include "neko/pdf/pdf.h"
 
 namespace neko::pdf {
 namespace {
@@ -45,41 +44,55 @@ namespace {
 // variant can be defined without a complete PdfObject.
 // ---------------------------------------------------------------------------
 
-struct PdfName {
+struct PdfName
+{
   std::string value;
 };
-struct PdfString {
+struct PdfString
+{
   std::string value;
 };
-struct PdfRef {
+struct PdfRef
+{
   int64_t num = 0;
   int64_t gen = 0;
 };
 struct PdfObject;
 using PdfObjectPtr = std::shared_ptr<PdfObject>;
-struct PdfArray {
+struct PdfArray
+{
   std::vector<PdfObjectPtr> items;
 };
-struct PdfDict {
+struct PdfDict
+{
   std::map<std::string, PdfObjectPtr> entries;
 
-  const PdfObject* Find(std::string_view key) const {
+  const PdfObject* Find(std::string_view key) const
+  {
     const auto it = entries.find(std::string(key));
     return it == entries.end() ? nullptr : it->second.get();
   }
 };
 
-struct PdfObject {
-  using Value = std::variant<std::nullptr_t, bool, int64_t, double, PdfName,
-                             PdfString, PdfArray, std::shared_ptr<PdfDict>, PdfRef>;
+struct PdfObject
+{
+  using Value = std::variant<std::nullptr_t,
+                             bool,
+                             int64_t,
+                             double,
+                             PdfName,
+                             PdfString,
+                             PdfArray,
+                             std::shared_ptr<PdfDict>,
+                             PdfRef>;
   Value value;
 
   PdfObject() = default;
   explicit PdfObject(Value v) : value(std::move(v)) {}
 };
 
-template <typename T>
-const T* GetIf(const PdfObject& obj) {
+template <typename T> const T* GetIf(const PdfObject& obj)
+{
   return std::get_if<T>(&obj.value);
 }
 
@@ -87,46 +100,56 @@ const T* GetIf(const PdfObject& obj) {
 // Lexer helpers
 // ---------------------------------------------------------------------------
 
-bool IsWs(char c) {
+bool IsWs(char c)
+{
   return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f' || c == '\0';
 }
 
-void SkipWsAndComments(std::string_view s, size_t& pos) {
+void SkipWsAndComments(std::string_view s, size_t& pos)
+{
   while (pos < s.size()) {
     if (IsWs(s[pos])) {
       ++pos;
     } else if (s[pos] == '%') {
-      while (pos < s.size() && s[pos] != '\n' && s[pos] != '\r') ++pos;
+      while (pos < s.size() && s[pos] != '\n' && s[pos] != '\r')
+        ++pos;
     } else {
       break;
     }
   }
 }
 
-bool ParseInt(std::string_view s, int64_t* out) {
-  if (s.empty()) return false;
+bool ParseInt(std::string_view s, int64_t* out)
+{
+  if (s.empty())
+    return false;
   size_t i = 0;
   bool neg = false;
   if (s[0] == '+' || s[0] == '-') {
     neg = s[0] == '-';
     i = 1;
   }
-  if (i >= s.size()) return false;
+  if (i >= s.size())
+    return false;
   int64_t v = 0;
   for (; i < s.size(); ++i) {
-    if (!std::isdigit(static_cast<unsigned char>(s[i]))) return false;
+    if (!std::isdigit(static_cast<unsigned char>(s[i])))
+      return false;
     v = v * 10 + (s[i] - '0');
   }
   *out = neg ? -v : v;
   return true;
 }
 
-std::optional<int64_t> ReadNumberToken(std::string_view s, size_t& pos) {
+std::optional<int64_t> ReadNumberToken(std::string_view s, size_t& pos)
+{
   SkipWsAndComments(s, pos);
   const size_t start = pos;
-  if (pos < s.size() && (s[pos] == '+' || s[pos] == '-')) ++pos;
+  if (pos < s.size() && (s[pos] == '+' || s[pos] == '-'))
+    ++pos;
   const size_t digits_start = pos;
-  while (pos < s.size() && std::isdigit(static_cast<unsigned char>(s[pos]))) ++pos;
+  while (pos < s.size() && std::isdigit(static_cast<unsigned char>(s[pos])))
+    ++pos;
   if (pos == digits_start) {
     pos = start;
     return std::nullopt;
@@ -140,19 +163,23 @@ std::optional<int64_t> ReadNumberToken(std::string_view s, size_t& pos) {
 }
 
 // Decodes a PDF name: strips the leading '/', resolves #XX escapes.
-std::string ParseNameToken(std::string_view s, size_t& pos) {
-  ++pos;  // skip '/'
+std::string ParseNameToken(std::string_view s, size_t& pos)
+{
+  ++pos; // skip '/'
   std::string out;
   auto hexv = [](char h) -> int {
-    if (h >= '0' && h <= '9') return h - '0';
-    if (h >= 'a' && h <= 'f') return h - 'a' + 10;
-    if (h >= 'A' && h <= 'F') return h - 'A' + 10;
+    if (h >= '0' && h <= '9')
+      return h - '0';
+    if (h >= 'a' && h <= 'f')
+      return h - 'a' + 10;
+    if (h >= 'A' && h <= 'F')
+      return h - 'A' + 10;
     return -1;
   };
   while (pos < s.size()) {
     const char c = s[pos];
-    if (IsWs(c) || c == '/' || c == '[' || c == ']' || c == '<' || c == '>' ||
-        c == '(' || c == ')' || c == '{' || c == '}') {
+    if (IsWs(c) || c == '/' || c == '[' || c == ']' || c == '<' || c == '>' || c == '(' ||
+        c == ')' || c == '{' || c == '}') {
       break;
     }
     if (c == '#' && pos + 2 < s.size() && hexv(s[pos + 1]) >= 0 && hexv(s[pos + 2]) >= 0) {
@@ -167,15 +194,19 @@ std::string ParseNameToken(std::string_view s, size_t& pos) {
 }
 
 // Parses a literal string ( ... ) including escapes, or hex string < ... >.
-std::string ParseStringToken(std::string_view s, size_t& pos) {
+std::string ParseStringToken(std::string_view s, size_t& pos)
+{
   const char open = s[pos];
   ++pos;
   if (open == '<') {
     std::string out;
     auto hexv = [](char h) -> int {
-      if (h >= '0' && h <= '9') return h - '0';
-      if (h >= 'a' && h <= 'f') return h - 'a' + 10;
-      if (h >= 'A' && h <= 'F') return h - 'A' + 10;
+      if (h >= '0' && h <= '9')
+        return h - '0';
+      if (h >= 'a' && h <= 'f')
+        return h - 'a' + 10;
+      if (h >= 'A' && h <= 'F')
+        return h - 'A' + 10;
       return -1;
     };
     while (pos < s.size() && s[pos] != '>') {
@@ -192,7 +223,8 @@ std::string ParseStringToken(std::string_view s, size_t& pos) {
       out.push_back(static_cast<char>((hi << 4) | (lo < 0 ? 0 : lo)));
       pos += 2;
     }
-    if (pos < s.size()) ++pos;
+    if (pos < s.size())
+      ++pos;
     return out;
   }
   std::string out;
@@ -202,30 +234,54 @@ std::string ParseStringToken(std::string_view s, size_t& pos) {
     if (c == '\\' && pos + 1 < s.size()) {
       const char e = s[pos + 1];
       switch (e) {
-        case 'n': out.push_back('\n'); pos += 2; break;
-        case 'r': out.push_back('\r'); pos += 2; break;
-        case 't': out.push_back('\t'); pos += 2; break;
-        case 'b': out.push_back('\b'); pos += 2; break;
-        case 'f': out.push_back('\f'); pos += 2; break;
-        case '(': out.push_back('('); pos += 2; break;
-        case ')': out.push_back(')'); pos += 2; break;
-        case '\\': out.push_back('\\'); pos += 2; break;
-        default:
-          if (e >= '0' && e <= '7') {
-            int v = 0;
-            size_t i = pos + 1;
-            int n = 0;
-            while (i < s.size() && n < 3 && s[i] >= '0' && s[i] <= '7') {
-              v = v * 8 + (s[i] - '0');
-              ++i;
-              ++n;
-            }
-            out.push_back(static_cast<char>(v));
-            pos = i;
-          } else {
-            out.push_back(e);
-            pos += 2;
+      case 'n':
+        out.push_back('\n');
+        pos += 2;
+        break;
+      case 'r':
+        out.push_back('\r');
+        pos += 2;
+        break;
+      case 't':
+        out.push_back('\t');
+        pos += 2;
+        break;
+      case 'b':
+        out.push_back('\b');
+        pos += 2;
+        break;
+      case 'f':
+        out.push_back('\f');
+        pos += 2;
+        break;
+      case '(':
+        out.push_back('(');
+        pos += 2;
+        break;
+      case ')':
+        out.push_back(')');
+        pos += 2;
+        break;
+      case '\\':
+        out.push_back('\\');
+        pos += 2;
+        break;
+      default:
+        if (e >= '0' && e <= '7') {
+          int v = 0;
+          size_t i = pos + 1;
+          int n = 0;
+          while (i < s.size() && n < 3 && s[i] >= '0' && s[i] <= '7') {
+            v = v * 8 + (s[i] - '0');
+            ++i;
+            ++n;
           }
+          out.push_back(static_cast<char>(v));
+          pos = i;
+        } else {
+          out.push_back(e);
+          pos += 2;
+        }
       }
       continue;
     }
@@ -257,8 +313,9 @@ std::string ParseStringToken(std::string_view s, size_t& pos) {
 
 PdfObjectPtr ParseObjectPtr(std::string_view s, size_t& pos, int depth);
 
-PdfDict ParseDict(std::string_view s, size_t& pos, int depth) {
-  PdfDict dict;  // pos at "<<"
+PdfDict ParseDict(std::string_view s, size_t& pos, int depth)
+{
+  PdfDict dict; // pos at "<<"
   pos += 2;
   for (;;) {
     SkipWsAndComments(s, pos);
@@ -266,18 +323,23 @@ PdfDict ParseDict(std::string_view s, size_t& pos, int depth) {
       pos += 2;
       break;
     }
-    if (pos >= s.size() || s[pos] != '/') break;
+    if (pos >= s.size() || s[pos] != '/')
+      break;
     const std::string key = ParseNameToken(s, pos);
-    if (key.empty()) break;
+    if (key.empty())
+      break;
     dict.entries[std::move(key)] = ParseObjectPtr(s, pos, depth + 1);
   }
   return dict;
 }
 
-PdfObjectPtr ParseObjectPtr(std::string_view s, size_t& pos, int depth) {
-  if (depth > 64) return std::make_shared<PdfObject>(nullptr);
+PdfObjectPtr ParseObjectPtr(std::string_view s, size_t& pos, int depth)
+{
+  if (depth > 64)
+    return std::make_shared<PdfObject>(nullptr);
   SkipWsAndComments(s, pos);
-  if (pos >= s.size()) return std::make_shared<PdfObject>(nullptr);
+  if (pos >= s.size())
+    return std::make_shared<PdfObject>(nullptr);
 
   const char c = s[pos];
   if (c == '[') {
@@ -285,7 +347,8 @@ PdfObjectPtr ParseObjectPtr(std::string_view s, size_t& pos, int depth) {
     ++pos;
     for (;;) {
       SkipWsAndComments(s, pos);
-      if (pos >= s.size()) break;
+      if (pos >= s.size())
+        break;
       if (s[pos] == ']') {
         ++pos;
         break;
@@ -297,9 +360,12 @@ PdfObjectPtr ParseObjectPtr(std::string_view s, size_t& pos, int depth) {
   if (c == '<' && pos + 1 < s.size() && s[pos + 1] == '<') {
     return std::make_shared<PdfObject>(std::make_shared<PdfDict>(ParseDict(s, pos, depth)));
   }
-  if (c == '<') return std::make_shared<PdfObject>(PdfString{ParseStringToken(s, pos)});
-  if (c == '(') return std::make_shared<PdfObject>(PdfString{ParseStringToken(s, pos)});
-  if (c == '/') return std::make_shared<PdfObject>(PdfName{ParseNameToken(s, pos)});
+  if (c == '<')
+    return std::make_shared<PdfObject>(PdfString{ParseStringToken(s, pos)});
+  if (c == '(')
+    return std::make_shared<PdfObject>(PdfString{ParseStringToken(s, pos)});
+  if (c == '/')
+    return std::make_shared<PdfObject>(PdfName{ParseNameToken(s, pos)});
   if (s.substr(pos, 4) == "true") {
     pos += 4;
     return std::make_shared<PdfObject>(true);
@@ -316,7 +382,8 @@ PdfObjectPtr ParseObjectPtr(std::string_view s, size_t& pos, int depth) {
   // Number, possibly an indirect reference "N G R".  Handles integers and
   // real numbers with a decimal fraction (PDF 1.7 §7.3.3).
   const size_t num_start = pos;
-  if (pos < s.size() && (s[pos] == '+' || s[pos] == '-')) ++pos;
+  if (pos < s.size() && (s[pos] == '+' || s[pos] == '-'))
+    ++pos;
   size_t digits = 0;
   while (pos < s.size() && std::isdigit(static_cast<unsigned char>(s[pos]))) {
     ++pos;
@@ -335,14 +402,16 @@ PdfObjectPtr ParseObjectPtr(std::string_view s, size_t& pos, int depth) {
     // Guarantee forward progress: callers (e.g. the array loop) may retry
     // on the same position, which would otherwise spin forever on bytes
     // that are not valid PDF tokens (binary inline-image data etc.).
-    if (pos < s.size()) ++pos;
+    if (pos < s.size())
+      ++pos;
     return std::make_shared<PdfObject>(nullptr);
   }
   if (is_real) {
     const std::string token(s.substr(num_start, pos - num_start));
     char* end = nullptr;
     const double v = std::strtod(token.c_str(), &end);
-    if (end == token.c_str()) return std::make_shared<PdfObject>(nullptr);
+    if (end == token.c_str())
+      return std::make_shared<PdfObject>(nullptr);
     return std::make_shared<PdfObject>(v);
   }
   int64_t first = 0;
@@ -358,8 +427,8 @@ PdfObjectPtr ParseObjectPtr(std::string_view s, size_t& pos, int depth) {
   }
   SkipWsAndComments(s, pos);
   if (pos < s.size() && s[pos] == 'R' &&
-      (pos + 1 == s.size() || IsWs(s[pos + 1]) || s[pos + 1] == '/' ||
-       s[pos + 1] == '[' || s[pos + 1] == '<' || s[pos + 1] == '(' || s[pos + 1] == ']')) {
+      (pos + 1 == s.size() || IsWs(s[pos + 1]) || s[pos + 1] == '/' || s[pos + 1] == '[' ||
+       s[pos + 1] == '<' || s[pos + 1] == '(' || s[pos + 1] == ']')) {
     ++pos;
     return std::make_shared<PdfObject>(PdfRef{first, gen.value()});
   }
@@ -373,7 +442,8 @@ PdfObjectPtr ParseObjectPtr(std::string_view s, size_t& pos, int depth) {
 // Inflate helpers
 // ---------------------------------------------------------------------------
 
-base::Result<std::string> InflateZlib(std::string_view in) {
+base::Result<std::string> InflateZlib(std::string_view in)
+{
   z_stream zs{};
   if (inflateInit(&zs) != Z_OK) {
     return base::Error::Parse("pdf: inflateInit failed");
@@ -402,18 +472,18 @@ base::Result<std::string> InflateZlib(std::string_view in) {
 }
 
 // Applies a stream /DecodeParms predictor (TIFF type 2 or PNG types 10-15).
-bool ApplyPredictor(int predictor, int colors, int bpc, int columns,
-                    std::string& data) {
-  if (predictor == 1) return true;
+bool ApplyPredictor(int predictor, int colors, int bpc, int columns, std::string& data)
+{
+  if (predictor == 1)
+    return true;
   const int bpp_int = std::max(1, (colors * bpc + 7) / 8);
   const size_t bpp = static_cast<size_t>(bpp_int);
   const size_t row_bytes = static_cast<size_t>(columns) * bpp;
   if (predictor == 2) {
     for (size_t row_start = 0; row_start < data.size(); row_start += row_bytes) {
       for (size_t i = bpp; i < row_bytes && row_start + i < data.size(); ++i) {
-        data[row_start + i] = static_cast<char>(
-            static_cast<uint8_t>(data[row_start + i]) +
-            static_cast<uint8_t>(data[row_start + i - bpp]));
+        data[row_start + i] = static_cast<char>(static_cast<uint8_t>(data[row_start + i]) +
+                                                static_cast<uint8_t>(data[row_start + i - bpp]));
       }
     }
     return true;
@@ -425,7 +495,8 @@ bool ApplyPredictor(int predictor, int colors, int bpc, int columns,
     size_t pos = 0;
     while (pos < data.size()) {
       const uint8_t filter = static_cast<uint8_t>(data[pos++]);
-      if (pos + row_bytes > data.size()) break;
+      if (pos + row_bytes > data.size())
+        break;
       std::vector<uint8_t> row(row_bytes);
       for (size_t i = 0; i < row_bytes; ++i) {
         const uint8_t raw = static_cast<uint8_t>(data[pos + i]);
@@ -434,19 +505,27 @@ bool ApplyPredictor(int predictor, int colors, int bpc, int columns,
         const uint8_t c = i >= bpp ? prev_row[i - bpp] : 0;
         int v = 0;
         switch (filter) {
-          case 0: v = raw; break;
-          case 1: v = raw + a; break;
-          case 2: v = raw + b; break;
-          case 3: v = raw + (a + b) / 2; break;
-          case 4: {
-            const int p = a + b - c;
-            const int pa = std::abs(p - a), pb = std::abs(p - b), pc = std::abs(p - c);
-            const int pr = (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c);
-            v = raw + pr;
-            break;
-          }
-          default:
-            return false;
+        case 0:
+          v = raw;
+          break;
+        case 1:
+          v = raw + a;
+          break;
+        case 2:
+          v = raw + b;
+          break;
+        case 3:
+          v = raw + (a + b) / 2;
+          break;
+        case 4: {
+          const int p = a + b - c;
+          const int pa = std::abs(p - a), pb = std::abs(p - b), pc = std::abs(p - c);
+          const int pr = (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c);
+          v = raw + pr;
+          break;
+        }
+        default:
+          return false;
         }
         row[i] = static_cast<uint8_t>(v & 0xFF);
       }
@@ -464,18 +543,21 @@ bool ApplyPredictor(int predictor, int colors, int bpc, int columns,
 // Content-stream tokenizer
 // ---------------------------------------------------------------------------
 
-struct ContentToken {
+struct ContentToken
+{
   bool is_operator = false;
-  PdfObjectPtr operand;  // valid when !is_operator
-  std::string op;        // valid when is_operator
+  PdfObjectPtr operand; // valid when !is_operator
+  std::string op;       // valid when is_operator
 };
 
-std::vector<ContentToken> TokenizeContent(std::string_view content) {
+std::vector<ContentToken> TokenizeContent(std::string_view content)
+{
   std::vector<ContentToken> tokens;
   size_t pos = 0;
   while (pos < content.size()) {
     SkipWsAndComments(content, pos);
-    if (pos >= content.size()) break;
+    if (pos >= content.size())
+      break;
     const char c = content[pos];
 
     if (c == '/' || c == '(' || c == '[' || c == '<') {
@@ -493,14 +575,13 @@ std::vector<ContentToken> TokenizeContent(std::string_view content) {
     const size_t start = pos;
     while (pos < content.size()) {
       const char k = content[pos];
-      if (IsWs(k) || k == '/' || k == '<' || k == '>' || k == '[' || k == ']' ||
-          k == '(' || k == ')' || k == '{' || k == '}') {
+      if (IsWs(k) || k == '/' || k == '<' || k == '>' || k == '[' || k == ']' || k == '(' ||
+          k == ')' || k == '{' || k == '}') {
         break;
       }
       ++pos;
     }
-    tokens.push_back(
-        ContentToken{true, nullptr, std::string(content.substr(start, pos - start))});
+    tokens.push_back(ContentToken{true, nullptr, std::string(content.substr(start, pos - start))});
   }
   return tokens;
 }
@@ -509,14 +590,15 @@ std::vector<ContentToken> TokenizeContent(std::string_view content) {
 // Text extraction (token stream -> text)
 // ---------------------------------------------------------------------------
 
-std::string DecodeTextBytes(std::string_view bytes) {
+std::string DecodeTextBytes(std::string_view bytes)
+{
   if (bytes.size() >= 2 && static_cast<uint8_t>(bytes[0]) == 0xFE &&
       static_cast<uint8_t>(bytes[1]) == 0xFF) {
     // UTF-16BE.
     std::string out;
     for (size_t i = 2; i + 1 < bytes.size(); i += 2) {
-      const char32_t cp = static_cast<char32_t>(
-          (static_cast<uint32_t>(bytes[i]) << 8) | static_cast<uint32_t>(bytes[i + 1]));
+      const char32_t cp = static_cast<char32_t>((static_cast<uint32_t>(bytes[i]) << 8) |
+                                                static_cast<uint32_t>(bytes[i + 1]));
       out += base::EncodeUtf8(cp);
     }
     return out;
@@ -538,9 +620,11 @@ std::string DecodeTextBytes(std::string_view bytes) {
   return out;
 }
 
-void AppendText(std::string& out, std::string_view bytes, bool& line_start) {
+void AppendText(std::string& out, std::string_view bytes, bool& line_start)
+{
   const std::string decoded = DecodeTextBytes(bytes);
-  if (decoded.empty()) return;
+  if (decoded.empty())
+    return;
   if (!out.empty() && !line_start && out.back() != '\n' && out.back() != ' ') {
     out.push_back(' ');
   }
@@ -548,14 +632,16 @@ void AppendText(std::string& out, std::string_view bytes, bool& line_start) {
   line_start = false;
 }
 
-std::string ExtractTextFromContent(std::string_view content) {
+std::string ExtractTextFromContent(std::string_view content)
+{
   const auto tokens = TokenizeContent(content);
   std::string out;
   bool line_start = true;
   std::vector<PdfObjectPtr> operands;
 
   auto handle_line_break = [&] {
-    if (!out.empty() && out.back() != '\n') out.push_back('\n');
+    if (!out.empty() && out.back() != '\n')
+      out.push_back('\n');
     line_start = true;
   };
 
@@ -604,7 +690,8 @@ std::string ExtractTextFromContent(std::string_view content) {
     operands.clear();
   }
 
-  while (!out.empty() && out.back() == '\n') out.pop_back();
+  while (!out.empty() && out.back() == '\n')
+    out.pop_back();
   return out;
 }
 
@@ -657,22 +744,20 @@ struct PdfFontMetrics
 // ---------------------------------------------------------------------------
 class PdfPageRenderer
 {
- public:
+public:
   PdfPageRenderer(const std::map<std::string, PdfFontMetrics>& fonts,
                   int width,
                   int height,
                   float scale,
                   const graphics::FontRegistry* registry)
       : fonts_(fonts), width_(width), height_(height), scale_(scale), registry_(registry)
-  {
-  }
+  {}
 
   base::Result<image::Image> Run(std::string_view content)
   {
     img_.width = width_;
     img_.height = height_;
-    img_.rgba.assign(static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_) * 4,
-                     255);
+    img_.rgba.assign(static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_) * 4, 255);
     if (registry_ != nullptr) {
       text_font_ = registry_->SelectorFor("sans-serif");
     }
@@ -687,7 +772,7 @@ class PdfPageRenderer
     return img_;
   }
 
- private:
+private:
   struct GState
   {
     PdfMatrix ctm;
@@ -749,9 +834,9 @@ class PdfPageRenderer
       return false;
     }
     for (int i = 0; i < n; ++i) {
-      out.push_back(ToFloat(*operands_[operands_.size() - static_cast<std::size_t>(n) +
-                                        static_cast<std::size_t>(i)],
-                            0.0f));
+      out.push_back(ToFloat(
+          *operands_[operands_.size() - static_cast<std::size_t>(n) + static_cast<std::size_t>(i)],
+          0.0f));
     }
     operands_.resize(operands_.size() - static_cast<std::size_t>(n));
     return true;
@@ -834,13 +919,7 @@ class PdfPageRenderer
   }
 
   // De Casteljau flattening of a cubic bezier; appends to the current sub-path.
-  void CurveTo(float x1,
-               float y1,
-               float x2,
-               float y2,
-               float x3,
-               float y3,
-               int depth = 0)
+  void CurveTo(float x1, float y1, float x2, float y2, float x3, float y3, int depth = 0)
   {
     if (!has_current_) {
       MoveTo(0, 0);
@@ -986,8 +1065,8 @@ class PdfPageRenderer
         }
         // Segments far outside the canvas would otherwise generate an
         // enormous number of (clamped) steps; cap the work to the diagonal.
-        const int steps = std::max(1, std::min(static_cast<int>(len / step),
-                                              2 * (width_ + height_) + 16));
+        const int steps =
+            std::max(1, std::min(static_cast<int>(len / step), 2 * (width_ + height_) + 16));
         for (int s = 0; s <= steps; ++s) {
           const float t = static_cast<float>(s) / static_cast<float>(steps);
           const int cx = static_cast<int>(std::lround(p0.x + dx * t));
@@ -1059,8 +1138,8 @@ class PdfPageRenderer
     // The glyph size is the font size scaled by the CTM's x-axis stretch (the
     // text matrix's own scale multiplies advances, not the glyph outlines).
     const float ctm_xscale = std::hypot(state_.ctm.a, state_.ctm.b);
-    const float px_size = std::min(
-        fs * scale_ * std::max(ctm_xscale, 0.01f), 4.0f * static_cast<float>(height_));
+    const float px_size =
+        std::min(fs * scale_ * std::max(ctm_xscale, 0.01f), 4.0f * static_cast<float>(height_));
     const PdfMatrix tm = state_.text_matrix.Mul(state_.ctm);
     for (const uint32_t cp : DecodeSimple(bytes)) {
       if (cp == 0x20) {
@@ -1086,9 +1165,9 @@ class PdfPageRenderer
               continue;
             }
             for (int gx = 0; gx < gb.width; ++gx) {
-              const uint8_t alpha = gb.data[static_cast<std::size_t>(gy) *
-                                                 static_cast<std::size_t>(gb.pitch) +
-                                             static_cast<std::size_t>(gx)];
+              const uint8_t alpha =
+                  gb.data[static_cast<std::size_t>(gy) * static_cast<std::size_t>(gb.pitch) +
+                          static_cast<std::size_t>(gx)];
               if (alpha != 0) {
                 BlendGlyphPixel(pen_x + gb.left + gx, dest_y, alpha, r, g, b);
               }
@@ -1317,9 +1396,8 @@ class PdfPageRenderer
             } else {
               const float offset = ToFloat(*item, 0.0f);
               // TJ offsets are in 1/1000 em and move the pen backward.
-              state_.text_matrix.e -=
-                  offset * 0.001f * state_.font_size *
-                  std::max(std::fabs(state_.text_matrix.a), 0.0001f);
+              state_.text_matrix.e -= offset * 0.001f * state_.font_size *
+                                      std::max(std::fabs(state_.text_matrix.a), 0.0001f);
             }
           }
         }
@@ -1351,9 +1429,11 @@ class PdfPageRenderer
   }
 };
 
-class Parser {
- public:
-  base::Result<PdfDocument> Run(std::string_view data) {
+class Parser
+{
+public:
+  base::Result<PdfDocument> Run(std::string_view data)
+  {
     if (!IsPdf(data)) {
       return base::Error::InvalidArgument("not a PDF file");
     }
@@ -1365,7 +1445,8 @@ class Parser {
   }
 
   // Loads the document and renders one page (the public RenderPage wrapper).
-  base::Result<image::Image> RenderPageEntry(std::string_view data, int page_index, float scale) {
+  base::Result<image::Image> RenderPageEntry(std::string_view data, int page_index, float scale)
+  {
     if (!IsPdf(data)) {
       return base::Error::InvalidArgument("not a PDF file");
     }
@@ -1377,7 +1458,8 @@ class Parser {
 
   // Renders one page to an RGBA image.  Parses the document with the same
   // xref/object machinery as Run(); see pdf.h for the supported subset.
-  base::Result<image::Image> RenderPageImage(int page_index, float scale) {
+  base::Result<image::Image> RenderPageImage(int page_index, float scale)
+  {
     if (page_index < 0 || scale <= 0.0f || !std::isfinite(scale)) {
       return base::Error::InvalidArgument("pdf: bad page index or scale");
     }
@@ -1428,20 +1510,20 @@ class Parser {
     return renderer.Run(CollectPageContent(*page_dict));
   }
 
- private:
+private:
   struct XrefEntry
   {
-    int type = 0;            // 1 = classic offset, 2 = inside an object stream
-    size_t offset = 0;       // type 1
-    int64_t objstm_num = 0;  // type 2: the /ObjStm container object number
-    int objstm_index = 0;    // type 2: the object's index inside the container
+    int type = 0;           // 1 = classic offset, 2 = inside an object stream
+    size_t offset = 0;      // type 1
+    int64_t objstm_num = 0; // type 2: the /ObjStm container object number
+    int objstm_index = 0;   // type 2: the object's index inside the container
   };
   std::map<int64_t, size_t> offsets_;
   std::map<int64_t, XrefEntry> xref_entries_;
   std::map<int64_t, PdfObjectPtr> objects_;
   // Objects inside a compressed object stream, keyed by object number.
   std::map<int64_t, PdfObjectPtr> stream_objects_;
-  std::string trailer_data_;  // kept for trailer parsing
+  std::string trailer_data_; // kept for trailer parsing
   std::string_view file_;
   // The xref-stream dictionary, when the document uses one (its /Root etc.
   // act as the trailer).
@@ -1449,19 +1531,21 @@ class Parser {
   // FreeType glyph source for the text renderer.
   graphics::FontRegistry fonts_registry_;
 
-  bool LoadXref(std::string_view data) {
+  bool LoadXref(std::string_view data)
+  {
     file_ = data;
     size_t startxref = std::string_view::npos;
-    for (size_t i = 0; (i = data.find("startxref", i)) != std::string_view::npos;
-         i += 9) {
+    for (size_t i = 0; (i = data.find("startxref", i)) != std::string_view::npos; i += 9) {
       startxref = i;
     }
-    if (startxref == std::string_view::npos) return false;
+    if (startxref == std::string_view::npos)
+      return false;
     size_t pos = startxref + 9;
     SkipWsAndComments(data, pos);
     const size_t line_end = data.find_first_of(" \t\r\n", pos);
     int64_t xref_offset = 0;
-    if (!ParseInt(data.substr(pos, line_end - pos), &xref_offset)) return false;
+    if (!ParseInt(data.substr(pos, line_end - pos), &xref_offset))
+      return false;
     if (ReadXrefSection(static_cast<size_t>(xref_offset))) {
       return true;
     }
@@ -1472,26 +1556,35 @@ class Parser {
 
   // Reads the raw bytes of the stream object at |offset| (dict + body)
   // without using EnsureObjectLoaded, for bootstrapping xref streams.
-  bool ReadRawStreamAt(size_t offset, std::shared_ptr<PdfDict>& dict, std::string& raw) {
+  bool ReadRawStreamAt(size_t offset, std::shared_ptr<PdfDict>& dict, std::string& raw)
+  {
     size_t pos = offset;
     const auto n = ReadNumberToken(file_, pos);
-    if (!n.has_value()) return false;
+    if (!n.has_value())
+      return false;
     const auto g = ReadNumberToken(file_, pos);
-    if (!g.has_value()) return false;
+    if (!g.has_value())
+      return false;
     SkipWsAndComments(file_, pos);
-    if (file_.substr(pos, 3) != "obj") return false;
+    if (file_.substr(pos, 3) != "obj")
+      return false;
     pos += 3;
     PdfObjectPtr obj = ParseObjectPtr(file_, pos, 0);
     const auto* dict_ptr = GetIf<std::shared_ptr<PdfDict>>(*obj);
-    if (dict_ptr == nullptr) return false;
+    if (dict_ptr == nullptr)
+      return false;
     SkipWsAndComments(file_, pos);
-    if (file_.substr(pos, 6) != "stream") return false;
+    if (file_.substr(pos, 6) != "stream")
+      return false;
     pos += 6;
-    if (pos < file_.size() && file_[pos] == '\r') ++pos;
-    if (pos < file_.size() && file_[pos] == '\n') ++pos;
+    if (pos < file_.size() && file_[pos] == '\r')
+      ++pos;
+    if (pos < file_.size() && file_[pos] == '\n')
+      ++pos;
     const size_t stream_start = pos;
     const size_t end = file_.find("endstream", pos);
-    if (end == std::string_view::npos) return false;
+    if (end == std::string_view::npos)
+      return false;
     size_t len = end - stream_start;
     if (len >= 2 && file_[stream_start + len - 2] == '\r' &&
         file_[stream_start + len - 1] == '\n') {
@@ -1506,7 +1599,8 @@ class Parser {
 
   // Parses a cross-reference stream (PDF 1.7 §7.5.8) and, through it, the
   // /Prev chain.  Returns true when at least one section was read.
-  bool LoadXrefStream(size_t offset) {
+  bool LoadXrefStream(size_t offset)
+  {
     for (int guard = 0; guard < 64; ++guard) {
       std::shared_ptr<PdfDict> dict;
       std::string raw;
@@ -1530,7 +1624,8 @@ class Parser {
       }
       int64_t size = 0;
       if (const PdfObject* sz = dict->Find("Size"); sz != nullptr) {
-        if (const auto* v = GetIf<int64_t>(*sz)) size = *v;
+        if (const auto* v = GetIf<int64_t>(*sz))
+          size = *v;
       }
       // /Index [first count ...]: default [0 Size].
       std::vector<std::pair<int64_t, int64_t>> sections;
@@ -1538,8 +1633,10 @@ class Parser {
         if (const auto* arr = GetIf<PdfArray>(*idx)) {
           for (std::size_t i = 0; i + 1 < arr->items.size(); i += 2) {
             int64_t first = 0, count = 0;
-            if (const auto* v = GetIf<int64_t>(*arr->items[i])) first = *v;
-            if (const auto* v = GetIf<int64_t>(*arr->items[i + 1])) count = *v;
+            if (const auto* v = GetIf<int64_t>(*arr->items[i]))
+              first = *v;
+            if (const auto* v = GetIf<int64_t>(*arr->items[i + 1]))
+              count = *v;
             sections.push_back({first, count});
           }
         }
@@ -1548,21 +1645,25 @@ class Parser {
       }
       std::string inflated = raw;
       if (const PdfObject* filter = dict->Find("Filter"); filter != nullptr) {
-        if (const auto* name = GetIf<PdfName>(*filter); name != nullptr &&
-            name->value == "FlateDecode") {
+        if (const auto* name = GetIf<PdfName>(*filter);
+            name != nullptr && name->value == "FlateDecode") {
           const auto r = InflateZlib(raw);
-          if (!r) return false;
+          if (!r)
+            return false;
           inflated = std::move(r.value());
         }
       }
       const size_t entry_bytes =
           static_cast<size_t>(w[0]) + static_cast<size_t>(w[1]) + static_cast<size_t>(w[2]);
-      if (entry_bytes == 0) return false;
+      if (entry_bytes == 0)
+        return false;
       size_t pos = 0;
       for (const auto& [first, count] : sections) {
-        if (count <= 0 || count > 10000000) continue;
+        if (count <= 0 || count > 10000000)
+          continue;
         for (int64_t i = 0; i < count; ++i) {
-          if (pos + entry_bytes > inflated.size()) return false;
+          if (pos + entry_bytes > inflated.size())
+            return false;
           auto read_int = [&](int bytes) -> int64_t {
             int64_t v = 0;
             for (int b = 0; b < bytes; ++b) {
@@ -1575,13 +1676,16 @@ class Parser {
           entry.type = type;
           if (type == 1) {
             entry.offset = static_cast<size_t>(read_int(w[1]));
-            if (w[2] > 0) read_int(w[2]);  // generation number (unused)
+            if (w[2] > 0)
+              read_int(w[2]); // generation number (unused)
           } else if (type == 2) {
             entry.objstm_num = read_int(w[1]);
             entry.objstm_index = w[2] > 0 ? static_cast<int>(read_int(w[2])) : 0;
           } else {
-            if (w[1] > 0) read_int(w[1]);
-            if (w[2] > 0) read_int(w[2]);
+            if (w[1] > 0)
+              read_int(w[1]);
+            if (w[2] > 0)
+              read_int(w[2]);
             continue; // free entry
           }
           xref_entries_.emplace(first + i, entry);
@@ -1590,7 +1694,8 @@ class Parser {
       // /Prev chains to the older section.
       int64_t prev = 0;
       if (const PdfObject* p = dict->Find("Prev"); p != nullptr) {
-        if (const auto* v = GetIf<int64_t>(*p)) prev = *v;
+        if (const auto* v = GetIf<int64_t>(*p))
+          prev = *v;
       }
       if (prev > 0) {
         offset = static_cast<size_t>(prev);
@@ -1601,9 +1706,11 @@ class Parser {
     return false;
   }
 
-  bool ReadXrefSection(size_t offset) {
+  bool ReadXrefSection(size_t offset)
+  {
     for (int guard = 0; guard < 64; ++guard) {
-      if (offset >= file_.size()) return false;
+      if (offset >= file_.size())
+        return false;
       size_t pos = offset;
       SkipWsAndComments(file_, pos);
       if (file_.substr(pos, 4) == "xref") {
@@ -1613,14 +1720,15 @@ class Parser {
           if (file_.substr(pos, 7) == "trailer") {
             pos += 7;
             SkipWsAndComments(file_, pos);
-            if (trailer_data_.empty()) trailer_data_ = std::string(file_);
+            if (trailer_data_.empty())
+              trailer_data_ = std::string(file_);
             PdfObject trailer = *ParseObjectPtr(file_, pos, 0);
             const auto* td = GetIf<std::shared_ptr<PdfDict>>(trailer);
             if (td != nullptr) {
               if (const PdfObject* p = (*td)->Find("Prev"); p != nullptr) {
                 if (const auto* v = GetIf<int64_t>(*p); v != nullptr && *v > 0) {
                   offset = static_cast<size_t>(*v);
-                  break;  // continue the outer guard loop with the older table
+                  break; // continue the outer guard loop with the older table
                 }
               }
             }
@@ -1629,15 +1737,19 @@ class Parser {
           // Subsection header "first count".
           int64_t first = 0, count = 0;
           const auto n1 = ReadNumberToken(file_, pos);
-          if (!n1.has_value()) return true;
+          if (!n1.has_value())
+            return true;
           first = n1.value();
           const auto n2 = ReadNumberToken(file_, pos);
-          if (!n2.has_value()) return true;
+          if (!n2.has_value())
+            return true;
           count = n2.value();
-          if (count <= 0 || count > 1000000) return false;
-          SkipWsAndComments(file_, pos);  // newline between header and entries
+          if (count <= 0 || count > 1000000)
+            return false;
+          SkipWsAndComments(file_, pos); // newline between header and entries
           for (int64_t i = 0; i < count; ++i) {
-            if (pos + 20 > file_.size()) return false;
+            if (pos + 20 > file_.size())
+              return false;
             const std::string_view entry = file_.substr(pos, 20);
             pos += 20;
             const char type = entry.size() >= 18 ? entry[17] : ' ';
@@ -1652,7 +1764,8 @@ class Parser {
           }
         }
       } else if (file_.substr(pos, 7) == "trailer") {
-        if (trailer_data_.empty()) trailer_data_ = std::string(file_);
+        if (trailer_data_.empty())
+          trailer_data_ = std::string(file_);
         return true;
       } else {
         return false;
@@ -1661,42 +1774,51 @@ class Parser {
     return false;
   }
 
-  PdfObject GetTrailerRoot() {
+  PdfObject GetTrailerRoot()
+  {
     // PDF 1.5+: the xref stream dictionary doubles as the trailer.
     if (xref_stream_dict_ != nullptr) {
-      if (const PdfObject* root = xref_stream_dict_->Find("Root");
-          root != nullptr) {
+      if (const PdfObject* root = xref_stream_dict_->Find("Root"); root != nullptr) {
         return *root;
       }
     }
-    if (trailer_data_.empty()) return PdfObject(nullptr);
+    if (trailer_data_.empty())
+      return PdfObject(nullptr);
     size_t pos = trailer_data_.find("trailer");
-    if (pos == std::string_view::npos) return PdfObject(nullptr);
+    if (pos == std::string_view::npos)
+      return PdfObject(nullptr);
     pos += 7;
     SkipWsAndComments(trailer_data_, pos);
     PdfObject trailer = *ParseObjectPtr(trailer_data_, pos, 0);
     const auto* td = GetIf<std::shared_ptr<PdfDict>>(trailer);
-    if (td == nullptr) return PdfObject(nullptr);
+    if (td == nullptr)
+      return PdfObject(nullptr);
     const PdfObject* root = (*td)->Find("Root");
-    if (root == nullptr) return PdfObject(nullptr);
+    if (root == nullptr)
+      return PdfObject(nullptr);
     return *root;
   }
 
   // Parses an /ObjStm object stream (PDF 1.7 §7.5.7) and caches every
   // object it contains, keyed by object number.  Pair offsets are relative
   // to the first object in the stream, whose position is /First.
-  void LoadObjectStream(const PdfDict& dict) {
+  void LoadObjectStream(const PdfDict& dict)
+  {
     const PdfObject* stream_obj = dict.Find("__stream__");
-    if (stream_obj == nullptr) return;
+    if (stream_obj == nullptr)
+      return;
     const auto* stream = GetIf<PdfString>(*stream_obj);
-    if (stream == nullptr) return;
+    if (stream == nullptr)
+      return;
     int64_t n = 0;
     if (const PdfObject* nobj = dict.Find("N"); nobj != nullptr) {
-      if (const auto* v = GetIf<int64_t>(*nobj)) n = *v;
+      if (const auto* v = GetIf<int64_t>(*nobj))
+        n = *v;
     }
     int64_t first = 0;
     if (const PdfObject* fobj = dict.Find("First"); fobj != nullptr) {
-      if (const auto* v = GetIf<int64_t>(*fobj)) first = *v;
+      if (const auto* v = GetIf<int64_t>(*fobj))
+        first = *v;
     }
     const std::string& data = stream->value;
     size_t pos = 0;
@@ -1704,11 +1826,14 @@ class Parser {
     std::vector<std::pair<int64_t, int64_t>> pairs;
     for (int64_t i = 0; i < n; ++i) {
       const auto num = ReadNumberToken(data, pos);
-      if (!num.has_value()) return;
+      if (!num.has_value())
+        return;
       const auto off = ReadNumberToken(data, pos);
-      if (!off.has_value()) return;
+      if (!off.has_value())
+        return;
       pairs.push_back({*num, *off});
-      if (pairs.size() > 100000) return;
+      if (pairs.size() > 100000)
+        return;
     }
     for (const auto& [obj_num, obj_off] : pairs) {
       const int64_t abs = first + obj_off;
@@ -1721,8 +1846,10 @@ class Parser {
     }
   }
 
-  void EnsureObjectLoaded(int64_t num) {
-    if (objects_.count(num) != 0 || stream_objects_.count(num) != 0) return;
+  void EnsureObjectLoaded(int64_t num)
+  {
+    if (objects_.count(num) != 0 || stream_objects_.count(num) != 0)
+      return;
     const auto xit = xref_entries_.find(num);
     if (xit != xref_entries_.end()) {
       if (xit->second.type == 2) {
@@ -1730,10 +1857,11 @@ class Parser {
         const int64_t container = xit->second.objstm_num;
         EnsureObjectLoaded(container);
         const auto cit = objects_.find(container);
-        if (cit == objects_.end()) return;
-        const auto* dict_ptr =
-            GetIf<std::shared_ptr<PdfDict>>(*cit->second);
-        if (dict_ptr == nullptr) return;
+        if (cit == objects_.end())
+          return;
+        const auto* dict_ptr = GetIf<std::shared_ptr<PdfDict>>(*cit->second);
+        if (dict_ptr == nullptr)
+          return;
         LoadObjectStream(**dict_ptr);
         return;
       }
@@ -1741,7 +1869,8 @@ class Parser {
     }
     const auto it = offsets_.find(num);
     if (it == offsets_.end()) {
-      if (xit == xref_entries_.end()) return;
+      if (xit == xref_entries_.end())
+        return;
     }
     size_t offset = 0;
     if (it != offsets_.end()) {
@@ -1749,14 +1878,18 @@ class Parser {
     } else if (xit != xref_entries_.end()) {
       offset = xit->second.offset;
     }
-    if (offset >= file_.size()) return;
+    if (offset >= file_.size())
+      return;
     size_t pos = offset;
     const auto n = ReadNumberToken(file_, pos);
-    if (!n.has_value() || n.value() != num) return;
+    if (!n.has_value() || n.value() != num)
+      return;
     const auto g = ReadNumberToken(file_, pos);
-    if (!g.has_value()) return;
+    if (!g.has_value())
+      return;
     SkipWsAndComments(file_, pos);
-    if (file_.substr(pos, 3) != "obj") return;
+    if (file_.substr(pos, 3) != "obj")
+      return;
     pos += 3;
     PdfObjectPtr obj = ParseObjectPtr(file_, pos, 0);
 
@@ -1765,8 +1898,10 @@ class Parser {
       SkipWsAndComments(file_, pos);
       if (file_.substr(pos, 6) == "stream") {
         pos += 6;
-        if (pos < file_.size() && file_[pos] == '\r') ++pos;
-        if (pos < file_.size() && file_[pos] == '\n') ++pos;
+        if (pos < file_.size() && file_[pos] == '\r')
+          ++pos;
+        if (pos < file_.size() && file_[pos] == '\n')
+          ++pos;
         const size_t stream_start = pos;
         const size_t end = file_.find("endstream", pos);
         if (end != std::string_view::npos) {
@@ -1780,8 +1915,7 @@ class Parser {
           const std::string raw(file_.substr(stream_start, len));
           PdfString stream_bytes{DecodeStream(**dict_ptr, raw)};
           auto with_stream = std::make_shared<PdfDict>(**dict_ptr);
-          with_stream->entries["__stream__"] =
-              std::make_shared<PdfObject>(std::move(stream_bytes));
+          with_stream->entries["__stream__"] = std::make_shared<PdfObject>(std::move(stream_bytes));
           obj = std::make_shared<PdfObject>(with_stream);
         }
       }
@@ -1790,23 +1924,27 @@ class Parser {
   }
 
   // Decodes a stream body according to /Filter and /DecodeParms.
-  std::string DecodeStream(const PdfDict& dict, const std::string& raw) {
+  std::string DecodeStream(const PdfDict& dict, const std::string& raw)
+  {
     std::vector<std::string> filters;
     if (const PdfObject* filter = dict.Find("Filter"); filter != nullptr) {
       if (const auto* name = GetIf<PdfName>(*filter)) {
         filters.push_back(name->value);
       } else if (const auto* arr = GetIf<PdfArray>(*filter)) {
         for (const PdfObjectPtr& f : arr->items) {
-          if (const auto* fname = GetIf<PdfName>(*f)) filters.push_back(fname->value);
+          if (const auto* fname = GetIf<PdfName>(*f))
+            filters.push_back(fname->value);
         }
       }
     }
-    if (filters.empty()) return raw;
+    if (filters.empty())
+      return raw;
     if (filters.size() != 1 || filters[0] != "FlateDecode") {
-      return {};  // unsupported filter chain: stream contributes no text
+      return {}; // unsupported filter chain: stream contributes no text
     }
     auto inflated = InflateZlib(raw);
-    if (!inflated) return {};
+    if (!inflated)
+      return {};
     std::string out = std::move(inflated.value());
 
     int predictor = 1, colors = 1, bpc = 8, columns = 1;
@@ -1814,8 +1952,10 @@ class Parser {
       if (const auto* pd = GetIf<std::shared_ptr<PdfDict>>(*parms)) {
         auto getint = [&](const char* key, int def) {
           const PdfObject* v = (*pd)->Find(key);
-          if (v == nullptr) return def;
-          if (const auto* i = GetIf<int64_t>(*v)) return static_cast<int>(*i);
+          if (v == nullptr)
+            return def;
+          if (const auto* i = GetIf<int64_t>(*v))
+            return static_cast<int>(*i);
           return def;
         };
         predictor = getint("Predictor", 1);
@@ -1830,8 +1970,10 @@ class Parser {
     return out;
   }
 
-  PdfObject Resolve(PdfObject obj, int depth = 0) {
-    if (depth > 64) return PdfObject(nullptr);
+  PdfObject Resolve(PdfObject obj, int depth = 0)
+  {
+    if (depth > 64)
+      return PdfObject(nullptr);
     if (const auto* ref = GetIf<PdfRef>(obj)) {
       EnsureObjectLoaded(ref->num);
       const auto it = objects_.find(ref->num);
@@ -1850,13 +1992,15 @@ class Parser {
   // Resolves an inheritable page attribute (PDF 1.7 §7.7.3.4) by walking
   // the /Parent chain.  Returns null when neither the page nor any
   // ancestor defines it.
-  PdfObject FindInheritedAttribute(const PdfDict* node, std::string_view key) {
+  PdfObject FindInheritedAttribute(const PdfDict* node, std::string_view key)
+  {
     for (int guard = 0; guard < 128 && node != nullptr; ++guard) {
       if (const PdfObject* v = node->Find(key); v != nullptr) {
         return Resolve(*v);
       }
       const PdfObject* parent = node->Find("Parent");
-      if (parent == nullptr) break;
+      if (parent == nullptr)
+        break;
       PdfObject parent_obj = Resolve(*parent);
       const auto* parent_dict = GetIf<std::shared_ptr<PdfDict>>(parent_obj);
       node = parent_dict == nullptr ? nullptr : parent_dict->get();
@@ -1864,9 +2008,10 @@ class Parser {
     return PdfObject(nullptr);
   }
 
-  base::Result<PdfDocument> ExtractPages(PdfObject root) {
+  base::Result<PdfDocument> ExtractPages(PdfObject root)
+  {
     PdfDocument doc;
-    PdfObject catalog_obj = Resolve(root);  // /Root is usually an indirect ref
+    PdfObject catalog_obj = Resolve(root); // /Root is usually an indirect ref
     const auto* catalog = GetIf<std::shared_ptr<PdfDict>>(catalog_obj);
     if (catalog == nullptr) {
       return base::Error::Parse("pdf: missing catalog");
@@ -1912,7 +2057,8 @@ class Parser {
   // returning its dictionary or nullptr when the index is out of range.  The
   // catalog points at the tree root via /Pages; tree nodes list children
   // via /Kids.
-  const PdfDict* FindPageDict(const PdfDict& node, int& remaining) {
+  const PdfDict* FindPageDict(const PdfDict& node, int& remaining)
+  {
     if (const PdfObject* kids = node.Find("Kids"); kids != nullptr) {
       PdfObject kids_resolved = Resolve(*kids);
       if (const auto* arr = GetIf<PdfArray>(kids_resolved)) {
@@ -1943,7 +2089,8 @@ class Parser {
 
   // Extracts per-font metrics (/Widths, /FirstChar) from the page's
   // /Resources /Font dictionary for the text renderer.
-  std::map<std::string, PdfFontMetrics> CollectFontMetrics(const PdfDict& page) {
+  std::map<std::string, PdfFontMetrics> CollectFontMetrics(const PdfDict& page)
+  {
     std::map<std::string, PdfFontMetrics> out;
     const PdfObject* resources = page.Find("Resources");
     if (resources == nullptr) {
@@ -1994,7 +2141,8 @@ class Parser {
     return out;
   }
 
-  void CollectPages(const PdfDict& node, PdfDocument& doc) {
+  void CollectPages(const PdfDict& node, PdfDocument& doc)
+  {
     const PdfObject* kids = node.Find("Kids");
     if (kids == nullptr) {
       ExtractPage(node, doc);
@@ -2012,7 +2160,8 @@ class Parser {
 
   // Concatenates a page's content streams (/Contents: one stream or an array
   // of streams), each already decoded by EnsureObjectLoaded.
-  std::string CollectPageContent(const PdfDict& page) {
+  std::string CollectPageContent(const PdfDict& page)
+  {
     std::string content;
     const PdfObject* contents = page.Find("Contents");
     if (contents == nullptr) {
@@ -2042,7 +2191,8 @@ class Parser {
     return content;
   }
 
-  void ExtractPage(const PdfDict& page, PdfDocument& doc) {
+  void ExtractPage(const PdfDict& page, PdfDocument& doc)
+  {
     PdfPage out;
     out.index = static_cast<int>(doc.pages.size());
 
@@ -2070,20 +2220,23 @@ class Parser {
   }
 };
 
-}  // namespace
+} // namespace
 
-base::Result<PdfDocument> ExtractText(std::string_view data) {
+base::Result<PdfDocument> ExtractText(std::string_view data)
+{
   Parser parser;
   return parser.Run(data);
 }
 
-base::Result<image::Image> RenderPage(std::string_view data, int page_index, float scale) {
+base::Result<image::Image> RenderPage(std::string_view data, int page_index, float scale)
+{
   Parser parser;
   return parser.RenderPageEntry(data, page_index, scale);
 }
 
-bool IsPdf(std::string_view data) {
+bool IsPdf(std::string_view data)
+{
   return data.size() >= 5 && data.substr(0, 5) == "%PDF-";
 }
 
-}  // namespace neko::pdf
+} // namespace neko::pdf

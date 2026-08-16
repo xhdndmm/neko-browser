@@ -5,7 +5,8 @@
 
 namespace neko::graphics {
 
-FT_Library SharedFreeTypeLibrary() {
+FT_Library SharedFreeTypeLibrary()
+{
   static FT_Library library = [] {
     FT_Library lib = nullptr;
     if (FT_Init_FreeType(&lib) != 0) {
@@ -16,4 +17,4 @@ FT_Library SharedFreeTypeLibrary() {
   return library;
 }
 
-}  // namespace neko::graphics
+} // namespace neko::graphics

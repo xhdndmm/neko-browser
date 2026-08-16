@@ -1807,7 +1807,7 @@ void StyleEngine::ComputeElement(dom::Element& element,
       if (const std::optional<float> g = parse_number(parts[0])) {
         out.flex_grow = g.value();
         out.flex_shrink = 1;
-        out.flex_basis = SizeSpec{0, false};
+        out.flex_basis = SizeSpec{};
       }
     } else if (parts.size() >= 2) {
       // First component is grow (a number); a non-number second is basis.
@@ -1837,7 +1837,7 @@ void StyleEngine::ComputeElement(dom::Element& element,
         }
       } else if (parts.size() >= 2 && parse_number(parts[0]).has_value()) {
         // Two or more components with no length: basis resolves to 0.
-        out.flex_basis = SizeSpec{0, false};
+        out.flex_basis = SizeSpec{};
       }
     }
   }
@@ -1915,11 +1915,8 @@ void StyleEngine::ComputeElement(dom::Element& element,
     out.grid_auto_flow = ParseGridAutoFlow(d->value);
   }
   if (const css::Declaration* d = find("grid-area")) {
-    ParseGridArea(d->value,
-                  out.grid_row_start,
-                  out.grid_column_start,
-                  out.grid_row_end,
-                  out.grid_column_end);
+    ParseGridArea(
+        d->value, out.grid_row_start, out.grid_column_start, out.grid_row_end, out.grid_column_end);
   }
   if (const css::Declaration* d = find("grid-column")) {
     ParseGridPlacementShorthand(d->value, out.grid_column_start, out.grid_column_end);

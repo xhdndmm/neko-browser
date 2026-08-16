@@ -115,27 +115,28 @@ struct PageApis
   std::function<base::Result<void>(std::string_view db, int64_t version)> idb_set_version;
   std::function<base::Result<void>(std::string_view db)> idb_delete_db;
   std::function<base::Result<std::vector<IdbStoreMeta>>(std::string_view db)> idb_store_names;
-  std::function<base::Result<void>(std::string_view db, std::string_view store,
-                                   std::string_view key_path, bool auto_increment)>
+  std::function<base::Result<void>(
+      std::string_view db, std::string_view store, std::string_view key_path, bool auto_increment)>
       idb_create_store;
-  std::function<base::Result<void>(std::string_view db, std::string_view store)>
-      idb_delete_store;
-  std::function<base::Result<std::string>(std::string_view db, std::string_view store,
-                                          std::optional<std::string> key, std::string value)>
+  std::function<base::Result<void>(std::string_view db, std::string_view store)> idb_delete_store;
+  std::function<base::Result<std::string>(std::string_view db,
+                                          std::string_view store,
+                                          std::optional<std::string> key,
+                                          std::string value)>
       idb_add;
-  std::function<base::Result<std::string>(std::string_view db, std::string_view store,
-                                          std::optional<std::string> key, std::string value)>
+  std::function<base::Result<std::string>(std::string_view db,
+                                          std::string_view store,
+                                          std::optional<std::string> key,
+                                          std::string value)>
       idb_put;
-  std::function<base::Result<std::optional<std::string>>(std::string_view db,
-                                                         std::string_view store,
-                                                         std::string key)>
+  std::function<base::Result<std::optional<std::string>>(
+      std::string_view db, std::string_view store, std::string key)>
       idb_get;
   std::function<base::Result<void>(std::string_view db, std::string_view store, std::string key)>
       idb_delete;
   std::function<base::Result<void>(std::string_view db, std::string_view store)> idb_clear;
   std::function<base::Result<int64_t>(std::string_view db, std::string_view store)> idb_count;
-  std::function<base::Result<std::vector<std::string>>(std::string_view db,
-                                                       std::string_view store)>
+  std::function<base::Result<std::vector<std::string>>(std::string_view db, std::string_view store)>
       idb_get_all;
 };
 
@@ -279,14 +280,16 @@ public:
 
   // Dispatches a cancelable keyboard event (keydown/keyup) to |element| with
   // the UI Events key/code strings.  Returns true when NOT canceled.
-  bool DispatchKeyboardEvent(dom::Element& element, std::string_view type, std::string_view key,
+  bool DispatchKeyboardEvent(dom::Element& element,
+                             std::string_view type,
+                             std::string_view key,
                              std::string_view code);
 
   // Dispatches a cancelable pointer event (mousedown/mouseup/click) to
   // |element| with client coordinates and the mouse button.  Returns true
   // when NOT canceled.
-  bool DispatchMouseEvent(dom::Element& element, std::string_view type, double client_x,
-                          double client_y, int button);
+  bool DispatchMouseEvent(
+      dom::Element& element, std::string_view type, double client_x, double client_y, int button);
 
   // Dispatches a cancelable wheel event to |element| with the vertical scroll
   // delta (px).  Returns true when NOT canceled.

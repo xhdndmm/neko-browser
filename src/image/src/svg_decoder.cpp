@@ -4,6 +4,14 @@
 // The XML parsing here is intentionally minimal — elements + attributes only,
 // enough for the SVG constructs pages actually use in <img> logos and icons.
 
+// GCC's optimizer sometimes mis-analyzes std::vector growth (memmove over a
+// temporary single-element array) as an out-of-bounds access; the runtime is
+// correct and ASan/UBSan clean.  Silence just that false positive.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+#endif
+
 #include "neko/image/svg_decoder.h"
 
 #include "neko/base/status.h"
@@ -1436,5 +1444,9 @@ base::Result<Image> DecodeSvg(std::string_view data)
   }
   return base::Ok(std::move(image));
 }
+
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 } // namespace neko::image

@@ -1,11 +1,11 @@
 #pragma once
 
+#include "neko/base/status.h"
+
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
-
-#include "neko/base/status.h"
 
 namespace neko::url {
 
@@ -17,31 +17,65 @@ namespace neko::url {
 //
 // Limitations (Phase 1): IDNA for non-ASCII hosts, opaque paths for
 // non-special schemes and `file:` URLs are not supported yet.
-class Url {
- public:
+class Url
+{
+public:
   // Parses an absolute URL (a scheme is required).
   static base::Result<Url> Parse(std::string_view input);
 
   // Parses |input|, resolving relative references against |base|.
   static base::Result<Url> Parse(std::string_view input, const Url& base);
 
-  const std::string& scheme() const { return scheme_; }
-  const std::string& host() const { return host_; }
-  const std::string& username() const { return username_; }
-  const std::string& password() const { return password_; }
+  const std::string& scheme() const
+  {
+    return scheme_;
+  }
+  const std::string& host() const
+  {
+    return host_;
+  }
+  const std::string& username() const
+  {
+    return username_;
+  }
+  const std::string& password() const
+  {
+    return password_;
+  }
 
   // Explicit port; nullopt when not specified.
-  const std::optional<uint16_t>& port() const { return port_; }
+  const std::optional<uint16_t>& port() const
+  {
+    return port_;
+  }
   // Port to use for connections (scheme default when unspecified).
   uint16_t effective_port() const;
 
-  const std::string& path() const { return path_; }
-  const std::string& query() const { return query_; }
-  const std::string& fragment() const { return fragment_; }
+  const std::string& path() const
+  {
+    return path_;
+  }
+  const std::string& query() const
+  {
+    return query_;
+  }
+  const std::string& fragment() const
+  {
+    return fragment_;
+  }
 
-  bool has_authority() const { return has_authority_; }
-  bool has_query() const { return has_query_; }
-  bool has_fragment() const { return has_fragment_; }
+  bool has_authority() const
+  {
+    return has_authority_;
+  }
+  bool has_query() const
+  {
+    return has_query_;
+  }
+  bool has_fragment() const
+  {
+    return has_fragment_;
+  }
 
   // Serialized form.  The fragment is omitted unless |include_fragment|.
   std::string Serialize(bool include_fragment = false) const;
@@ -50,7 +84,7 @@ class Url {
   // Default ports are omitted, matching browser origin serialization.
   std::string Origin() const;
 
- private:
+private:
   Url() = default;
 
   // Parser helpers (defined in url.cpp) need access to the component fields.
@@ -83,4 +117,4 @@ uint16_t DefaultPortForScheme(std::string_view scheme);
 // True for schemes that always use an authority (http/https/ws/wss/ftp).
 bool IsSpecialScheme(std::string_view scheme);
 
-}  // namespace neko::url
+} // namespace neko::url

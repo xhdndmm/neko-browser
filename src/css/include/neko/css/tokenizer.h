@@ -6,7 +6,8 @@
 
 namespace neko::css {
 
-enum class CssTokenType {
+enum class CssTokenType
+{
   kIdent,
   kAtKeyword,
   kHash,
@@ -28,22 +29,24 @@ enum class CssTokenType {
   kEOF,
 };
 
-struct CssToken {
+struct CssToken
+{
   CssTokenType type = CssTokenType::kEOF;
-  std::string text;   // identifier/hash/string/delim text, or the numeric part
-  std::string unit;   // dimension unit
-  double number = 0;  // numeric value for kNumber/kPercentage/kDimension
+  std::string text;  // identifier/hash/string/delim text, or the numeric part
+  std::string unit;  // dimension unit
+  double number = 0; // numeric value for kNumber/kPercentage/kDimension
 };
 
 // CSS tokenizer (Phase 4 scope).  Comments are skipped; whitespace is emitted
 // as kWhitespace tokens.  See docs/css/README.md for scope notes.
-class Tokenizer {
- public:
+class Tokenizer
+{
+public:
   explicit Tokenizer(std::string_view input) : input_(input) {}
 
   std::vector<CssToken> Tokenize();
 
- private:
+private:
   std::string_view input_;
   std::size_t pos_ = 0;
 
@@ -53,4 +56,4 @@ class Tokenizer {
   CssToken NextToken();
 };
 
-}  // namespace neko::css
+} // namespace neko::css

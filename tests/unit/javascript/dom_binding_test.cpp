@@ -16,9 +16,8 @@
 #include <optional>
 #include <string>
 #include <thread>
-#include <vector>
-
 #include <unistd.h>
+#include <vector>
 
 namespace neko::javascript {
 namespace {
@@ -843,7 +842,7 @@ TEST_F(DomBinderTest, WindowGetComputedStyleWired)
     return {{"display", "block"}, {"background-color", "rgb(255, 0, 0)"}};
   };
   DomBinder binder(*document_, apis);
-  binder.SetConsoleSink([this](std::string_view, std::string_view) {});
+  binder.SetConsoleSink([](std::string_view, std::string_view) {});
   auto r = binder.Evaluate(
       "(function(){ var e = document.getElementById('first'); "
       "var cs = getComputedStyle(e); "
@@ -1298,7 +1297,8 @@ TEST(DomBinderGeometryTest, GeometryGettersUseCallback)
   </body></html>)")
                       .Parse();
   javascript::PageApis apis;
-  apis.element_geometry = [](const dom::Element& element) -> std::optional<javascript::ElementGeometry> {
+  apis.element_geometry =
+      [](const dom::Element& element) -> std::optional<javascript::ElementGeometry> {
     const std::string id = std::string(element.GetAttribute("id").value_or(""));
     if (id == "box") {
       javascript::ElementGeometry g;
@@ -1378,13 +1378,15 @@ TEST(DomBinderGeometryTest, GeometryGettersUseCallback)
 TEST_F(DomBinderTest, InsertAdjacentHTML)
 {
   // beforeend: append as the last child.
-  EvalString("document.getElementById('main').insertAdjacentHTML('beforeend','<span id=\"x\">X</span>');");
+  EvalString(
+      "document.getElementById('main').insertAdjacentHTML('beforeend','<span id=\"x\">X</span>');");
   ASSERT_TRUE(EvalBool("document.getElementById('x')!==null"));
   EXPECT_EQ(EvalString("document.getElementById('x').tagName"), "SPAN");
   EXPECT_EQ(EvalString("document.getElementById('x').textContent"), "X");
 
   // afterbegin: insert as the first child.
-  EvalString("document.getElementById('main').insertAdjacentHTML('afterbegin','<span id=\"y\">Y</span>');");
+  EvalString("document.getElementById('main').insertAdjacentHTML('afterbegin','<span "
+             "id=\"y\">Y</span>');");
   ASSERT_TRUE(EvalBool("document.getElementById('y')!==null"));
   EXPECT_EQ(EvalString("document.getElementById('main').firstChild.id"), "y");
 
@@ -1419,12 +1421,18 @@ public:
     // local, but the callbacks outlive it.
     storage::IndexedDbStore* store = &store_;
     PageApis apis;
-    apis.idb_current_version = [store](std::string_view db) { return store->CurrentVersion("https://idb.test", db); };
-    apis.idb_create_db = [store](std::string_view db) { return store->CreateDatabase("https://idb.test", db); };
+    apis.idb_current_version = [store](std::string_view db) {
+      return store->CurrentVersion("https://idb.test", db);
+    };
+    apis.idb_create_db = [store](std::string_view db) {
+      return store->CreateDatabase("https://idb.test", db);
+    };
     apis.idb_set_version = [store](std::string_view db, int64_t version) {
       return store->SetVersion("https://idb.test", db, version);
     };
-    apis.idb_delete_db = [store](std::string_view db) { return store->DeleteDatabase("https://idb.test", db); };
+    apis.idb_delete_db = [store](std::string_view db) {
+      return store->DeleteDatabase("https://idb.test", db);
+    };
     apis.idb_store_names = [store](std::string_view db) {
       const base::Result<std::vector<storage::IndexedDbStore::ObjectStoreMeta>> metas =
           store->ObjectStores("https://idb.test", db);
@@ -1441,20 +1449,25 @@ public:
       }
       return base::Result<std::vector<IdbStoreMeta>>(std::move(out));
     };
-    apis.idb_create_store = [store](std::string_view db, std::string_view store_name,
-                                    std::string_view key_path, bool auto_increment) {
-      return store->CreateObjectStore("https://idb.test", db, store_name, key_path,
-                                      auto_increment);
+    apis.idb_create_store = [store](std::string_view db,
+                                    std::string_view store_name,
+                                    std::string_view key_path,
+                                    bool auto_increment) {
+      return store->CreateObjectStore("https://idb.test", db, store_name, key_path, auto_increment);
     };
     apis.idb_delete_store = [store](std::string_view db, std::string_view store_name) {
       return store->DeleteObjectStore("https://idb.test", db, store_name);
     };
-    apis.idb_add = [store](std::string_view db, std::string_view store_name,
-                           std::optional<std::string> key, std::string value) {
+    apis.idb_add = [store](std::string_view db,
+                           std::string_view store_name,
+                           std::optional<std::string> key,
+                           std::string value) {
       return store->Add("https://idb.test", db, store_name, std::move(key), std::move(value));
     };
-    apis.idb_put = [store](std::string_view db, std::string_view store_name,
-                           std::optional<std::string> key, std::string value) {
+    apis.idb_put = [store](std::string_view db,
+                           std::string_view store_name,
+                           std::optional<std::string> key,
+                           std::string value) {
       return store->Put("https://idb.test", db, store_name, std::move(key), std::move(value));
     };
     apis.idb_get = [store](std::string_view db, std::string_view store_name, std::string key) {
@@ -1610,13 +1623,14 @@ TEST_F(IndexedDbTest, AutoIncrementGeneratesKeys)
                              "  db.createObjectStore('items', {autoIncrement: true});\n"
                              "};")
                   .has_value());
-  ASSERT_TRUE(idb_binder_
-                  ->Evaluate("var k1, k2;\n"
-                             "var tx = db.transaction('items', 'readwrite');\n"
-                             "var st = tx.objectStore('items');\n"
-                             "st.add({label: 'first'}).onsuccess = function(e) { k1 = e.target.result; };\n"
-                             "st.add({label: 'second'}).onsuccess = function(e) { k2 = e.target.result; };")
-                  .has_value());
+  ASSERT_TRUE(
+      idb_binder_
+          ->Evaluate("var k1, k2;\n"
+                     "var tx = db.transaction('items', 'readwrite');\n"
+                     "var st = tx.objectStore('items');\n"
+                     "st.add({label: 'first'}).onsuccess = function(e) { k1 = e.target.result; };\n"
+                     "st.add({label: 'second'}).onsuccess = function(e) { k2 = e.target.result; };")
+          .has_value());
   EXPECT_EQ(IdbEval("k1"), "1");
   EXPECT_EQ(IdbEval("k2"), "2");
 }
@@ -1653,10 +1667,11 @@ TEST_F(IndexedDbTest, LowerVersionFailsWithVersionError)
                              "  db = e.target.result;\n"
                              "};")
                   .has_value());
-  ASSERT_TRUE(idb_binder_
-                  ->Evaluate("var verr;\n"
-                             "indexedDB.open('kv', 1).onerror = function(e) { verr = e.target.error; };")
-                  .has_value());
+  ASSERT_TRUE(
+      idb_binder_
+          ->Evaluate("var verr;\n"
+                     "indexedDB.open('kv', 1).onerror = function(e) { verr = e.target.error; };")
+          .has_value());
   EXPECT_EQ(IdbEval("verr.name"), "VersionError");
 }
 
@@ -1735,10 +1750,11 @@ TEST_F(IndexedDbTest, DeleteDatabase)
                              "  db = e.target.result;\n"
                              "};")
                   .has_value());
-  ASSERT_TRUE(idb_binder_
-                  ->Evaluate("var del_ok = false;\n"
-                             "indexedDB.deleteDatabase('kv').onsuccess = function() { del_ok = true; };")
-                  .has_value());
+  ASSERT_TRUE(
+      idb_binder_
+          ->Evaluate("var del_ok = false;\n"
+                     "indexedDB.deleteDatabase('kv').onsuccess = function() { del_ok = true; };")
+          .has_value());
   EXPECT_EQ(IdbEval("del_ok"), "true");
   EXPECT_EQ(store_->CurrentVersion("https://idb.test", "kv").value(), 0);
 }

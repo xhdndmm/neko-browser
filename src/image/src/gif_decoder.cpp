@@ -190,7 +190,9 @@ private:
 // Stops with false once |max_output| bytes would be emitted, so a crafted
 // stream cannot balloon memory before the caller validates the length.
 // Returns false on any malformed input.
-bool LzwDecompress(const std::vector<uint8_t>& data, int min_code_size, std::size_t max_output,
+bool LzwDecompress(const std::vector<uint8_t>& data,
+                   int min_code_size,
+                   std::size_t max_output,
                    std::vector<uint8_t>& out)
 {
   if (min_code_size < 2 || min_code_size > 8) {
@@ -469,9 +471,9 @@ base::Result<GifAnimation> DecodeGifImpl(std::string_view data, bool first_frame
         } else if (!r.Skip(size)) {
           return base::Err(base::Error::Parse("gif: truncated application extension"));
         }
-        const bool is_netscape = size == 11 &&
-                                 (std::memcmp(identifier.data(), "NETSCAPE2.0", 11) == 0 ||
-                                  std::memcmp(identifier.data(), "ANIMEXTS1.0", 11) == 0);
+        const bool is_netscape =
+            size == 11 && (std::memcmp(identifier.data(), "NETSCAPE2.0", 11) == 0 ||
+                           std::memcmp(identifier.data(), "ANIMEXTS1.0", 11) == 0);
         if (!is_netscape) {
           std::vector<uint8_t> ignored;
           if (!ReadAllSubBlocks(r, ignored)) {
@@ -490,8 +492,7 @@ base::Result<GifAnimation> DecodeGifImpl(std::string_view data, bool first_frame
               break; // terminator
             }
             if (sub.size() >= 3 && (sub[0] & 0x07) == 1) {
-              anim.loop_count =
-                  static_cast<int>(sub[1]) | (static_cast<int>(sub[2]) << 8);
+              anim.loop_count = static_cast<int>(sub[1]) | (static_cast<int>(sub[2]) << 8);
             }
           }
         }
@@ -613,10 +614,9 @@ base::Result<GifAnimation> DecodeGifImpl(std::string_view data, bool first_frame
       // Restore to background: repaint this frame's rectangle with the
       // background color.
       for (int row = 0; row < height; ++row) {
-        const std::size_t base =
-            (static_cast<std::size_t>(top) + static_cast<std::size_t>(row)) *
-                static_cast<std::size_t>(screen_width) * 4 +
-            static_cast<std::size_t>(left) * 4;
+        const std::size_t base = (static_cast<std::size_t>(top) + static_cast<std::size_t>(row)) *
+                                     static_cast<std::size_t>(screen_width) * 4 +
+                                 static_cast<std::size_t>(left) * 4;
         for (int col = 0; col < width; ++col) {
           const std::size_t o = base + static_cast<std::size_t>(col) * 4;
           canvas[o + 0] = background_rgba[0];

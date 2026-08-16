@@ -1,5 +1,7 @@
 #pragma once
 
+#include "neko/base/macros.h"
+
 #include <atomic>
 #include <format>
 #include <fstream>
@@ -9,14 +11,13 @@
 #include <string_view>
 #include <vector>
 
-#include "neko/base/macros.h"
-
 namespace neko::base {
 
 // ---------------------------------------------------------------------------
 // Log levels
 // ---------------------------------------------------------------------------
-enum class LogLevel : int {
+enum class LogLevel : int
+{
   kTrace = 0,
   kDebug = 1,
   kInfo = 2,
@@ -36,25 +37,28 @@ bool ParseLogLevel(std::string_view name, LogLevel& out);
 // Sinks
 // ---------------------------------------------------------------------------
 // A LogSink receives already-formatted, newline-terminated log lines.
-class LogSink {
- public:
+class LogSink
+{
+public:
   virtual ~LogSink() = default;
   virtual void Write(LogLevel level, std::string_view message) = 0;
 };
 
 // Writes (optionally colorized) log lines to the process stderr.
-class ConsoleLogSink final : public LogSink {
- public:
+class ConsoleLogSink final : public LogSink
+{
+public:
   explicit ConsoleLogSink(bool use_color = true);
   void Write(LogLevel level, std::string_view message) override;
 
- private:
+private:
   bool use_color_;
 };
 
 // Appends log lines to a file, truncating it on construction.
-class FileLogSink final : public LogSink {
- public:
+class FileLogSink final : public LogSink
+{
+public:
   explicit FileLogSink(std::string_view path);
   ~FileLogSink() override;
 
@@ -62,7 +66,7 @@ class FileLogSink final : public LogSink {
 
   void Write(LogLevel level, std::string_view message) override;
 
- private:
+private:
   std::string path_;
   std::ofstream file_;
 };
@@ -73,8 +77,9 @@ class FileLogSink final : public LogSink {
 // Process-wide, thread-safe logger.  Access via Logger::Instance() or the
 // NEKO_LOG* macros.  If no sink has been registered, the first log call
 // attaches a ConsoleLogSink automatically.
-class Logger {
- public:
+class Logger
+{
+public:
   static Logger& Instance();
 
   NEKO_DISALLOW_COPY_AND_MOVE(Logger)
@@ -91,7 +96,7 @@ class Logger {
   // Logs a bare message (no source location decoration).
   void Log(LogLevel level, std::string_view message);
 
- private:
+private:
   Logger() = default;
 
   void WriteToSinks(LogLevel level, const std::string& message);
@@ -101,28 +106,27 @@ class Logger {
   std::vector<std::unique_ptr<LogSink>> sinks_;
 };
 
-}  // namespace neko::base
+} // namespace neko::base
 
 // ---------------------------------------------------------------------------
 // Logging macros
 // ---------------------------------------------------------------------------
-#define NEKO_LOG(level, message)                                          \
-  do {                                                                    \
-    if (::neko::base::Logger::Instance().IsEnabled(level)) {              \
-      ::neko::base::Logger::Instance().Log(level, __FILE__, __LINE__,     \
-                                           (message));                    \
-    }                                                                     \
+#define NEKO_LOG(level, message)                                                                   \
+  do {                                                                                             \
+    if (::neko::base::Logger::Instance().IsEnabled(level)) {                                       \
+      ::neko::base::Logger::Instance().Log(level, __FILE__, __LINE__, (message));                  \
+    }                                                                                              \
   } while (false)
 
 // printf-style variant using std::format.
 // NOTE: the format parameter is named |fmt| (not |format|) because the
 // preprocessor would otherwise substitute it inside ::std::format(...).
-#define NEKO_LOGF(level, fmt, ...)                                        \
-  do {                                                                    \
-    if (::neko::base::Logger::Instance().IsEnabled(level)) {              \
-      ::neko::base::Logger::Instance().Log(                               \
-          level, __FILE__, __LINE__, ::std::format((fmt), __VA_ARGS__));  \
-    }                                                                     \
+#define NEKO_LOGF(level, fmt, ...)                                                                 \
+  do {                                                                                             \
+    if (::neko::base::Logger::Instance().IsEnabled(level)) {                                       \
+      ::neko::base::Logger::Instance().Log(                                                        \
+          level, __FILE__, __LINE__, ::std::format((fmt), __VA_ARGS__));                           \
+    }                                                                                              \
   } while (false)
 
 #define NEKO_LOG_TRACE(message) NEKO_LOG(::neko::base::LogLevel::kTrace, message)
@@ -132,13 +136,9 @@ class Logger {
 #define NEKO_LOG_ERROR(message) NEKO_LOG(::neko::base::LogLevel::kError, message)
 #define NEKO_LOG_FATAL(message) NEKO_LOG(::neko::base::LogLevel::kFatal, message)
 
-#define NEKO_LOG_TRACE_F(format, ...) \
-  NEKO_LOGF(::neko::base::LogLevel::kTrace, format, __VA_ARGS__)
-#define NEKO_LOG_DEBUG_F(format, ...) \
-  NEKO_LOGF(::neko::base::LogLevel::kDebug, format, __VA_ARGS__)
-#define NEKO_LOG_INFO_F(format, ...) \
-  NEKO_LOGF(::neko::base::LogLevel::kInfo, format, __VA_ARGS__)
-#define NEKO_LOG_WARNING_F(format, ...) \
+#define NEKO_LOG_TRACE_F(format, ...) NEKO_LOGF(::neko::base::LogLevel::kTrace, format, __VA_ARGS__)
+#define NEKO_LOG_DEBUG_F(format, ...) NEKO_LOGF(::neko::base::LogLevel::kDebug, format, __VA_ARGS__)
+#define NEKO_LOG_INFO_F(format, ...) NEKO_LOGF(::neko::base::LogLevel::kInfo, format, __VA_ARGS__)
+#define NEKO_LOG_WARNING_F(format, ...)                                                            \
   NEKO_LOGF(::neko::base::LogLevel::kWarning, format, __VA_ARGS__)
-#define NEKO_LOG_ERROR_F(format, ...) \
-  NEKO_LOGF(::neko::base::LogLevel::kError, format, __VA_ARGS__)
+#define NEKO_LOG_ERROR_F(format, ...) NEKO_LOGF(::neko::base::LogLevel::kError, format, __VA_ARGS__)

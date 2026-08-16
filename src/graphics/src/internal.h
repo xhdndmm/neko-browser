@@ -13,4 +13,4 @@ namespace neko::graphics {
 // process owns it for its lifetime.
 FT_Library SharedFreeTypeLibrary();
 
-}  // namespace neko::graphics
+} // namespace neko::graphics

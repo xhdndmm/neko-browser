@@ -8,12 +8,14 @@ namespace neko::dom {
 
 Element::Element(std::string tag_name) : Node(NodeType::kElement), tag_name_(std::move(tag_name)) {}
 
-bool Element::HasAttribute(std::string_view name) const {
-  return std::any_of(attributes_.begin(), attributes_.end(),
-                     [&](const Attribute& a) { return a.name == name; });
+bool Element::HasAttribute(std::string_view name) const
+{
+  return std::any_of(
+      attributes_.begin(), attributes_.end(), [&](const Attribute& a) { return a.name == name; });
 }
 
-std::optional<std::string_view> Element::GetAttribute(std::string_view name) const {
+std::optional<std::string_view> Element::GetAttribute(std::string_view name) const
+{
   for (const Attribute& a : attributes_) {
     if (a.name == name) {
       return std::string_view(a.value);
@@ -22,7 +24,8 @@ std::optional<std::string_view> Element::GetAttribute(std::string_view name) con
   return std::nullopt;
 }
 
-void Element::SetAttribute(std::string_view name, std::string_view value) {
+void Element::SetAttribute(std::string_view name, std::string_view value)
+{
   for (Attribute& a : attributes_) {
     if (a.name == name) {
       a.value = std::string(value);
@@ -32,16 +35,20 @@ void Element::SetAttribute(std::string_view name, std::string_view value) {
   attributes_.push_back(Attribute{std::string(name), std::string(value)});
 }
 
-void Element::RemoveAttribute(std::string_view name) {
-  const auto it =
-      std::remove_if(attributes_.begin(), attributes_.end(),
-                     [&](const Attribute& a) { return a.name == name; });
+void Element::RemoveAttribute(std::string_view name)
+{
+  const auto it = std::remove_if(
+      attributes_.begin(), attributes_.end(), [&](const Attribute& a) { return a.name == name; });
   attributes_.erase(it, attributes_.end());
 }
 
-std::optional<std::string_view> Element::Id() const { return GetAttribute("id"); }
+std::optional<std::string_view> Element::Id() const
+{
+  return GetAttribute("id");
+}
 
-std::vector<std::string_view> Element::ClassList() const {
+std::vector<std::string_view> Element::ClassList() const
+{
   std::vector<std::string_view> classes;
   const std::optional<std::string_view> attr = GetAttribute("class");
   if (!attr.has_value()) {
@@ -65,7 +72,8 @@ std::vector<std::string_view> Element::ClassList() const {
   return classes;
 }
 
-std::string Element::ToString() const {
+std::string Element::ToString() const
+{
   std::string out = SerializeOpenTag(*this);
   out += Node::ToString();
   out += "</";
@@ -74,7 +82,8 @@ std::string Element::ToString() const {
   return out;
 }
 
-std::string SerializeOpenTag(const Element& element) {
+std::string SerializeOpenTag(const Element& element)
+{
   std::string out = "<";
   out += element.tag_name();
   for (const Attribute& attr : element.attributes()) {
@@ -98,4 +107,4 @@ std::string SerializeOpenTag(const Element& element) {
   return out;
 }
 
-}  // namespace neko::dom
+} // namespace neko::dom

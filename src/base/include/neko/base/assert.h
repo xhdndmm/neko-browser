@@ -17,7 +17,7 @@
 #elif defined(__GNUC__) || defined(__clang__)
 #define NEKO_UNREACHABLE() __builtin_unreachable()
 #else
-#define NEKO_UNREACHABLE() \
-  do {                     \
+#define NEKO_UNREACHABLE()                                                                         \
+  do {                                                                                             \
   } while (false)
 #endif

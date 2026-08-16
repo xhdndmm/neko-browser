@@ -232,9 +232,10 @@ TEST(CookieStoreTest, OversizedExpiresYearDoesNotOverflow)
   ASSERT_TRUE(store.Load().has_value());
   const int64_t now = 1'700'000'000;
 
-  ASSERT_TRUE(store.SetCookieFromHeader(
-      MakeUrl("http://example.com/"),
-      "evil=1; Expires=Sun, 06 Nov 99999999999999999999 08:49:37 GMT", now));
+  ASSERT_TRUE(
+      store.SetCookieFromHeader(MakeUrl("http://example.com/"),
+                                "evil=1; Expires=Sun, 06 Nov 99999999999999999999 08:49:37 GMT",
+                                now));
   const auto cookies = store.All();
   ASSERT_EQ(cookies.size(), 1u);
   // Invalid date: expiry is not a wrapped huge/positive value.

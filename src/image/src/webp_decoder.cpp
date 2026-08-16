@@ -2,15 +2,13 @@
 // lossy (VP8) and lossless (VP8L) bitstreams are handled by libwebp's
 // WebPDecodeRGBA; the result is top-down R,G,B,A like the other decoders.
 
-#include "neko/image/image.h"
-
 #include "neko/base/status.h"
-
-#include <webp/decode.h>
+#include "neko/image/image.h"
 
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <webp/decode.h>
 
 namespace neko::image {
 
@@ -40,7 +38,8 @@ base::Result<Image> DecodeWebp(std::string_view data)
   Image out;
   out.width = width;
   out.height = height;
-  out.rgba.assign(rgba, rgba + static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4);
+  out.rgba.assign(rgba,
+                  rgba + static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4);
   WebPFree(rgba);
   return base::Ok(std::move(out));
 }

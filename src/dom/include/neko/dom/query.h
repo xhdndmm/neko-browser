@@ -1,9 +1,9 @@
 #pragma once
 
+#include "neko/dom/element.h"
+
 #include <string_view>
 #include <vector>
-
-#include "neko/dom/element.h"
 
 namespace neko::dom {
 
@@ -24,4 +24,4 @@ std::vector<Element*> QuerySelectorAll(Node& root, std::string_view selector);
 // Matches a single compound selector (no combinators) against an element.
 bool MatchesCompoundSelector(const Element& element, std::string_view selector);
 
-}  // namespace neko::dom
+} // namespace neko::dom

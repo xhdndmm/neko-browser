@@ -2,19 +2,20 @@
 
 #include <filesystem>
 #include <fstream>
+#include <gtest/gtest.h>
 #include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include <gtest/gtest.h>
-
 namespace neko::base {
 namespace {
 
-class CapturingSink final : public LogSink {
- public:
-  void Write(LogLevel level, std::string_view message) override {
+class CapturingSink final : public LogSink
+{
+public:
+  void Write(LogLevel level, std::string_view message) override
+  {
     levels_.push_back(level);
     messages_.emplace_back(message);
   }
@@ -23,7 +24,8 @@ class CapturingSink final : public LogSink {
   std::vector<std::string> messages_;
 };
 
-TEST(LoggingTest, LogLevelToString) {
+TEST(LoggingTest, LogLevelToString)
+{
   EXPECT_EQ(ToString(LogLevel::kTrace), "TRACE");
   EXPECT_EQ(ToString(LogLevel::kDebug), "DEBUG");
   EXPECT_EQ(ToString(LogLevel::kInfo), "INFO");
@@ -32,7 +34,8 @@ TEST(LoggingTest, LogLevelToString) {
   EXPECT_EQ(ToString(LogLevel::kFatal), "FATAL");
 }
 
-TEST(LoggingTest, ParseLogLevel) {
+TEST(LoggingTest, ParseLogLevel)
+{
   LogLevel level = LogLevel::kInfo;
   EXPECT_TRUE(ParseLogLevel("info", level));
   EXPECT_EQ(level, LogLevel::kInfo);
@@ -54,7 +57,8 @@ TEST(LoggingTest, ParseLogLevel) {
   EXPECT_EQ(level, before);
 }
 
-TEST(LoggingTest, LoggerRoutesToSinks) {
+TEST(LoggingTest, LoggerRoutesToSinks)
+{
   auto sink = std::make_unique<CapturingSink>();
   CapturingSink* raw = sink.get();
 
@@ -74,7 +78,8 @@ TEST(LoggingTest, LoggerRoutesToSinks) {
   EXPECT_NE(raw->messages_[1].find("decorated message"), std::string::npos);
 }
 
-TEST(LoggingTest, LevelFiltering) {
+TEST(LoggingTest, LevelFiltering)
+{
   auto sink = std::make_unique<CapturingSink>();
   CapturingSink* raw = sink.get();
 
@@ -90,7 +95,8 @@ TEST(LoggingTest, LevelFiltering) {
   EXPECT_EQ(raw->messages_[0], "kept");
 }
 
-TEST(LoggingTest, FileSinkWritesLines) {
+TEST(LoggingTest, FileSinkWritesLines)
+{
   namespace fs = std::filesystem;
   const fs::path dir = fs::temp_directory_path() / "neko_logging_test";
   fs::create_directories(dir);
@@ -104,8 +110,7 @@ TEST(LoggingTest, FileSinkWritesLines) {
 
   std::ifstream in(file);
   ASSERT_TRUE(in.is_open());
-  const std::string content((std::istreambuf_iterator<char>(in)),
-                            std::istreambuf_iterator<char>());
+  const std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
   in.close();
   EXPECT_NE(content.find("line one"), std::string::npos);
   EXPECT_NE(content.find("line two"), std::string::npos);
@@ -113,5 +118,5 @@ TEST(LoggingTest, FileSinkWritesLines) {
   fs::remove_all(dir);
 }
 
-}  // namespace
-}  // namespace neko::base
+} // namespace
+} // namespace neko::base

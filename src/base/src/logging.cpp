@@ -1,5 +1,7 @@
 #include "neko/base/logging.h"
 
+#include "neko/base/string_util.h"
+
 #include <chrono>
 #include <cstdlib>
 #include <ctime>
@@ -7,12 +9,11 @@
 #include <iostream>
 #include <string>
 
-#include "neko/base/string_util.h"
-
 namespace neko::base {
 namespace {
 
-std::string_view Basename(std::string_view path) {
+std::string_view Basename(std::string_view path)
+{
   const std::size_t pos = path.find_last_of("/\\");
   if (pos == std::string_view::npos) {
     return path;
@@ -20,26 +21,27 @@ std::string_view Basename(std::string_view path) {
   return path.substr(pos + 1);
 }
 
-const char* ColorFor(LogLevel level) {
+const char* ColorFor(LogLevel level)
+{
   switch (level) {
-    case LogLevel::kTrace:
-      return "\033[90m";
-    case LogLevel::kDebug:
-      return "\033[34m";
-    case LogLevel::kInfo:
-      return "\033[32m";
-    case LogLevel::kWarning:
-      return "\033[33m";
-    case LogLevel::kError:
-      return "\033[31m";
-    case LogLevel::kFatal:
-      return "\033[1;31m";
+  case LogLevel::kTrace:
+    return "\033[90m";
+  case LogLevel::kDebug:
+    return "\033[34m";
+  case LogLevel::kInfo:
+    return "\033[32m";
+  case LogLevel::kWarning:
+    return "\033[33m";
+  case LogLevel::kError:
+    return "\033[31m";
+  case LogLevel::kFatal:
+    return "\033[1;31m";
   }
   return "";
 }
 
-std::string FormatLogLine(LogLevel level, std::string_view file, int line,
-                          std::string_view message) {
+std::string FormatLogLine(LogLevel level, std::string_view file, int line, std::string_view message)
+{
   const auto now = std::chrono::system_clock::now();
   const std::time_t timestamp = std::chrono::system_clock::to_time_t(now);
   const auto millis =
@@ -55,32 +57,40 @@ std::string FormatLogLine(LogLevel level, std::string_view file, int line,
   char time_buf[16] = {};
   std::strftime(time_buf, sizeof(time_buf), "%H:%M:%S", &local);
 
-  return std::format("[{}.{:03d}] [{:<5}] {}:{} {}", time_buf, millis, ToString(level),
-                     Basename(file), line, message);
+  return std::format("[{}.{:03d}] [{:<5}] {}:{} {}",
+                     time_buf,
+                     millis,
+                     ToString(level),
+                     Basename(file),
+                     line,
+                     message);
 }
 
-}  // namespace
+} // namespace
 
-std::string_view ToString(LogLevel level) {
+std::string_view ToString(LogLevel level)
+{
   switch (level) {
-    case LogLevel::kTrace:
-      return "TRACE";
-    case LogLevel::kDebug:
-      return "DEBUG";
-    case LogLevel::kInfo:
-      return "INFO";
-    case LogLevel::kWarning:
-      return "WARN";
-    case LogLevel::kError:
-      return "ERROR";
-    case LogLevel::kFatal:
-      return "FATAL";
+  case LogLevel::kTrace:
+    return "TRACE";
+  case LogLevel::kDebug:
+    return "DEBUG";
+  case LogLevel::kInfo:
+    return "INFO";
+  case LogLevel::kWarning:
+    return "WARN";
+  case LogLevel::kError:
+    return "ERROR";
+  case LogLevel::kFatal:
+    return "FATAL";
   }
   return "UNKNOWN";
 }
 
-bool ParseLogLevel(std::string_view name, LogLevel& out) {
-  struct Entry {
+bool ParseLogLevel(std::string_view name, LogLevel& out)
+{
+  struct Entry
+  {
     std::string_view name;
     LogLevel level;
   };
@@ -104,7 +114,8 @@ bool ParseLogLevel(std::string_view name, LogLevel& out) {
 
 ConsoleLogSink::ConsoleLogSink(bool use_color) : use_color_(use_color) {}
 
-void ConsoleLogSink::Write(LogLevel level, std::string_view message) {
+void ConsoleLogSink::Write(LogLevel level, std::string_view message)
+{
   if (use_color_) {
     std::cerr << ColorFor(level) << message << "\033[0m\n";
   } else {
@@ -113,11 +124,13 @@ void ConsoleLogSink::Write(LogLevel level, std::string_view message) {
 }
 
 FileLogSink::FileLogSink(std::string_view path)
-    : path_(path), file_(std::string(path), std::ios::out | std::ios::trunc) {}
+    : path_(path), file_(std::string(path), std::ios::out | std::ios::trunc)
+{}
 
 FileLogSink::~FileLogSink() = default;
 
-void FileLogSink::Write(LogLevel level, std::string_view message) {
+void FileLogSink::Write(LogLevel level, std::string_view message)
+{
   (void)level;
   if (file_.is_open()) {
     file_ << message << '\n';
@@ -127,43 +140,51 @@ void FileLogSink::Write(LogLevel level, std::string_view message) {
   }
 }
 
-Logger& Logger::Instance() {
+Logger& Logger::Instance()
+{
   static Logger instance;
   return instance;
 }
 
-void Logger::SetLevel(LogLevel level) {
+void Logger::SetLevel(LogLevel level)
+{
   level_.store(static_cast<int>(level), std::memory_order_relaxed);
 }
 
-LogLevel Logger::level() const {
+LogLevel Logger::level() const
+{
   return static_cast<LogLevel>(level_.load(std::memory_order_relaxed));
 }
 
-bool Logger::IsEnabled(LogLevel level) const {
+bool Logger::IsEnabled(LogLevel level) const
+{
   return static_cast<int>(level) >= level_.load(std::memory_order_relaxed);
 }
 
-void Logger::AddSink(std::unique_ptr<LogSink> sink) {
+void Logger::AddSink(std::unique_ptr<LogSink> sink)
+{
   std::lock_guard<std::mutex> lock(mutex_);
   sinks_.push_back(std::move(sink));
 }
 
-void Logger::Log(LogLevel level, std::string_view file, int line, std::string_view message) {
+void Logger::Log(LogLevel level, std::string_view file, int line, std::string_view message)
+{
   if (!IsEnabled(level)) {
     return;
   }
   WriteToSinks(level, FormatLogLine(level, file, line, message));
 }
 
-void Logger::Log(LogLevel level, std::string_view message) {
+void Logger::Log(LogLevel level, std::string_view message)
+{
   if (!IsEnabled(level)) {
     return;
   }
   WriteToSinks(level, std::string(message));
 }
 
-void Logger::WriteToSinks(LogLevel level, const std::string& message) {
+void Logger::WriteToSinks(LogLevel level, const std::string& message)
+{
   std::lock_guard<std::mutex> lock(mutex_);
   if (sinks_.empty()) {
     sinks_.push_back(std::make_unique<ConsoleLogSink>());
@@ -176,4 +197,4 @@ void Logger::WriteToSinks(LogLevel level, const std::string& message) {
   }
 }
 
-}  // namespace neko::base
+} // namespace neko::base

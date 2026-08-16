@@ -10,4 +10,4 @@ namespace neko::graphics {
 // sequences produce U+FFFD, matching HTML's replacement behavior.
 void DecodeUtf8(std::string_view text, std::vector<uint32_t>& out);
 
-}  // namespace neko::graphics
+} // namespace neko::graphics

@@ -34,6 +34,8 @@ std::string_view ToString(Display display)
     return "table-cell";
   case Display::kTableCaption:
     return "table-caption";
+  case Display::kListItem:
+    return "list-item";
   }
   return "unknown";
 }

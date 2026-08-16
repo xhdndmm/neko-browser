@@ -84,6 +84,9 @@ void NodeFinalizer(JSRuntime* /*rt*/, JSValue obj)
 // dispatch state in one place.
 struct EventWrapper
 {
+  EventWrapper(Impl* i, std::string t, bool b, bool c)
+      : impl(i), type(std::move(t)), bubbles(b), cancelable(c)
+  {}
   Impl* impl = nullptr;
   std::string type;
   bool bubbles = false;
@@ -91,7 +94,7 @@ struct EventWrapper
   bool default_prevented = false;
   bool propagation_stopped = false;
   bool immediate_stopped = false;
-  int event_phase = 0;                   // 0 none, 1 capture, 2 target, 3 bubble
+  int event_phase = 0; // 0 none, 1 capture, 2 target, 3 bubble
   // KeyboardEvent fields (empty for non-keyboard events).
   std::string key;
   std::string code;
@@ -752,17 +755,21 @@ struct Impl
   // Creates an Event object (class wrapper + event_proto prototype).
   JSValue MakeEvent(std::string type, bool bubbles, bool cancelable);
   // Creates a KeyboardEvent-carrying Event with key/code strings.
-  JSValue MakeKeyboardEvent(std::string type, bool bubbles, bool cancelable, std::string key,
-                            std::string code);
+  JSValue MakeKeyboardEvent(
+      std::string type, bool bubbles, bool cancelable, std::string key, std::string code);
   // Creates a pointer (MouseEvent) carrying Event with client coordinates.
-  JSValue MakeMouseEvent(std::string type, bool bubbles, bool cancelable, double client_x,
-                         double client_y, int button);
+  JSValue MakeMouseEvent(std::string type,
+                         bool bubbles,
+                         bool cancelable,
+                         double client_x,
+                         double client_y,
+                         int button);
   // Creates a wheel Event carrying a vertical scroll delta.
   JSValue MakeWheelEvent(std::string type, bool bubbles, bool cancelable, double delta_y);
   // Dispatches a cancelable pointer event to |node|; returns whether NOT
   // canceled.
-  bool DispatchMouseToNode(dom::Node* node, std::string_view type, double client_x,
-                           double client_y, int button);
+  bool DispatchMouseToNode(
+      dom::Node* node, std::string_view type, double client_x, double client_y, int button);
   // Dispatches a cancelable wheel event to |node|; returns whether NOT canceled.
   bool DispatchWheelToNode(dom::Node* node, std::string_view type, double delta_y);
   // Dispatches a non-bubbling focus/blur event to |node|.
@@ -788,7 +795,9 @@ struct Impl
   std::optional<std::chrono::steady_clock::time_point> NextTimerDeadline() const;
   void DispatchToNode(dom::Node* node, std::string_view type);
   bool DispatchCancelableToNode(dom::Node* node, std::string_view type);
-  bool DispatchKeyboardToNode(dom::Node* node, std::string_view type, std::string_view key,
+  bool DispatchKeyboardToNode(dom::Node* node,
+                              std::string_view type,
+                              std::string_view key,
                               std::string_view code);
   void DispatchEvent(dom::Element& element, std::string_view type);
   void DispatchDocumentEvent(std::string_view type);
@@ -1866,11 +1875,11 @@ JSValue ElementGetBoundingClientRect(JSContext* ctx,
   return rect;
 }
 
-#define DEFINE_GEOMETRY_GETTER(Name, Member)                                                   \
-  JSValue Name(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)    \
-  {                                                                                            \
-    const std::optional<ElementGeometry> g = ElementGeometryOf(ctx, this_val);                 \
-    return JS_NewFloat64(ctx, g ? static_cast<double>(g->Member) : 0);                         \
+#define DEFINE_GEOMETRY_GETTER(Name, Member)                                                       \
+  JSValue Name(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)        \
+  {                                                                                                \
+    const std::optional<ElementGeometry> g = ElementGeometryOf(ctx, this_val);                     \
+    return JS_NewFloat64(ctx, g ? static_cast<double>(g->Member) : 0);                             \
   }
 
 DEFINE_GEOMETRY_GETTER(ElementGetOffsetWidth, width)
@@ -1884,8 +1893,8 @@ DEFINE_GEOMETRY_GETTER(ElementGetOffsetLeft, x)
 
 #undef DEFINE_GEOMETRY_GETTER
 
-JSValue ElementGetOffsetParent(JSContext* ctx, JSValueConst this_val, int /*argc*/,
-                               JSValueConst* /*argv*/)
+JSValue
+ElementGetOffsetParent(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
   dom::Element* element = AsElement(UnwrapNode(this_val));
   if (element == nullptr) {
@@ -2036,7 +2045,7 @@ std::string ResolvedUrl(const Impl& impl, const std::string& raw)
   return raw;
 }
 
-bool IsFormControl(const dom::Element& element)
+[[maybe_unused]] bool IsFormControl(const dom::Element& element)
 {
   const std::string_view tag = element.tag_name();
   return tag == "input" || tag == "textarea" || tag == "select" || tag == "option" ||
@@ -2493,8 +2502,8 @@ bool IsVideoElement(const dom::Element* element)
   return element != nullptr && element->tag_name() == "video";
 }
 
-JSValue ElementPlayVideo(JSContext* ctx, JSValueConst this_val, int /*argc*/,
-                         JSValueConst* /*argv*/)
+JSValue
+ElementPlayVideo(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
   Impl* impl = ImplFor(ctx, this_val);
   dom::Element* element = AsElement(UnwrapNode(this_val));
@@ -2511,8 +2520,8 @@ JSValue ElementPlayVideo(JSContext* ctx, JSValueConst this_val, int /*argc*/,
   return JS_UNDEFINED;
 }
 
-JSValue ElementPauseVideo(JSContext* ctx, JSValueConst this_val, int /*argc*/,
-                          JSValueConst* /*argv*/)
+JSValue
+ElementPauseVideo(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
   Impl* impl = ImplFor(ctx, this_val);
   dom::Element* element = AsElement(UnwrapNode(this_val));
@@ -2555,8 +2564,7 @@ JSValue ElementSetVideoCurrentTime(JSContext* ctx, JSValueConst this_val, JSValu
 {
   Impl* impl = ImplFor(ctx, this_val);
   dom::Element* element = AsElement(UnwrapNode(this_val));
-  if (impl == nullptr || element == nullptr || !IsVideoElement(element) ||
-      !impl->apis.video_seek) {
+  if (impl == nullptr || element == nullptr || !IsVideoElement(element) || !impl->apis.video_seek) {
     return JS_UNDEFINED;
   }
   double seconds = 0;
@@ -2579,7 +2587,7 @@ JSValue ElementGetVideoPaused(JSContext* ctx, JSValueConst this_val)
   return JS_NewBool(ctx, impl->apis.video_paused(*element) ? 1 : 0);
 }
 
-JSValue ElementGetText(JSContext* ctx, JSValueConst this_val)
+[[maybe_unused]] JSValue ElementGetText(JSContext* ctx, JSValueConst this_val)
 {
   dom::Element* element = AsElement(UnwrapNode(this_val));
   if (element == nullptr) {
@@ -2950,8 +2958,8 @@ std::vector<std::unique_ptr<dom::Node>> TakeFragmentChildren(std::string_view ht
 // Element.insertAdjacentHTML(position, html): parses the fragment and inserts
 // it relative to the element — beforebegin/afterend outside (sibling) and
 // afterbegin/beforeend inside.
-JSValue ElementInsertAdjacentHTML(JSContext* ctx, JSValueConst this_val, int argc,
-                                  JSValueConst* argv)
+JSValue
+ElementInsertAdjacentHTML(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
   dom::Element* element = AsElement(UnwrapNode(this_val));
@@ -2971,10 +2979,10 @@ JSValue ElementInsertAdjacentHTML(JSContext* ctx, JSValueConst this_val, int arg
     return JS_EXCEPTION;
   }
   std::vector<std::unique_ptr<dom::Node>> nodes = TakeFragmentChildren(html);
-  const auto insert_before = [&](dom::Node* parent, std::unique_ptr<dom::Node>&& node,
-                                 dom::Node* reference) {
-    parent->InsertBefore(std::move(node), reference);
-  };
+  const auto insert_before =
+      [&](dom::Node* parent, std::unique_ptr<dom::Node>&& node, dom::Node* reference) {
+        parent->InsertBefore(std::move(node), reference);
+      };
   if (position == "beforeend") {
     for (auto& node : nodes) {
       element->AppendChild(std::move(node));
@@ -4125,24 +4133,42 @@ JSValue EventGetDeltaY(JSContext* ctx, JSValueConst this_val)
 // the type.  HTML spec §8.1.7.2.
 const char* OnHandlerForType(std::string_view type)
 {
-  if (type == "click") return "onclick";
-  if (type == "dblclick") return "ondblclick";
-  if (type == "mousedown") return "onmousedown";
-  if (type == "mouseup") return "onmouseup";
-  if (type == "mousemove") return "onmousemove";
-  if (type == "mouseover") return "onmouseover";
-  if (type == "mouseout") return "onmouseout";
-  if (type == "focus") return "onfocus";
-  if (type == "blur") return "onblur";
-  if (type == "keydown") return "onkeydown";
-  if (type == "keyup") return "onkeyup";
-  if (type == "input") return "oninput";
-  if (type == "change") return "onchange";
-  if (type == "submit") return "onsubmit";
-  if (type == "wheel") return "onwheel";
-  if (type == "load") return "onload";
-  if (type == "error") return "onerror";
-  if (type == "scroll") return "onscroll";
+  if (type == "click")
+    return "onclick";
+  if (type == "dblclick")
+    return "ondblclick";
+  if (type == "mousedown")
+    return "onmousedown";
+  if (type == "mouseup")
+    return "onmouseup";
+  if (type == "mousemove")
+    return "onmousemove";
+  if (type == "mouseover")
+    return "onmouseover";
+  if (type == "mouseout")
+    return "onmouseout";
+  if (type == "focus")
+    return "onfocus";
+  if (type == "blur")
+    return "onblur";
+  if (type == "keydown")
+    return "onkeydown";
+  if (type == "keyup")
+    return "onkeyup";
+  if (type == "input")
+    return "oninput";
+  if (type == "change")
+    return "onchange";
+  if (type == "submit")
+    return "onsubmit";
+  if (type == "wheel")
+    return "onwheel";
+  if (type == "load")
+    return "onload";
+  if (type == "error")
+    return "onerror";
+  if (type == "scroll")
+    return "onscroll";
   return nullptr;
 }
 
@@ -4150,11 +4176,25 @@ const char* OnHandlerForType(std::string_view type)
 // The handler is stored as a property on the element's wrapper so JS sees a
 // regular function value; a content attribute (on*="code") is compiled to a
 // function on first fire and cached on the wrapper.
-static constexpr std::array<const char*, 19> kElementEventHandlers = {
-    "onclick", "ondblclick", "onmousedown", "onmouseup", "onmousemove",
-    "onmouseover", "onmouseout", "onfocus", "onblur", "onkeydown", "onkeyup",
-    "oninput", "onchange", "onsubmit", "onwheel", "onload", "onerror",
-    "onscroll", "onresize"};
+static constexpr std::array<const char*, 19> kElementEventHandlers = {"onclick",
+                                                                      "ondblclick",
+                                                                      "onmousedown",
+                                                                      "onmouseup",
+                                                                      "onmousemove",
+                                                                      "onmouseover",
+                                                                      "onmouseout",
+                                                                      "onfocus",
+                                                                      "onblur",
+                                                                      "onkeydown",
+                                                                      "onkeyup",
+                                                                      "oninput",
+                                                                      "onchange",
+                                                                      "onsubmit",
+                                                                      "onwheel",
+                                                                      "onload",
+                                                                      "onerror",
+                                                                      "onscroll",
+                                                                      "onresize"};
 
 // The getter/setter are JS_CFUNC_getter_magic / JS_CFUNC_setter_magic: the
 // magic (handler index) arrives as the trailing int argument (no argc/argv).
@@ -4167,7 +4207,8 @@ JSValue ElementGetEventHandler(JSContext* ctx, JSValueConst this_val, int magic)
     return JS_ThrowTypeError(ctx, "not an element");
   }
   JSValue wrapper = impl->WrapNode(node);
-  JSValue h = JS_GetPropertyStr(ctx, wrapper, kElementEventHandlers[magic]);
+  JSValue h =
+      JS_GetPropertyStr(ctx, wrapper, kElementEventHandlers[static_cast<std::size_t>(magic)]);
   JS_FreeValue(ctx, wrapper);
   if (JS_IsUndefined(h)) {
     JS_FreeValue(ctx, h);
@@ -4176,8 +4217,7 @@ JSValue ElementGetEventHandler(JSContext* ctx, JSValueConst this_val, int magic)
   return h;
 }
 
-JSValue ElementSetEventHandler(JSContext* ctx, JSValueConst this_val, JSValueConst value,
-                               int magic)
+JSValue ElementSetEventHandler(JSContext* ctx, JSValueConst this_val, JSValueConst value, int magic)
 {
   Impl* impl = ImplFor(ctx, this_val);
   dom::Node* node = UnwrapNode(this_val);
@@ -4188,8 +4228,11 @@ JSValue ElementSetEventHandler(JSContext* ctx, JSValueConst this_val, JSValueCon
   JSValue wrapper = impl->WrapNode(node);
   // Define an own property (not JS_SetPropertyStr, which would re-enter the
   // prototype's accessor and recurse).
-  JS_DefinePropertyValueStr(ctx, wrapper, kElementEventHandlers[magic],
-                            JS_DupValue(ctx, value), JS_PROP_C_W_E);
+  JS_DefinePropertyValueStr(ctx,
+                            wrapper,
+                            kElementEventHandlers[static_cast<std::size_t>(magic)],
+                            JS_DupValue(ctx, value),
+                            JS_PROP_C_W_E);
   JS_FreeValue(ctx, wrapper);
   return JS_UNDEFINED;
 }
@@ -4487,10 +4530,14 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
       ctx, impl.element_proto, "offsetTop", MakeGetter(ctx, "offsetTop", ElementGetOffsetTop));
   DefineGetter(
       ctx, impl.element_proto, "offsetLeft", MakeGetter(ctx, "offsetLeft", ElementGetOffsetLeft));
-  DefineGetter(
-      ctx, impl.element_proto, "offsetParent", MakeGetter(ctx, "offsetParent", ElementGetOffsetParent));
-  DefineGetter(
-      ctx, impl.element_proto, "clientWidth", MakeGetter(ctx, "clientWidth", ElementGetClientWidth));
+  DefineGetter(ctx,
+               impl.element_proto,
+               "offsetParent",
+               MakeGetter(ctx, "offsetParent", ElementGetOffsetParent));
+  DefineGetter(ctx,
+               impl.element_proto,
+               "clientWidth",
+               MakeGetter(ctx, "clientWidth", ElementGetClientWidth));
   DefineGetter(ctx,
                impl.element_proto,
                "clientHeight",
@@ -4501,11 +4548,14 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
       ctx, impl.element_proto, "clientLeft", MakeGetter(ctx, "clientLeft", ElementGetClientLeft));
   // Element-level global event handler attributes (element.onclick = fn).
   for (int i = 0; i < static_cast<int>(kElementEventHandlers.size()); ++i) {
-    DefineAccessor(ctx,
-                   impl.element_proto,
-                   kElementEventHandlers[i],
-                   MakeGetterMagic(ctx, kElementEventHandlers[i], ElementGetEventHandler, i),
-                   MakeSetterMagic(ctx, kElementEventHandlers[i], ElementSetEventHandler, i));
+    DefineAccessor(
+        ctx,
+        impl.element_proto,
+        kElementEventHandlers[static_cast<std::size_t>(i)],
+        MakeGetterMagic(
+            ctx, kElementEventHandlers[static_cast<std::size_t>(i)], ElementGetEventHandler, i),
+        MakeSetterMagic(
+            ctx, kElementEventHandlers[static_cast<std::size_t>(i)], ElementSetEventHandler, i));
   }
   DefineGetter(
       ctx, impl.element_proto, "children", MakeGetter(ctx, "children", ElementGetChildren));
@@ -4644,19 +4694,14 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
   // Media (<video>): duration/currentTime/paused + play()/pause() (methods
   // above).  currentTime is seekable; non-video elements report the media
   // defaults (NaN duration, paused = true).
-  DefineGetter(ctx,
-               impl.element_proto,
-               "duration",
-               MakeGetter(ctx, "duration", ElementGetVideoDuration));
+  DefineGetter(
+      ctx, impl.element_proto, "duration", MakeGetter(ctx, "duration", ElementGetVideoDuration));
   DefineAccessor(ctx,
                  impl.element_proto,
                  "currentTime",
                  MakeGetter(ctx, "currentTime", ElementGetVideoCurrentTime),
                  MakeSetter(ctx, "currentTime", ElementSetVideoCurrentTime));
-  DefineGetter(ctx,
-               impl.element_proto,
-               "paused",
-               MakeGetter(ctx, "paused", ElementGetVideoPaused));
+  DefineGetter(ctx, impl.element_proto, "paused", MakeGetter(ctx, "paused", ElementGetVideoPaused));
 }
 
 void DefineDocumentPrototype(JSContext* ctx, Impl& impl)
@@ -5344,8 +5389,12 @@ JSValue IdbJsonToJs(JSContext* ctx, const std::string& json)
 
 // Common completion of a request: sets result/error/readyState and fires the
 // matching handler.  |result| and |error_value| are consumed.
-void SettleIdbRequest(JSContext* ctx, JSValueConst req_obj, const char* handler_prop,
-                      const char* event_type, bool success, JSValueConst result,
+void SettleIdbRequest(JSContext* ctx,
+                      JSValueConst req_obj,
+                      const char* handler_prop,
+                      const char* event_type,
+                      bool success,
+                      JSValueConst result,
                       JSValueConst error_value)
 {
   if (success) {
@@ -5364,7 +5413,9 @@ void SettleIdbRequest(JSContext* ctx, JSValueConst req_obj, const char* handler_
 
 // Completes a data request (add/put/get/delete/clear/count/getAll) and
 // commits its transaction when it was the last outstanding request.
-void SettleIdbDataRequest(Impl* impl, JSContext* ctx, JSValueConst req_obj,
+void SettleIdbDataRequest(Impl* impl,
+                          JSContext* ctx,
+                          JSValueConst req_obj,
                           const std::shared_ptr<Impl::IdbRequest>& request)
 {
   if (!request->error_name.empty()) {
@@ -5407,7 +5458,8 @@ JSValue MakeIdbStoreObject(Impl* impl, JSContext* ctx, int handle_idx);
 int IdbHandleIndexFromData(JSContext* ctx, JSValueConst* func_data);
 
 // Loads the object-store metadata of |db_name| into |handle->stores|.
-void IdbLoadStoreMetas(Impl* impl, const std::string& db_name,
+void IdbLoadStoreMetas(Impl* impl,
+                       const std::string& db_name,
                        const std::shared_ptr<Impl::IdbHandle>& handle)
 {
   handle->stores.clear();
@@ -5426,7 +5478,9 @@ void IdbLoadStoreMetas(Impl* impl, const std::string& db_name,
 
 // Completes an open()/deleteDatabase() request: handles version-change
 // upgrades (onupgradeneeded) and plain opens.
-void SettleIdbOpenRequest(Impl* impl, JSContext* ctx, JSValueConst req_obj,
+void SettleIdbOpenRequest(Impl* impl,
+                          JSContext* ctx,
+                          JSValueConst req_obj,
                           const std::shared_ptr<Impl::IdbRequest>& request)
 {
   if (!request->error_name.empty()) {
@@ -5529,8 +5583,8 @@ void SettleIdbOpenRequest(Impl* impl, JSContext* ctx, JSValueConst req_obj,
     JS_SetPropertyStr(ctx, db_obj, "version", JS_NewInt64(ctx, new_version));
     JSValue names = JS_NewArray(ctx);
     for (std::size_t i = 0; i < handle->stores.size(); ++i) {
-      JS_SetPropertyUint32(ctx, names, static_cast<uint32_t>(i),
-                           JS_NewString(ctx, handle->stores[i].name.c_str()));
+      JS_SetPropertyUint32(
+          ctx, names, static_cast<uint32_t>(i), JS_NewString(ctx, handle->stores[i].name.c_str()));
     }
     JS_SetPropertyStr(ctx, db_obj, "objectStoreNames", names); // steals names
     // The version-change transaction completes, then the request succeeds.
@@ -5539,8 +5593,8 @@ void SettleIdbOpenRequest(Impl* impl, JSContext* ctx, JSValueConst req_obj,
     JS_SetPropertyStr(ctx, complete_event, "target", JS_DupValue(ctx, tx->object));
     CallIdbHandler(ctx, tx->object, "oncomplete", complete_event);
     JS_FreeValue(ctx, complete_event);
-    SettleIdbRequest(ctx, req_obj, "onsuccess", "success", true, JS_DupValue(ctx, db_obj),
-                     JS_UNDEFINED);
+    SettleIdbRequest(
+        ctx, req_obj, "onsuccess", "success", true, JS_DupValue(ctx, db_obj), JS_UNDEFINED);
   } else {
     JSValue db_obj = MakeIdbDatabaseObject(impl, ctx, handle_idx);
     JS_SetPropertyStr(ctx, req_obj, "transaction", JS_UNDEFINED);
@@ -5580,7 +5634,9 @@ JSValue IdbJobEntry(JSContext* ctx, int argc, JSValueConst* argv)
 // Allocates a request state + JS request object and enqueues its completion
 // job.  The returned JSValue is owned by the caller (the API returns it to
 // the script); the job queue holds its own dup.
-JSValue MakeIdbRequest(Impl* impl, JSContext* ctx, std::shared_ptr<Impl::IdbRequest> request,
+JSValue MakeIdbRequest(Impl* impl,
+                       JSContext* ctx,
+                       std::shared_ptr<Impl::IdbRequest> request,
                        bool upgradeneeded_slot)
 {
   JSValue req_obj = JS_NewObject(ctx);
@@ -5657,8 +5713,11 @@ JSValue IdbDeleteDatabase(JSContext* ctx, JSValueConst this_val, int argc, JSVal
   return MakeIdbRequest(impl, ctx, std::move(request), /*upgradeneeded_slot=*/false);
 }
 
-JSValue IdbDatabaseCreateObjectStore(JSContext* ctx, JSValueConst /*this_val*/, int argc,
-                                     JSValueConst* argv, int /*magic*/,
+JSValue IdbDatabaseCreateObjectStore(JSContext* ctx,
+                                     JSValueConst /*this_val*/,
+                                     int argc,
+                                     JSValueConst* argv,
+                                     int /*magic*/,
                                      JSValueConst* func_data)
 {
   Impl* impl = ImplFor(ctx, JS_UNDEFINED);
@@ -5667,8 +5726,8 @@ JSValue IdbDatabaseCreateObjectStore(JSContext* ctx, JSValueConst /*this_val*/, 
     return JS_ThrowTypeError(ctx, "stale indexedDB object");
   }
   if (!handle->upgrade) {
-    return ThrowIdbError(ctx, "InvalidStateError",
-                         "createObjectStore is only allowed during a version change");
+    return ThrowIdbError(
+        ctx, "InvalidStateError", "createObjectStore is only allowed during a version change");
   }
   bool ok = false;
   const std::string name = ArgString(ctx, argc >= 1 ? argv[0] : JS_UNDEFINED, &ok);
@@ -5721,8 +5780,11 @@ JSValue IdbDatabaseCreateObjectStore(JSContext* ctx, JSValueConst /*this_val*/, 
   return MakeIdbStoreObject(impl, ctx, store_idx);
 }
 
-JSValue IdbDatabaseDeleteObjectStore(JSContext* ctx, JSValueConst /*this_val*/, int argc,
-                                     JSValueConst* argv, int /*magic*/,
+JSValue IdbDatabaseDeleteObjectStore(JSContext* ctx,
+                                     JSValueConst /*this_val*/,
+                                     int argc,
+                                     JSValueConst* argv,
+                                     int /*magic*/,
                                      JSValueConst* func_data)
 {
   Impl* impl = ImplFor(ctx, JS_UNDEFINED);
@@ -5731,8 +5793,8 @@ JSValue IdbDatabaseDeleteObjectStore(JSContext* ctx, JSValueConst /*this_val*/, 
     return JS_ThrowTypeError(ctx, "stale indexedDB object");
   }
   if (!handle->upgrade) {
-    return ThrowIdbError(ctx, "InvalidStateError",
-                         "deleteObjectStore is only allowed during a version change");
+    return ThrowIdbError(
+        ctx, "InvalidStateError", "deleteObjectStore is only allowed during a version change");
   }
   bool ok = false;
   const std::string name = ArgString(ctx, argc >= 1 ? argv[0] : JS_UNDEFINED, &ok);
@@ -5758,8 +5820,8 @@ JSValue IdbDatabaseDeleteObjectStore(JSContext* ctx, JSValueConst /*this_val*/, 
 }
 
 // Shared logic for object-store data operations.
-JSValue IdbStoreOp(JSContext* ctx, int argc, JSValueConst* argv, JSValueConst* func_data,
-                   const std::string& op)
+JSValue IdbStoreOp(
+    JSContext* ctx, int argc, JSValueConst* argv, JSValueConst* func_data, const std::string& op)
 {
   Impl* impl = ImplFor(ctx, JS_UNDEFINED);
   const std::shared_ptr<Impl::IdbHandle> store = IdbHandleFromData(ctx, func_data);
@@ -5861,8 +5923,7 @@ JSValue IdbStoreOp(JSContext* ctx, int argc, JSValueConst* argv, JSValueConst* f
         return;
       }
     } else if (op == "count") {
-      const base::Result<int64_t> r =
-          impl->apis.idb_count(store->db_name, store->store_name);
+      const base::Result<int64_t> r = impl->apis.idb_count(store->db_name, store->store_name);
       if (!r) {
         SplitIdbError(r.error(), request->error_name, request->error_message);
         return;
@@ -5893,12 +5954,16 @@ JSValue IdbStoreOp(JSContext* ctx, int argc, JSValueConst* argv, JSValueConst* f
   return MakeIdbRequest(impl, ctx, std::move(request), /*upgradeneeded_slot=*/false);
 }
 
-#define NEKO_IDB_STORE_OP(fn_name, op_name, length)                                            \
-  JSValue fn_name(JSContext* ctx, JSValueConst /*this_val*/, int argc, JSValueConst* argv,    \
-                  int /*magic*/, JSValueConst* func_data)                                      \
-  {                                                                                            \
-    (void)length;                                                                              \
-    return IdbStoreOp(ctx, argc, argv, func_data, op_name);                                    \
+#define NEKO_IDB_STORE_OP(fn_name, op_name, length)                                                \
+  JSValue fn_name(JSContext* ctx,                                                                  \
+                  JSValueConst /*this_val*/,                                                       \
+                  int argc,                                                                        \
+                  JSValueConst* argv,                                                              \
+                  int /*magic*/,                                                                   \
+                  JSValueConst* func_data)                                                         \
+  {                                                                                                \
+    (void)length;                                                                                  \
+    return IdbStoreOp(ctx, argc, argv, func_data, op_name);                                        \
   }
 
 NEKO_IDB_STORE_OP(IdbStoreAdd, "add", 2)
@@ -5911,8 +5976,12 @@ NEKO_IDB_STORE_OP(IdbStoreGetAll, "getAll", 0)
 
 #undef NEKO_IDB_STORE_OP
 
-JSValue IdbDatabaseTransaction(JSContext* ctx, JSValueConst /*this_val*/, int argc,
-                               JSValueConst* argv, int /*magic*/, JSValueConst* func_data)
+JSValue IdbDatabaseTransaction(JSContext* ctx,
+                               JSValueConst /*this_val*/,
+                               int argc,
+                               JSValueConst* argv,
+                               int /*magic*/,
+                               JSValueConst* func_data)
 {
   Impl* impl = ImplFor(ctx, JS_UNDEFINED);
   const std::shared_ptr<Impl::IdbHandle> db = IdbHandleFromData(ctx, func_data);
@@ -5978,8 +6047,11 @@ JSValue IdbDatabaseTransaction(JSContext* ctx, JSValueConst /*this_val*/, int ar
   return MakeIdbTransactionObject(impl, ctx, tx_idx);
 }
 
-JSValue IdbTransactionObjectStore(JSContext* ctx, JSValueConst /*this_val*/, int argc,
-                                  JSValueConst* argv, int /*magic*/,
+JSValue IdbTransactionObjectStore(JSContext* ctx,
+                                  JSValueConst /*this_val*/,
+                                  int argc,
+                                  JSValueConst* argv,
+                                  int /*magic*/,
                                   JSValueConst* func_data)
 {
   Impl* impl = ImplFor(ctx, JS_UNDEFINED);
@@ -6019,8 +6091,12 @@ JSValue IdbTransactionObjectStore(JSContext* ctx, JSValueConst /*this_val*/, int
   return MakeIdbStoreObject(impl, ctx, store_idx);
 }
 
-JSValue IdbTransactionAbort(JSContext* ctx, JSValueConst /*this_val*/, int /*argc*/,
-                            JSValueConst* /*argv*/, int /*magic*/, JSValueConst* func_data)
+JSValue IdbTransactionAbort(JSContext* ctx,
+                            JSValueConst /*this_val*/,
+                            int /*argc*/,
+                            JSValueConst* /*argv*/,
+                            int /*magic*/,
+                            JSValueConst* func_data)
 {
   const std::shared_ptr<Impl::IdbHandle> tx = IdbHandleFromData(ctx, func_data);
   if (tx != nullptr) {
@@ -6038,14 +6114,22 @@ JSValue IdbTransactionAbort(JSContext* ctx, JSValueConst /*this_val*/, int /*arg
 
 // The transaction auto-commits when its requests settle; commit() is a
 // documented no-op.
-JSValue IdbTransactionCommit(JSContext* /*ctx*/, JSValueConst /*this_val*/, int /*argc*/,
-                             JSValueConst* /*argv*/, int /*magic*/, JSValueConst* /*func_data*/)
+JSValue IdbTransactionCommit(JSContext* /*ctx*/,
+                             JSValueConst /*this_val*/,
+                             int /*argc*/,
+                             JSValueConst* /*argv*/,
+                             int /*magic*/,
+                             JSValueConst* /*func_data*/)
 {
   return JS_UNDEFINED;
 }
 
-JSValue IdbDatabaseClose(JSContext* /*ctx*/, JSValueConst /*this_val*/, int /*argc*/,
-                         JSValueConst* /*argv*/, int /*magic*/, JSValueConst* /*func_data*/)
+JSValue IdbDatabaseClose(JSContext* /*ctx*/,
+                         JSValueConst /*this_val*/,
+                         int /*argc*/,
+                         JSValueConst* /*argv*/,
+                         int /*magic*/,
+                         JSValueConst* /*func_data*/)
 {
   return JS_UNDEFINED; // connections live for the page; close() is a no-op
 }
@@ -6060,12 +6144,12 @@ int IdbHandleIndexFromData(JSContext* ctx, JSValueConst* func_data)
   return idx;
 }
 
-JSValue BindIdbMethod(JSContext* ctx, JSValue obj, const char* name, JSCFunctionData* fn,
-                      int handle_idx)
+JSValue
+BindIdbMethod(JSContext* ctx, JSValue obj, const char* name, JSCFunctionData* fn, int handle_idx)
 {
   JSValue data[] = {JS_NewInt32(ctx, handle_idx)};
   JSValue bound = JS_NewCFunctionData(ctx, fn, 0, 0, 1, data);
-  JS_FreeValue(ctx, data[0]); // the function dup'd it
+  JS_FreeValue(ctx, data[0]);               // the function dup'd it
   JS_SetPropertyStr(ctx, obj, name, bound); // steals bound
   return obj;
 }
@@ -6078,8 +6162,8 @@ JSValue MakeIdbDatabaseObject(Impl* impl, JSContext* ctx, int handle_idx)
   JS_SetPropertyStr(ctx, obj, "version", JS_NewInt64(ctx, handle->version));
   JSValue names = JS_NewArray(ctx);
   for (std::size_t i = 0; i < handle->stores.size(); ++i) {
-    JS_SetPropertyUint32(ctx, names, static_cast<uint32_t>(i),
-                         JS_NewString(ctx, handle->stores[i].name.c_str()));
+    JS_SetPropertyUint32(
+        ctx, names, static_cast<uint32_t>(i), JS_NewString(ctx, handle->stores[i].name.c_str()));
   }
   JS_SetPropertyStr(ctx, obj, "objectStoreNames", names); // steals names
   BindIdbMethod(ctx, obj, "createObjectStore", IdbDatabaseCreateObjectStore, handle_idx);
@@ -6358,14 +6442,14 @@ bool MatchMediaQueryImpl(const std::string& query)
       break;
     }
     const std::string expr = q.substr(open + 1, close - open - 1);
-    if (auto w = num_feature(expr, "min-width")) {
-      matched = matched && 800.0 >= *w;
-    } else if (auto w = num_feature(expr, "max-width")) {
-      matched = matched && 800.0 <= *w;
-    } else if (auto h = num_feature(expr, "min-height")) {
-      matched = matched && 600.0 >= *h;
-    } else if (auto h = num_feature(expr, "max-height")) {
-      matched = matched && 600.0 <= *h;
+    if (auto w_min = num_feature(expr, "min-width")) {
+      matched = matched && 800.0 >= *w_min;
+    } else if (auto w_max = num_feature(expr, "max-width")) {
+      matched = matched && 800.0 <= *w_max;
+    } else if (auto h_min = num_feature(expr, "min-height")) {
+      matched = matched && 600.0 >= *h_min;
+    } else if (auto h_max = num_feature(expr, "max-height")) {
+      matched = matched && 600.0 <= *h_max;
     } else if (expr.rfind("orientation:", 0) == 0) {
       const bool p = expr.find("portrait") != std::string::npos;
       matched = matched && (p ? !landscape : landscape);
@@ -6905,7 +6989,7 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
     JSValue open_fn = JS_NewCFunction(ctx, IdbOpen, "open", 1);
     JS_SetPropertyStr(ctx, idb, "open", open_fn); // steals open_fn
     JSValue delete_fn = JS_NewCFunction(ctx, IdbDeleteDatabase, "deleteDatabase", 1);
-    JS_SetPropertyStr(ctx, idb, "deleteDatabase", delete_fn); // steals delete_fn
+    JS_SetPropertyStr(ctx, idb, "deleteDatabase", delete_fn);           // steals delete_fn
     JS_SetPropertyStr(ctx, window, "indexedDB", JS_DupValue(ctx, idb)); // steals
     JS_SetPropertyStr(ctx, global, "indexedDB", idb);                   // steals
   }
@@ -7269,24 +7353,19 @@ int KeyCodeFor(std::string_view key)
     return c == ' ' ? 32 : static_cast<int>(c);
   }
   static const std::unordered_map<std::string_view, int> kMap = {
-      {"Enter", 13},   {"Backspace", 8},   {"Tab", 9},        {"Escape", 27},
-      {"Delete", 46},  {"Home", 36},       {"End", 35},       {"PageUp", 33},
-      {"PageDown", 34}, {"ArrowLeft", 37}, {"ArrowUp", 38},   {"ArrowRight", 39},
-      {"ArrowDown", 40}, {"Shift", 16},    {"Control", 17},   {"Alt", 18},
-      {"Meta", 91},    {"F1", 112},        {"F2", 113},       {"F3", 114},
-      {"F4", 115},     {"F5", 116},        {"F6", 117},       {"F7", 118},
-      {"F8", 119},     {"F9", 120},        {"F10", 121},      {"F11", 122},
-      {"F12", 123},
+      {"Enter", 13},   {"Backspace", 8},   {"Tab", 9},        {"Escape", 27},   {"Delete", 46},
+      {"Home", 36},    {"End", 35},        {"PageUp", 33},    {"PageDown", 34}, {"ArrowLeft", 37},
+      {"ArrowUp", 38}, {"ArrowRight", 39}, {"ArrowDown", 40}, {"Shift", 16},    {"Control", 17},
+      {"Alt", 18},     {"Meta", 91},       {"F1", 112},       {"F2", 113},      {"F3", 114},
+      {"F4", 115},     {"F5", 116},        {"F6", 117},       {"F7", 118},      {"F8", 119},
+      {"F9", 120},     {"F10", 121},       {"F11", 122},      {"F12", 123},
   };
   const auto it = kMap.find(key);
   return it != kMap.end() ? it->second : 0;
 }
 
-JSValue Impl::MakeKeyboardEvent(std::string type,
-                                bool bubbles,
-                                bool cancelable,
-                                std::string key,
-                                std::string code)
+JSValue Impl::MakeKeyboardEvent(
+    std::string type, bool bubbles, bool cancelable, std::string key, std::string code)
 {
   auto* w = new EventWrapper{this, std::move(type), bubbles, cancelable};
   w->key = std::move(key);
@@ -7298,12 +7377,8 @@ JSValue Impl::MakeKeyboardEvent(std::string type,
   return obj;
 }
 
-JSValue Impl::MakeMouseEvent(std::string type,
-                             bool bubbles,
-                             bool cancelable,
-                             double client_x,
-                             double client_y,
-                             int button)
+JSValue Impl::MakeMouseEvent(
+    std::string type, bool bubbles, bool cancelable, double client_x, double client_y, int button)
 {
   auto* w = new EventWrapper{this, std::move(type), bubbles, cancelable};
   w->client_x = client_x;
@@ -7327,14 +7402,19 @@ JSValue Impl::MakeWheelEvent(std::string type, bool bubbles, bool cancelable, do
 
 // Dispatches a cancelable keyboard event (keydown/keyup) to |node| with the
 // UI Events key/code strings.  Returns whether the event was NOT canceled.
-bool Impl::DispatchKeyboardToNode(dom::Node* node, std::string_view type, std::string_view key,
+bool Impl::DispatchKeyboardToNode(dom::Node* node,
+                                  std::string_view type,
+                                  std::string_view key,
                                   std::string_view code)
 {
   if (node == nullptr) {
     return true;
   }
-  JSValue event = MakeKeyboardEvent(std::string(type), /*bubbles=*/true, /*cancelable=*/true,
-                                    std::string(key), std::string(code));
+  JSValue event = MakeKeyboardEvent(std::string(type),
+                                    /*bubbles=*/true,
+                                    /*cancelable=*/true,
+                                    std::string(key),
+                                    std::string(code));
   const bool not_canceled = DispatchPropagated(node, event);
   JS_FreeValue(ctx, event);
   engine.RunPendingJobs();
@@ -7343,17 +7423,14 @@ bool Impl::DispatchKeyboardToNode(dom::Node* node, std::string_view type, std::s
 
 // Dispatches a cancelable pointer event (mousedown/mouseup/click) to |node|
 // with client coordinates and the mouse button.  Returns whether NOT canceled.
-bool Impl::DispatchMouseToNode(dom::Node* node,
-                               std::string_view type,
-                               double client_x,
-                               double client_y,
-                               int button)
+bool Impl::DispatchMouseToNode(
+    dom::Node* node, std::string_view type, double client_x, double client_y, int button)
 {
   if (node == nullptr) {
     return true;
   }
-  JSValue event = MakeMouseEvent(std::string(type), /*bubbles=*/true, /*cancelable=*/true,
-                                 client_x, client_y, button);
+  JSValue event = MakeMouseEvent(
+      std::string(type), /*bubbles=*/true, /*cancelable=*/true, client_x, client_y, button);
   const bool not_canceled = DispatchPropagated(node, event);
   JS_FreeValue(ctx, event);
   engine.RunPendingJobs();
@@ -7367,8 +7444,7 @@ bool Impl::DispatchWheelToNode(dom::Node* node, std::string_view type, double de
   if (node == nullptr) {
     return true;
   }
-  JSValue event = MakeWheelEvent(std::string(type), /*bubbles=*/true, /*cancelable=*/true,
-                                 delta_y);
+  JSValue event = MakeWheelEvent(std::string(type), /*bubbles=*/true, /*cancelable=*/true, delta_y);
   const bool not_canceled = DispatchPropagated(node, event);
   JS_FreeValue(ctx, event);
   engine.RunPendingJobs();
@@ -7672,14 +7748,16 @@ bool DomBinder::DispatchCancelableEvent(dom::Element& element, std::string_view 
   return impl_->DispatchCancelableToNode(&element, type);
 }
 
-bool DomBinder::DispatchKeyboardEvent(dom::Element& element, std::string_view type,
-                                      std::string_view key, std::string_view code)
+bool DomBinder::DispatchKeyboardEvent(dom::Element& element,
+                                      std::string_view type,
+                                      std::string_view key,
+                                      std::string_view code)
 {
   return impl_->DispatchKeyboardToNode(&element, type, key, code);
 }
 
-bool DomBinder::DispatchMouseEvent(dom::Element& element, std::string_view type, double client_x,
-                                   double client_y, int button)
+bool DomBinder::DispatchMouseEvent(
+    dom::Element& element, std::string_view type, double client_x, double client_y, int button)
 {
   return impl_->DispatchMouseToNode(&element, type, client_x, client_y, button);
 }

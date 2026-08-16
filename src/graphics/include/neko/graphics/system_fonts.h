@@ -7,7 +7,13 @@
 namespace neko::graphics {
 
 // CSS generic font families (subset; cursive/fantasy map to sans-serif).
-enum class GenericFamily { kSansSerif, kSerif, kMonospace, kCjkSans };
+enum class GenericFamily
+{
+  kSansSerif,
+  kSerif,
+  kMonospace,
+  kCjkSans
+};
 
 // Returns the available system font paths for |family| in priority order (the
 // first entry is the best match).  Empty when none of the candidates exist.
@@ -24,4 +30,4 @@ std::string ResolveFamilyName(std::string_view name);
 // otherwise returns |base_path| unchanged.  |weight| >= 600 requests bold.
 std::string FindFontVariant(const std::string& base_path, int weight, bool italic);
 
-}  // namespace neko::graphics
+} // namespace neko::graphics

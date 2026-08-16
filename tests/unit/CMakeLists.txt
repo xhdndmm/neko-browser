@@ -253,10 +253,11 @@ gtest_discover_tests(neko_javascript_tests DISCOVERY_MODE PRE_TEST)
 # neko_ui_tests (Qt offscreen smoke tests)
 # -----------------------------------------------------------------------------
 if(NEKO_BUILD_UI)
+  find_package(Qt6 REQUIRED COMPONENTS Test)
   add_executable(neko_ui_tests
     ui/ui_smoke_test.cpp
   )
-  target_link_libraries(neko_ui_tests PRIVATE neko::ui neko::storage gtest)
+  target_link_libraries(neko_ui_tests PRIVATE neko::ui neko::storage gtest Qt6::Test)
   apply_compiler_warnings(neko_ui_tests)
   # The Qt offscreen platform plugin lets the tests run without a display.
   gtest_discover_tests(neko_ui_tests DISCOVERY_MODE PRE_TEST

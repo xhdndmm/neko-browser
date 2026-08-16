@@ -21,14 +21,14 @@ namespace {
 // Monotonic clock in milliseconds (drives animated-image frame advance).
 double NowMs()
 {
-  return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch())
+  return std::chrono::duration<double, std::milli>(
+             std::chrono::steady_clock::now().time_since_epoch())
       .count();
 }
 
 // Depth-first search for the first layout box owned by |target| (block-level
 // boxes and atomic inline boxes carry the element's own geometry).
-const layout::LayoutBox* FindElementBox(const layout::LayoutBox& box,
-                                        const dom::Element* target)
+const layout::LayoutBox* FindElementBox(const layout::LayoutBox& box, const dom::Element* target)
 {
   if (box.element == target) {
     return &box;
@@ -90,9 +90,8 @@ bool CollectFragmentRect(const layout::LayoutBox& box,
   for (const layout::Line& line : box.lines) {
     for (const layout::TextRun& run : line.runs) {
       if (run.element == target) {
-        const float w = run.width > 0
-                            ? run.width
-                            : static_cast<float>(run.text.size()) * run.font_size;
+        const float w =
+            run.width > 0 ? run.width : static_cast<float>(run.text.size()) * run.font_size;
         add(run.x, run.y, w, run.font_size);
       }
     }
@@ -328,7 +327,7 @@ void Page::SetElementImage(const dom::Element& element,
     animation_states_.erase(&element);
   }
   video_states_.erase(&element); // a static image replaces any video frame
-  root_.reset(); // the replaced box's intrinsic size may have changed
+  root_.reset();                 // the replaced box's intrinsic size may have changed
   display_list_.reset();
   BumpVersion();
 }
@@ -382,16 +381,14 @@ void Page::PauseVideo(const dom::Element& element)
   state.playing = false;
   // Freeze the actual media clock (not the snapped frame time) so that
   // pause/play round-trips preserve sub-frame progress.
-  state.paused_time =
-      state.frame_rate > 0 ? (NowMs() - state.start_ms) / 1000.0 : 0.0;
+  state.paused_time = state.frame_rate > 0 ? (NowMs() - state.start_ms) / 1000.0 : 0.0;
 }
 
 void Page::SeekVideo(const dom::Element& element, double seconds)
 {
   std::lock_guard<std::mutex> lock(mutex_);
   const auto it = video_states_.find(&element);
-  if (it == video_states_.end() || it->second.frames == nullptr ||
-      it->second.frame_rate <= 0) {
+  if (it == video_states_.end() || it->second.frames == nullptr || it->second.frame_rate <= 0) {
     return;
   }
   VideoAnimationState& state = it->second;
@@ -408,8 +405,7 @@ void Page::SeekVideo(const dom::Element& element, double seconds)
   if (image_it != images_.end()) {
     const image::Image& frame_image = (*state.frames)[state.frame];
     if (image_it->second.rgba.size() == frame_image.rgba.size()) {
-      std::memcpy(image_it->second.rgba.data(), frame_image.rgba.data(),
-                  frame_image.rgba.size());
+      std::memcpy(image_it->second.rgba.data(), frame_image.rgba.data(), frame_image.rgba.size());
     }
   }
   display_list_.reset();
@@ -427,8 +423,7 @@ std::optional<double> Page::VideoDuration(const dom::Element& element) const
 {
   std::lock_guard<std::mutex> lock(mutex_);
   const auto it = video_states_.find(&element);
-  if (it == video_states_.end() || it->second.frames == nullptr ||
-      it->second.frame_rate <= 0) {
+  if (it == video_states_.end() || it->second.frames == nullptr || it->second.frame_rate <= 0) {
     return std::nullopt;
   }
   return static_cast<double>(it->second.frames->size()) / it->second.frame_rate;
@@ -538,8 +533,7 @@ bool Page::AdvanceAnimations()
     const auto image_it = images_.find(element);
     const image::Image& frame_image = (*state.frames)[f];
     if (image_it != images_.end() && image_it->second.rgba.size() == frame_image.rgba.size()) {
-      std::memcpy(image_it->second.rgba.data(), frame_image.rgba.data(),
-                  frame_image.rgba.size());
+      std::memcpy(image_it->second.rgba.data(), frame_image.rgba.data(), frame_image.rgba.size());
       display_list_.reset();
       BumpVersion();
       changed = true;

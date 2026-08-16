@@ -79,9 +79,11 @@ std::string DefaultProfileDir()
 // a depth cap so a redirect loop terminates.  When |local_storage| and
 // |indexed_db| are provided, page scripts get localStorage/indexedDB scoped
 // to the loaded page's origin.
-neko::base::Result<void> LoadTarget(neko::renderer::Page& page, const std::string& target,
+neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
+                                    const std::string& target,
                                     neko::storage::LocalStorage* local_storage,
-                                    neko::storage::IndexedDbStore* indexed_db, int depth = 0)
+                                    neko::storage::IndexedDbStore* indexed_db,
+                                    int depth = 0)
 {
   constexpr int kMaxNavigationDepth = 20;
   if (depth >= kMaxNavigationDepth) {
@@ -319,8 +321,8 @@ int RunRendererChild()
 
   const auto request_frame = channel.Receive();
   if (!request_frame.has_value()) {
-    std::cerr << "renderer child: failed to read request: "
-              << request_frame.error().message() << "\n";
+    std::cerr << "renderer child: failed to read request: " << request_frame.error().message()
+              << "\n";
     return 1;
   }
   const auto request = neko::browser::DecodeLoadRequest(request_frame.value());
@@ -425,14 +427,13 @@ int main(int argc, char** argv)
       std::cout << "\n--- Page " << (page.index + 1) << " ---\n" << page.text << "\n";
     }
     if (parsed.options.pdf_render_out.has_value()) {
-      const auto rendered = neko::pdf::RenderPage(
-          bytes.value(), parsed.options.pdf_page, parsed.options.pdf_scale);
+      const auto rendered =
+          neko::pdf::RenderPage(bytes.value(), parsed.options.pdf_page, parsed.options.pdf_scale);
       if (!rendered) {
         std::cerr << "error: pdf render: " << rendered.error().message() << "\n";
         return 1;
       }
-      const auto written =
-          WriteImagePpm(parsed.options.pdf_render_out.value(), rendered.value());
+      const auto written = WriteImagePpm(parsed.options.pdf_render_out.value(), rendered.value());
       if (!written) {
         std::cerr << "error: " << written.error().message() << "\n";
         return 1;
@@ -517,8 +518,7 @@ int main(int argc, char** argv)
     }
     std::cout << "container   : " << video.value().format_name << "\n"
               << "codec       : " << video.value().codec_name << "\n"
-              << "size        : " << video.value().width << " x " << video.value().height
-              << "\n"
+              << "size        : " << video.value().width << " x " << video.value().height << "\n"
               << "duration    : " << video.value().duration_seconds << " s\n"
               << "frame rate  : " << video.value().frame_rate << " fps\n"
               << "frames      : " << video.value().frames.size() << "\n";
@@ -630,8 +630,7 @@ int main(int argc, char** argv)
   }
 
   if (parsed.options.dump_dom) {
-    const std::string dump =
-        renderer_result.has_value() ? renderer_result->dom : page.DumpDom();
+    const std::string dump = renderer_result.has_value() ? renderer_result->dom : page.DumpDom();
     std::cout << dump;
     if (!dump.empty() && dump.back() != '\n') {
       std::cout << '\n';
@@ -651,8 +650,8 @@ int main(int argc, char** argv)
         std::cerr << "error: " << written.error().message() << "\n";
         return 1;
       }
-      std::cout << "wrote screenshot (renderer process): "
-                << parsed.options.screenshot_path.value() << "\n";
+      std::cout << "wrote screenshot (renderer process): " << parsed.options.screenshot_path.value()
+                << "\n";
     } else {
       constexpr float kViewportWidth = 800;
       constexpr int kMinHeight = 600;

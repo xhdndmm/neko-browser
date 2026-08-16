@@ -6,7 +6,8 @@
 
 namespace neko::browser {
 
-std::string UsageText() {
+std::string UsageText()
+{
   return "Usage: neko-browser [options] [url]\n"
          "\n"
          "A from-scratch, cross-platform browser engine (Phase 0 bootstrap).\n"
@@ -26,8 +27,10 @@ std::string UsageText() {
          "      --extract-pdf <file>   Extract text from a PDF; with --pdf-render-out,\n"
          "                            rasterize a page to PPM.\n"
          "      --audio-info <file>    Print WAV metadata.\n"
-         "      --image-info <file>    Decode an image; optionally write PPM via --image-out.\n"      "      --video-info <file>    Decode a video (FFmpeg); print container/codec/metadata.\n"
-      "      --video-out <file>     With --video-info: write the first frame as PPM.\n"         "      --eval <script>         Evaluate a JavaScript expression.\n"
+         "      --image-info <file>    Decode an image; optionally write PPM via --image-out.\n"
+         "      --video-info <file>    Decode a video (FFmpeg); print container/codec/metadata.\n"
+         "      --video-out <file>     With --video-info: write the first frame as PPM.\n"
+         "      --eval <script>         Evaluate a JavaScript expression.\n"
          "      --profile <dir>        Browser profile directory.\n"
          "      --disable-gpu          Force software rendering.\n"
          "      --renderer-process    Load pages through an out-of-process renderer\n"
@@ -41,7 +44,8 @@ std::string UsageText() {
          "software rendering are implemented; the GUI is not yet available.\n";
 }
 
-ParseResult ParseCommandLine(int argc, char** argv) {
+ParseResult ParseCommandLine(int argc, char** argv)
+{
   ParseResult result;
   const std::vector<std::string_view> args(argv + 1, argv + argc);
 
@@ -161,8 +165,7 @@ ParseResult ParseCommandLine(int argc, char** argv) {
         result.error_message = "option '--pdf-scale' requires an argument";
         return result;
       }
-      result.options.pdf_scale =
-          static_cast<float>(std::atof(std::string(args[++i]).c_str()));
+      result.options.pdf_scale = static_cast<float>(std::atof(std::string(args[++i]).c_str()));
       continue;
     }
     if (arg == "--audio-info") {
@@ -267,4 +270,4 @@ ParseResult ParseCommandLine(int argc, char** argv) {
   return result;
 }
 
-}  // namespace neko::browser
+} // namespace neko::browser

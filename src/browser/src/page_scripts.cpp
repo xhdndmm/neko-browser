@@ -59,7 +59,8 @@ std::map<std::string, std::string> SerializeComputedStyle(const style::ComputedS
   out["border-right-width"] = style::ToString(s.border_right);
   out["border-bottom-width"] = style::ToString(s.border_bottom);
   out["border-left-width"] = style::ToString(s.border_left);
-  out["font-size"] = style::ToString(style::SizeSpec{s.font_size});
+  out["font-size"] = style::ToString(
+      style::SizeSpec{static_cast<float>(s.font_size), false, false, {}, false, false, false, {}});
   out["font-family"] = s.font_family;
   out["font-weight"] = std::to_string(s.font_weight);
   out["line-height"] = std::to_string(s.line_height);
@@ -185,26 +186,31 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
       }
       return base::Result<std::vector<javascript::IdbStoreMeta>>(std::move(out));
     };
-    apis.idb_create_store = [idb, origin](std::string_view db, std::string_view store,
-                                          std::string_view key_path, bool auto_increment) {
+    apis.idb_create_store = [idb, origin](std::string_view db,
+                                          std::string_view store,
+                                          std::string_view key_path,
+                                          bool auto_increment) {
       return idb->CreateObjectStore(origin, db, store, key_path, auto_increment);
     };
     apis.idb_delete_store = [idb, origin](std::string_view db, std::string_view store) {
       return idb->DeleteObjectStore(origin, db, store);
     };
-    apis.idb_add = [idb, origin](std::string_view db, std::string_view store,
-                                 std::optional<std::string> key, std::string value) {
+    apis.idb_add = [idb, origin](std::string_view db,
+                                 std::string_view store,
+                                 std::optional<std::string> key,
+                                 std::string value) {
       return idb->Add(origin, db, store, std::move(key), std::move(value));
     };
-    apis.idb_put = [idb, origin](std::string_view db, std::string_view store,
-                                 std::optional<std::string> key, std::string value) {
+    apis.idb_put = [idb, origin](std::string_view db,
+                                 std::string_view store,
+                                 std::optional<std::string> key,
+                                 std::string value) {
       return idb->Put(origin, db, store, std::move(key), std::move(value));
     };
     apis.idb_get = [idb, origin](std::string_view db, std::string_view store, std::string key) {
       return idb->Get(origin, db, store, std::move(key));
     };
-    apis.idb_delete = [idb, origin](std::string_view db, std::string_view store,
-                                    std::string key) {
+    apis.idb_delete = [idb, origin](std::string_view db, std::string_view store, std::string key) {
       return idb->Delete(origin, db, store, std::move(key));
     };
     apis.idb_clear = [idb, origin](std::string_view db, std::string_view store) {
@@ -269,20 +275,21 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
 
   // Element layout geometry (getBoundingClientRect / offsetWidth etc): the
   // union of the element's laid-out border box and inline fragments.
-  apis.element_geometry = [&page](const dom::Element& element) -> std::optional<javascript::ElementGeometry> {
+  apis.element_geometry =
+      [&page](const dom::Element& element) -> std::optional<javascript::ElementGeometry> {
     const std::optional<renderer::ElementGeometry> g = page.ElementBoxGeometry(element);
     if (!g.has_value()) {
       return std::nullopt;
     }
     javascript::ElementGeometry out;
-    out.x = g->x;
-    out.y = g->y;
-    out.width = g->width;
-    out.height = g->height;
-    out.client_width = g->client_width;
-    out.client_height = g->client_height;
-    out.border_top = g->border_top;
-    out.border_left = g->border_left;
+    out.x = static_cast<double>(g->x);
+    out.y = static_cast<double>(g->y);
+    out.width = static_cast<double>(g->width);
+    out.height = static_cast<double>(g->height);
+    out.client_width = static_cast<double>(g->client_width);
+    out.client_height = static_cast<double>(g->client_height);
+    out.border_top = static_cast<double>(g->border_top);
+    out.border_left = static_cast<double>(g->border_left);
     return out;
   };
 

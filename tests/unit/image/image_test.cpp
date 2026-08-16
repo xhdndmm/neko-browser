@@ -595,10 +595,7 @@ struct GifFrameSpec
 
 // Appends a graphic control extension (when any of its fields apply) followed
 // by a full-screen image descriptor for one frame.
-std::string EncodeGifFrame(int width,
-                           int height,
-                           int min_code_size,
-                           const GifFrameSpec& frame)
+std::string EncodeGifFrame(int width, int height, int min_code_size, const GifFrameSpec& frame)
 {
   std::string out;
   if (frame.delay_cs >= 0 || frame.disposal != 0 || frame.transparent_index >= 0) {
@@ -647,14 +644,13 @@ std::string EncodeAnimatedGif(int width,
   out.push_back(static_cast<char>(background_index));
   out.push_back('\0'); // aspect ratio
   for (int i = 0; i < table_size * 3; ++i) {
-    out.push_back(i < ncolors * 3 ? static_cast<char>(palette[static_cast<std::size_t>(i)])
-                                  : '\0');
+    out.push_back(i < ncolors * 3 ? static_cast<char>(palette[static_cast<std::size_t>(i)]) : '\0');
   }
   if (loops >= 0) {
     out += "\x21\xff\x0bNETSCAPE2.0";
-    out += "\x03\x01";          // sub-block: id 1 (loop count), 3 bytes
+    out += "\x03\x01"; // sub-block: id 1 (loop count), 3 bytes
     out += Le16(static_cast<uint16_t>(loops));
-    out.push_back('\0');        // sub-block terminator
+    out.push_back('\0'); // sub-block terminator
   }
   for (const GifFrameSpec& frame : frames) {
     out += EncodeGifFrame(width, height, min_code_size, frame);
@@ -665,12 +661,12 @@ std::string EncodeAnimatedGif(int width,
 
 TEST(GifTest, DecodeGifAnimationTwoFrames)
 {
-  const std::string gif = EncodeAnimatedGif(
-      1,
-      1,
-      {255, 0, 0, 0, 255, 0}, // red, green
-      {GifFrameSpec{{0}, /*delay=*/20}, GifFrameSpec{{1}, /*delay=*/30}},
-      /*loops=*/0);
+  const std::string gif =
+      EncodeAnimatedGif(1,
+                        1,
+                        {255, 0, 0, 0, 255, 0}, // red, green
+                        {GifFrameSpec{{0}, /*delay=*/20}, GifFrameSpec{{1}, /*delay=*/30}},
+                        /*loops=*/0);
   const auto result = DecodeGifAnimation(gif);
   ASSERT_TRUE(result.has_value()) << result.error().message();
   const GifAnimation& anim = result.value();
@@ -717,11 +713,11 @@ TEST(GifTest, DecodeGifAnimationLoopCount)
 TEST(GifTest, DecodeGifAnimationClampsShortDelays)
 {
   // Browsers clamp frame delays below 20 ms to 100 ms (10 cs).
-  const std::string gif = EncodeAnimatedGif(1,
-                                            1,
-                                            {255, 0, 0, 0, 255, 0},
-                                            {GifFrameSpec{{0}, /*delay=*/0},
-                                             GifFrameSpec{{1}, /*delay=*/1}});
+  const std::string gif =
+      EncodeAnimatedGif(1,
+                        1,
+                        {255, 0, 0, 0, 255, 0},
+                        {GifFrameSpec{{0}, /*delay=*/0}, GifFrameSpec{{1}, /*delay=*/1}});
   const auto result = DecodeGifAnimation(gif);
   ASSERT_TRUE(result.has_value());
   ASSERT_EQ(result.value().frames.size(), 2u);
@@ -755,15 +751,15 @@ TEST(GifTest, DecodeGifAnimationDisposalRestoresBackground)
   // Palette red/green/blue with blue as the canvas background.  Frame 1 is
   // disposed with method 2 (restore to background), so the frame 2 snapshot
   // (which only paints a transparent pixel) must show blue again.
-  const std::string gif = EncodeAnimatedGif(
-      2,
-      1,
-      {255, 0, 0, 0, 255, 0, 0, 0, 255},
-      {GifFrameSpec{{0, 0}, 10},
-       GifFrameSpec{{1, 1}, 10, /*disposal=*/2},
-       GifFrameSpec{{1, 1}, 10, /*disposal=*/0, /*transparent=*/1}},
-      /*loops=*/-1,
-      /*background_index=*/2);
+  const std::string gif =
+      EncodeAnimatedGif(2,
+                        1,
+                        {255, 0, 0, 0, 255, 0, 0, 0, 255},
+                        {GifFrameSpec{{0, 0}, 10},
+                         GifFrameSpec{{1, 1}, 10, /*disposal=*/2},
+                         GifFrameSpec{{1, 1}, 10, /*disposal=*/0, /*transparent=*/1}},
+                        /*loops=*/-1,
+                        /*background_index=*/2);
   const auto result = DecodeGifAnimation(gif);
   ASSERT_TRUE(result.has_value());
   ASSERT_EQ(result.value().frames.size(), 3u);
@@ -786,13 +782,13 @@ TEST(GifTest, DecodeGifAnimationDisposalRestoresPrevious)
   // Frame 0 red; frame 1 green with disposal 3 (restore to previous).  Frame
   // 2 paints only transparent pixels, so its snapshot shows the restored
   // pre-frame-1 canvas (red).
-  const std::string gif = EncodeAnimatedGif(
-      1,
-      1,
-      {255, 0, 0, 0, 255, 0},
-      {GifFrameSpec{{0}, 10},
-       GifFrameSpec{{1}, 10, /*disposal=*/3},
-       GifFrameSpec{{1}, 10, /*disposal=*/0, /*transparent=*/1}});
+  const std::string gif =
+      EncodeAnimatedGif(1,
+                        1,
+                        {255, 0, 0, 0, 255, 0},
+                        {GifFrameSpec{{0}, 10},
+                         GifFrameSpec{{1}, 10, /*disposal=*/3},
+                         GifFrameSpec{{1}, 10, /*disposal=*/0, /*transparent=*/1}});
   const auto result = DecodeGifAnimation(gif);
   ASSERT_TRUE(result.has_value());
   ASSERT_EQ(result.value().frames.size(), 3u);
@@ -804,10 +800,8 @@ TEST(GifTest, DecodeGifAnimationDisposalRestoresPrevious)
 
 TEST(GifTest, DecodeGifAnimationSingleFrameMatchesDecodeGif)
 {
-  const std::string gif = EncodeAnimatedGif(2,
-                                            1,
-                                            {255, 0, 0, 0, 255, 0},
-                                            {GifFrameSpec{{0, 1}, 10}});
+  const std::string gif =
+      EncodeAnimatedGif(2, 1, {255, 0, 0, 0, 255, 0}, {GifFrameSpec{{0, 1}, 10}});
   const auto anim = DecodeGifAnimation(gif);
   ASSERT_TRUE(anim.has_value());
   ASSERT_EQ(anim.value().frames.size(), 1u);
@@ -818,10 +812,8 @@ TEST(GifTest, DecodeGifAnimationSingleFrameMatchesDecodeGif)
 
 TEST(GifTest, DecodeGifReturnsFirstFrameOfAnimation)
 {
-  const std::string gif = EncodeAnimatedGif(1,
-                                            1,
-                                            {255, 0, 0, 0, 255, 0},
-                                            {GifFrameSpec{{0}, 10}, GifFrameSpec{{1}, 10}});
+  const std::string gif = EncodeAnimatedGif(
+      1, 1, {255, 0, 0, 0, 255, 0}, {GifFrameSpec{{0}, 10}, GifFrameSpec{{1}, 10}});
   const auto result = DecodeGif(gif);
   ASSERT_TRUE(result.has_value());
   // The still-image path always returns the first frame (red).
@@ -1289,19 +1281,17 @@ TEST(SvgTest, PathDataDoesNotHangOnUnrecognizedChar)
 {
   // A '#' in the path data is consumed by neither the argument parser nor the
   // command switch; it must not spin forever.
-  const std::string svg =
-      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">"
-      "<path d=\"M0 0 #\"/></svg>";
+  const std::string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">"
+                          "<path d=\"M0 0 #\"/></svg>";
   const auto r = DecodeSvg(svg);
-  EXPECT_TRUE(r.has_value());  // tolerated, no hang
+  EXPECT_TRUE(r.has_value()); // tolerated, no hang
 }
 
 TEST(SvgTest, PathDataMissingArgumentsDoesNotOverrun)
 {
   // d=\"M\" has no coordinates; reading args[1] must not overrun the vector.
-  const std::string svg =
-      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">"
-      "<path d=\"M\"/></svg>";
+  const std::string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">"
+                          "<path d=\"M\"/></svg>";
   const auto r = DecodeSvg(svg);
   EXPECT_TRUE(r.has_value());
 }
@@ -1312,8 +1302,9 @@ TEST(SvgTest, NonFiniteDimensionsAreRejected)
   // allocation / int conversion.
   EXPECT_FALSE(DecodeSvg("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"NaN\" height=\"10\"/>")
                    .has_value());
-  EXPECT_FALSE(DecodeSvg("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"Infinity\"/>")
-                   .has_value());
+  EXPECT_FALSE(
+      DecodeSvg("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"Infinity\"/>")
+          .has_value());
 }
 
 TEST(WebpTest, DecodesSolidColors)
@@ -1333,7 +1324,8 @@ TEST(WebpTest, DecodesSolidColors)
   EXPECT_EQ(img.width, 2);
   EXPECT_EQ(img.height, 2);
   // Lossless WebP (VP8L): the solid colors decode exactly.
-  ExpectPixels(img, {255, 0, 0, 255, 0, 0, 255, 255, 0, 255, 0, 255, 255, 255, 0, 255},
+  ExpectPixels(img,
+               {255, 0, 0, 255, 0, 0, 255, 255, 0, 255, 0, 255, 255, 255, 0, 255},
                /*tolerance=*/0);
 }
 
@@ -1352,28 +1344,26 @@ TEST(WebpTest, RejectsBadMagic)
 // committed as tests/pages/avif_8x4_red.avif; the bytes are embedded so the
 // test never depends on runtime paths.
 static const unsigned char kAvif8x4Red[] = {
-    0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66, 0x00, 0x00, 0x00,
-    0x00, 0x61, 0x76, 0x69, 0x66, 0x6d, 0x69, 0x66, 0x31, 0x6d, 0x69, 0x61, 0x66, 0x4d, 0x41,
-    0x31, 0x41, 0x00, 0x00, 0x00, 0xf9, 0x6d, 0x65, 0x74, 0x61, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x2f, 0x68, 0x64, 0x6c, 0x72, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x70, 0x69, 0x63, 0x74, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x50, 0x69, 0x63, 0x74, 0x75, 0x72, 0x65, 0x48, 0x61, 0x6e, 0x64, 0x6c, 0x65, 0x72,
-    0x00, 0x00, 0x00, 0x00, 0x0e, 0x70, 0x69, 0x74, 0x6d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
-    0x00, 0x00, 0x00, 0x1e, 0x69, 0x6c, 0x6f, 0x63, 0x00, 0x00, 0x00, 0x00, 0x44, 0x00, 0x00,
-    0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x01, 0x21, 0x00, 0x00, 0x00, 0x1b,
-    0x00, 0x00, 0x00, 0x28, 0x69, 0x69, 0x6e, 0x66, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
-    0x00, 0x00, 0x1a, 0x69, 0x6e, 0x66, 0x65, 0x02, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
-    0x61, 0x76, 0x30, 0x31, 0x43, 0x6f, 0x6c, 0x6f, 0x72, 0x00, 0x00, 0x00, 0x00, 0x6a, 0x69,
-    0x70, 0x72, 0x70, 0x00, 0x00, 0x00, 0x4b, 0x69, 0x70, 0x63, 0x6f, 0x00, 0x00, 0x00, 0x14,
-    0x69, 0x73, 0x70, 0x65, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
-    0x04, 0x00, 0x00, 0x00, 0x10, 0x70, 0x69, 0x78, 0x69, 0x00, 0x00, 0x00, 0x00, 0x03, 0x08,
-    0x08, 0x08, 0x00, 0x00, 0x00, 0x0c, 0x61, 0x76, 0x31, 0x43, 0x81, 0x20, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x13, 0x63, 0x6f, 0x6c, 0x72, 0x6e, 0x63, 0x6c, 0x78, 0x00, 0x02, 0x00, 0x02,
-    0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x17, 0x69, 0x70, 0x6d, 0x61, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x04, 0x01, 0x02, 0x83, 0x04, 0x00, 0x00, 0x00, 0x23,
-    0x6d, 0x64, 0x61, 0x74, 0x0a, 0x05, 0x38, 0x08, 0x7e, 0xd8, 0x20, 0x32, 0x12, 0x10, 0x00,
-    0x00, 0x00, 0x0f, 0xfa, 0x40, 0x0c, 0x77, 0xb1, 0xea, 0x48, 0x8d, 0x0c, 0xa7, 0xb3, 0x53,
-    0x77};
+    0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66, 0x00, 0x00, 0x00, 0x00,
+    0x61, 0x76, 0x69, 0x66, 0x6d, 0x69, 0x66, 0x31, 0x6d, 0x69, 0x61, 0x66, 0x4d, 0x41, 0x31, 0x41,
+    0x00, 0x00, 0x00, 0xf9, 0x6d, 0x65, 0x74, 0x61, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2f,
+    0x68, 0x64, 0x6c, 0x72, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x70, 0x69, 0x63, 0x74,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x50, 0x69, 0x63, 0x74,
+    0x75, 0x72, 0x65, 0x48, 0x61, 0x6e, 0x64, 0x6c, 0x65, 0x72, 0x00, 0x00, 0x00, 0x00, 0x0e, 0x70,
+    0x69, 0x74, 0x6d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x1e, 0x69, 0x6c, 0x6f,
+    0x63, 0x00, 0x00, 0x00, 0x00, 0x44, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00,
+    0x00, 0x01, 0x21, 0x00, 0x00, 0x00, 0x1b, 0x00, 0x00, 0x00, 0x28, 0x69, 0x69, 0x6e, 0x66, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x1a, 0x69, 0x6e, 0x66, 0x65, 0x02, 0x00, 0x00,
+    0x00, 0x00, 0x01, 0x00, 0x00, 0x61, 0x76, 0x30, 0x31, 0x43, 0x6f, 0x6c, 0x6f, 0x72, 0x00, 0x00,
+    0x00, 0x00, 0x6a, 0x69, 0x70, 0x72, 0x70, 0x00, 0x00, 0x00, 0x4b, 0x69, 0x70, 0x63, 0x6f, 0x00,
+    0x00, 0x00, 0x14, 0x69, 0x73, 0x70, 0x65, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00,
+    0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x10, 0x70, 0x69, 0x78, 0x69, 0x00, 0x00, 0x00, 0x00, 0x03,
+    0x08, 0x08, 0x08, 0x00, 0x00, 0x00, 0x0c, 0x61, 0x76, 0x31, 0x43, 0x81, 0x20, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x13, 0x63, 0x6f, 0x6c, 0x72, 0x6e, 0x63, 0x6c, 0x78, 0x00, 0x02, 0x00, 0x02, 0x00,
+    0x02, 0x00, 0x00, 0x00, 0x00, 0x17, 0x69, 0x70, 0x6d, 0x61, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x01, 0x00, 0x01, 0x04, 0x01, 0x02, 0x83, 0x04, 0x00, 0x00, 0x00, 0x23, 0x6d, 0x64, 0x61,
+    0x74, 0x0a, 0x05, 0x38, 0x08, 0x7e, 0xd8, 0x20, 0x32, 0x12, 0x10, 0x00, 0x00, 0x00, 0x0f, 0xfa,
+    0x40, 0x0c, 0x77, 0xb1, 0xea, 0x48, 0x8d, 0x0c, 0xa7, 0xb3, 0x53, 0x77};
 
 TEST(AvifTest, IsAvifDetectsMagic)
 {

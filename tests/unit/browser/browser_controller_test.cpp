@@ -15,9 +15,9 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
-#include <iterator>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <iterator>
 #include <map>
 #include <mutex>
 #include <string>
@@ -295,7 +295,10 @@ TEST(BrowserControllerTest, RunsInlineScriptsOnHtmlLoad)
 
 // Finds the first laid-out text run belonging to |target| and returns its
 // top-left point (document coordinates, before scroll).
-bool FindElementRunPoint(const layout::LayoutBox& box, const dom::Element* target, float& x, float& y)
+bool FindElementRunPoint(const layout::LayoutBox& box,
+                         const dom::Element* target,
+                         float& x,
+                         float& y)
 {
   for (const layout::Line& line : box.lines) {
     for (const layout::TextRun& run : line.runs) {
@@ -329,7 +332,8 @@ TEST(BrowserControllerTest, PointerClickRunsClickEventAndNavigates)
   TempProfile tp;
   FakeFetcher fetch;
   fetch.Add("http://example.com/",
-            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
                                "<html><body><a href=\"http://target.example/\">go</a>"
                                "<script>var a=document.querySelector('a');"
                                "window.__clicked=false;"
@@ -358,7 +362,8 @@ TEST(BrowserControllerTest, PointerClickPreventDefaultSkipsNavigation)
   TempProfile tp;
   FakeFetcher fetch;
   fetch.Add("http://example.com/",
-            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
                                "<html><body><a href=\"http://target.example/\">go</a>"
                                "<script>var a=document.querySelector('a');"
                                "a.addEventListener('click',function(e){e.preventDefault();});"
@@ -385,7 +390,8 @@ TEST(BrowserControllerTest, KeyboardDispatchRunsPageListener)
   TempProfile tp;
   FakeFetcher fetch;
   fetch.Add("http://example.com/",
-            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
                                "<html><body>"
                                "<script>window.__key='';"
                                "document.body.addEventListener('keydown',function(e){"
@@ -411,10 +417,11 @@ TEST(BrowserControllerTest, SubmitButtonSubmitsFormWithEncodedData)
   FakeFetcher fetch;
   // Target page for the form action.
   fetch.Add("http://example.com/search",
-            FakeFetcher::Route{200, {{"content-type", "text/html"}},
-                               "<html><body>results</body></html>"});
+            FakeFetcher::Route{
+                200, {{"content-type", "text/html"}}, "<html><body>results</body></html>"});
   fetch.Add("http://example.com/",
-            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
                                "<html><body>"
                                "<form action=\"/search\">"
                                "<input name=\"q\" type=\"text\" value=\"hello world\">"
@@ -444,7 +451,8 @@ TEST(BrowserControllerTest, SubmitEventPreventDefaultBlocksNavigation)
   TempProfile tp;
   FakeFetcher fetch;
   fetch.Add("http://example.com/",
-            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
                                "<html><body>"
                                "<form action=\"/search\">"
                                "<input name=\"q\" type=\"text\" value=\"x\">"
@@ -771,11 +779,9 @@ TEST(BrowserControllerTest, PageScriptLocalStoragePersists)
 TEST(BrowserControllerTest, PageVideoDecodesAndAutoplays)
 {
   // Read the committed H.264 fixture (NEKO_TEST_PAGES_DIR from CMake).
-  std::ifstream clip(std::string(NEKO_TEST_PAGES_DIR) + "/sample_8x6_h264.mp4",
-                     std::ios::binary);
+  std::ifstream clip(std::string(NEKO_TEST_PAGES_DIR) + "/sample_8x6_h264.mp4", std::ios::binary);
   ASSERT_TRUE(clip.good());
-  const std::string bytes((std::istreambuf_iterator<char>(clip)),
-                          std::istreambuf_iterator<char>());
+  const std::string bytes((std::istreambuf_iterator<char>(clip)), std::istreambuf_iterator<char>());
   ASSERT_FALSE(bytes.empty());
 
   TempProfile tp;
@@ -818,8 +824,7 @@ TEST(BrowserControllerTest, PageVideoDecodesAndAutoplays)
   // Playback state is reachable from scripts (HTMLMediaElement subset).
   ASSERT_NE(tab->script_runtime, nullptr);
   ASSERT_EQ(tab, controller.ActiveTab());
-  auto playing = tab->script_runtime->Evaluate(
-      "document.getElementById('v').paused === false");
+  auto playing = tab->script_runtime->Evaluate("document.getElementById('v').paused === false");
   ASSERT_TRUE(playing.has_value());
   ASSERT_TRUE(playing.value().ToBoolean().has_value());
   EXPECT_TRUE(playing.value().ToBoolean().value());
@@ -1126,10 +1131,12 @@ TEST(BrowserControllerTest, ExternalStylesheetsCascadeInDocumentOrder)
                                "<link rel=\"stylesheet\" href=\"/a.css\">"
                                "<link rel=\"stylesheet\" href=\"/b.css\">"
                                "</head><body><p id=\"t\">x</p></body></html>"});
-  fetch.Add("http://example.com/a.css",
-            FakeFetcher::Route{200, {{"content-type", "text/css"}}, "#t { color: rgb(255, 0, 0); }"});
-  fetch.Add("http://example.com/b.css",
-            FakeFetcher::Route{200, {{"content-type", "text/css"}}, "#t { color: rgb(0, 0, 255); }"});
+  fetch.Add(
+      "http://example.com/a.css",
+      FakeFetcher::Route{200, {{"content-type", "text/css"}}, "#t { color: rgb(255, 0, 0); }"});
+  fetch.Add(
+      "http://example.com/b.css",
+      FakeFetcher::Route{200, {{"content-type", "text/css"}}, "#t { color: rgb(0, 0, 255); }"});
 
   BrowserController controller(tp.path(), std::ref(fetch));
   controller.NewTab();
@@ -1356,11 +1363,11 @@ TEST(BrowserControllerTest, LocalFormSubmitKeepsQueryAndLoadsFile)
   FakeFetcher fetch;
   BrowserController controller(tp.path(), std::ref(fetch));
   const std::string file = tp.path() + "/form.html";
-  ASSERT_TRUE(storage::WriteFileAtomic(
-      file, "<html><title>F</title><body>"
-            "<form action=\"form.html\"><input name=\"q\" value=\"hi\">"
-            "<button type=\"submit\">Go</button></form></body></html>")
-                 .has_value());
+  ASSERT_TRUE(storage::WriteFileAtomic(file,
+                                       "<html><title>F</title><body>"
+                                       "<form action=\"form.html\"><input name=\"q\" value=\"hi\">"
+                                       "<button type=\"submit\">Go</button></form></body></html>")
+                  .has_value());
   controller.NewTab();
   ASSERT_TRUE(controller.NavigateActive(file).has_value());
   Tab* tab = controller.ActiveTab();
@@ -1383,7 +1390,8 @@ TEST(BrowserControllerTest, FocusAndTypeIntoInput)
   TempProfile tp;
   FakeFetcher fetch;
   fetch.Add("http://example.com/",
-            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
                                "<html><body><input id=\"q\" value=\"hi\"></body></html>"});
   BrowserController controller(tp.path(), std::ref(fetch));
   controller.NewTab();
@@ -1417,13 +1425,15 @@ TEST(BrowserControllerTest, EnterInFocusedInputSubmitsForm)
   TempProfile tp;
   FakeFetcher fetch;
   fetch.Add("http://example.com/search",
-            FakeFetcher::Route{200, {{"content-type", "text/html"}},
-                               "<html><body>results</body></html>"});
-  fetch.Add("http://example.com/",
-            FakeFetcher::Route{200, {{"content-type", "text/html"}},
-                               "<html><body>"
-                               "<form action=\"/search\"><input id=\"q\" name=\"q\" value=\"go\"></form>"
-                               "</body></html>"});
+            FakeFetcher::Route{
+                200, {{"content-type", "text/html"}}, "<html><body>results</body></html>"});
+  fetch.Add(
+      "http://example.com/",
+      FakeFetcher::Route{200,
+                         {{"content-type", "text/html"}},
+                         "<html><body>"
+                         "<form action=\"/search\"><input id=\"q\" name=\"q\" value=\"go\"></form>"
+                         "</body></html>"});
   BrowserController controller(tp.path(), std::ref(fetch));
   controller.NewTab();
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
@@ -1448,26 +1458,28 @@ TEST(BrowserControllerTest, ElementGeometryApisReflectLayout)
   FakeFetcher fetch;
   // Default (content-box) sizing: width:100px is the content width, so the
   // border box adds 2px borders + 4px padding each side.
-  fetch.Add("http://example.com/",
-            FakeFetcher::Route{200, {{"content-type", "text/html"}},
-                               "<html><body style=\"margin:0\">"
-                               "<div id=\"box\" style=\"width:100px;height:50px;margin:10px;"
-                               "border:2px solid black;padding:4px\">x<span id=\"sp\">text</span></div>"
-                               "<script>"
-                               "var b = document.getElementById('box');"
-                               "b.setAttribute('data-w', b.offsetWidth);"
-                               "b.setAttribute('data-h', b.offsetHeight);"
-                               "b.setAttribute('data-x', b.getBoundingClientRect().x);"
-                               "b.setAttribute('data-y', b.getBoundingClientRect().y);"
-                               "b.setAttribute('data-cw', b.clientWidth);"
-                               "b.setAttribute('data-ch', b.clientHeight);"
-                               "b.setAttribute('data-ct', b.clientTop);"
-                               "b.setAttribute('data-cl', b.clientLeft);"
-                               "b.setAttribute('data-ot', b.offsetTop);"
-                               "var s = document.getElementById('sp');"
-                               "s.setAttribute('data-w', s.offsetWidth);"
-                               "s.setAttribute('data-sx', s.getBoundingClientRect().x);"
-                               "</script></body></html>"});
+  fetch.Add(
+      "http://example.com/",
+      FakeFetcher::Route{200,
+                         {{"content-type", "text/html"}},
+                         "<html><body style=\"margin:0\">"
+                         "<div id=\"box\" style=\"width:100px;height:50px;margin:10px;"
+                         "border:2px solid black;padding:4px\">x<span id=\"sp\">text</span></div>"
+                         "<script>"
+                         "var b = document.getElementById('box');"
+                         "b.setAttribute('data-w', b.offsetWidth);"
+                         "b.setAttribute('data-h', b.offsetHeight);"
+                         "b.setAttribute('data-x', b.getBoundingClientRect().x);"
+                         "b.setAttribute('data-y', b.getBoundingClientRect().y);"
+                         "b.setAttribute('data-cw', b.clientWidth);"
+                         "b.setAttribute('data-ch', b.clientHeight);"
+                         "b.setAttribute('data-ct', b.clientTop);"
+                         "b.setAttribute('data-cl', b.clientLeft);"
+                         "b.setAttribute('data-ot', b.offsetTop);"
+                         "var s = document.getElementById('sp');"
+                         "s.setAttribute('data-w', s.offsetWidth);"
+                         "s.setAttribute('data-sx', s.getBoundingClientRect().x);"
+                         "</script></body></html>"});
   BrowserController controller(tp.path(), std::ref(fetch));
   controller.NewTab();
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
@@ -1500,7 +1512,8 @@ TEST(BrowserControllerTest, ClickRunsElementOnclickHandler)
   TempProfile tp;
   FakeFetcher fetch;
   fetch.Add("http://example.com/",
-            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
                                "<html><body style=\"margin:0\">"
                                "<button id=\"b\" style=\"width:100px;height:40px\">go</button>"
                                "<script>"
@@ -1532,11 +1545,12 @@ TEST(BrowserControllerTest, OnclickPreventDefaultBlocksNavigation)
 {
   TempProfile tp;
   FakeFetcher fetch;
-  fetch.Add("http://example.com/nav",
-            FakeFetcher::Route{200, {{"content-type", "text/html"}},
-                               "<html><body>nav</body></html>"});
+  fetch.Add(
+      "http://example.com/nav",
+      FakeFetcher::Route{200, {{"content-type", "text/html"}}, "<html><body>nav</body></html>"});
   fetch.Add("http://example.com/",
-            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
                                "<html><body style=\"margin:0\">"
                                "<a id=\"lk\" href=\"/nav\">go</a>"
                                "<script>"
@@ -1564,7 +1578,8 @@ TEST(BrowserControllerTest, TypingFiresInputEvent)
   TempProfile tp;
   FakeFetcher fetch;
   fetch.Add("http://example.com/",
-            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
                                "<html><body style=\"margin:0\">"
                                "<input id=\"q\" value=\"x\">"
                                "<script>"
@@ -1597,7 +1612,8 @@ TEST(BrowserControllerTest, FocusAndBlurFireOnClick)
   TempProfile tp;
   FakeFetcher fetch;
   fetch.Add("http://example.com/",
-            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
                                "<html><body style=\"margin:0\">"
                                "<input id=\"q\" value=\"x\">"
                                "<script>"
@@ -1629,7 +1645,8 @@ TEST(BrowserControllerTest, HoverFiresMouseOverAndOut)
   TempProfile tp;
   FakeFetcher fetch;
   fetch.Add("http://example.com/",
-            FakeFetcher::Route{200, {{"content-type", "text/html"}},
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
                                "<html><body style=\"margin:0\">"
                                "<div id=\"a\" style=\"width:100px;height:50px\">A</div>"
                                "<div id=\"b\" style=\"width:100px;height:50px\">B</div>"

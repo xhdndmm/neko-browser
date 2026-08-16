@@ -201,8 +201,8 @@ public:
   // Dispatches a cancelable keyboard event (keydown/keyup) to the tab's
   // focused element (falling back to <body>/document) on the worker thread.
   // Returns true when NOT canceled.
-  bool DispatchKeyboard(int tab_id, std::string_view type, std::string_view key,
-                        std::string_view code);
+  bool
+  DispatchKeyboard(int tab_id, std::string_view type, std::string_view key, std::string_view code);
 
   // Submits |form| on |tab_id| (worker thread): runs the cancelable "submit"
   // event, then — unless preventDefault was called — collects the named form

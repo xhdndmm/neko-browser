@@ -9,13 +9,23 @@ namespace {
 
 constexpr std::string_view kHexDigits = "0123456789ABCDEF";
 
-bool IsAsciiAlpha(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
+bool IsAsciiAlpha(char c)
+{
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
 
-bool IsAsciiDigit(char c) { return c >= '0' && c <= '9'; }
+bool IsAsciiDigit(char c)
+{
+  return c >= '0' && c <= '9';
+}
 
-char ToLowerAscii(char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c; }
+char ToLowerAscii(char c)
+{
+  return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c;
+}
 
-std::string ToLowerAscii(std::string_view s) {
+std::string ToLowerAscii(std::string_view s)
+{
   std::string out;
   out.reserve(s.size());
   for (const char c : s) {
@@ -24,7 +34,8 @@ std::string ToLowerAscii(std::string_view s) {
   return out;
 }
 
-int HexValue(char c) {
+int HexValue(char c)
+{
   if (IsAsciiDigit(c)) {
     return c - '0';
   }
@@ -37,24 +48,28 @@ int HexValue(char c) {
   return -1;
 }
 
-bool IsUnreserved(char c) {
+bool IsUnreserved(char c)
+{
   return IsAsciiAlpha(c) || IsAsciiDigit(c) || c == '-' || c == '.' || c == '_' || c == '~';
 }
 
 // Characters allowed in a (non-bracketed) host.  Forbids whitespace, control
 // characters and path delimiters; '%' is allowed for percent-encoded hosts.
-bool IsValidHostChar(char c) {
-  return IsUnreserved(c) || c == '!' || c == '$' || c == '&' || c == '\'' || c == '(' ||
-         c == ')' || c == '*' || c == '+' || c == ',' || c == ';' || c == '=' || c == '%';
+bool IsValidHostChar(char c)
+{
+  return IsUnreserved(c) || c == '!' || c == '$' || c == '&' || c == '\'' || c == '(' || c == ')' ||
+         c == '*' || c == '+' || c == ',' || c == ';' || c == '=' || c == '%';
 }
 
 // True when the host is an IPv6 literal (contains ':'), which must be
 // bracketed when serialized.
-bool IsBracketedHost(std::string_view host) {
+bool IsBracketedHost(std::string_view host)
+{
   return host.find(':') != std::string_view::npos;
 }
 
-bool IsSchemeChar(char c, bool first) {
+bool IsSchemeChar(char c, bool first)
+{
   if (first) {
     return IsAsciiAlpha(c);
   }
@@ -62,7 +77,8 @@ bool IsSchemeChar(char c, bool first) {
 }
 
 // Parses a decimal port; returns false for empty or out-of-range input.
-bool ParsePort(std::string_view text, std::optional<uint16_t>& out) {
+bool ParsePort(std::string_view text, std::optional<uint16_t>& out)
+{
   if (text.empty()) {
     return false;
   }
@@ -80,7 +96,8 @@ bool ParsePort(std::string_view text, std::optional<uint16_t>& out) {
   return true;
 }
 
-void RemoveLastSegment(std::string& output) {
+void RemoveLastSegment(std::string& output)
+{
   const size_t slash = output.rfind('/');
   if (slash == std::string::npos) {
     output.clear();
@@ -90,7 +107,8 @@ void RemoveLastSegment(std::string& output) {
 }
 
 // RFC 3986 5.2.4 remove_dot_segments.
-std::string RemoveDotSegments(std::string_view path) {
+std::string RemoveDotSegments(std::string_view path)
+{
   std::string input(path);
   std::string output;
   while (!input.empty()) {
@@ -99,11 +117,11 @@ std::string RemoveDotSegments(std::string_view path) {
     } else if (input.rfind("./", 0) == 0) {
       input.erase(0, 2);
     } else if (input.rfind("/./", 0) == 0) {
-      input.erase(0, 2);  // "/./" -> "/"
+      input.erase(0, 2); // "/./" -> "/"
     } else if (input == "/.") {
       input = "/";
     } else if (input.rfind("/../", 0) == 0) {
-      input.erase(0, 3);  // "/../" -> "/"
+      input.erase(0, 3); // "/../" -> "/"
       RemoveLastSegment(output);
     } else if (input == "/..") {
       input = "/";
@@ -125,7 +143,8 @@ std::string RemoveDotSegments(std::string_view path) {
   return output;
 }
 
-std::string SerializeHost(std::string_view host) {
+std::string SerializeHost(std::string_view host)
+{
   if (IsBracketedHost(host)) {
     std::string out;
     out.push_back('[');
@@ -136,10 +155,11 @@ std::string SerializeHost(std::string_view host) {
   return std::string(host);
 }
 
-}  // namespace
+} // namespace
 
 // Parses the authority (userinfo@host:port) into |url|.
-bool ParseAuthority(std::string_view authority, Url& url) {
+bool ParseAuthority(std::string_view authority, Url& url)
+{
   std::string_view hostport = authority;
 
   const size_t at = authority.rfind('@');
@@ -156,7 +176,7 @@ bool ParseAuthority(std::string_view authority, Url& url) {
   }
 
   if (hostport.empty()) {
-    return true;  // Caller rejects empty hosts for special schemes.
+    return true; // Caller rejects empty hosts for special schemes.
   }
 
   if (hostport[0] == '[') {
@@ -197,7 +217,8 @@ bool ParseAuthority(std::string_view authority, Url& url) {
 // must never appear raw in a URL's path/query: they are not valid in a
 // request target and would let untrusted input inject bytes into the HTTP
 // request line (CRLF injection).
-bool IsControlChar(char c) {
+bool IsControlChar(char c)
+{
   const unsigned char u = static_cast<unsigned char>(c);
   return u < 0x20 || u == 0x7F;
 }
@@ -205,7 +226,8 @@ bool IsControlChar(char c) {
 // Splits the remainder of a URL (after scheme or authority) into
 // path / query / fragment.  Rejects control characters anywhere in the
 // path/query portion.
-base::Result<void> SplitPathQueryFragment(std::string_view rest, Url& url) {
+base::Result<void> SplitPathQueryFragment(std::string_view rest, Url& url)
+{
   for (const char c : rest) {
     if (IsControlChar(c)) {
       return base::Err(base::Error::Parse("URL contains a control character"));
@@ -234,7 +256,8 @@ base::Result<void> SplitPathQueryFragment(std::string_view rest, Url& url) {
   return base::Ok();
 }
 
-base::Result<Url> ParseAbsoluteInternal(std::string_view input) {
+base::Result<Url> ParseAbsoluteInternal(std::string_view input)
+{
   const size_t colon = input.find(':');
   if (colon == std::string_view::npos) {
     return base::Err(base::Error::Parse("URL is missing a scheme"));
@@ -264,8 +287,8 @@ base::Result<Url> ParseAbsoluteInternal(std::string_view input) {
     if (IsSpecialScheme(url.scheme_) && url.host_.empty()) {
       return base::Err(base::Error::Parse("URL has an empty host"));
     }
-    rest = (authority_end == std::string_view::npos) ? std::string_view{}
-                                                     : rest.substr(authority_end);
+    rest =
+        (authority_end == std::string_view::npos) ? std::string_view{} : rest.substr(authority_end);
   } else if (IsSpecialScheme(url.scheme_)) {
     // Special schemes always use "//".
     return base::Err(base::Error::Parse("special scheme requires '//'"));
@@ -279,7 +302,8 @@ base::Result<Url> ParseAbsoluteInternal(std::string_view input) {
 }
 
 // Resolves an input that starts with "//" (network-path reference).
-base::Result<Url> ResolveNetworkPath(std::string_view input, const Url& base) {
+base::Result<Url> ResolveNetworkPath(std::string_view input, const Url& base)
+{
   Url url;
   url.scheme_ = base.scheme();
   url.has_authority_ = true;
@@ -292,8 +316,8 @@ base::Result<Url> ResolveNetworkPath(std::string_view input, const Url& base) {
   if (IsSpecialScheme(url.scheme_) && url.host_.empty()) {
     return base::Err(base::Error::Parse("URL has an empty host"));
   }
-  rest = (authority_end == std::string_view::npos) ? std::string_view{}
-                                                    : rest.substr(authority_end);
+  rest =
+      (authority_end == std::string_view::npos) ? std::string_view{} : rest.substr(authority_end);
   const base::Result<void> split = SplitPathQueryFragment(rest, url);
   if (!split) {
     return base::Err(split.error());
@@ -301,7 +325,8 @@ base::Result<Url> ResolveNetworkPath(std::string_view input, const Url& base) {
   return url;
 }
 
-std::string MergePaths(const Url& base, std::string_view relative) {
+std::string MergePaths(const Url& base, std::string_view relative)
+{
   if (base.has_authority() && base.path().empty()) {
     return std::string("/") + std::string(relative);
   }
@@ -314,7 +339,8 @@ std::string MergePaths(const Url& base, std::string_view relative) {
 }
 
 // RFC 3986 5.2.2 relative reference resolution.
-base::Result<Url> ResolveRelative(std::string_view input, const Url& base) {
+base::Result<Url> ResolveRelative(std::string_view input, const Url& base)
+{
   if (input.empty()) {
     return base;
   }
@@ -376,15 +402,18 @@ base::Result<Url> ResolveRelative(std::string_view input, const Url& base) {
   return t;
 }
 
-base::Result<Url> Url::Parse(std::string_view input) {
+base::Result<Url> Url::Parse(std::string_view input)
+{
   return ParseAbsoluteInternal(input);
 }
 
-base::Result<Url> Url::Parse(std::string_view input, const Url& base) {
+base::Result<Url> Url::Parse(std::string_view input, const Url& base)
+{
   // Absolute references: a scheme appears before any of '/', '?', '#'.
   const size_t colon = input.find(':');
   const size_t delim = input.find_first_of("/?#");
-  if (colon != std::string_view::npos && colon > 0 && (delim == std::string_view::npos || colon < delim)) {
+  if (colon != std::string_view::npos && colon > 0 &&
+      (delim == std::string_view::npos || colon < delim)) {
     bool scheme_ok = IsAsciiAlpha(input[0]);
     for (size_t i = 1; i < colon && scheme_ok; ++i) {
       scheme_ok = IsSchemeChar(input[i], /*first=*/false);
@@ -401,14 +430,16 @@ base::Result<Url> Url::Parse(std::string_view input, const Url& base) {
   return ResolveRelative(input, base);
 }
 
-uint16_t Url::effective_port() const {
+uint16_t Url::effective_port() const
+{
   if (port_.has_value()) {
     return port_.value();
   }
   return DefaultPortForScheme(scheme_);
 }
 
-std::string Url::Serialize(bool include_fragment) const {
+std::string Url::Serialize(bool include_fragment) const
+{
   std::string out = scheme_;
   out.push_back(':');
   if (has_authority_) {
@@ -439,7 +470,8 @@ std::string Url::Serialize(bool include_fragment) const {
   return out;
 }
 
-std::string Url::Origin() const {
+std::string Url::Origin() const
+{
   std::string out = scheme_;
   out += "://";
   out += SerializeHost(host_);
@@ -451,7 +483,8 @@ std::string Url::Origin() const {
   return out;
 }
 
-std::string PercentEncode(std::string_view input) {
+std::string PercentEncode(std::string_view input)
+{
   std::string out;
   out.reserve(input.size());
   for (const char ch : input) {
@@ -467,7 +500,8 @@ std::string PercentEncode(std::string_view input) {
   return out;
 }
 
-std::string PercentDecode(std::string_view input) {
+std::string PercentDecode(std::string_view input)
+{
   std::string out;
   out.reserve(input.size());
   for (size_t i = 0; i < input.size(); ++i) {
@@ -485,7 +519,8 @@ std::string PercentDecode(std::string_view input) {
   return out;
 }
 
-uint16_t DefaultPortForScheme(std::string_view scheme) {
+uint16_t DefaultPortForScheme(std::string_view scheme)
+{
   if (scheme == "http" || scheme == "ws") {
     return 80;
   }
@@ -498,9 +533,10 @@ uint16_t DefaultPortForScheme(std::string_view scheme) {
   return 0;
 }
 
-bool IsSpecialScheme(std::string_view scheme) {
+bool IsSpecialScheme(std::string_view scheme)
+{
   return scheme == "http" || scheme == "https" || scheme == "ws" || scheme == "wss" ||
          scheme == "ftp";
 }
 
-}  // namespace neko::url
+} // namespace neko::url

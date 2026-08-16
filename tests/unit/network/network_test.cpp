@@ -471,9 +471,7 @@ TEST(HttpTest, RejectsOverlongStatusCode)
 {
   // A status code longer than the 3-digit form must be rejected instead of
   // overflowing the int accumulation.
-  EXPECT_FALSE(ParseHttpResponse(
-                   "HTTP/1.1 999999999999999999999999999999 OK\r\n\r\n")
-                   .has_value());
+  EXPECT_FALSE(ParseHttpResponse("HTTP/1.1 999999999999999999999999999999 OK\r\n\r\n").has_value());
   EXPECT_FALSE(ParseHttpResponse("HTTP/1.1 123456 OK\r\n\r\n").has_value());
 }
 
@@ -581,8 +579,7 @@ TEST(TlsTest, AcceptsCompleteResponseAfterAbruptClose)
   ASSERT_TRUE(server.IsValid());
   TlsOptions options;
   options.extra_ca_cert_pem = server.cert_pem();
-  const std::string host =
-      "https://localhost:" + std::to_string(server.port()) + "/abrupt-close";
+  const std::string host = "https://localhost:" + std::to_string(server.port()) + "/abrupt-close";
   const auto url = url::Url::Parse(host);
   ASSERT_TRUE(url.has_value());
   const auto result = HttpGet(url.value(), 5, {}, options);
@@ -597,8 +594,7 @@ TEST(HttpTest, RejectsTruncatedContentLengthBody)
   // (truncation): the TLS layer hands back whatever a truncated close
   // delivered, and this check is what stops a truncated response from being
   // accepted silently.
-  EXPECT_FALSE(ParseHttpResponse(
-      "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nshort").has_value());
+  EXPECT_FALSE(ParseHttpResponse("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nshort").has_value());
 }
 
 TEST(HttpTest, RejectsOversizedContentLength)
@@ -691,8 +687,7 @@ TEST(HttpTest, RedirectFollowed)
   EXPECT_EQ(result.value().body, "<h1>Hello World</h1>");
   // The response must expose the final (post-redirect) URL so callers can
   // resolve relative references against the real document location.
-  EXPECT_EQ(result.value().final_url,
-            "http://127.0.0.1:" + std::to_string(server.port()) + "/");
+  EXPECT_EQ(result.value().final_url, "http://127.0.0.1:" + std::to_string(server.port()) + "/");
 }
 
 TEST(HttpTest, ChunkedFromServer)

@@ -7,23 +7,26 @@
 namespace neko::base {
 namespace {
 
-char AsciiToLowerChar(char c) {
+char AsciiToLowerChar(char c)
+{
   if (c >= 'A' && c <= 'Z') {
     return static_cast<char>(c + ('a' - 'A'));
   }
   return c;
 }
 
-char AsciiToUpperChar(char c) {
+char AsciiToUpperChar(char c)
+{
   if (c >= 'a' && c <= 'z') {
     return static_cast<char>(c - ('a' - 'A'));
   }
   return c;
 }
 
-}  // namespace
+} // namespace
 
-bool AsciiEqualsIgnoreCase(std::string_view lhs, std::string_view rhs) {
+bool AsciiEqualsIgnoreCase(std::string_view lhs, std::string_view rhs)
+{
   if (lhs.size() != rhs.size()) {
     return false;
   }
@@ -35,31 +38,40 @@ bool AsciiEqualsIgnoreCase(std::string_view lhs, std::string_view rhs) {
   return true;
 }
 
-bool AsciiStartsWith(std::string_view text, std::string_view prefix) {
+bool AsciiStartsWith(std::string_view text, std::string_view prefix)
+{
   return text.size() >= prefix.size() && text.substr(0, prefix.size()) == prefix;
 }
 
-bool AsciiEndsWith(std::string_view text, std::string_view suffix) {
+bool AsciiEndsWith(std::string_view text, std::string_view suffix)
+{
   return text.size() >= suffix.size() && text.substr(text.size() - suffix.size()) == suffix;
 }
 
-bool Contains(std::string_view text, std::string_view needle) {
+bool Contains(std::string_view text, std::string_view needle)
+{
   return text.find(needle) != std::string_view::npos;
 }
 
-std::string_view TrimLeft(std::string_view text) {
+std::string_view TrimLeft(std::string_view text)
+{
   const std::size_t start = text.find_first_not_of(" \t\r\n\f\v");
   return start == std::string_view::npos ? std::string_view{} : text.substr(start);
 }
 
-std::string_view TrimRight(std::string_view text) {
+std::string_view TrimRight(std::string_view text)
+{
   const std::size_t end = text.find_last_not_of(" \t\r\n\f\v");
   return end == std::string_view::npos ? std::string_view{} : text.substr(0, end + 1);
 }
 
-std::string_view Trim(std::string_view text) { return TrimRight(TrimLeft(text)); }
+std::string_view Trim(std::string_view text)
+{
+  return TrimRight(TrimLeft(text));
+}
 
-std::string ToLower(std::string_view text) {
+std::string ToLower(std::string_view text)
+{
   std::string result;
   result.reserve(text.size());
   for (const char c : text) {
@@ -68,7 +80,8 @@ std::string ToLower(std::string_view text) {
   return result;
 }
 
-std::string ToUpper(std::string_view text) {
+std::string ToUpper(std::string_view text)
+{
   std::string result;
   result.reserve(text.size());
   for (const char c : text) {
@@ -77,7 +90,8 @@ std::string ToUpper(std::string_view text) {
   return result;
 }
 
-std::vector<std::string_view> Split(std::string_view text, char delimiter) {
+std::vector<std::string_view> Split(std::string_view text, char delimiter)
+{
   std::vector<std::string_view> parts;
   std::size_t start = 0;
   for (;;) {
@@ -92,7 +106,8 @@ std::vector<std::string_view> Split(std::string_view text, char delimiter) {
   return parts;
 }
 
-std::vector<std::string_view> Split(std::string_view text, std::string_view delimiter) {
+std::vector<std::string_view> Split(std::string_view text, std::string_view delimiter)
+{
   std::vector<std::string_view> parts;
   if (delimiter.empty()) {
     parts.push_back(text);
@@ -111,7 +126,8 @@ std::vector<std::string_view> Split(std::string_view text, std::string_view deli
   return parts;
 }
 
-std::string Join(const std::vector<std::string_view>& parts, std::string_view separator) {
+std::string Join(const std::vector<std::string_view>& parts, std::string_view separator)
+{
   std::string result;
   std::size_t total = 0;
   for (const std::string_view part : parts) {
@@ -130,7 +146,8 @@ std::string Join(const std::vector<std::string_view>& parts, std::string_view se
   return result;
 }
 
-std::string ReplaceAll(std::string_view text, std::string_view from, std::string_view to) {
+std::string ReplaceAll(std::string_view text, std::string_view from, std::string_view to)
+{
   if (from.empty()) {
     return std::string(text);
   }
@@ -150,4 +167,4 @@ std::string ReplaceAll(std::string_view text, std::string_view from, std::string
   return result;
 }
 
-}  // namespace neko::base
+} // namespace neko::base

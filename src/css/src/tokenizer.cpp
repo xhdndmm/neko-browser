@@ -6,20 +6,31 @@
 namespace neko::css {
 namespace {
 
-bool IsDigit(char c) { return c >= '0' && c <= '9'; }
+bool IsDigit(char c)
+{
+  return c >= '0' && c <= '9';
+}
 
-bool IsNameStart(char c) {
+bool IsNameStart(char c)
+{
   return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' ||
          static_cast<unsigned char>(c) >= 0x80;
 }
 
-bool IsNameChar(char c) { return IsNameStart(c) || IsDigit(c) || c == '-'; }
+bool IsNameChar(char c)
+{
+  return IsNameStart(c) || IsDigit(c) || c == '-';
+}
 
-bool IsWhitespace(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'; }
+bool IsWhitespace(char c)
+{
+  return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+}
 
-}  // namespace
+} // namespace
 
-std::vector<CssToken> Tokenizer::Tokenize() {
+std::vector<CssToken> Tokenizer::Tokenize()
+{
   std::vector<CssToken> tokens;
   for (;;) {
     SkipComments();
@@ -35,7 +46,8 @@ std::vector<CssToken> Tokenizer::Tokenize() {
 // Skips /* */ comments.  Whitespace is NOT skipped here: NextToken emits it
 // as kWhitespace tokens so value components and descendant combinators stay
 // distinguishable.
-void Tokenizer::SkipComments() {
+void Tokenizer::SkipComments()
+{
   while (pos_ + 1 < input_.size() && input_[pos_] == '/' && input_[pos_ + 1] == '*') {
     pos_ += 2;
     while (pos_ + 1 < input_.size() && !(input_[pos_] == '*' && input_[pos_ + 1] == '/')) {
@@ -45,7 +57,8 @@ void Tokenizer::SkipComments() {
   }
 }
 
-CssToken Tokenizer::NextToken() {
+CssToken Tokenizer::NextToken()
+{
   CssToken token;
   if (pos_ >= input_.size()) {
     token.type = CssTokenType::kEOF;
@@ -158,39 +171,39 @@ CssToken Tokenizer::NextToken() {
 
   ++pos_;
   switch (c) {
-    case ':':
-      token.type = CssTokenType::kColon;
-      break;
-    case ';':
-      token.type = CssTokenType::kSemicolon;
-      break;
-    case ',':
-      token.type = CssTokenType::kComma;
-      break;
-    case '[':
-      token.type = CssTokenType::kOpenBracket;
-      break;
-    case ']':
-      token.type = CssTokenType::kCloseBracket;
-      break;
-    case '(':
-      token.type = CssTokenType::kOpenParen;
-      break;
-    case ')':
-      token.type = CssTokenType::kCloseParen;
-      break;
-    case '{':
-      token.type = CssTokenType::kOpenBrace;
-      break;
-    case '}':
-      token.type = CssTokenType::kCloseBrace;
-      break;
-    default:
-      token.type = CssTokenType::kDelim;
-      token.text.push_back(c);
-      break;
+  case ':':
+    token.type = CssTokenType::kColon;
+    break;
+  case ';':
+    token.type = CssTokenType::kSemicolon;
+    break;
+  case ',':
+    token.type = CssTokenType::kComma;
+    break;
+  case '[':
+    token.type = CssTokenType::kOpenBracket;
+    break;
+  case ']':
+    token.type = CssTokenType::kCloseBracket;
+    break;
+  case '(':
+    token.type = CssTokenType::kOpenParen;
+    break;
+  case ')':
+    token.type = CssTokenType::kCloseParen;
+    break;
+  case '{':
+    token.type = CssTokenType::kOpenBrace;
+    break;
+  case '}':
+    token.type = CssTokenType::kCloseBrace;
+    break;
+  default:
+    token.type = CssTokenType::kDelim;
+    token.text.push_back(c);
+    break;
   }
   return token;
 }
 
-}  // namespace neko::css
+} // namespace neko::css

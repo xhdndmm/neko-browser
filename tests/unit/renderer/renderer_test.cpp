@@ -106,9 +106,8 @@ TEST(PageTest, NoBackgroundStaysWhite)
 TEST(PageTest, GifAnimationAdvancesFrames)
 {
   Page page;
-  ASSERT_TRUE(
-      page.LoadHtml("<body><img id=\"i\" src=\"a.gif\" width=\"1\" height=\"1\"></body>")
-          .has_value());
+  ASSERT_TRUE(page.LoadHtml("<body><img id=\"i\" src=\"a.gif\" width=\"1\" height=\"1\"></body>")
+                  .has_value());
   page.Layout(400);
   dom::Element* img = dom::QuerySelector(*page.document(), "#i");
   ASSERT_NE(img, nullptr);

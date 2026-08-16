@@ -1897,9 +1897,8 @@ TEST(GridLayoutTest, MixedFrAndFixedColumns)
 
 TEST(GridLayoutTest, MinmaxMinimumWinsForTinyContent)
 {
-  Page page = Build(
-      "<body><div style=\"display:grid; grid-template-columns:minmax(120px, 200px)\">"
-      "<div>a</div></div></body>");
+  Page page = Build("<body><div style=\"display:grid; grid-template-columns:minmax(120px, 200px)\">"
+                    "<div>a</div></div></body>");
   const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
   ASSERT_NE(grid, nullptr);
   ASSERT_EQ(grid->children.size(), 1u);
@@ -1909,9 +1908,8 @@ TEST(GridLayoutTest, MinmaxMinimumWinsForTinyContent)
 
 TEST(GridLayoutTest, MinmaxMaximumClampsLongContent)
 {
-  Page page = Build(
-      "<body><div style=\"display:grid; grid-template-columns:minmax(120px, 200px)\">"
-      "<div>abcdefghijklmnopqrstuvwxyz</div></div></body>");
+  Page page = Build("<body><div style=\"display:grid; grid-template-columns:minmax(120px, 200px)\">"
+                    "<div>abcdefghijklmnopqrstuvwxyz</div></div></body>");
   const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
   ASSERT_NE(grid, nullptr);
   ASSERT_EQ(grid->children.size(), 1u);
@@ -1922,9 +1920,9 @@ TEST(GridLayoutTest, MinmaxMaximumClampsLongContent)
 
 TEST(GridLayoutTest, MinmaxMinContentBeatsMax)
 {
-  Page page = Build(
-      "<body><div style=\"display:grid; grid-template-columns:minmax(min-content, 100px)\">"
-      "<div>abcdefghijklmnopqrstuvwxyz</div></div></body>");
+  Page page =
+      Build("<body><div style=\"display:grid; grid-template-columns:minmax(min-content, 100px)\">"
+            "<div>abcdefghijklmnopqrstuvwxyz</div></div></body>");
   const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
   ASSERT_NE(grid, nullptr);
   ASSERT_EQ(grid->children.size(), 1u);
@@ -1935,11 +1933,10 @@ TEST(GridLayoutTest, MinmaxMinContentBeatsMax)
 
 TEST(GridLayoutTest, NamedLinesPlaceItems)
 {
-  Page page = Build(
-      "<body><div style=\"display:grid; "
-      "grid-template-columns:[left] 100px [main] 1fr [right]\">"
-      "<div style=\"grid-column:main\">a</div>"
-      "<div style=\"grid-column:right\">b</div></div></body>");
+  Page page = Build("<body><div style=\"display:grid; "
+                    "grid-template-columns:[left] 100px [main] 1fr [right]\">"
+                    "<div style=\"grid-column:main\">a</div>"
+                    "<div style=\"grid-column:right\">b</div></div></body>");
   const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
   ASSERT_NE(grid, nullptr);
   ASSERT_EQ(grid->children.size(), 2u);
@@ -1954,11 +1951,10 @@ TEST(GridLayoutTest, NamedLinesPlaceItems)
 
 TEST(GridLayoutTest, NamedAreasPlaceItems)
 {
-  Page page = Build(
-      "<body><div style=\"display:grid; grid-template-columns:100px 100px; "
-      "grid-template-rows:40px 40px; grid-template-areas:'h h' 's m'\">"
-      "<div style=\"grid-area:m\">a</div>"
-      "<div style=\"grid-area:h\">b</div></div></body>");
+  Page page = Build("<body><div style=\"display:grid; grid-template-columns:100px 100px; "
+                    "grid-template-rows:40px 40px; grid-template-areas:'h h' 's m'\">"
+                    "<div style=\"grid-area:m\">a</div>"
+                    "<div style=\"grid-area:h\">b</div></div></body>");
   const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
   ASSERT_NE(grid, nullptr);
   ASSERT_EQ(grid->children.size(), 2u);
@@ -1973,10 +1969,9 @@ TEST(GridLayoutTest, NamedAreasPlaceItems)
 
 TEST(GridLayoutTest, TemplateAreasDefineImplicitTracks)
 {
-  Page page = Build(
-      "<body><div style=\"display:grid; grid-template-areas:'a b' 'a c'\">"
-      "<div style=\"grid-area:c\">x</div>"
-      "<div style=\"grid-area:a\">y</div></div></body>");
+  Page page = Build("<body><div style=\"display:grid; grid-template-areas:'a b' 'a c'\">"
+                    "<div style=\"grid-area:c\">x</div>"
+                    "<div style=\"grid-area:a\">y</div></div></body>");
   const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
   ASSERT_NE(grid, nullptr);
   ASSERT_EQ(grid->children.size(), 2u);
@@ -1990,10 +1985,9 @@ TEST(GridLayoutTest, TemplateAreasDefineImplicitTracks)
 
 TEST(GridLayoutTest, AutoFlowColumnPlacesDownColumns)
 {
-  Page page = Build(
-      "<body><div style=\"display:grid; grid-auto-flow:column; "
-      "grid-template-columns:100px 100px; grid-template-rows:40px 40px\">"
-      "<div>a</div><div>b</div><div>c</div><div>d</div></div></body>");
+  Page page = Build("<body><div style=\"display:grid; grid-auto-flow:column; "
+                    "grid-template-columns:100px 100px; grid-template-rows:40px 40px\">"
+                    "<div>a</div><div>b</div><div>c</div><div>d</div></div></body>");
   const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
   ASSERT_NE(grid, nullptr);
   ASSERT_EQ(grid->children.size(), 4u);
@@ -2010,11 +2004,10 @@ TEST(GridLayoutTest, AutoFlowColumnPlacesDownColumns)
 
 TEST(GridLayoutTest, AutoFlowDenseBackfillsHoles)
 {
-  Page page = Build(
-      "<body><div style=\"display:grid; grid-auto-flow:row dense; "
-      "grid-template-columns:100px 100px 100px\">"
-      "<div style=\"grid-column: span 2\">a</div>"
-      "<div>b</div><div>c</div></div></body>");
+  Page page = Build("<body><div style=\"display:grid; grid-auto-flow:row dense; "
+                    "grid-template-columns:100px 100px 100px\">"
+                    "<div style=\"grid-column: span 2\">a</div>"
+                    "<div>b</div><div>c</div></div></body>");
   const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
   ASSERT_NE(grid, nullptr);
   ASSERT_EQ(grid->children.size(), 3u);
@@ -2029,9 +2022,8 @@ TEST(GridLayoutTest, AutoFlowDenseBackfillsHoles)
 
 TEST(GridLayoutTest, NegativeLineSpansToEnd)
 {
-  Page page = Build(
-      "<body><div style=\"display:grid; grid-template-columns:repeat(4, 100px)\">"
-      "<div style=\"grid-column:2 / -1\">a</div></div></body>");
+  Page page = Build("<body><div style=\"display:grid; grid-template-columns:repeat(4, 100px)\">"
+                    "<div style=\"grid-column:2 / -1\">a</div></div></body>");
   const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
   ASSERT_NE(grid, nullptr);
   ASSERT_EQ(grid->children.size(), 1u);
@@ -2043,9 +2035,9 @@ TEST(GridLayoutTest, NegativeLineSpansToEnd)
 
 TEST(GridLayoutTest, InlineGridRendersAsAtomicInlineBox)
 {
-  Page page = Build(
-      "<body><div>t<span style=\"display:inline-grid; grid-template-columns:50px 50px\">"
-      "<i>a</i><i>b</i></span>z</div></body>");
+  Page page =
+      Build("<body><div>t<span style=\"display:inline-grid; grid-template-columns:50px 50px\">"
+            "<i>a</i><i>b</i></span>z</div></body>");
   const LayoutBox* div = FindBox(*page.root, "div", *page.doc);
   ASSERT_NE(div, nullptr);
   dom::Element* span = dom::QuerySelector(*page.doc, "span");

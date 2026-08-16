@@ -1,14 +1,14 @@
 #include "neko/storage/cookie_store.h"
 
+#include "neko/base/logging.h"
+#include "neko/storage/field_codec.h"
+#include "neko/storage/file_util.h"
+
 #include <algorithm>
 #include <cctype>
 #include <climits>
 #include <string>
 #include <vector>
-
-#include "neko/base/logging.h"
-#include "neko/storage/field_codec.h"
-#include "neko/storage/file_util.h"
 
 namespace neko::storage {
 namespace {
@@ -21,31 +21,37 @@ namespace {
 // Returns unix seconds, or -1 when the date is malformed.
 // ---------------------------------------------------------------------------
 
-constexpr const char* kMonths[] = {"jan", "feb", "mar", "apr", "may", "jun",
-                                   "jul", "aug", "sep", "oct", "nov", "dec"};
+constexpr const char* kMonths[] = {
+    "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"};
 
-int MonthIndex(std::string_view s) {
+int MonthIndex(std::string_view s)
+{
   for (int i = 0; i < 12; ++i) {
-    if (s == kMonths[i]) return i + 1;
+    if (s == kMonths[i])
+      return i + 1;
   }
   return 0;
 }
 
-bool AllDigits(std::string_view s) {
-  if (s.empty()) return false;
+bool AllDigits(std::string_view s)
+{
+  if (s.empty())
+    return false;
   for (char c : s) {
-    if (!std::isdigit(static_cast<unsigned char>(c))) return false;
+    if (!std::isdigit(static_cast<unsigned char>(c)))
+      return false;
   }
   return true;
 }
 
 // Parses a decimal integer, guarding against signed overflow (callers feed
 // untrusted token text such as a Set-Cookie Expires date).
-int ParseInt(std::string_view s) {
+int ParseInt(std::string_view s)
+{
   int v = 0;
   for (char c : s) {
     if (v > (INT_MAX - (c - '0')) / 10) {
-      return INT_MAX;  // saturate; callers validate the value afterwards
+      return INT_MAX; // saturate; callers validate the value afterwards
     }
     v = v * 10 + (c - '0');
   }
@@ -53,24 +59,27 @@ int ParseInt(std::string_view s) {
 }
 
 // Howard Hinnant's days-from-civil algorithm (proleptic Gregorian).
-int64_t DaysFromCivil(int64_t y, unsigned m, unsigned d) {
+int64_t DaysFromCivil(int64_t y, unsigned m, unsigned d)
+{
   y -= m <= 2;
   const int64_t era = (y >= 0 ? y : y - 399) / 400;
   const unsigned yoe = static_cast<unsigned>(y - era * 400);
-  const int doy = (153 * (static_cast<int>(m) + (m > 2 ? -3 : 9)) + 2) / 5 +
-                  static_cast<int>(d) - 1;
-  const unsigned doe =
-      yoe * 365 + yoe / 4 - yoe / 100 + static_cast<unsigned>(doy);
+  const int doy =
+      (153 * (static_cast<int>(m) + (m > 2 ? -3 : 9)) + 2) / 5 + static_cast<int>(d) - 1;
+  const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + static_cast<unsigned>(doy);
   return era * 146097 + static_cast<int64_t>(doe) - 719468;
 }
 
-int64_t CivilToUnix(int y, int mo, int d, int hh, int mm, int ss) {
-  if (y < 1970) return -1;
+int64_t CivilToUnix(int y, int mo, int d, int hh, int mm, int ss)
+{
+  if (y < 1970)
+    return -1;
   const int64_t days = DaysFromCivil(y, static_cast<unsigned>(mo), static_cast<unsigned>(d));
   return days * 86400 + hh * 3600 + mm * 60 + ss;
 }
 
-int64_t ParseCookieDate(std::string_view input) {
+int64_t ParseCookieDate(std::string_view input)
+{
   std::vector<std::string> tokens;
   std::string cur;
   const auto flush = [&] {
@@ -116,14 +125,18 @@ int64_t ParseCookieDate(std::string_view input) {
   }
 
   // Every supported format carries exactly two numbers: day and year.
-  if (!have_time || month == 0 || numerics.size() != 2) return -1;
+  if (!have_time || month == 0 || numerics.size() != 2)
+    return -1;
   const int day = numerics[0];
   int year = numerics[1];
-  if (day < 1 || day > 31) return -1;
-  if (year < 100) year += (year >= 50) ? 1900 : 2000;
+  if (day < 1 || day > 31)
+    return -1;
+  if (year < 100)
+    year += (year >= 50) ? 1900 : 2000;
   // RFC 6265 5.1.5.1: years must be within 1601..9999; anything else is a
   // parse failure (also bounds the value after saturation).
-  if (year < 1601 || year > 9999) return -1;
+  if (year < 1601 || year > 9999)
+    return -1;
   return CivilToUnix(year, month, day, hh, mm, ss);
 }
 
@@ -131,36 +144,50 @@ int64_t ParseCookieDate(std::string_view input) {
 // Matching (RFC 6265 section 5.1.3 / 5.1.4)
 // ---------------------------------------------------------------------------
 
-bool DomainMatch(std::string_view host, const Cookie& c) {
-  if (c.host_only) return host == c.domain;
-  if (host == c.domain) return true;
+bool DomainMatch(std::string_view host, const Cookie& c)
+{
+  if (c.host_only)
+    return host == c.domain;
+  if (host == c.domain)
+    return true;
   const size_t dlen = c.domain.size();
-  if (host.size() <= dlen + 1) return false;
+  if (host.size() <= dlen + 1)
+    return false;
   const size_t start = host.size() - dlen - 1;
   return host[start] == '.' && host.compare(start + 1, dlen, c.domain) == 0;
 }
 
 // Suffix-only domain match used by Set-Cookie acceptance (RFC 6265 5.3).
-bool HostMatchesDomain(std::string_view host, std::string_view domain) {
-  if (host == domain) return true;
-  if (host.size() <= domain.size() + 1) return false;
+bool HostMatchesDomain(std::string_view host, std::string_view domain)
+{
+  if (host == domain)
+    return true;
+  if (host.size() <= domain.size() + 1)
+    return false;
   const size_t start = host.size() - domain.size() - 1;
   return host[start] == '.' && host.compare(start + 1, domain.size(), domain) == 0;
 }
 
-bool PathMatch(std::string_view request_path, const Cookie& c) {
-  if (request_path == c.path) return true;
-  if (request_path.size() <= c.path.size()) return false;
-  if (!request_path.starts_with(c.path)) return false;
+bool PathMatch(std::string_view request_path, const Cookie& c)
+{
+  if (request_path == c.path)
+    return true;
+  if (request_path.size() <= c.path.size())
+    return false;
+  if (!request_path.starts_with(c.path))
+    return false;
   return c.path.back() == '/' || request_path[c.path.size()] == '/';
 }
 
 // Default cookie path (RFC 6265 section 5.1.4).
-std::string DefaultPath(const url::Url& url) {
+std::string DefaultPath(const url::Url& url)
+{
   const std::string& path = url.path();
-  if (path.empty() || path.front() != '/') return "/";
+  if (path.empty() || path.front() != '/')
+    return "/";
   const size_t slash = path.find_last_of('/');
-  if (slash == 0) return "/";
+  if (slash == 0)
+    return "/";
   return path.substr(0, slash);
 }
 
@@ -168,7 +195,8 @@ std::string DefaultPath(const url::Url& url) {
 // Set-Cookie parsing helpers (RFC 6265 section 5.2)
 // ---------------------------------------------------------------------------
 
-std::vector<std::string_view> SplitOnSemicolon(std::string_view s) {
+std::vector<std::string_view> SplitOnSemicolon(std::string_view s)
+{
   std::vector<std::string_view> parts;
   size_t start = 0;
   while (true) {
@@ -183,13 +211,17 @@ std::vector<std::string_view> SplitOnSemicolon(std::string_view s) {
   return parts;
 }
 
-std::string_view Trim(std::string_view s) {
-  while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
-  while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.remove_suffix(1);
+std::string_view Trim(std::string_view s)
+{
+  while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front())))
+    s.remove_prefix(1);
+  while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back())))
+    s.remove_suffix(1);
   return s;
 }
 
-std::string ToLowerAscii(std::string_view s) {
+std::string ToLowerAscii(std::string_view s)
+{
   std::string out;
   out.reserve(s.size());
   for (char c : s) {
@@ -199,11 +231,12 @@ std::string ToLowerAscii(std::string_view s) {
 }
 
 // Cookie name separators (RFC 6265 section 4.1.1).
-bool NameHasSeparator(std::string_view name) {
+bool NameHasSeparator(std::string_view name)
+{
   constexpr std::string_view kSeps = "()<>@,;:\\\"/[]?={} \t";
   for (char c : name) {
-    if (kSeps.find(c) != std::string_view::npos ||
-        static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) > 0x7E) {
+    if (kSeps.find(c) != std::string_view::npos || static_cast<unsigned char>(c) < 0x20 ||
+        static_cast<unsigned char>(c) > 0x7E) {
       return true;
     }
   }
@@ -212,7 +245,8 @@ bool NameHasSeparator(std::string_view name) {
 
 // Splits "name=value" at the first '='.  Trailing/leading whitespace is
 // trimmed from both sides.
-void SplitNameValue(std::string_view pair, std::string_view& name, std::string_view& value) {
+void SplitNameValue(std::string_view pair, std::string_view& name, std::string_view& value)
+{
   const size_t eq = pair.find('=');
   if (eq == std::string_view::npos) {
     name = Trim(pair);
@@ -225,7 +259,8 @@ void SplitNameValue(std::string_view pair, std::string_view& name, std::string_v
 
 // Split one attribute "Name[=Value]".  Outputs std::string because the name
 // is lowercased into a new buffer (a string_view would dangle).
-void SplitAttribute(std::string_view attr, std::string& name, std::string& value) {
+void SplitAttribute(std::string_view attr, std::string& name, std::string& value)
+{
   const size_t eq = attr.find('=');
   if (eq == std::string_view::npos) {
     name = ToLowerAscii(Trim(attr));
@@ -236,33 +271,39 @@ void SplitAttribute(std::string_view attr, std::string& name, std::string& value
   }
 }
 
-bool ParseInt64(std::string_view s, int64_t* out) {
-  if (s.empty()) return false;
+bool ParseInt64(std::string_view s, int64_t* out)
+{
+  if (s.empty())
+    return false;
   int64_t v = 0;
   const bool neg = s.front() == '-';
   const size_t start = neg ? 1 : 0;
-  if (start >= s.size()) return false;
+  if (start >= s.size())
+    return false;
   for (size_t i = start; i < s.size(); ++i) {
     const char c = s[i];
-    if (!std::isdigit(static_cast<unsigned char>(c))) return false;
+    if (!std::isdigit(static_cast<unsigned char>(c)))
+      return false;
     v = v * 10 + (c - '0');
-    if (v < 0) return false;  // overflow
+    if (v < 0)
+      return false; // overflow
   }
   *out = neg ? -v : v;
   return true;
 }
 
-}  // namespace
+} // namespace
 
 // ---------------------------------------------------------------------------
 // CookieStore
 // ---------------------------------------------------------------------------
 
 CookieStore::CookieStore(std::string profile_dir)
-    : profile_dir_(std::move(profile_dir)),
-      file_path_(profile_dir_ + "/cookies.txt") {}
+    : profile_dir_(std::move(profile_dir)), file_path_(profile_dir_ + "/cookies.txt")
+{}
 
-base::Result<void> CookieStore::Load() {
+base::Result<void> CookieStore::Load()
+{
   std::lock_guard<std::mutex> lock(mutex_);
   cookies_.clear();
   auto maybe_data = ReadFile(file_path_);
@@ -282,7 +323,8 @@ base::Result<void> CookieStore::Load() {
     std::string_view line(data.data() + pos, end - pos);
     pos = (nl == std::string::npos) ? data.size() : nl + 1;
     ++line_no;
-    if (line.empty() || line.front() == '#') continue;
+    if (line.empty() || line.front() == '#')
+      continue;
 
     std::vector<std::string_view> fields;
     size_t fstart = 0;
@@ -326,11 +368,13 @@ base::Result<void> CookieStore::Load() {
   return base::Error();
 }
 
-base::Result<void> CookieStore::Save() const {
+base::Result<void> CookieStore::Save() const
+{
   std::lock_guard<std::mutex> lock(mutex_);
   std::string out = "# neko-cookie v1\n";
   for (const auto& c : cookies_) {
-    if (c.expiry == 0) continue;  // session cookies never persist
+    if (c.expiry == 0)
+      continue; // session cookies never persist
     out += EncodeField(c.domain);
     out += '\t';
     out += c.host_only ? '1' : '0';
@@ -355,16 +399,18 @@ base::Result<void> CookieStore::Save() const {
   return WriteFileAtomic(file_path_, out);
 }
 
-bool CookieStore::SetCookieFromHeader(const url::Url& origin, std::string_view header,
-                                      int64_t now) {
+bool CookieStore::SetCookieFromHeader(const url::Url& origin, std::string_view header, int64_t now)
+{
   std::lock_guard<std::mutex> lock(mutex_);
   const std::vector<std::string_view> parts = SplitOnSemicolon(header);
-  if (parts.empty()) return false;
+  if (parts.empty())
+    return false;
 
   // Cookie-pair (section 5.2 step 1).
   std::string_view raw_name, raw_value;
   SplitNameValue(parts[0], raw_name, raw_value);
-  if (raw_name.empty() || NameHasSeparator(raw_name)) return false;
+  if (raw_name.empty() || NameHasSeparator(raw_name))
+    return false;
   const std::string name(raw_name);
   const std::string value(raw_value);
 
@@ -400,8 +446,10 @@ bool CookieStore::SetCookieFromHeader(const url::Url& origin, std::string_view h
       if (!attr_value.empty()) {
         // Ignore a leading dot; strip trailing dots (RFC 6265 5.2.3).
         std::string d(attr_value);
-        if (!d.empty() && d.front() == '.') d.erase(d.begin());
-        while (!d.empty() && d.back() == '.') d.pop_back();
+        if (!d.empty() && d.front() == '.')
+          d.erase(d.begin());
+        while (!d.empty() && d.back() == '.')
+          d.pop_back();
         domain = ToLowerAscii(d);
         has_domain = !domain.empty();
       }
@@ -434,7 +482,7 @@ bool CookieStore::SetCookieFromHeader(const url::Url& origin, std::string_view h
   const std::string cookie_path = has_path ? path : DefaultPath(origin);
 
   // Expiry (section 5.2.2 / 5.3).
-  int64_t expiry = 0;  // session by default
+  int64_t expiry = 0; // session by default
   if (has_max_age) {
     if (max_age <= 0) {
       // Delete the cookie: Max-Age=0 (or negative) means removal.
@@ -455,7 +503,7 @@ bool CookieStore::SetCookieFromHeader(const url::Url& origin, std::string_view h
   int64_t created = now;
   for (auto& c : cookies_) {
     if (c.name == name && c.domain == cookie_domain && c.path == cookie_path) {
-      created = c.created;  // preserve creation time across replacement
+      created = c.created; // preserve creation time across replacement
       c.domain = cookie_domain;
       c.host_only = host_only;
       c.path = cookie_path;
@@ -468,43 +516,59 @@ bool CookieStore::SetCookieFromHeader(const url::Url& origin, std::string_view h
     }
   }
 
-  cookies_.push_back(Cookie{cookie_domain, host_only, cookie_path, name, value,
-                            expiry, created, secure, http_only, same_site});
+  cookies_.push_back(Cookie{cookie_domain,
+                            host_only,
+                            cookie_path,
+                            name,
+                            value,
+                            expiry,
+                            created,
+                            secure,
+                            http_only,
+                            same_site});
   return true;
 }
 
-std::vector<const Cookie*> CookieStore::CookiesFor(const url::Url& url, int64_t now) const {
+std::vector<const Cookie*> CookieStore::CookiesFor(const url::Url& url, int64_t now) const
+{
   std::lock_guard<std::mutex> lock(mutex_);
   return CookiesForLocked(url, now);
 }
 
-std::vector<const Cookie*> CookieStore::CookiesForLocked(const url::Url& url,
-                                                         int64_t now) const {
+std::vector<const Cookie*> CookieStore::CookiesForLocked(const url::Url& url, int64_t now) const
+{
   const std::string& host = url.host();
   const std::string& path = url.path();
   const bool is_secure = url.scheme() == "https";
   std::vector<const Cookie*> out;
   for (const auto& c : cookies_) {
-    if (c.expiry > 0 && now > c.expiry) continue;
-    if (c.secure && !is_secure) continue;
-    if (!DomainMatch(host, c)) continue;
-    if (!PathMatch(path, c)) continue;
+    if (c.expiry > 0 && now > c.expiry)
+      continue;
+    if (c.secure && !is_secure)
+      continue;
+    if (!DomainMatch(host, c))
+      continue;
+    if (!PathMatch(path, c))
+      continue;
     out.push_back(&c);
   }
   // RFC 6265 section 5.4 step 2: longer paths first, then earlier creation.
   std::stable_sort(out.begin(), out.end(), [](const Cookie* a, const Cookie* b) {
-    if (a->path.size() != b->path.size()) return a->path.size() > b->path.size();
+    if (a->path.size() != b->path.size())
+      return a->path.size() > b->path.size();
     return a->created < b->created;
   });
   return out;
 }
 
-std::string CookieStore::CookieHeaderFor(const url::Url& url, int64_t now) const {
+std::string CookieStore::CookieHeaderFor(const url::Url& url, int64_t now) const
+{
   std::lock_guard<std::mutex> lock(mutex_);
   const auto cookies = CookiesForLocked(url, now);
   std::string header;
   for (const Cookie* c : cookies) {
-    if (!header.empty()) header += "; ";
+    if (!header.empty())
+      header += "; ";
     header += c->name;
     header += '=';
     header += c->value;
@@ -512,19 +576,24 @@ std::string CookieStore::CookieHeaderFor(const url::Url& url, int64_t now) const
   return header;
 }
 
-void CookieStore::PurgeExpired(int64_t now) {
+void CookieStore::PurgeExpired(int64_t now)
+{
   std::lock_guard<std::mutex> lock(mutex_);
   std::erase_if(cookies_, [now](const Cookie& c) { return c.expiry > 0 && now > c.expiry; });
 }
 
-bool CookieStore::DeleteCookie(const std::string& name, const std::string& domain,
-                               const std::string& path) {
+bool CookieStore::DeleteCookie(const std::string& name,
+                               const std::string& domain,
+                               const std::string& path)
+{
   std::lock_guard<std::mutex> lock(mutex_);
   return DeleteCookieLocked(name, domain, path);
 }
 
-bool CookieStore::DeleteCookieLocked(const std::string& name, const std::string& domain,
-                                     const std::string& path) {
+bool CookieStore::DeleteCookieLocked(const std::string& name,
+                                     const std::string& domain,
+                                     const std::string& path)
+{
   const size_t before = cookies_.size();
   std::erase_if(cookies_, [&](const Cookie& c) {
     return c.name == name && c.domain == domain && c.path == path;
@@ -532,9 +601,10 @@ bool CookieStore::DeleteCookieLocked(const std::string& name, const std::string&
   return cookies_.size() != before;
 }
 
-void CookieStore::Clear() {
+void CookieStore::Clear()
+{
   std::lock_guard<std::mutex> lock(mutex_);
   cookies_.clear();
 }
 
-}  // namespace neko::storage
+} // namespace neko::storage

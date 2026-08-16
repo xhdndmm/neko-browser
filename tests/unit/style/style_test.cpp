@@ -334,9 +334,9 @@ TEST(StyleTest, GridPlacementLonghandsAndSingleLine)
 
 TEST(StyleTest, GridMinmaxParses)
 {
-  auto doc = MakeDoc(
-      "<body><div style=\"grid-template-columns:minmax(0px, 1fr) minmax(100px, 200px) "
-      "minmax(min-content, 100px) minmax(120px, 120px)\">x</div></body>");
+  auto doc =
+      MakeDoc("<body><div style=\"grid-template-columns:minmax(0px, 1fr) minmax(100px, 200px) "
+              "minmax(min-content, 100px) minmax(120px, 120px)\">x</div></body>");
   StyleEngine engine;
   engine.ApplyStyles(*doc);
   const ComputedStyle& s = Style(engine, *doc, "div");
@@ -368,8 +368,8 @@ TEST(StyleTest, GridMinmaxParses)
 
 TEST(StyleTest, GridNamedLinesParse)
 {
-  auto doc = MakeDoc(
-      "<body><div style=\"grid-template-columns:[a] 100px [b c] 1fr [d]\">x</div></body>");
+  auto doc =
+      MakeDoc("<body><div style=\"grid-template-columns:[a] 100px [b c] 1fr [d]\">x</div></body>");
   StyleEngine engine;
   engine.ApplyStyles(*doc);
   const ComputedStyle& s = Style(engine, *doc, "div");
@@ -386,8 +386,8 @@ TEST(StyleTest, GridNamedLinesParse)
 
 TEST(StyleTest, GridRepeatWithNamedLines)
 {
-  auto doc = MakeDoc(
-      "<body><div style=\"grid-template-columns:repeat(2, [x] 50px)\">x</div></body>");
+  auto doc =
+      MakeDoc("<body><div style=\"grid-template-columns:repeat(2, [x] 50px)\">x</div></body>");
   StyleEngine engine;
   engine.ApplyStyles(*doc);
   const ComputedStyle& s = Style(engine, *doc, "div");
@@ -426,14 +426,13 @@ TEST(StyleTest, GridTemplateAreasRejectsNonRectangular)
 
 TEST(StyleTest, GridAutoFlowParses)
 {
-  auto doc = MakeDoc(
-      "<body>"
-      "<div id=\"a\" style=\"grid-auto-flow:row\">1</div>"
-      "<div id=\"b\" style=\"grid-auto-flow:column\">2</div>"
-      "<div id=\"c\" style=\"grid-auto-flow:dense\">3</div>"
-      "<div id=\"d\" style=\"grid-auto-flow:row dense\">4</div>"
-      "<div id=\"e\" style=\"grid-auto-flow:column dense\">5</div>"
-      "</body>");
+  auto doc = MakeDoc("<body>"
+                     "<div id=\"a\" style=\"grid-auto-flow:row\">1</div>"
+                     "<div id=\"b\" style=\"grid-auto-flow:column\">2</div>"
+                     "<div id=\"c\" style=\"grid-auto-flow:dense\">3</div>"
+                     "<div id=\"d\" style=\"grid-auto-flow:row dense\">4</div>"
+                     "<div id=\"e\" style=\"grid-auto-flow:column dense\">5</div>"
+                     "</body>");
   StyleEngine engine;
   engine.ApplyStyles(*doc);
   EXPECT_EQ(Style(engine, *doc, "#a").grid_auto_flow, GridAutoFlow::kRow);

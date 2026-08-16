@@ -6,31 +6,33 @@
 // waits for it to finish, and saves a grab of the window as PNG.  Useful for
 // end-to-end visual validation in CI and locally.
 
+#include "neko/ui/browser_worker.h"
+#include "neko/ui/main_window.h"
+
 #include <QApplication>
 #include <QImage>
 #include <QPixmap>
 #include <QString>
 #include <QTabBar>
-
 #include <chrono>
 #include <cstdio>
 #include <string>
 #include <thread>
 
-#include "neko/ui/browser_worker.h"
-#include "neko/ui/main_window.h"
-
 namespace {
 
-QString DefaultProfileDir() {
+QString DefaultProfileDir()
+{
   const char* env = std::getenv("NEKO_PROFILE");
-  if (env != nullptr && *env != '\0') return QString::fromUtf8(env);
+  if (env != nullptr && *env != '\0')
+    return QString::fromUtf8(env);
   return QString("/tmp/neko-gui-screenshot-profile");
 }
 
-}  // namespace
+} // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv)
+{
   if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
   }
@@ -57,9 +59,9 @@ int main(int argc, char** argv) {
   bool ready = false;
   for (int i = 0; i < 200 && !ready; ++i) {
     QCoreApplication::processEvents();
-    ready = window.TabBarWidget()->count() > 0 &&
-            !window.TabBarWidget()->tabText(0).isEmpty();
-    if (!ready) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    ready = window.TabBarWidget()->count() > 0 && !window.TabBarWidget()->tabText(0).isEmpty();
+    if (!ready)
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
 
   const QPixmap shot = window.grab();
@@ -71,7 +73,6 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "failed to save %s\n", out.toLocal8Bit().constData());
     return 1;
   }
-  std::printf("saved %s (%dx%d)\n", out.toLocal8Bit().constData(), shot.width(),
-              shot.height());
+  std::printf("saved %s (%dx%d)\n", out.toLocal8Bit().constData(), shot.width(), shot.height());
   return 0;
 }

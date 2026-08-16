@@ -149,9 +149,7 @@ void BrowserWorker::DispatchPointerClick(int tab_id, float doc_x, float doc_y)
 
 void BrowserWorker::DispatchHover(int tab_id, float doc_x, float doc_y)
 {
-  Post([this, tab_id, doc_x, doc_y] {
-    (void)controller_.DispatchHover(tab_id, doc_x, doc_y);
-  });
+  Post([this, tab_id, doc_x, doc_y] { (void)controller_.DispatchHover(tab_id, doc_x, doc_y); });
 }
 
 void BrowserWorker::DispatchHoverClear(int tab_id)
@@ -161,18 +159,20 @@ void BrowserWorker::DispatchHoverClear(int tab_id)
 
 void BrowserWorker::DispatchWheel(int tab_id, double delta_y)
 {
-  Post([this, tab_id, delta_y] {
-    (void)controller_.DispatchWheel(tab_id, delta_y);
-  });
+  Post([this, tab_id, delta_y] { (void)controller_.DispatchWheel(tab_id, delta_y); });
 }
 
-void BrowserWorker::DispatchKeyboard(int tab_id, const QString& type, const QString& key,
+void BrowserWorker::DispatchKeyboard(int tab_id,
+                                     const QString& type,
+                                     const QString& key,
                                      const QString& code)
 {
-  Post([this, tab_id, type = type.toStdString(), key = key.toStdString(),
-        code = code.toStdString()] {
-    (void)controller_.DispatchKeyboard(tab_id, type, key, code);
-  });
+  Post(
+      [this,
+       tab_id,
+       type = type.toStdString(),
+       key = key.toStdString(),
+       code = code.toStdString()] { (void)controller_.DispatchKeyboard(tab_id, type, key, code); });
 }
 
 void BrowserWorker::PumpScriptTimers()
