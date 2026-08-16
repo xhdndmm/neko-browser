@@ -126,9 +126,22 @@ public:
   // Total content height in px after Layout(); 0 before Layout().
   float ContentHeight() const;
 
-  // Attaches a decoded image to an <img> element and invalidates the layout
-  // so the replaced box picks up its intrinsic size.
-  void SetElementImage(const dom::Element& element, image::Image image);
+  // Attaches a decoded image to an <img> element (or any element whose
+  // computed style has a background-image, which layout resolves through the
+  // same ImageProvider lookup) and invalidates the layout so the replaced
+  // box picks up its intrinsic size.  |animation| carries the full frame set
+  // of an animated GIF; its first frame is installed as the initial image.
+  void SetElementImage(const dom::Element& element,
+                       image::Image image,
+                       std::shared_ptr<image::GifAnimation> animation = nullptr);
+
+  // Advances every animated image registered via SetElementImage to the
+  // frame for the current time (steady clock; frame durations come from the
+  // GIF graphic control extension).  Returns true when at least one frame
+  // changed.  A changed frame bumps the layout version so the UI repaints.
+  // Must be driven by a periodic tick (the GUI's 50 ms timer); headless
+  // screenshots show the first frame.
+  bool AdvanceAnimations();
 
   // layout::ImageProvider.
   const image::Image* Find(const dom::Element& element) const override;
@@ -188,6 +201,19 @@ private:
 
   graphics::FontRegistry fonts_;
   std::unordered_map<const dom::Element*, image::Image> images_;
+
+  // Playback state for one animated image (per element).  The frame pixels
+  // are kept in |images_| and overwritten in place on each advance so the
+  // raw pointers the display list holds stay valid.
+  struct ImageAnimationState
+  {
+    std::shared_ptr<image::GifAnimation> animation;
+    double start_ms = 0;    // steady clock of the first display
+    std::size_t frame = 0;  // currently displayed frame index
+    std::size_t loops = 0;  // completed full passes
+    bool finished = false;  // loop count reached; stays on the last frame
+  };
+  std::unordered_map<const dom::Element*, ImageAnimationState> animation_states_;
 
   // Cached paint output: rebuilt only when version_ changes.
   mutable std::optional<paint::DisplayList> display_list_;

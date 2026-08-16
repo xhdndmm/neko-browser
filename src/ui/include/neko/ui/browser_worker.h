@@ -95,9 +95,10 @@ public:
   void ClearStorage();
   void ClearNetworkLog();
 
-  // Runs the active tab's pending page-script timers on the worker thread
-  // (see BrowserController::PumpScriptTimers).  The GUI calls this on a
-  // periodic timer so setTimeout/setInterval callbacks progress.
+  // Runs the active tab's pending page-script timers and advances animated
+  // image frames (GIF) on the worker thread (see
+  // BrowserController::PumpScriptTimers).  The GUI calls this on a periodic
+  // timer so setTimeout/setInterval callbacks and animations progress.
   void PumpScriptTimers();
 
   // Evaluates |script| in the DevTools console context (persistent global

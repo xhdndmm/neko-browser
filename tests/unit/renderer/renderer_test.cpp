@@ -6,6 +6,7 @@
 #include "neko/renderer/page.h"
 
 #include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -100,6 +101,94 @@ TEST(PageTest, NoBackgroundStaysWhite)
   EXPECT_EQ(image.pixels()[offset], 255);
   EXPECT_EQ(image.pixels()[offset + 1], 255);
   EXPECT_EQ(image.pixels()[offset + 2], 255);
+}
+
+TEST(PageTest, GifAnimationAdvancesFrames)
+{
+  Page page;
+  ASSERT_TRUE(
+      page.LoadHtml("<body><img id=\"i\" src=\"a.gif\" width=\"1\" height=\"1\"></body>")
+          .has_value());
+  page.Layout(400);
+  dom::Element* img = dom::QuerySelector(*page.document(), "#i");
+  ASSERT_NE(img, nullptr);
+
+  auto animation = std::make_shared<image::GifAnimation>();
+  animation->width = 1;
+  animation->height = 1;
+  animation->loop_count = 0; // loop forever
+  image::GifFrame f0;
+  f0.rgba = {255, 0, 0, 255}; // red
+  f0.delay_cs = 5;            // 50 ms
+  image::GifFrame f1;
+  f1.rgba = {0, 255, 0, 255}; // green
+  f1.delay_cs = 10;           // 100 ms
+  animation->frames.push_back(std::move(f0));
+  animation->frames.push_back(std::move(f1));
+
+  image::Image first;
+  first.width = 1;
+  first.height = 1;
+  first.rgba = animation->frames[0].rgba;
+
+  const std::uint64_t version = page.layout_version();
+  page.SetElementImage(*img, std::move(first), animation);
+  EXPECT_NE(page.layout_version(), version);
+  const image::Image* current = page.Find(*img);
+  ASSERT_NE(current, nullptr);
+  EXPECT_EQ(current->rgba[0], 255); // red first frame
+
+  // Within the first frame's duration nothing changes.
+  EXPECT_FALSE(page.AdvanceAnimations());
+  current = page.Find(*img);
+  EXPECT_EQ(current->rgba[0], 255);
+
+  // At t≈120 ms the 50 ms first frame has elapsed and the 100 ms second frame
+  // is current: the tick advances to frame 1 (green) and bumps the page
+  // version so the UI repaints.
+  std::this_thread::sleep_for(std::chrono::milliseconds(120));
+  const std::uint64_t before = page.layout_version();
+  EXPECT_TRUE(page.AdvanceAnimations());
+  EXPECT_NE(page.layout_version(), before);
+  current = page.Find(*img);
+  ASSERT_NE(current, nullptr);
+  EXPECT_EQ(current->rgba[1], 255); // green
+}
+
+TEST(PageTest, GifAnimationFiniteLoopStopsOnLastFrame)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body><img id=\"i\" src=\"a.gif\"></body>").has_value());
+  dom::Element* img = dom::QuerySelector(*page.document(), "#i");
+  ASSERT_NE(img, nullptr);
+
+  auto animation = std::make_shared<image::GifAnimation>();
+  animation->width = 1;
+  animation->height = 1;
+  animation->loop_count = 1; // play exactly once
+  image::GifFrame f0;
+  f0.rgba = {255, 0, 0, 255};
+  f0.delay_cs = 5;
+  image::GifFrame f1;
+  f1.rgba = {0, 255, 0, 255};
+  f1.delay_cs = 5;
+  animation->frames.push_back(std::move(f0));
+  animation->frames.push_back(std::move(f1));
+
+  image::Image first;
+  first.width = 1;
+  first.height = 1;
+  first.rgba = animation->frames[0].rgba;
+  page.SetElementImage(*img, std::move(first), animation);
+
+  // Both 50 ms frames have elapsed: the single allowed pass is over and the
+  // animation rests on its last frame.
+  std::this_thread::sleep_for(std::chrono::milliseconds(150));
+  EXPECT_TRUE(page.AdvanceAnimations());
+  const image::Image* current = page.Find(*img);
+  ASSERT_NE(current, nullptr);
+  EXPECT_EQ(current->rgba[1], 255); // green (last frame)
+  EXPECT_FALSE(page.AdvanceAnimations());
 }
 
 // A 2x2 solid-color image helper.

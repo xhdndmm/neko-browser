@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
 #include <gtest/gtest.h>
 #include <jpeglib.h>
 #include <string>
@@ -579,6 +580,256 @@ TEST(GifTest, RejectsNoImageData)
 }
 
 // ---------------------------------------------------------------------------
+// Animated GIF (multi-frame encoder + decoder)
+// ---------------------------------------------------------------------------
+
+// One frame of a multi-image GIF: pixel indices plus graphic control
+// extension state (delay in centiseconds, disposal method, transparent index).
+struct GifFrameSpec
+{
+  std::vector<uint8_t> pixels; // row-major color indices
+  int delay_cs = 0;
+  uint8_t disposal = 0;
+  int transparent_index = -1;
+};
+
+// Appends a graphic control extension (when any of its fields apply) followed
+// by a full-screen image descriptor for one frame.
+std::string EncodeGifFrame(int width,
+                           int height,
+                           int min_code_size,
+                           const GifFrameSpec& frame)
+{
+  std::string out;
+  if (frame.delay_cs >= 0 || frame.disposal != 0 || frame.transparent_index >= 0) {
+    out += "\x21\xf9\x04";
+    uint8_t packed = static_cast<uint8_t>((frame.disposal & 0x07) << 2);
+    if (frame.transparent_index >= 0) {
+      packed |= 0x01;
+    }
+    out.push_back(static_cast<char>(packed));
+    out += Le16(static_cast<uint16_t>(frame.delay_cs >= 0 ? frame.delay_cs : 0));
+    out.push_back(static_cast<char>(frame.transparent_index >= 0 ? frame.transparent_index : 0));
+    out.push_back('\0'); // block terminator
+  }
+  out.push_back(0x2C); // image descriptor
+  out += Le16(0);      // left
+  out += Le16(0);      // top
+  out += Le16(static_cast<uint16_t>(width));
+  out += Le16(static_cast<uint16_t>(height));
+  out.push_back('\0'); // no local color table, no interlace
+  out.push_back(static_cast<char>(min_code_size));
+  out += GifSubBlocks(LzwEncodeGif(frame.pixels, min_code_size));
+  return out;
+}
+
+// Builds a multi-frame GIF89a with one global palette.  |loops| >= 0 emits a
+// NETSCAPE2.0 loop extension; a negative value omits it.
+std::string EncodeAnimatedGif(int width,
+                              int height,
+                              const std::vector<uint8_t>& palette,
+                              const std::vector<GifFrameSpec>& frames,
+                              int loops = -1,
+                              int background_index = 0)
+{
+  const int ncolors = static_cast<int>(palette.size()) / 3;
+  int size_bits = 0;
+  while ((2 << size_bits) < ncolors) {
+    ++size_bits;
+  }
+  const int table_size = 2 << size_bits;
+  const int min_code_size = std::max(2, size_bits + 1);
+
+  std::string out = "GIF89a";
+  out += Le16(static_cast<uint16_t>(width));
+  out += Le16(static_cast<uint16_t>(height));
+  out.push_back(static_cast<char>(0x80 | (7 << 4) | size_bits)); // GCT present
+  out.push_back(static_cast<char>(background_index));
+  out.push_back('\0'); // aspect ratio
+  for (int i = 0; i < table_size * 3; ++i) {
+    out.push_back(i < ncolors * 3 ? static_cast<char>(palette[static_cast<std::size_t>(i)])
+                                  : '\0');
+  }
+  if (loops >= 0) {
+    out += "\x21\xff\x0bNETSCAPE2.0";
+    out += "\x03\x01";          // sub-block: id 1 (loop count), 3 bytes
+    out += Le16(static_cast<uint16_t>(loops));
+    out.push_back('\0');        // sub-block terminator
+  }
+  for (const GifFrameSpec& frame : frames) {
+    out += EncodeGifFrame(width, height, min_code_size, frame);
+  }
+  out.push_back(0x3B); // trailer
+  return out;
+}
+
+TEST(GifTest, DecodeGifAnimationTwoFrames)
+{
+  const std::string gif = EncodeAnimatedGif(
+      1,
+      1,
+      {255, 0, 0, 0, 255, 0}, // red, green
+      {GifFrameSpec{{0}, /*delay=*/20}, GifFrameSpec{{1}, /*delay=*/30}},
+      /*loops=*/0);
+  const auto result = DecodeGifAnimation(gif);
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  const GifAnimation& anim = result.value();
+  EXPECT_EQ(anim.width, 1);
+  EXPECT_EQ(anim.height, 1);
+  EXPECT_EQ(anim.loop_count, 0);
+  ASSERT_EQ(anim.frames.size(), 2u);
+  // Frame 0 is solid red, frame 1 solid green; both are complete canvases.
+  EXPECT_EQ(anim.frames[0].rgba[0], 255);
+  EXPECT_EQ(anim.frames[0].rgba[1], 0);
+  EXPECT_EQ(anim.frames[0].rgba[2], 0);
+  EXPECT_EQ(anim.frames[0].rgba[3], 255);
+  EXPECT_EQ(anim.frames[1].rgba[0], 0);
+  EXPECT_EQ(anim.frames[1].rgba[1], 255);
+  EXPECT_EQ(anim.frames[0].delay_cs, 20);
+  EXPECT_EQ(anim.frames[1].delay_cs, 30);
+}
+
+TEST(GifTest, DecodeGifAnimationDefaultsToInfiniteLoop)
+{
+  // No NETSCAPE extension: browsers (Blink/Gecko) loop forever.
+  const std::string gif = EncodeAnimatedGif(1,
+                                            1,
+                                            {255, 0, 0, 0, 255, 0},
+                                            {GifFrameSpec{{0}, 10}, GifFrameSpec{{1}, 10}},
+                                            /*loops=*/-1);
+  const auto result = DecodeGifAnimation(gif);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result.value().loop_count, 0);
+}
+
+TEST(GifTest, DecodeGifAnimationLoopCount)
+{
+  const std::string gif = EncodeAnimatedGif(1,
+                                            1,
+                                            {255, 0, 0, 0, 255, 0},
+                                            {GifFrameSpec{{0}, 10}, GifFrameSpec{{1}, 10}},
+                                            /*loops=*/3);
+  const auto result = DecodeGifAnimation(gif);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result.value().loop_count, 3);
+}
+
+TEST(GifTest, DecodeGifAnimationClampsShortDelays)
+{
+  // Browsers clamp frame delays below 20 ms to 100 ms (10 cs).
+  const std::string gif = EncodeAnimatedGif(1,
+                                            1,
+                                            {255, 0, 0, 0, 255, 0},
+                                            {GifFrameSpec{{0}, /*delay=*/0},
+                                             GifFrameSpec{{1}, /*delay=*/1}});
+  const auto result = DecodeGifAnimation(gif);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_EQ(result.value().frames.size(), 2u);
+  EXPECT_EQ(result.value().frames[0].delay_cs, 10);
+  EXPECT_EQ(result.value().frames[1].delay_cs, 10);
+}
+
+TEST(GifTest, DecodeGifAnimationTransparencyPreservesCanvas)
+{
+  // Frame 0 paints both pixels red.  Frame 1 paints both green except that
+  // index 0 (red) is transparent, so the composited second frame keeps the
+  // first pixel red.
+  const std::string gif = EncodeAnimatedGif(
+      2,
+      1,
+      {255, 0, 0, 0, 255, 0}, // red, green
+      {GifFrameSpec{{0, 0}, 10}, GifFrameSpec{{0, 1}, 10, /*disposal=*/0, /*transparent=*/0}});
+  const auto result = DecodeGifAnimation(gif);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_EQ(result.value().frames.size(), 2u);
+  const std::vector<uint8_t>& f1 = result.value().frames[1].rgba;
+  ASSERT_EQ(f1.size(), 8u);
+  EXPECT_EQ(f1[0], 255); // red preserved from frame 0
+  EXPECT_EQ(f1[1], 0);
+  EXPECT_EQ(f1[4], 0); // green from frame 1
+  EXPECT_EQ(f1[5], 255);
+}
+
+TEST(GifTest, DecodeGifAnimationDisposalRestoresBackground)
+{
+  // Palette red/green/blue with blue as the canvas background.  Frame 1 is
+  // disposed with method 2 (restore to background), so the frame 2 snapshot
+  // (which only paints a transparent pixel) must show blue again.
+  const std::string gif = EncodeAnimatedGif(
+      2,
+      1,
+      {255, 0, 0, 0, 255, 0, 0, 0, 255},
+      {GifFrameSpec{{0, 0}, 10},
+       GifFrameSpec{{1, 1}, 10, /*disposal=*/2},
+       GifFrameSpec{{1, 1}, 10, /*disposal=*/0, /*transparent=*/1}},
+      /*loops=*/-1,
+      /*background_index=*/2);
+  const auto result = DecodeGifAnimation(gif);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_EQ(result.value().frames.size(), 3u);
+  // Frame 1 is snapshotted green before its disposal.
+  EXPECT_EQ(result.value().frames[1].rgba[0], 0);
+  EXPECT_EQ(result.value().frames[1].rgba[1], 255);
+  // Frame 2 sees the background blue restored by disposal 2.
+  const std::vector<uint8_t>& f2 = result.value().frames[2].rgba;
+  ASSERT_EQ(f2.size(), 8u);
+  EXPECT_EQ(f2[0], 0);
+  EXPECT_EQ(f2[1], 0);
+  EXPECT_EQ(f2[2], 255);
+  EXPECT_EQ(f2[4], 0);
+  EXPECT_EQ(f2[5], 0);
+  EXPECT_EQ(f2[6], 255);
+}
+
+TEST(GifTest, DecodeGifAnimationDisposalRestoresPrevious)
+{
+  // Frame 0 red; frame 1 green with disposal 3 (restore to previous).  Frame
+  // 2 paints only transparent pixels, so its snapshot shows the restored
+  // pre-frame-1 canvas (red).
+  const std::string gif = EncodeAnimatedGif(
+      1,
+      1,
+      {255, 0, 0, 0, 255, 0},
+      {GifFrameSpec{{0}, 10},
+       GifFrameSpec{{1}, 10, /*disposal=*/3},
+       GifFrameSpec{{1}, 10, /*disposal=*/0, /*transparent=*/1}});
+  const auto result = DecodeGifAnimation(gif);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_EQ(result.value().frames.size(), 3u);
+  EXPECT_EQ(result.value().frames[1].rgba[1], 255); // green snapshot
+  const std::vector<uint8_t>& f2 = result.value().frames[2].rgba;
+  EXPECT_EQ(f2[0], 255); // red restored
+  EXPECT_EQ(f2[1], 0);
+}
+
+TEST(GifTest, DecodeGifAnimationSingleFrameMatchesDecodeGif)
+{
+  const std::string gif = EncodeAnimatedGif(2,
+                                            1,
+                                            {255, 0, 0, 0, 255, 0},
+                                            {GifFrameSpec{{0, 1}, 10}});
+  const auto anim = DecodeGifAnimation(gif);
+  ASSERT_TRUE(anim.has_value());
+  ASSERT_EQ(anim.value().frames.size(), 1u);
+  const auto still = DecodeGif(gif);
+  ASSERT_TRUE(still.has_value());
+  EXPECT_EQ(anim.value().frames[0].rgba, still.value().rgba);
+}
+
+TEST(GifTest, DecodeGifReturnsFirstFrameOfAnimation)
+{
+  const std::string gif = EncodeAnimatedGif(1,
+                                            1,
+                                            {255, 0, 0, 0, 255, 0},
+                                            {GifFrameSpec{{0}, 10}, GifFrameSpec{{1}, 10}});
+  const auto result = DecodeGif(gif);
+  ASSERT_TRUE(result.has_value());
+  // The still-image path always returns the first frame (red).
+  EXPECT_EQ(result.value().rgba[0], 255);
+  EXPECT_EQ(result.value().rgba[1], 0);
+}
+
+// ---------------------------------------------------------------------------
 // PNG decoding
 // ---------------------------------------------------------------------------
 
@@ -1090,6 +1341,82 @@ TEST(WebpTest, RejectsBadMagic)
 {
   EXPECT_FALSE(IsWebp("not a webp"));
   EXPECT_FALSE(DecodeWebp("RIFFxxxx").has_value());
+}
+
+// ---------------------------------------------------------------------------
+// AVIF decoding
+// ---------------------------------------------------------------------------
+
+// A lossless 8x4 solid-red AVIF (8-bit YUV 4:4:4, still picture), generated
+// with ffmpeg/libaom-av1 (`-crf 0 -still-picture 1 -pix_fmt yuv444p`) and
+// committed as tests/pages/avif_8x4_red.avif; the bytes are embedded so the
+// test never depends on runtime paths.
+static const unsigned char kAvif8x4Red[] = {
+    0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66, 0x00, 0x00, 0x00,
+    0x00, 0x61, 0x76, 0x69, 0x66, 0x6d, 0x69, 0x66, 0x31, 0x6d, 0x69, 0x61, 0x66, 0x4d, 0x41,
+    0x31, 0x41, 0x00, 0x00, 0x00, 0xf9, 0x6d, 0x65, 0x74, 0x61, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x2f, 0x68, 0x64, 0x6c, 0x72, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x70, 0x69, 0x63, 0x74, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x50, 0x69, 0x63, 0x74, 0x75, 0x72, 0x65, 0x48, 0x61, 0x6e, 0x64, 0x6c, 0x65, 0x72,
+    0x00, 0x00, 0x00, 0x00, 0x0e, 0x70, 0x69, 0x74, 0x6d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+    0x00, 0x00, 0x00, 0x1e, 0x69, 0x6c, 0x6f, 0x63, 0x00, 0x00, 0x00, 0x00, 0x44, 0x00, 0x00,
+    0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x01, 0x21, 0x00, 0x00, 0x00, 0x1b,
+    0x00, 0x00, 0x00, 0x28, 0x69, 0x69, 0x6e, 0x66, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+    0x00, 0x00, 0x1a, 0x69, 0x6e, 0x66, 0x65, 0x02, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+    0x61, 0x76, 0x30, 0x31, 0x43, 0x6f, 0x6c, 0x6f, 0x72, 0x00, 0x00, 0x00, 0x00, 0x6a, 0x69,
+    0x70, 0x72, 0x70, 0x00, 0x00, 0x00, 0x4b, 0x69, 0x70, 0x63, 0x6f, 0x00, 0x00, 0x00, 0x14,
+    0x69, 0x73, 0x70, 0x65, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
+    0x04, 0x00, 0x00, 0x00, 0x10, 0x70, 0x69, 0x78, 0x69, 0x00, 0x00, 0x00, 0x00, 0x03, 0x08,
+    0x08, 0x08, 0x00, 0x00, 0x00, 0x0c, 0x61, 0x76, 0x31, 0x43, 0x81, 0x20, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x13, 0x63, 0x6f, 0x6c, 0x72, 0x6e, 0x63, 0x6c, 0x78, 0x00, 0x02, 0x00, 0x02,
+    0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x17, 0x69, 0x70, 0x6d, 0x61, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x04, 0x01, 0x02, 0x83, 0x04, 0x00, 0x00, 0x00, 0x23,
+    0x6d, 0x64, 0x61, 0x74, 0x0a, 0x05, 0x38, 0x08, 0x7e, 0xd8, 0x20, 0x32, 0x12, 0x10, 0x00,
+    0x00, 0x00, 0x0f, 0xfa, 0x40, 0x0c, 0x77, 0xb1, 0xea, 0x48, 0x8d, 0x0c, 0xa7, 0xb3, 0x53,
+    0x77};
+
+TEST(AvifTest, IsAvifDetectsMagic)
+{
+  const std::string data(reinterpret_cast<const char*>(kAvif8x4Red), sizeof(kAvif8x4Red));
+  EXPECT_TRUE(IsAvif(data));
+  // The brand check requires a complete ftyp box: arbitrary data must not
+  // match.
+  EXPECT_FALSE(IsAvif("GIF89a"));
+  EXPECT_FALSE(IsAvif("ftypavif"));
+  EXPECT_FALSE(IsAvif(""));
+}
+
+TEST(AvifTest, DecodesFixture)
+{
+  const std::string data(reinterpret_cast<const char*>(kAvif8x4Red), sizeof(kAvif8x4Red));
+  const auto result = DecodeAvif(data);
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  const Image& img = result.value();
+  EXPECT_EQ(img.width, 8);
+  EXPECT_EQ(img.height, 4);
+  ASSERT_EQ(img.rgba.size(), 8u * 4u * 4u);
+  // Lossless AV1: every pixel is (near-)pure red, fully opaque.
+  for (std::size_t i = 0; i < img.rgba.size(); i += 4) {
+    EXPECT_NEAR(img.rgba[i], 255, 6);
+    EXPECT_NEAR(img.rgba[i + 1], 0, 6);
+    EXPECT_NEAR(img.rgba[i + 2], 0, 6);
+    EXPECT_NEAR(img.rgba[i + 3], 255, 6);
+  }
+}
+
+TEST(AvifTest, RejectsBadMagic)
+{
+  EXPECT_FALSE(DecodeAvif("this is not an avif").has_value());
+  EXPECT_FALSE(DecodeAvif(std::string(12, '\0')).has_value());
+}
+
+TEST(AvifTest, DecodeImageDispatches)
+{
+  const std::string data(reinterpret_cast<const char*>(kAvif8x4Red), sizeof(kAvif8x4Red));
+  const auto result = DecodeImage(data);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result.value().width, 8);
+  EXPECT_EQ(result.value().height, 4);
 }
 
 } // namespace
