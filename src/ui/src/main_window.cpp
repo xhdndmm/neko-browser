@@ -17,6 +17,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QPushButton>
 #include <QShortcut>
 #include <QStackedWidget>
@@ -91,13 +92,19 @@ MainWindow::MainWindow(BrowserWorker* worker, QWidget* parent)
   // not clobber the text or reset the cursor (that made Backspace appear to
   // delete nothing).  The moment the user focuses the bar it counts as an
   // edit; leaving it (or committing with Enter) lets the URL sync resume.
-  connect(qApp, &QApplication::focusChanged, this, [this](QWidget* old, QWidget* now) {
-    if (now == address_) {
-      address_editing_ = true;
-    } else if (old == address_) {
-      address_editing_ = false;
-    }
-  });
+  connect(qApp,
+          &QApplication::focusChanged,
+          this,
+          [self = QPointer<MainWindow>(this)](QWidget* old, QWidget* now) {
+            if (self == nullptr) {
+              return;
+            }
+            if (now == self->address_) {
+              self->address_editing_ = true;
+            } else if (old == self->address_) {
+              self->address_editing_ = false;
+            }
+          });
 
   // Keyboard shortcuts (tab management + navigation).
   auto* new_tab = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_T), this);
