@@ -20,6 +20,7 @@ enum class Display
   kFlex,       // block-level flex container (CSS Flexbox 1)
   kInlineFlex, // inline-level flex container
   kGrid,       // block-level grid container (CSS Grid Layout 1)
+  kInlineGrid, // inline-level grid container
   kTable,
   kTableRowGroup, // thead/tbody/tfoot
   kTableRow,      // tr
@@ -217,6 +218,16 @@ struct SizeSpec
   std::vector<CalcTerm> extremum_args;
 };
 
+// grid-auto-flow (CSS Grid Layout 1 §7.1): the placement direction for
+// auto-placed items, plus the dense backfill flag.
+enum class GridAutoFlow
+{
+  kRow,        // sparse, rows first (initial value)
+  kColumn,     // sparse, columns first
+  kRowDense,   // dense, rows first
+  kColumnDense // dense, columns first
+};
+
 // Grid layout (CSS Grid Layout 1).  One grid track definition.
 struct GridTrack
 {
@@ -232,6 +243,16 @@ struct GridTrack
   float length = 0;  // kFixed: px length
   float percent = 0; // kFixed: percentage (0 = not a percentage)
   float fr = 0;      // kFr: the flex factor
+
+  // minmax() bounds (CSS Grid Layout 1 §5.1).  min_size/max_size are length
+  // or percentage bounds; the *_content flags mark a bound given as
+  // min-content / max-content (resolved against the track's items at layout
+  // time).  Layout clamps the resolved track size into [min, max].
+  std::optional<SizeSpec> min_size;
+  std::optional<SizeSpec> max_size;
+  bool min_is_min_content = false;
+  bool min_is_max_content = false;
+  bool max_is_max_content = false;
 };
 
 // A grid item's placement on one axis (grid-column / grid-row).
@@ -240,12 +261,16 @@ struct GridPlacement
   enum class Kind
   {
     kAuto, // auto-placement
-    kLine, // explicit 1-based line
+    kLine, // explicit 1-based line (negative counts from the end)
     kSpan, // spans |span| tracks (end only)
   };
   Kind kind = Kind::kAuto;
   int line = 0; // kLine: 1-based line number
   int span = 1; // kSpan: number of tracks spanned
+  // Custom-ident reference (CSS Grid Layout 1 §7.3): kLine resolves to the
+  // first line with this name (a grid-template-areas name matches the area's
+  // edge); kSpan spans to the next line with this name.  Empty = numeric.
+  std::string name;
 };
 
 // Fully resolved style for one element (px values unless noted).
@@ -369,10 +394,19 @@ struct ComputedStyle
   std::optional<AlignItems> align_self;
 
   // Grid layout (CSS Grid Layout 1).  Track templates and row/column gaps
-  // live on the container; the item's placement lives on the item.  Only the
-  // row-major auto flow is supported (grid-auto-flow: row).
+  // live on the container; the item's placement lives on the item.
   std::vector<GridTrack> grid_template_columns;
   std::vector<GridTrack> grid_template_rows;
+  // Named grid lines (CSS Grid Layout 1 §7.2): grid_column_lines[i] names
+  // the line before track i, so the vector has tracks + 1 entries (an empty
+  // name list for anonymous lines).  Implicit <name>-start/<name>-end lines
+  // from grid-template-areas are added at layout time.
+  std::vector<std::vector<std::string>> grid_column_lines;
+  std::vector<std::vector<std::string>> grid_row_lines;
+  // grid-template-areas (CSS Grid Layout 1 §7.3): rows of cell names;
+  // "." marks an empty cell.  Empty vector = none.
+  std::vector<std::vector<std::string>> grid_template_areas;
+  GridAutoFlow grid_auto_flow = GridAutoFlow::kRow;
   GridPlacement grid_column_start;
   GridPlacement grid_column_end;
   GridPlacement grid_row_start;

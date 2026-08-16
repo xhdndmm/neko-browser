@@ -332,6 +332,166 @@ TEST(StyleTest, GridPlacementLonghandsAndSingleLine)
   EXPECT_EQ(s.grid_row_end.kind, GridPlacement::Kind::kAuto);
 }
 
+TEST(StyleTest, GridMinmaxParses)
+{
+  auto doc = MakeDoc(
+      "<body><div style=\"grid-template-columns:minmax(0px, 1fr) minmax(100px, 200px) "
+      "minmax(min-content, 100px) minmax(120px, 120px)\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, "div");
+  ASSERT_EQ(s.grid_template_columns.size(), 4u);
+  // minmax(0px, 1fr): a flexible track with a 0 minimum (the common idiom).
+  const GridTrack& fr = s.grid_template_columns[0];
+  EXPECT_EQ(fr.kind, GridTrack::Kind::kFr);
+  EXPECT_FLOAT_EQ(fr.fr, 1.0f);
+  ASSERT_TRUE(fr.min_size.has_value());
+  EXPECT_FLOAT_EQ(fr.min_size.value().value, 0.0f);
+  // minmax(100px, 200px): auto-sized and clamped into the range.
+  const GridTrack& clamp = s.grid_template_columns[1];
+  EXPECT_EQ(clamp.kind, GridTrack::Kind::kAuto);
+  ASSERT_TRUE(clamp.min_size.has_value());
+  EXPECT_FLOAT_EQ(clamp.min_size.value().value, 100.0f);
+  ASSERT_TRUE(clamp.max_size.has_value());
+  EXPECT_FLOAT_EQ(clamp.max_size.value().value, 200.0f);
+  // minmax(min-content, 100px): min-content kind with a max clamp.
+  const GridTrack& mc = s.grid_template_columns[2];
+  EXPECT_EQ(mc.kind, GridTrack::Kind::kMinContent);
+  EXPECT_TRUE(mc.min_is_min_content);
+  ASSERT_TRUE(mc.max_size.has_value());
+  EXPECT_FLOAT_EQ(mc.max_size.value().value, 100.0f);
+  // minmax(120px, 120px): a fixed track.
+  const GridTrack& fixed = s.grid_template_columns[3];
+  EXPECT_EQ(fixed.kind, GridTrack::Kind::kFixed);
+  EXPECT_FLOAT_EQ(fixed.length, 120.0f);
+}
+
+TEST(StyleTest, GridNamedLinesParse)
+{
+  auto doc = MakeDoc(
+      "<body><div style=\"grid-template-columns:[a] 100px [b c] 1fr [d]\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, "div");
+  ASSERT_EQ(s.grid_template_columns.size(), 2u);
+  ASSERT_EQ(s.grid_column_lines.size(), 3u);
+  ASSERT_EQ(s.grid_column_lines[0].size(), 1u);
+  EXPECT_EQ(s.grid_column_lines[0][0], "a");
+  ASSERT_EQ(s.grid_column_lines[1].size(), 2u);
+  EXPECT_EQ(s.grid_column_lines[1][0], "b");
+  EXPECT_EQ(s.grid_column_lines[1][1], "c");
+  ASSERT_EQ(s.grid_column_lines[2].size(), 1u);
+  EXPECT_EQ(s.grid_column_lines[2][0], "d");
+}
+
+TEST(StyleTest, GridRepeatWithNamedLines)
+{
+  auto doc = MakeDoc(
+      "<body><div style=\"grid-template-columns:repeat(2, [x] 50px)\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, "div");
+  ASSERT_EQ(s.grid_template_columns.size(), 2u);
+  ASSERT_EQ(s.grid_column_lines.size(), 3u);
+  ASSERT_EQ(s.grid_column_lines[0].size(), 1u);
+  EXPECT_EQ(s.grid_column_lines[0][0], "x");
+  ASSERT_EQ(s.grid_column_lines[1].size(), 1u);
+  EXPECT_EQ(s.grid_column_lines[1][0], "x");
+  EXPECT_TRUE(s.grid_column_lines[2].empty());
+}
+
+TEST(StyleTest, GridTemplateAreasParse)
+{
+  auto doc = MakeDoc(
+      "<body><div style=\"grid-template-areas:'header header' 'side main'\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, "div");
+  ASSERT_EQ(s.grid_template_areas.size(), 2u);
+  ASSERT_EQ(s.grid_template_areas[0].size(), 2u);
+  EXPECT_EQ(s.grid_template_areas[0][0], "header");
+  EXPECT_EQ(s.grid_template_areas[0][1], "header");
+  EXPECT_EQ(s.grid_template_areas[1][0], "side");
+  EXPECT_EQ(s.grid_template_areas[1][1], "main");
+}
+
+TEST(StyleTest, GridTemplateAreasRejectsNonRectangular)
+{
+  auto doc = MakeDoc("<body><div style=\"grid-template-areas:'a a' 'b'\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, "div");
+  EXPECT_TRUE(s.grid_template_areas.empty());
+}
+
+TEST(StyleTest, GridAutoFlowParses)
+{
+  auto doc = MakeDoc(
+      "<body>"
+      "<div id=\"a\" style=\"grid-auto-flow:row\">1</div>"
+      "<div id=\"b\" style=\"grid-auto-flow:column\">2</div>"
+      "<div id=\"c\" style=\"grid-auto-flow:dense\">3</div>"
+      "<div id=\"d\" style=\"grid-auto-flow:row dense\">4</div>"
+      "<div id=\"e\" style=\"grid-auto-flow:column dense\">5</div>"
+      "</body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  EXPECT_EQ(Style(engine, *doc, "#a").grid_auto_flow, GridAutoFlow::kRow);
+  EXPECT_EQ(Style(engine, *doc, "#b").grid_auto_flow, GridAutoFlow::kColumn);
+  EXPECT_EQ(Style(engine, *doc, "#c").grid_auto_flow, GridAutoFlow::kRowDense);
+  EXPECT_EQ(Style(engine, *doc, "#d").grid_auto_flow, GridAutoFlow::kRowDense);
+  EXPECT_EQ(Style(engine, *doc, "#e").grid_auto_flow, GridAutoFlow::kColumnDense);
+}
+
+TEST(StyleTest, GridNamedPlacementParses)
+{
+  auto doc = MakeDoc(
+      "<body><div style=\"grid-column:sidebar-start / span 2; grid-row:span main\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, "div");
+  EXPECT_EQ(s.grid_column_start.kind, GridPlacement::Kind::kLine);
+  EXPECT_EQ(s.grid_column_start.name, "sidebar-start");
+  EXPECT_EQ(s.grid_column_end.kind, GridPlacement::Kind::kSpan);
+  EXPECT_TRUE(s.grid_column_end.name.empty());
+  EXPECT_EQ(s.grid_column_end.span, 2);
+  EXPECT_EQ(s.grid_row_end.kind, GridPlacement::Kind::kSpan);
+  EXPECT_EQ(s.grid_row_end.name, "main");
+}
+
+TEST(StyleTest, GridAreaShorthandParses)
+{
+  auto doc = MakeDoc("<body><div style=\"grid-area:header\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, "div");
+  EXPECT_EQ(s.grid_row_start.kind, GridPlacement::Kind::kLine);
+  EXPECT_EQ(s.grid_row_start.name, "header-start");
+  EXPECT_EQ(s.grid_column_start.name, "header-start");
+  EXPECT_EQ(s.grid_row_end.name, "header-end");
+  EXPECT_EQ(s.grid_column_end.name, "header-end");
+}
+
+TEST(StyleTest, GridNegativeLinesParse)
+{
+  auto doc = MakeDoc("<body><div style=\"grid-column:1 / -1\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, "div");
+  EXPECT_EQ(s.grid_column_start.kind, GridPlacement::Kind::kLine);
+  EXPECT_EQ(s.grid_column_start.line, 1);
+  EXPECT_EQ(s.grid_column_end.kind, GridPlacement::Kind::kLine);
+  EXPECT_EQ(s.grid_column_end.line, -1);
+}
+
+TEST(StyleTest, InlineGridDisplayParses)
+{
+  auto doc = MakeDoc("<body><div style=\"display:inline-grid\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  EXPECT_EQ(Style(engine, *doc, "div").display, Display::kInlineGrid);
+}
+
 TEST(StyleTest, SpecificityCascade)
 {
   auto doc = MakeDoc("<style>p { color: red; font-size: 20px; } .note { color: blue; }</style>"

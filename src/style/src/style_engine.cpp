@@ -658,24 +658,32 @@ void ParseBorderValue(const std::string& value,
 // ---------------------------------------------------------------------------
 
 // Splits a track list into comma- or whitespace-separated tokens while
-// keeping "repeat(...)" intact (commas inside repeat must not split).
+// keeping "repeat(...)" and "[...]" line-name lists intact (commas and
+// spaces inside them must not split).
 std::vector<std::string> SplitGridList(std::string_view text)
 {
   std::vector<std::string> parts;
   std::size_t i = 0;
-  int depth = 0;
+  int paren_depth = 0;
+  int bracket_depth = 0;
   std::string current;
   while (i < text.size()) {
     const char c = text[i];
     if (c == '(') {
-      ++depth;
+      ++paren_depth;
+    } else if (c == ')' && paren_depth > 0) {
+      --paren_depth;
+    } else if (c == '[') {
+      ++bracket_depth;
+    } else if (c == ']' && bracket_depth > 0) {
+      --bracket_depth;
+    }
+    if (c == '(' || c == ')' || c == '[' || c == ']') {
       current.push_back(c);
-    } else if (c == ')') {
-      if (depth > 0) {
-        --depth;
-      }
-      current.push_back(c);
-    } else if (depth == 0 && (c == ',' || c == ' ' || c == '\t')) {
+      ++i;
+      continue;
+    }
+    if (paren_depth == 0 && bracket_depth == 0 && (c == ',' || c == ' ' || c == '\t')) {
       if (!current.empty()) {
         parts.push_back(current);
         current.clear();
@@ -691,83 +699,196 @@ std::vector<std::string> SplitGridList(std::string_view text)
   return parts;
 }
 
-// Parses a single grid track token ("100px", "25%", "1fr", "auto",
-// "min-content", "max-content", "repeat(2, 40px 1fr)").
-void ParseGridTrackToken(const std::string& token,
-                         const SizeContext& ctx,
-                         std::vector<GridTrack>& out)
+// A parsed grid track list: the tracks plus the named lines on both sides of
+// every track (lines.size() == tracks.size() + 1).
+struct ParsedGridTrackList
+{
+  std::vector<GridTrack> tracks;
+  std::vector<std::vector<std::string>> lines;
+};
+
+// Top-level comma position (guarded against nested parentheses), or npos.
+std::size_t FindTopLevelComma(const std::string& text)
+{
+  int depth = 0;
+  for (std::size_t i = 0; i < text.size(); ++i) {
+    if (text[i] == '(') {
+      ++depth;
+    } else if (text[i] == ')' && depth > 0) {
+      --depth;
+    } else if (text[i] == ',' && depth == 0) {
+      return i;
+    }
+  }
+  return std::string::npos;
+}
+
+// Appends the names inside a "[a b]" token to |line| (case preserved).
+void AppendLineNames(const std::string& token, std::vector<std::string>& line)
+{
+  const std::string inner = std::string(neko::base::Trim(token.substr(1, token.size() - 2)));
+  for (const std::string& name : SplitWhitespace(inner)) {
+    line.push_back(name);
+  }
+}
+
+// A custom-ident for grid placement: a single word that is not a number and
+// not a keyword reserved in placement ("auto"/"span").  Case is preserved.
+std::optional<std::string> ParseGridIdent(const std::string& text)
+{
+  const std::string trimmed = std::string(neko::base::Trim(text));
+  if (trimmed.empty() || trimmed.find(' ') != std::string::npos) {
+    return std::nullopt;
+  }
+  const css::CssValue v = css::ParseCssValue(trimmed);
+  if (v.type == css::CssValue::Type::kNumber) {
+    return std::nullopt;
+  }
+  const std::string lower = neko::base::ToLower(trimmed);
+  if (lower == "auto" || lower == "span" || lower == "none") {
+    return std::nullopt;
+  }
+  return trimmed;
+}
+
+// Parses one grid track size token: "100px", "25%", "1fr", "auto",
+// "min-content", "max-content", "minmax(min, max)".  Unknown input parses as
+// an auto track (permissive).
+GridTrack ParseGridTrackSize(const std::string& token, const SizeContext& ctx)
 {
   const std::string lower = neko::base::ToLower(token);
+  GridTrack track;
   if (lower == "auto") {
-    out.push_back(GridTrack{GridTrack::Kind::kAuto, 0, 0, 0});
-    return;
+    return track; // kAuto
   }
   if (lower == "min-content") {
-    out.push_back(GridTrack{GridTrack::Kind::kMinContent, 0, 0, 0});
-    return;
+    track.kind = GridTrack::Kind::kMinContent;
+    return track;
   }
   if (lower == "max-content") {
-    out.push_back(GridTrack{GridTrack::Kind::kMaxContent, 0, 0, 0});
-    return;
+    track.kind = GridTrack::Kind::kMaxContent;
+    return track;
   }
-  // repeat(N, <track-list>)
-  const std::size_t repeat_pos = lower.find("repeat(");
-  if (repeat_pos == 0 && lower.back() == ')') {
+  // minmax(min, max)
+  if (lower.compare(0, 7, "minmax(") == 0 && lower.back() == ')') {
     const std::string inner = lower.substr(7, lower.size() - 8);
-    const std::size_t comma = inner.find(',');
-    if (comma != std::string::npos) {
-      const std::string count_text = std::string(neko::base::Trim(inner.substr(0, comma)));
-      const css::CssValue count_value = css::ParseCssValue(count_text);
-      int count = 0;
-      if (count_value.type == css::CssValue::Type::kNumber) {
-        count = static_cast<int>(count_value.number);
-      }
-      if (count > 0) {
-        const std::vector<std::string> inner_tracks = SplitGridList(inner.substr(comma + 1));
-        for (int r = 0; r < count; ++r) {
-          for (const std::string& track : inner_tracks) {
-            ParseGridTrackToken(track, ctx, out);
-          }
-        }
-      }
+    const std::size_t comma = FindTopLevelComma(inner);
+    if (comma == std::string::npos) {
+      return track; // malformed minmax: auto
     }
-    return;
+    const std::string min_text = std::string(neko::base::Trim(inner.substr(0, comma)));
+    const std::string max_text = std::string(neko::base::Trim(inner.substr(comma + 1)));
+    track.min_is_min_content = min_text == "min-content";
+    track.min_is_max_content = min_text == "max-content";
+    track.max_is_max_content = max_text == "max-content";
+    if (const std::optional<SizeSpec> spec = ParseSize(min_text, ctx)) {
+      track.min_size = spec;
+    }
+    if (const std::optional<SizeSpec> spec = ParseSize(max_text, ctx)) {
+      track.max_size = spec;
+    }
+    // An fr maximum makes the track flexible with the minimum enforced after
+    // distribution (the common minmax(0, 1fr) idiom).
+    if (max_text.size() > 2 && max_text.compare(max_text.size() - 2, 2, "fr") == 0) {
+      const css::CssValue v = css::ParseCssValue(max_text.substr(0, max_text.size() - 2));
+      if (v.type == css::CssValue::Type::kNumber && v.number > 0) {
+        track.kind = GridTrack::Kind::kFr;
+        track.fr = v.number;
+      }
+      return track;
+    }
+    if (track.min_is_min_content) {
+      track.kind = GridTrack::Kind::kMinContent;
+    } else if (track.min_is_max_content) {
+      track.kind = GridTrack::Kind::kMaxContent;
+    } else if (track.min_size.has_value() && track.max_size.has_value() &&
+               !track.min_size.value().percent && !track.max_size.value().percent &&
+               track.min_size.value().value == track.max_size.value().value) {
+      // minmax(A, A): a fixed track of A.
+      track.kind = GridTrack::Kind::kFixed;
+      track.length = track.min_size.value().value;
+    } else {
+      // Distinct/partial bounds: an auto-sized track clamped into [min, max].
+      track.kind = GridTrack::Kind::kAuto;
+    }
+    return track;
   }
   // Nfr
   if (lower.size() > 2 && lower.compare(lower.size() - 2, 2, "fr") == 0) {
     const css::CssValue v = css::ParseCssValue(lower.substr(0, lower.size() - 2));
     if (v.type == css::CssValue::Type::kNumber && v.number > 0) {
-      out.push_back(GridTrack{GridTrack::Kind::kFr, 0, 0, v.number});
-      return;
+      track.kind = GridTrack::Kind::kFr;
+      track.fr = v.number;
     }
-    return;
+    return track;
   }
   // Length / percentage.
   if (const std::optional<SizeSpec> spec = ParseSize(token, ctx)) {
-    GridTrack track;
     track.kind = GridTrack::Kind::kFixed;
     if (spec.value().percent) {
       track.percent = spec.value().value;
     } else {
       track.length = spec.value().value;
     }
-    out.push_back(track);
-    return;
   }
-  // Unknown token: treat as auto (permissive parsing).
-  out.push_back(GridTrack{GridTrack::Kind::kAuto, 0, 0, 0});
+  return track;
 }
 
-std::vector<GridTrack> ParseGridTrackList(const std::string& value, const SizeContext& ctx)
+// Parses a grid track list with named lines ("[a] 1fr [b] [c] 2fr") and
+// repeat() (including line names inside the repeated segment).
+ParsedGridTrackList ParseGridTrackList(const std::string& value, const SizeContext& ctx)
 {
-  std::vector<GridTrack> tracks;
+  ParsedGridTrackList out;
+  out.lines.push_back({});
   for (const std::string& token : SplitGridList(value)) {
-    ParseGridTrackToken(token, ctx, tracks);
+    const std::string lower = neko::base::ToLower(token);
+    if (lower.size() >= 2 && lower.front() == '[' && lower.back() == ']') {
+      AppendLineNames(token, out.lines.back());
+      continue;
+    }
+    if (lower.compare(0, 7, "repeat(") == 0 && lower.back() == ')') {
+      const std::string inner = token.substr(7, token.size() - 8);
+      const std::size_t comma = FindTopLevelComma(inner);
+      int count = 0;
+      if (comma != std::string::npos) {
+        const css::CssValue cv =
+            css::ParseCssValue(std::string(neko::base::Trim(inner.substr(0, comma))));
+        if (cv.type == css::CssValue::Type::kNumber) {
+          count = static_cast<int>(cv.number);
+        }
+        // auto-fill / auto-fit repeat counts are not supported: treated as
+        // no tracks (documented approximation).
+      }
+      if (count > 0 && comma != std::string::npos) {
+        const ParsedGridTrackList repeated = ParseGridTrackList(inner.substr(comma + 1), ctx);
+        if (repeated.tracks.empty()) {
+          for (int r = 0; r < count; ++r) {
+            for (const std::string& name : repeated.lines[0]) {
+              out.lines.back().push_back(name);
+            }
+          }
+        } else {
+          for (int r = 0; r < count; ++r) {
+            for (const std::string& name : repeated.lines[0]) {
+              out.lines.back().push_back(name);
+            }
+            for (std::size_t t = 0; t < repeated.tracks.size(); ++t) {
+              out.tracks.push_back(repeated.tracks[t]);
+              out.lines.push_back(repeated.lines[t + 1]);
+            }
+          }
+        }
+      }
+      continue;
+    }
+    out.tracks.push_back(ParseGridTrackSize(token, ctx));
+    out.lines.push_back({});
   }
-  return tracks;
+  return out;
 }
 
-// Parses one grid line value: "auto", "<number>", "span <number>".
+// Parses one grid line value: "auto", "<integer>", "<custom-ident>",
+// "span <integer>", "span <custom-ident>".
 void ParseGridLine(const std::string& text, GridPlacement& out)
 {
   const std::string lower = neko::base::ToLower(text);
@@ -776,22 +897,38 @@ void ParseGridLine(const std::string& text, GridPlacement& out)
     return;
   }
   if (lower.compare(0, 5, "span ") == 0) {
-    const css::CssValue v = css::ParseCssValue(std::string(neko::base::Trim(lower.substr(5))));
+    const std::string rest = std::string(neko::base::Trim(lower.substr(5)));
+    const css::CssValue v = css::ParseCssValue(rest);
     if (v.type == css::CssValue::Type::kNumber && v.number >= 1) {
       out.kind = GridPlacement::Kind::kSpan;
       out.span = static_cast<int>(v.number);
+      out.name.clear();
+      return;
+    }
+    if (const std::optional<std::string> ident = ParseGridIdent(rest)) {
+      out.kind = GridPlacement::Kind::kSpan;
+      out.span = 1;
+      out.name = ident.value();
     }
     return;
   }
   const css::CssValue v = css::ParseCssValue(lower);
-  if (v.type == css::CssValue::Type::kNumber && v.number >= 1) {
+  if (v.type == css::CssValue::Type::kNumber && v.number != 0) {
     out.kind = GridPlacement::Kind::kLine;
     out.line = static_cast<int>(v.number);
+    out.name.clear();
+    return;
+  }
+  if (const std::optional<std::string> ident = ParseGridIdent(lower)) {
+    out.kind = GridPlacement::Kind::kLine;
+    out.line = 0;
+    out.name = ident.value();
   }
 }
 
 // Parses the grid-column / grid-row shorthand:
 //   auto | <line> | span <n> | <line> / <line> | <line> / span <n> | span <n> / <line>
+// where a line may be a number or a custom-ident.
 void ParseGridPlacementShorthand(const std::string& value, GridPlacement& start, GridPlacement& end)
 {
   const std::vector<std::string> parts = SplitWhitespace(value);
@@ -826,6 +963,117 @@ void ParseGridPlacementShorthand(const std::string& value, GridPlacement& start,
   }
   ParseGridLine(units[0], start);
   ParseGridLine(units[1], end);
+}
+
+// Splits on '/' and trims each part.
+std::vector<std::string> SplitOnSlash(const std::string& value)
+{
+  std::vector<std::string> parts;
+  std::string current;
+  for (const char c : value) {
+    if (c == '/') {
+      parts.push_back(std::string(neko::base::Trim(current)));
+      current.clear();
+    } else {
+      current.push_back(c);
+    }
+  }
+  parts.push_back(std::string(neko::base::Trim(current)));
+  return parts;
+}
+
+// Parses the grid-area shorthand:
+//   <custom-ident> | <line> [ / <line> ]{0,3}
+// The four components map to grid-row-start / grid-column-start /
+// grid-row-end / grid-column-end.  A single custom-ident names a
+// grid-template-areas area and expands to its <name>-start/<name>-end lines.
+void ParseGridArea(const std::string& value,
+                   GridPlacement& row_start,
+                   GridPlacement& column_start,
+                   GridPlacement& row_end,
+                   GridPlacement& column_end)
+{
+  const std::vector<std::string> parts = SplitOnSlash(value);
+  if (parts.empty()) {
+    return;
+  }
+  if (parts.size() == 1) {
+    if (const std::optional<std::string> ident = ParseGridIdent(parts[0])) {
+      const std::string name = ident.value();
+      row_start = GridPlacement{GridPlacement::Kind::kLine, 0, 1, name + "-start"};
+      column_start = GridPlacement{GridPlacement::Kind::kLine, 0, 1, name + "-start"};
+      row_end = GridPlacement{GridPlacement::Kind::kLine, 0, 1, name + "-end"};
+      column_end = GridPlacement{GridPlacement::Kind::kLine, 0, 1, name + "-end"};
+      return;
+    }
+    ParseGridLine(parts[0], row_start);
+    return;
+  }
+  ParseGridLine(parts[0], row_start);
+  ParseGridLine(parts[1], column_start);
+  if (parts.size() > 2) {
+    ParseGridLine(parts[2], row_end);
+  }
+  if (parts.size() > 3) {
+    ParseGridLine(parts[3], column_end);
+  }
+}
+
+// Parses grid-template-areas: quoted strings, one per row, of whitespace
+// separated area names ("." = empty cell).  Returns an empty vector for
+// invalid (non-rectangular or unterminated) input.
+std::vector<std::vector<std::string>> ParseGridTemplateAreas(const std::string& value)
+{
+  std::vector<std::string> rows;
+  std::size_t i = 0;
+  while (i < value.size()) {
+    if (value[i] == '"' || value[i] == '\'') {
+      const char quote = value[i];
+      ++i;
+      std::string segment;
+      while (i < value.size() && value[i] != quote) {
+        segment.push_back(value[i]);
+        ++i;
+      }
+      if (i >= value.size()) {
+        return {}; // unterminated string
+      }
+      ++i; // closing quote
+      rows.push_back(segment);
+    } else {
+      ++i;
+    }
+  }
+  if (rows.empty()) {
+    return {};
+  }
+  std::vector<std::vector<std::string>> area_rows;
+  std::size_t cols = 0;
+  for (const std::string& row : rows) {
+    const std::vector<std::string> row_cells = SplitWhitespace(row);
+    if (row_cells.empty()) {
+      return {};
+    }
+    if (cols == 0) {
+      cols = row_cells.size();
+    } else if (row_cells.size() != cols) {
+      return {}; // non-rectangular
+    }
+    area_rows.push_back(row_cells);
+  }
+  return area_rows;
+}
+
+// Parses grid-auto-flow: row | column, optionally with dense (dense alone
+// means "row dense").
+GridAutoFlow ParseGridAutoFlow(const std::string& value)
+{
+  const std::string lower = neko::base::ToLower(value);
+  const bool dense = lower.find("dense") != std::string::npos;
+  if (lower.find("column") != std::string::npos) {
+    return dense ? GridAutoFlow::kColumnDense : GridAutoFlow::kColumn;
+  }
+  return dense ? GridAutoFlow::kRowDense : GridAutoFlow::kRow;
 }
 
 bool MediaQueryMatches(std::string_view prelude)
@@ -1249,9 +1497,16 @@ void StyleEngine::ComputeElement(dom::Element& element,
     }
   }
 
-  // font-family.
+  // font-family.  The value collector re-quotes string tokens; a single
+  // fully-quoted family is stored without the quotes (the font registry
+  // looks families up by bare name).
   if (const css::Declaration* d = find("font-family")) {
-    out.font_family = d->value;
+    std::string family = d->value;
+    if (family.size() >= 2 && ((family.front() == '"' && family.back() == '"') ||
+                               (family.front() == '\'' && family.back() == '\''))) {
+      family = family.substr(1, family.size() - 2);
+    }
+    out.font_family = family;
   }
 
   // font-style.
@@ -1351,6 +1606,8 @@ void StyleEngine::ComputeElement(dom::Element& element,
         out.display = Display::kBlock;
       } else if (v.text == "grid") {
         out.display = Display::kGrid;
+      } else if (v.text == "inline-grid") {
+        out.display = Display::kInlineGrid;
       } else if (v.text == "flex") {
         out.display = Display::kFlex;
       } else if (v.text == "inline-flex") {
@@ -1639,12 +1896,30 @@ void StyleEngine::ComputeElement(dom::Element& element,
     out.column_gap = parse_gap(d->value);
   }
 
-  // Grid (CSS Grid Layout 1).  Track templates and item placement.
+  // Grid (CSS Grid Layout 1).  Track templates, named lines, template areas,
+  // auto flow and item placement.
   if (const css::Declaration* d = find("grid-template-columns")) {
-    out.grid_template_columns = ParseGridTrackList(d->value, size_ctx);
+    const ParsedGridTrackList cols = ParseGridTrackList(d->value, size_ctx);
+    out.grid_template_columns = cols.tracks;
+    out.grid_column_lines = cols.lines;
   }
   if (const css::Declaration* d = find("grid-template-rows")) {
-    out.grid_template_rows = ParseGridTrackList(d->value, size_ctx);
+    const ParsedGridTrackList rows = ParseGridTrackList(d->value, size_ctx);
+    out.grid_template_rows = rows.tracks;
+    out.grid_row_lines = rows.lines;
+  }
+  if (const css::Declaration* d = find("grid-template-areas")) {
+    out.grid_template_areas = ParseGridTemplateAreas(d->value);
+  }
+  if (const css::Declaration* d = find("grid-auto-flow")) {
+    out.grid_auto_flow = ParseGridAutoFlow(d->value);
+  }
+  if (const css::Declaration* d = find("grid-area")) {
+    ParseGridArea(d->value,
+                  out.grid_row_start,
+                  out.grid_column_start,
+                  out.grid_row_end,
+                  out.grid_column_end);
   }
   if (const css::Declaration* d = find("grid-column")) {
     ParseGridPlacementShorthand(d->value, out.grid_column_start, out.grid_column_end);

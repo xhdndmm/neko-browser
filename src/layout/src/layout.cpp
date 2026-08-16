@@ -1412,6 +1412,24 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         items.push_back(std::move(item));
         return;
       }
+      if (child_style.display == style::Display::kInlineGrid &&
+          child_style.position == style::Position::kStatic) {
+        // Inline-level grid container: an atomic inline box whose content is
+        // a grid container (handled by LayoutGridContent inside
+        // BuildInlineBlock's LayoutBlockContent dispatch).
+        auto block_box = BuildInlineBlock(child_element, containing_width);
+        InlineItem item;
+        item.style = &child_style;
+        item.element = &child_element;
+        item.atomic = true;
+        item.width = block_box->margin_left + block_box->width + block_box->margin_right;
+        item.height = block_box->margin_top + block_box->height + block_box->margin_bottom;
+        item.baseline_offset = block_box->lines.empty() ? block_box->margin_top + block_box->height
+                                                        : block_box->lines.back().baseline;
+        item.block_box = std::move(block_box);
+        items.push_back(std::move(item));
+        return;
+      }
       for (dom::Node* child : node.ChildNodes()) {
         CollectInline(*child, child_style, &child_element, containing_width, items);
       }
@@ -1445,7 +1463,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
             box, element, avail_width, cb_x, cb_y, cb_w, cb_h, absolute_children);
       }
       // A grid container's children are grid items, not normal-flow content.
-      if (box.style.display == style::Display::kGrid) {
+      if (box.style.display == style::Display::kGrid ||
+          box.style.display == style::Display::kInlineGrid) {
         return LayoutGridContent(
             box, element, avail_width, cb_x, cb_y, cb_w, cb_h, absolute_children);
       }
@@ -2473,10 +2492,13 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
 
     // Lays out |element|'s children as grid items (CSS Grid Layout 1 §7–10)
     // into |box| (whose border-box width is already set).  Supports explicit
-    // grid-template-columns/rows (px/%/fr/auto/min-content/max-content, plus
-    // repeat()), row-major auto placement, grid-column/row line + span
-    // placement, and row/column gaps.  Tracks beyond the explicit template
-    // (implicit) are auto-sized.  Returns the container's content height.
+    // grid-template-columns/rows (px/%/fr/auto/min-content/max-content,
+    // repeat(), minmax(min,max)), named grid lines ([name] ...), template
+    // areas (grid-template-areas + grid-area, with their implicit
+    // <name>-start/<name>-end lines), line/span/named placement (numeric
+    // lines may be negative), grid-auto-flow (row/column, sparse/dense) and
+    // row/column gaps.  Tracks beyond the explicit template (implicit) are
+    // auto-sized.  Returns the container's content height.
     float LayoutGridContent(LayoutBox& box,
                             dom::Element& element,
                             float avail_width,
@@ -2500,14 +2522,134 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
               ? SpecToContent(cs.height.value(), avail_width, container_bp_h, cs.box_sizing)
               : 0.0f;
 
+      // ---- Grid definition: explicit tracks, named lines, areas ----
+      const std::vector<std::vector<std::string>>& areas = cs.grid_template_areas;
+      const int area_cols = areas.empty() ? 0 : static_cast<int>(areas[0].size());
+      const int area_rows = static_cast<int>(areas.size());
+      const int template_cols = static_cast<int>(cs.grid_template_columns.size());
+      const int template_rows = static_cast<int>(cs.grid_template_rows.size());
+      const int explicit_cols = std::max(template_cols, area_cols);
+      const int explicit_rows = std::max(template_rows, area_rows);
+
+      // Area rectangles (name → inclusive row/column span) from the
+      // contiguous cells carrying that name.
+      struct AreaRect
+      {
+        int r0 = 0, c0 = 0, r1 = 0, c1 = 0;
+      };
+      std::map<std::string, AreaRect> area_rects;
+      for (int r = 0; r < area_rows; ++r) {
+        for (int c = 0; c < area_cols; ++c) {
+          const std::string& name = areas[static_cast<std::size_t>(r)]
+                                         [static_cast<std::size_t>(c)];
+          if (name.empty() || name == ".") {
+            continue;
+          }
+          const auto it = area_rects.find(name);
+          if (it == area_rects.end()) {
+            area_rects.emplace(name, AreaRect{r, c, r, c});
+          } else {
+            it->second.r0 = std::min(it->second.r0, r);
+            it->second.c0 = std::min(it->second.c0, c);
+            it->second.r1 = std::max(it->second.r1, r);
+            it->second.c1 = std::max(it->second.c1, c);
+          }
+        }
+      }
+
+      // Named lines per axis: the explicit [name] lines plus the implicit
+      // <name>-start / <name>-end lines the template areas create.
+      const auto build_line_names =
+          [](const std::vector<std::vector<std::string>>& explicit_lines,
+             int track_count,
+             const std::vector<std::vector<std::string>>& areas,
+             bool horizontal,
+             const std::map<std::string, AreaRect>& rects) {
+            std::vector<std::vector<std::string>> lines(
+                static_cast<std::size_t>(track_count) + 1);
+            for (std::size_t i = 0; i < explicit_lines.size() && i < lines.size(); ++i) {
+              lines[i] = explicit_lines[i];
+            }
+            for (const auto& [name, rect] : rects) {
+              const int start = horizontal ? rect.c0 : rect.r0;
+              const int end = horizontal ? rect.c1 + 1 : rect.r1 + 1;
+              if (start >= 0 && start < static_cast<int>(lines.size())) {
+                lines[static_cast<std::size_t>(start)].push_back(name + "-start");
+              }
+              if (end >= 0 && end < static_cast<int>(lines.size())) {
+                lines[static_cast<std::size_t>(end)].push_back(name + "-end");
+              }
+            }
+            return lines;
+          };
+      const std::vector<std::vector<std::string>> col_lines =
+          build_line_names(cs.grid_column_lines, explicit_cols, areas, /*horizontal=*/true,
+                           area_rects);
+      const std::vector<std::vector<std::string>> row_lines =
+          build_line_names(cs.grid_row_lines, explicit_rows, areas, /*horizontal=*/false,
+                           area_rects);
+
+      // Resolves one placement to a 0-based line index, or -1 when it does
+      // not resolve (treated as auto).  Per §8.3 an ident matches a template
+      // area first (its edge on this axis), then a named line.
+      const auto resolve_line =
+          [&](const style::GridPlacement& p,
+              const std::vector<std::vector<std::string>>& lines,
+              bool horizontal,
+              int track_count) -> int {
+        if (p.kind == style::GridPlacement::Kind::kLine) {
+          if (!p.name.empty()) {
+            const auto area_it = area_rects.find(p.name);
+            if (area_it != area_rects.end()) {
+              return horizontal ? area_it->second.c0 : area_it->second.r0;
+            }
+            for (std::size_t i = 0; i < lines.size(); ++i) {
+              for (const std::string& name : lines[i]) {
+                if (name == p.name) {
+                  return static_cast<int>(i);
+                }
+              }
+            }
+            return -1;
+          }
+          if (p.line < 0) {
+            // Negative lines count from the end of the explicit grid
+            // (line -1 = the last explicit line).
+            return track_count + 1 + p.line;
+          }
+          return p.line - 1;
+        }
+        return -1;
+      };
+      // Resolves a named span ("span <name>"): the first line with |name|
+      // after |start_line|, or -1.
+      const auto resolve_span_named =
+          [](const style::GridPlacement& p,
+             const std::vector<std::vector<std::string>>& lines,
+             int start_line) -> int {
+        if (p.kind != style::GridPlacement::Kind::kSpan || p.name.empty()) {
+          return -1;
+        }
+        for (std::size_t i = static_cast<std::size_t>(start_line) + 1; i < lines.size(); ++i) {
+          for (const std::string& name : lines[i]) {
+            if (name == p.name) {
+              return static_cast<int>(i);
+            }
+          }
+        }
+        return -1;
+      };
+
       // One in-flow grid item with its resolved placement.
       struct GridItem
       {
         dom::Element* element = nullptr;
         const style::ComputedStyle* style = nullptr;
-        int col_start = 0; // 0-based
-        int col_span = 1;
+        bool col_definite = false; // start line explicitly resolved
+        bool row_definite = false;
+        int col_start = 0; // 0-based (when definite)
         int row_start = 0;
+        int col_span = 1;
         int row_span = 1;
         std::unique_ptr<LayoutBox> layout;
       };
@@ -2529,23 +2671,69 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         GridItem item;
         item.element = el;
         item.style = &s;
-        // Column placement: explicit start line, span or end-line end.
+        // Column start.
         if (s.grid_column_start.kind == style::GridPlacement::Kind::kLine) {
-          item.col_start = std::max(0, s.grid_column_start.line - 1);
+          const int idx = resolve_line(s.grid_column_start, col_lines, true, explicit_cols);
+          if (idx >= 0) {
+            item.col_definite = true;
+            item.col_start = idx;
+          }
+        } else if (s.grid_column_start.kind == style::GridPlacement::Kind::kSpan) {
+          item.col_span = std::max(1, s.grid_column_start.span);
         }
+        // Column end: an explicit end line makes the start definite when it
+        // was auto ("auto / 4" → start = end − span), per §8.3.
         if (s.grid_column_end.kind == style::GridPlacement::Kind::kSpan) {
-          item.col_span = std::max(1, s.grid_column_end.span);
+          if (!s.grid_column_end.name.empty() && item.col_definite) {
+            const int end = resolve_span_named(s.grid_column_end, col_lines, item.col_start);
+            if (end > item.col_start) {
+              item.col_span = end - item.col_start;
+            }
+          } else {
+            item.col_span = std::max(1, s.grid_column_end.span);
+          }
         } else if (s.grid_column_end.kind == style::GridPlacement::Kind::kLine) {
-          item.col_span = std::max(1, s.grid_column_end.line - s.grid_column_start.line);
+          const int idx = resolve_line(s.grid_column_end, col_lines, true, explicit_cols);
+          if (idx >= 0) {
+            if (item.col_definite) {
+              item.col_span = std::max(1, idx - item.col_start);
+            } else {
+              item.col_start = std::max(0, idx - item.col_span);
+              item.col_definite = true;
+              item.col_span = std::max(1, idx - item.col_start);
+            }
+          }
         }
-        // Row placement.
+        // Row start / end (symmetric).
         if (s.grid_row_start.kind == style::GridPlacement::Kind::kLine) {
-          item.row_start = std::max(0, s.grid_row_start.line - 1);
+          const int idx = resolve_line(s.grid_row_start, row_lines, false, explicit_rows);
+          if (idx >= 0) {
+            item.row_definite = true;
+            item.row_start = idx;
+          }
+        } else if (s.grid_row_start.kind == style::GridPlacement::Kind::kSpan) {
+          item.row_span = std::max(1, s.grid_row_start.span);
         }
         if (s.grid_row_end.kind == style::GridPlacement::Kind::kSpan) {
-          item.row_span = std::max(1, s.grid_row_end.span);
+          if (!s.grid_row_end.name.empty() && item.row_definite) {
+            const int end = resolve_span_named(s.grid_row_end, row_lines, item.row_start);
+            if (end > item.row_start) {
+              item.row_span = end - item.row_start;
+            }
+          } else {
+            item.row_span = std::max(1, s.grid_row_end.span);
+          }
         } else if (s.grid_row_end.kind == style::GridPlacement::Kind::kLine) {
-          item.row_span = std::max(1, s.grid_row_end.line - s.grid_row_start.line);
+          const int idx = resolve_line(s.grid_row_end, row_lines, false, explicit_rows);
+          if (idx >= 0) {
+            if (item.row_definite) {
+              item.row_span = std::max(1, idx - item.row_start);
+            } else {
+              item.row_start = std::max(0, idx - item.row_span);
+              item.row_definite = true;
+              item.row_span = std::max(1, idx - item.row_start);
+            }
+          }
         }
         items.push_back(std::move(item));
       }
@@ -2553,12 +2741,9 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         return 0.0f;
       }
 
-      const std::size_t explicit_cols = cs.grid_template_columns.size();
-      const std::size_t explicit_rows = cs.grid_template_rows.size();
-
-      // ---- Auto placement (grid-auto-flow: row) ----
-      // occupied[r][c] marks a claimed cell; columns beyond the explicit
-      // template are implicit (auto-sized).
+      // ---- Auto placement (grid-auto-flow: row|column, sparse|dense) ----
+      // occupied[r][c] marks a claimed cell; the grid grows in both axes as
+      // items extend past the explicit template (implicit auto-sized tracks).
       std::vector<std::vector<bool>> occupied;
       auto ensure_cells = [&](int rows, int cols) {
         if (static_cast<int>(occupied.size()) < rows) {
@@ -2588,57 +2773,124 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
           }
         }
       };
+      const auto place_item = [&](GridItem& item, int row, int col) {
+        claim_cells(row, col, item.col_span, item.row_span);
+        item.row_start = row;
+        item.col_start = col;
+      };
+
+      const auto flow = cs.grid_auto_flow;
+      const bool flow_column = flow == style::GridAutoFlow::kColumn ||
+                               flow == style::GridAutoFlow::kColumnDense;
+      const bool dense =
+          flow == style::GridAutoFlow::kRowDense || flow == style::GridAutoFlow::kColumnDense;
       int grid_rows = 0;
-      int grid_cols = static_cast<int>(explicit_cols);
+      int grid_cols = std::max(1, explicit_cols);
+      // Sparse-flow cursors: the next candidate cell for auto placement.
+      int cursor_row = 0;
+      int cursor_col = 0;
       for (GridItem& item : items) {
         const int col_span = std::max(1, item.col_span);
         const int row_span = std::max(1, item.row_span);
-        const bool has_explicit_col =
-            item.style->grid_column_start.kind == style::GridPlacement::Kind::kLine;
         bool placed = false;
-        if (has_explicit_col) {
+        if (item.col_definite && item.row_definite) {
+          place_item(item, item.row_start, item.col_start);
+          placed = true;
+        } else if (item.col_definite) {
+          // Definite column: scan rows top-down at that column.  In row flow
+          // the sparse cursor only moves forward (§8.5 step 2): moving to an
+          // earlier column advances the row cursor past the previous
+          // placement there.  (Column flow scans from the top as an
+          // approximation of the per-column cursor.)
           const int col = item.col_start;
-          for (int row = 0; row <= grid_rows; ++row) {
+          const int row_from = (!flow_column && !dense && col < cursor_col) ? cursor_row + 1
+                                                                           : 0;
+          for (int row = row_from; row <= grid_rows; ++row) {
             ensure_cells(row + row_span, col + col_span);
             if (cells_free(row, col, col_span, row_span)) {
-              claim_cells(row, col, col_span, row_span);
-              item.row_start = row;
+              place_item(item, row, col);
               placed = true;
               break;
             }
           }
           if (!placed) {
-            // No room in an existing row: start a new row at the column.
             ensure_cells(grid_rows + row_span, col + col_span);
-            claim_cells(grid_rows, col, col_span, row_span);
-            item.row_start = grid_rows;
+            place_item(item, grid_rows, col);
             placed = true;
           }
-          item.col_start = col;
-        } else {
-          // Auto column: fill the current grid's columns row by row, wrapping
-          // to new rows; auto items never extend the column count.
-          const int cols = std::max(grid_cols, 1);
-          for (int row = 0; row <= grid_rows; ++row) {
-            ensure_cells(row + row_span, cols + col_span);
-            for (int col = 0; col + col_span <= cols; ++col) {
-              if (cells_free(row, col, col_span, row_span)) {
-                claim_cells(row, col, col_span, row_span);
-                item.col_start = col;
-                item.row_start = row;
-                placed = true;
-                break;
-              }
-            }
-            if (placed) {
+          cursor_col = col;
+          cursor_row = item.row_start + row_span;
+        } else if (item.row_definite) {
+          // Definite row: scan columns left-to-right at that row.  In column
+          // flow the sparse cursor only moves forward (same rule, axes
+          // swapped); row flow scans from the start as an approximation of
+          // the per-row cursor.
+          const int row = item.row_start;
+          const int col_from = (flow_column && !dense && row < cursor_row) ? cursor_col + 1 : 0;
+          for (int col = col_from; col <= grid_cols; ++col) {
+            ensure_cells(row + row_span, col + col_span);
+            if (cells_free(row, col, col_span, row_span)) {
+              place_item(item, row, col);
+              placed = true;
               break;
             }
           }
           if (!placed) {
-            ensure_cells(grid_rows + row_span, cols + col_span);
-            claim_cells(grid_rows, 0, col_span, row_span);
-            item.col_start = 0;
-            item.row_start = grid_rows;
+            ensure_cells(row + row_span, grid_cols + col_span);
+            place_item(item, row, grid_cols);
+            placed = true;
+          }
+          cursor_row = row;
+          cursor_col = item.col_start + col_span;
+        } else if (flow_column) {
+          // Column flow: iterate columns left-to-right; inside each column
+          // scan rows from the cursor (sparse) or the top (dense).  Rows are
+          // bounded by the implicit grid's row count (explicit rows, grown
+          // by placement and spans, §8.5 step 3 with axes swapped); columns
+          // only extend the grid via the fallback below.
+          for (int col = dense ? 0 : cursor_col; col <= grid_cols && !placed; ++col) {
+            const int rows_bound = std::max({explicit_rows, grid_rows, row_span});
+            const int row_from = dense ? 0 : (col == cursor_col ? cursor_row : 0);
+            for (int row = row_from; row < rows_bound; ++row) {
+              ensure_cells(row + row_span, col + col_span);
+              if (cells_free(row, col, col_span, row_span)) {
+                place_item(item, row, col);
+                cursor_col = col;
+                cursor_row = row + row_span;
+                placed = true;
+                break;
+              }
+            }
+          }
+          if (!placed) {
+            // No existing column fits: open a new column below the grid's
+            // right edge, taking its first row.
+            ensure_cells(std::max(row_span, 1), grid_cols + col_span);
+            place_item(item, 0, grid_cols);
+            placed = true;
+          }
+        } else {
+          // Row flow (initial): iterate rows top-down; inside each row scan
+          // columns from the cursor (sparse) or the left edge (dense).  Rows
+          // only extend the grid via the fallback below.
+          for (int row = dense ? 0 : cursor_row; row <= grid_rows && !placed; ++row) {
+            const int col_from = dense ? 0 : (row == cursor_row ? cursor_col : 0);
+            for (int col = col_from; col + col_span <= grid_cols; ++col) {
+              ensure_cells(row + row_span, col + col_span);
+              if (cells_free(row, col, col_span, row_span)) {
+                place_item(item, row, col);
+                cursor_row = row;
+                cursor_col = col + col_span;
+                placed = true;
+                break;
+              }
+            }
+          }
+          if (!placed) {
+            // No existing row fits: open a new row at the grid's bottom
+            // edge, starting at its first column.
+            ensure_cells(grid_rows + row_span, std::max(grid_cols, col_span));
+            place_item(item, grid_rows, 0);
             placed = true;
           }
         }
@@ -2650,7 +2902,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       std::vector<float> col_sizes(static_cast<std::size_t>(grid_cols), 0.0f);
       // Phase 1: fixed tracks.
       for (int c = 0; c < grid_cols; ++c) {
-        const style::GridTrack* t = c < static_cast<int>(explicit_cols)
+        const style::GridTrack* t = c < template_cols
                                         ? &cs.grid_template_columns[static_cast<std::size_t>(c)]
                                         : nullptr;
         if (t != nullptr && t->kind == style::GridTrack::Kind::kFixed) {
@@ -2662,7 +2914,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       // tracks) sized to the items starting in each column (a spanning item
       // contributes to its start column only — documented simplification).
       for (int c = 0; c < grid_cols; ++c) {
-        const style::GridTrack* t = c < static_cast<int>(explicit_cols)
+        const style::GridTrack* t = c < template_cols
                                         ? &cs.grid_template_columns[static_cast<std::size_t>(c)]
                                         : nullptr;
         style::GridTrack::Kind kind = t != nullptr ? t->kind : style::GridTrack::Kind::kAuto;
@@ -2688,7 +2940,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         used += column_gap * static_cast<float>(std::max(0, grid_cols - 1));
         float total_fr = 0;
         for (int c = 0; c < grid_cols; ++c) {
-          const style::GridTrack* t = c < static_cast<int>(explicit_cols)
+          const style::GridTrack* t = c < template_cols
                                           ? &cs.grid_template_columns[static_cast<std::size_t>(c)]
                                           : nullptr;
           if (t != nullptr && t->kind == style::GridTrack::Kind::kFr) {
@@ -2698,13 +2950,56 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         if (total_fr > 0) {
           const float leftover = std::max(0.0f, container_width - used);
           for (int c = 0; c < grid_cols; ++c) {
-            const style::GridTrack* t = c < static_cast<int>(explicit_cols)
+            const style::GridTrack* t = c < template_cols
                                             ? &cs.grid_template_columns[static_cast<std::size_t>(c)]
                                             : nullptr;
             if (t != nullptr && t->kind == style::GridTrack::Kind::kFr) {
               col_sizes[static_cast<std::size_t>(c)] = leftover * t->fr / total_fr;
             }
           }
+        }
+      }
+
+      // Phase 4: minmax() bounds clamp the resolved track size (CSS Grid
+      // Layout 1 §5.1).  Content keywords inside minmax() clamp against the
+      // min-content / max-content of the items starting in the track.
+      const auto column_content_extent = [&](int c, bool max_measure) {
+        float extent = 0;
+        for (const GridItem& item : items) {
+          if (item.col_start != c) {
+            continue;
+          }
+          const IntrinsicWidths w = MeasureContent(*item.element, styles, registry);
+          extent = std::max(extent, max_measure ? w.max : w.min);
+        }
+        return extent;
+      };
+      for (int c = 0; c < grid_cols; ++c) {
+        const style::GridTrack* t = c < template_cols
+                                        ? &cs.grid_template_columns[static_cast<std::size_t>(c)]
+                                        : nullptr;
+        if (t == nullptr) {
+          continue;
+        }
+        float& size = col_sizes[static_cast<std::size_t>(c)];
+        if (t->kind != style::GridTrack::Kind::kFr) {
+          if (t->max_size.has_value()) {
+            size = std::min(size, ResolveSize(t->max_size.value(), container_width));
+          }
+          if (t->max_is_max_content) {
+            size = std::min(size, column_content_extent(c, /*max_measure=*/true));
+          }
+        }
+        // The minimum always wins over the maximum (minmax(A,B) with A > B
+        // resolves to A, §5.1).
+        if (t->min_size.has_value()) {
+          size = std::max(size, ResolveSize(t->min_size.value(), container_width));
+        }
+        if (t->min_is_min_content) {
+          size = std::max(size, column_content_extent(c, /*max_measure=*/false));
+        }
+        if (t->min_is_max_content) {
+          size = std::max(size, column_content_extent(c, /*max_measure=*/true));
         }
       }
 
@@ -2730,7 +3025,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       // ---- Row track sizing ----
       std::vector<float> row_sizes(static_cast<std::size_t>(grid_rows), 0.0f);
       for (int r = 0; r < grid_rows; ++r) {
-        const style::GridTrack* t = r < static_cast<int>(explicit_rows)
+        const style::GridTrack* t = r < template_rows
                                         ? &cs.grid_template_rows[static_cast<std::size_t>(r)]
                                         : nullptr;
         if (t != nullptr && t->kind == style::GridTrack::Kind::kFixed) {
@@ -2740,7 +3035,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         }
       }
       for (int r = 0; r < grid_rows; ++r) {
-        const style::GridTrack* t = r < static_cast<int>(explicit_rows)
+        const style::GridTrack* t = r < template_rows
                                         ? &cs.grid_template_rows[static_cast<std::size_t>(r)]
                                         : nullptr;
         style::GridTrack::Kind kind = t != nullptr ? t->kind : style::GridTrack::Kind::kAuto;
@@ -2765,7 +3060,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         used += row_gap * static_cast<float>(std::max(0, grid_rows - 1));
         float total_fr = 0;
         for (int r = 0; r < grid_rows; ++r) {
-          const style::GridTrack* t = r < static_cast<int>(explicit_rows)
+          const style::GridTrack* t = r < template_rows
                                           ? &cs.grid_template_rows[static_cast<std::size_t>(r)]
                                           : nullptr;
           if (t != nullptr && t->kind == style::GridTrack::Kind::kFr) {
@@ -2775,13 +3070,52 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         if (total_fr > 0) {
           const float leftover = std::max(0.0f, container_height - used);
           for (int r = 0; r < grid_rows; ++r) {
-            const style::GridTrack* t = r < static_cast<int>(explicit_rows)
+            const style::GridTrack* t = r < template_rows
                                             ? &cs.grid_template_rows[static_cast<std::size_t>(r)]
                                             : nullptr;
             if (t != nullptr && t->kind == style::GridTrack::Kind::kFr) {
               row_sizes[static_cast<std::size_t>(r)] = leftover * t->fr / total_fr;
             }
           }
+        }
+      }
+
+      // Row minmax() bounds (percent bounds resolve against the definite
+      // container height; 0 otherwise, making them no-ops).
+      const auto row_content_extent = [&](int r) {
+        float extent = 0;
+        for (const GridItem& item : items) {
+          if (item.row_start != r) {
+            continue;
+          }
+          extent = std::max(extent,
+                            item.layout->margin_top + item.layout->height +
+                                item.layout->margin_bottom);
+        }
+        return extent;
+      };
+      for (int r = 0; r < grid_rows; ++r) {
+        const style::GridTrack* t = r < template_rows
+                                        ? &cs.grid_template_rows[static_cast<std::size_t>(r)]
+                                        : nullptr;
+        if (t == nullptr) {
+          continue;
+        }
+        float& size = row_sizes[static_cast<std::size_t>(r)];
+        if (t->kind != style::GridTrack::Kind::kFr) {
+          if (t->max_size.has_value()) {
+            size = std::min(size, ResolveSize(t->max_size.value(), container_height));
+          }
+          if (t->max_is_max_content) {
+            size = std::min(size, row_content_extent(r));
+          }
+        }
+        // The minimum always wins (see the column clamp phase).
+        if (t->min_size.has_value()) {
+          size = std::max(size, ResolveSize(t->min_size.value(), container_height));
+        }
+        if (t->min_is_min_content || t->min_is_max_content) {
+          size = std::max(size, row_content_extent(r));
         }
       }
 
