@@ -82,7 +82,7 @@ RendererHost::Load(const std::string& target, int width, int height)
   if (!decoded.has_value()) {
     return base::Err(decoded.error());
   }
-  RendererLoadResult result = std::move(decoded.value());
+  RendererLoadResult result = decoded.value();
   if (!result.ok) {
     if (!result.error.empty()) {
       return base::Err(base::Error::Io("renderer child failed: " + result.error));
