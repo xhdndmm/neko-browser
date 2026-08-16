@@ -40,6 +40,13 @@ QString FromUtf8(std::string_view s)
 
 } // namespace
 
+MainWindow::~MainWindow()
+{
+  // The application outlives the window; stop listening to its focus changes
+  // so a queued focusChanged can never touch members of a destroyed window.
+  disconnect(qApp, &QApplication::focusChanged, this, nullptr);
+}
+
 MainWindow::MainWindow(BrowserWorker* worker, QWidget* parent)
     : QMainWindow(parent), worker_(worker)
 {

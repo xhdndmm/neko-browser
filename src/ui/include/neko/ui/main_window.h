@@ -28,6 +28,7 @@ class MainWindow : public QMainWindow
   Q_OBJECT
 public:
   explicit MainWindow(BrowserWorker* worker, QWidget* parent = nullptr);
+  ~MainWindow() override;
 
   // Test/automation accessors.
   QTabBar* TabBarWidget() const
