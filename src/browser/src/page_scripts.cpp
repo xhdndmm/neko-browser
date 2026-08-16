@@ -59,7 +59,8 @@ std::map<std::string, std::string> SerializeComputedStyle(const style::ComputedS
   out["border-right-width"] = style::ToString(s.border_right);
   out["border-bottom-width"] = style::ToString(s.border_bottom);
   out["border-left-width"] = style::ToString(s.border_left);
-  out["font-size"] = style::ToString(style::SizeSpec{s.font_size});
+  out["font-size"] = style::ToString(style::SizeSpec{
+      static_cast<float>(s.font_size), false, false, {}, false, false, false, {}});
   out["font-family"] = s.font_family;
   out["font-weight"] = std::to_string(s.font_weight);
   out["line-height"] = std::to_string(s.line_height);
@@ -209,14 +210,14 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
       return std::nullopt;
     }
     javascript::ElementGeometry out;
-    out.x = g->x;
-    out.y = g->y;
-    out.width = g->width;
-    out.height = g->height;
-    out.client_width = g->client_width;
-    out.client_height = g->client_height;
-    out.border_top = g->border_top;
-    out.border_left = g->border_left;
+    out.x = static_cast<double>(g->x);
+    out.y = static_cast<double>(g->y);
+    out.width = static_cast<double>(g->width);
+    out.height = static_cast<double>(g->height);
+    out.client_width = static_cast<double>(g->client_width);
+    out.client_height = static_cast<double>(g->client_height);
+    out.border_top = static_cast<double>(g->border_top);
+    out.border_left = static_cast<double>(g->border_left);
     return out;
   };
 

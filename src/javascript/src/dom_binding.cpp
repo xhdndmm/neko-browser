@@ -84,6 +84,10 @@ void NodeFinalizer(JSRuntime* /*rt*/, JSValue obj)
 // dispatch state in one place.
 struct EventWrapper
 {
+  EventWrapper(Impl* i, std::string t, bool b, bool c)
+      : impl(i), type(std::move(t)), bubbles(b), cancelable(c)
+  {
+  }
   Impl* impl = nullptr;
   std::string type;
   bool bubbles = false;
@@ -1988,7 +1992,7 @@ std::string ResolvedUrl(const Impl& impl, const std::string& raw)
   return raw;
 }
 
-bool IsFormControl(const dom::Element& element)
+[[maybe_unused]] bool IsFormControl(const dom::Element& element)
 {
   const std::string_view tag = element.tag_name();
   return tag == "input" || tag == "textarea" || tag == "select" || tag == "option" ||
@@ -2438,7 +2442,7 @@ JSValue ElementGetCurrentSrc(JSContext* ctx, JSValueConst this_val)
   return JS_NewStringLen(ctx, resolved.data(), resolved.size());
 }
 
-JSValue ElementGetText(JSContext* ctx, JSValueConst this_val)
+[[maybe_unused]] JSValue ElementGetText(JSContext* ctx, JSValueConst this_val)
 {
   dom::Element* element = AsElement(UnwrapNode(this_val));
   if (element == nullptr) {
@@ -4026,7 +4030,7 @@ JSValue ElementGetEventHandler(JSContext* ctx, JSValueConst this_val, int magic)
     return JS_ThrowTypeError(ctx, "not an element");
   }
   JSValue wrapper = impl->WrapNode(node);
-  JSValue h = JS_GetPropertyStr(ctx, wrapper, kElementEventHandlers[magic]);
+  JSValue h = JS_GetPropertyStr(ctx, wrapper, kElementEventHandlers[static_cast<std::size_t>(magic)]);
   JS_FreeValue(ctx, wrapper);
   if (JS_IsUndefined(h)) {
     JS_FreeValue(ctx, h);
@@ -4047,7 +4051,7 @@ JSValue ElementSetEventHandler(JSContext* ctx, JSValueConst this_val, JSValueCon
   JSValue wrapper = impl->WrapNode(node);
   // Define an own property (not JS_SetPropertyStr, which would re-enter the
   // prototype's accessor and recurse).
-  JS_DefinePropertyValueStr(ctx, wrapper, kElementEventHandlers[magic],
+  JS_DefinePropertyValueStr(ctx, wrapper, kElementEventHandlers[static_cast<std::size_t>(magic)],
                             JS_DupValue(ctx, value), JS_PROP_C_W_E);
   JS_FreeValue(ctx, wrapper);
   return JS_UNDEFINED;
@@ -4360,9 +4364,9 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
   for (int i = 0; i < static_cast<int>(kElementEventHandlers.size()); ++i) {
     DefineAccessor(ctx,
                    impl.element_proto,
-                   kElementEventHandlers[i],
-                   MakeGetterMagic(ctx, kElementEventHandlers[i], ElementGetEventHandler, i),
-                   MakeSetterMagic(ctx, kElementEventHandlers[i], ElementSetEventHandler, i));
+                   kElementEventHandlers[static_cast<std::size_t>(i)],
+                   MakeGetterMagic(ctx, kElementEventHandlers[static_cast<std::size_t>(i)], ElementGetEventHandler, i),
+                   MakeSetterMagic(ctx, kElementEventHandlers[static_cast<std::size_t>(i)], ElementSetEventHandler, i));
   }
   DefineGetter(
       ctx, impl.element_proto, "children", MakeGetter(ctx, "children", ElementGetChildren));
@@ -5260,14 +5264,14 @@ bool MatchMediaQueryImpl(const std::string& query)
       break;
     }
     const std::string expr = q.substr(open + 1, close - open - 1);
-    if (auto w = num_feature(expr, "min-width")) {
-      matched = matched && 800.0 >= *w;
-    } else if (auto w = num_feature(expr, "max-width")) {
-      matched = matched && 800.0 <= *w;
-    } else if (auto h = num_feature(expr, "min-height")) {
-      matched = matched && 600.0 >= *h;
-    } else if (auto h = num_feature(expr, "max-height")) {
-      matched = matched && 600.0 <= *h;
+    if (auto w_min = num_feature(expr, "min-width")) {
+      matched = matched && 800.0 >= *w_min;
+    } else if (auto w_max = num_feature(expr, "max-width")) {
+      matched = matched && 800.0 <= *w_max;
+    } else if (auto h_min = num_feature(expr, "min-height")) {
+      matched = matched && 600.0 >= *h_min;
+    } else if (auto h_max = num_feature(expr, "max-height")) {
+      matched = matched && 600.0 <= *h_max;
     } else if (expr.rfind("orientation:", 0) == 0) {
       const bool p = expr.find("portrait") != std::string::npos;
       matched = matched && (p ? !landscape : landscape);

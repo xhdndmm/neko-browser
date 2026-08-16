@@ -489,7 +489,8 @@ void WebView::PaintCaret(QPainter& painter)
     return;
   }
   const int scroll = verticalScrollBar()->value();
-  painter.fillRect(static_cast<int>(x), static_cast<int>(y - scroll), 1, std::max(1, (int)h),
+  painter.fillRect(QRect(static_cast<int>(x), static_cast<int>(y - static_cast<float>(scroll)), 1,
+                         std::max(1, static_cast<int>(h))),
                    QColor(0, 0, 0));
 }
 

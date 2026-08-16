@@ -839,7 +839,7 @@ TEST_F(DomBinderTest, WindowGetComputedStyleWired)
     return {{"display", "block"}, {"background-color", "rgb(255, 0, 0)"}};
   };
   DomBinder binder(*document_, apis);
-  binder.SetConsoleSink([this](std::string_view, std::string_view) {});
+  binder.SetConsoleSink([](std::string_view, std::string_view) {});
   auto r = binder.Evaluate(
       "(function(){ var e = document.getElementById('first'); "
       "var cs = getComputedStyle(e); "

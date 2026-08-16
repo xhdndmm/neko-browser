@@ -185,7 +185,7 @@ float SpecToContent(const style::SizeSpec& spec,
 }
 
 // Border-box size that corresponds to a content-box size.
-float ContentToBox(float content, float borders_paddings)
+[[maybe_unused]] float ContentToBox(float content, float borders_paddings)
 {
   return content + borders_paddings;
 }
@@ -3138,8 +3138,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         float min_content = 0; // widest single column content per column
         float max_content = 0; // natural (unwrapped) content width per column
         // Sum the per-column extrema of the non-spanning cells.
-        std::vector<float> col_min(ncols, 0.0f);
-        std::vector<float> col_max(ncols, 0.0f);
+        std::vector<float> col_min(static_cast<std::size_t>(ncols), 0.0f);
+        std::vector<float> col_max(static_cast<std::size_t>(ncols), 0.0f);
         for (const CellInfo& cell : cells) {
           if (cell.colspan != 1) {
             continue;
@@ -3233,9 +3233,9 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         TranslateBox(*caption_box,
                      table_x - caption_box->border_left - caption_box->padding_left,
                      table_y - caption_box->border_top - caption_box->padding_top);
-        for (dom::Element* child : caption_absolute) {
+        for (dom::Element* abs_child : caption_absolute) {
           caption_box->positioned_children.push_back(
-              BuildAbsolute(*child, table_x, table_y, cb_w, cb_h, kNoFloats));
+              BuildAbsolute(*abs_child, table_x, table_y, cb_w, cb_h, kNoFloats));
         }
         break; // only the first caption participates in the table model
       }

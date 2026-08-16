@@ -29,14 +29,14 @@ namespace neko::renderer {
 // |border_top|/|border_left| the top/left border widths.
 struct ElementGeometry
 {
-  double x = 0;
-  double y = 0;
-  double width = 0;
-  double height = 0;
-  double client_width = 0;
-  double client_height = 0;
-  double border_top = 0;
-  double border_left = 0;
+  float x = 0;
+  float y = 0;
+  float width = 0;
+  float height = 0;
+  float client_width = 0;
+  float client_height = 0;
+  float border_top = 0;
+  float border_left = 0;
 };
 
 // The minimal page pipeline: HTML -> DOM -> style -> layout -> paint.

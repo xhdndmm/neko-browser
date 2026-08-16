@@ -757,7 +757,7 @@ void MainWindow::PopulateComputedStyle(QTreeWidget* tree, QTreeWidgetItem* item)
               .arg(style.font_weight)
               .arg(style.font_size)
               .arg(style.font_italic ? tr("italic") : tr("normal")));
-  add_row(tr("line-height"), QString::number(style.line_height));
+  add_row(tr("line-height"), QString::number(static_cast<double>(style.line_height)));
   add_row(tr("text-align"), FromUtf8(style::ToString(style.text_align)));
   add_row(tr("color"),
           style.color.has_value() ? FromUtf8(style::ToString(style.color.value()))
@@ -772,8 +772,8 @@ void MainWindow::PopulateComputedStyle(QTreeWidget* tree, QTreeWidgetItem* item)
     add_row(tr("flex-direction"), FromUtf8(style::ToString(style.flex_direction)));
   }
   if (style.position == style::Position::kAbsolute || style.position == style::Position::kFixed) {
-    add_row(tr("left"), QString::number(style.left));
-    add_row(tr("top"), QString::number(style.top));
+    add_row(tr("left"), QString::number(static_cast<double>(style.left)));
+    add_row(tr("top"), QString::number(static_cast<double>(style.top)));
   }
   add_row(tr("order"), QString::number(style.order));
   if (!style.custom_properties.empty()) {

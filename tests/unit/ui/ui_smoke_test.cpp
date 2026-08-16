@@ -11,6 +11,7 @@
 #include <QPixmap>
 #include <QPlainTextEdit>
 #include <QScrollBar>
+#include <QtTest>
 #include <QWheelEvent>
 #include <QTabBar>
 #include <QWidget>
@@ -231,7 +232,7 @@ TEST(UiSmokeTest, AddressBarBackspaceDeletesCharacter) {
   address->setFocus();
   // Place the cursor at the end of the text, then delete the last character
   // with Backspace — a plain QLineEdit must honor this.
-  address->setCursorPosition(address->text().size());
+  address->setCursorPosition(static_cast<int>(address->text().size()));
   SendKey(address, Qt::Key_Backspace);
   EXPECT_EQ(address->text(), QStringLiteral("https://example.com/fo"));
 }
@@ -258,7 +259,7 @@ TEST(UiSmokeTest, AddressBarEditSurvivesPeriodicRefresh) {
   address->setFocus();
   // Click in the MIDDLE of the text (a user editing the path, not the end).
   const QString original = address->text();
-  const int mid = original.size() / 2;
+  const int mid = static_cast<int>(original.size()) / 2;
   address->setCursorPosition(mid);
 
   // Give the periodic refresh timer a chance to fire several times.  The
@@ -374,9 +375,7 @@ TEST(UiSmokeTest, HoverDoesNotResetScroll) {
 
   // Hover over the page (a MouseMove into the viewport); this changes the
   // hovered element and re-runs the cascade/layout.
-  QMouseEvent move(QEvent::MouseMove, QPointF(100, 100), Qt::NoButton, Qt::NoButton,
-                   Qt::NoModifier);
-  QApplication::sendEvent(view->viewport(), &move);
+  QTest::mouseMove(view->viewport(), QPoint(static_cast<int>(100), static_cast<int>(100)));
   QCoreApplication::processEvents();
 
   // A script-pump / navigation refresh must not treat the hover-induced work
@@ -417,12 +416,8 @@ TEST(UiSmokeTest, ClickRunsPageClickListener) {
 
   // Click the button's center: body margin 0, button margin 10 + 200x40 →
   // the button spans roughly (10,10)..(210,50); (100,30) hits it.
-  QMouseEvent press(QEvent::MouseButtonPress, QPointF(100, 30), Qt::LeftButton, Qt::LeftButton,
-                    Qt::NoModifier);
-  QApplication::sendEvent(view->viewport(), &press);
-  QMouseEvent release(QEvent::MouseButtonRelease, QPointF(100, 30), Qt::LeftButton, Qt::NoButton,
-                      Qt::NoModifier);
-  QApplication::sendEvent(view->viewport(), &release);
+  QTest::mousePress(view->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(static_cast<int>(100), static_cast<int>(30)));
+  QTest::mouseRelease(view->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(static_cast<int>(100), static_cast<int>(30)));
 
   // The click is dispatched on the worker thread; wait until the page script
   // observed it and updated #status.
@@ -514,12 +509,8 @@ TEST(UiSmokeTest, ClickInputAndTypeUpdatesValue) {
     float x = 0;
     float y = 0;
     ASSERT_TRUE(FindElementRunPoint(*snap.page->layout_root(), input, x, y));
-    QMouseEvent press(QEvent::MouseButtonPress, QPointF(x, y), Qt::LeftButton, Qt::LeftButton,
-                      Qt::NoModifier);
-    QApplication::sendEvent(view->viewport(), &press);
-    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(x, y), Qt::LeftButton, Qt::NoButton,
-                        Qt::NoModifier);
-    QApplication::sendEvent(view->viewport(), &release);
+    QTest::mousePress(view->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(static_cast<int>(x), static_cast<int>(y)));
+    QTest::mouseRelease(view->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(static_cast<int>(x), static_cast<int>(y)));
   }
   // The focused control is published on the page (read by caret painting).
   ASSERT_TRUE(WaitFor([&] {
@@ -622,12 +613,10 @@ TEST(UiSmokeTest, FocusedInputDrawsCaret) {
     float y = 0;
     float h = 0;
     ASSERT_TRUE(FindCaretPoint(*snap.page->layout_root(), input, x, y, h));
-    QMouseEvent press(QEvent::MouseButtonPress, QPointF(x - 2.0f, y), Qt::LeftButton,
-                      Qt::LeftButton, Qt::NoModifier);
-    QApplication::sendEvent(view->viewport(), &press);
-    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(x - 2.0f, y), Qt::LeftButton,
-                        Qt::NoButton, Qt::NoModifier);
-    QApplication::sendEvent(view->viewport(), &release);
+    QTest::mousePress(view->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      QPoint(static_cast<int>(x - 2.0f), static_cast<int>(y)));
+    QTest::mouseRelease(view->viewport(), Qt::LeftButton, Qt::NoModifier,
+                        QPoint(static_cast<int>(x - 2.0f), static_cast<int>(y)));
   }
   ASSERT_TRUE(WaitFor([&] {
     const auto snap = worker.SnapshotActiveTab();
@@ -648,9 +637,9 @@ TEST(UiSmokeTest, FocusedInputDrawsCaret) {
   for (int i = 0; i < 5; ++i) {
     const QImage img = view->viewport()->grab().toImage();
     bool has = false;
-    for (int y = std::max(0, (int)cy); y < (int)(cy + ch) && y < img.height(); ++y) {
-      if (cx < img.width()) {
-        const QColor c = img.pixelColor((int)cx, y);
+    for (int y = std::max(0, static_cast<int>(cy)); y < static_cast<int>(cy + ch) && y < img.height(); ++y) {
+      if (static_cast<int>(cx) < img.width()) {
+        const QColor c = img.pixelColor(static_cast<int>(cx), y);
         if (c.red() < 100 && c.green() < 100 && c.blue() < 100) {
           has = true;
           break;
@@ -699,9 +688,9 @@ TEST(UiSmokeTest, FocusedInputDrawsCaret) {
   for (int i = 0; i < 5; ++i) {
     const QImage img = view->viewport()->grab().toImage();
     bool has = false;
-    for (int y = std::max(0, (int)cy2); y < (int)(cy2 + ch2) && y < img.height(); ++y) {
-      if (cx2 < img.width()) {
-        const QColor c = img.pixelColor((int)cx2, y);
+    for (int y = std::max(0, static_cast<int>(cy2)); y < static_cast<int>(cy2 + ch2) && y < img.height(); ++y) {
+      if (static_cast<int>(cx2) < img.width()) {
+        const QColor c = img.pixelColor(static_cast<int>(cx2), y);
         if (c.red() < 100 && c.green() < 100 && c.blue() < 100) {
           has = true;
           break;
@@ -794,9 +783,7 @@ TEST(UiSmokeTest, HoverOverElementFiresPageMouseOver) {
   view->Refresh();
 
   // Move over the box (top-left of the page) -> page onmouseover.
-  QMouseEvent move(QEvent::MouseMove, QPointF(50, 10), Qt::NoButton, Qt::NoButton,
-                   Qt::NoModifier);
-  QApplication::sendEvent(view->viewport(), &move);
+  QTest::mouseMove(view->viewport(), QPoint(static_cast<int>(50), static_cast<int>(10)));
   ASSERT_TRUE(WaitFor([&] {
     const auto snap = worker.SnapshotActiveTab();
     if (snap.page == nullptr || snap.page->document() == nullptr) {
@@ -849,12 +836,8 @@ TEST(UiSmokeTest, ClickLinkNavigates) {
   float y = 0;
   ASSERT_TRUE(FindElementRunPoint(*snap.page->layout_root(), link, x, y));
 
-  QMouseEvent press(QEvent::MouseButtonPress, QPointF(x, y), Qt::LeftButton, Qt::LeftButton,
-                    Qt::NoModifier);
-  QApplication::sendEvent(view->viewport(), &press);
-  QMouseEvent release(QEvent::MouseButtonRelease, QPointF(x, y), Qt::LeftButton, Qt::NoButton,
-                      Qt::NoModifier);
-  QApplication::sendEvent(view->viewport(), &release);
+  QTest::mousePress(view->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(static_cast<int>(x), static_cast<int>(y)));
+  QTest::mouseRelease(view->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(static_cast<int>(x), static_cast<int>(y)));
 
   // The default action navigates the link to /nav.
   ASSERT_TRUE(WaitFor([&] {
@@ -893,15 +876,11 @@ TEST(UiSmokeTest, HoverLinkShowsPointingHand) {
   ASSERT_TRUE(FindElementRunPoint(*snap.page->layout_root(), link, x, y));
 
   // Hovering the hyperlink switches the pointer to a pointing hand.
-  QMouseEvent move(QEvent::MouseMove, QPointF(x, y), Qt::NoButton, Qt::NoButton,
-                   Qt::NoModifier);
-  QApplication::sendEvent(view->viewport(), &move);
+  QTest::mouseMove(view->viewport(), QPoint(static_cast<int>(x), static_cast<int>(y)));
   EXPECT_EQ(view->viewport()->cursor().shape(), Qt::PointingHandCursor);
 
   // Hovering elsewhere restores the arrow.
-  QMouseEvent away(QEvent::MouseMove, QPointF(500, 400), Qt::NoButton, Qt::NoButton,
-                   Qt::NoModifier);
-  QApplication::sendEvent(view->viewport(), &away);
+  QTest::mouseMove(view->viewport(), QPoint(static_cast<int>(500), static_cast<int>(400)));
   EXPECT_EQ(view->viewport()->cursor().shape(), Qt::ArrowCursor);
 }
 
