@@ -34,6 +34,11 @@ base::Result<void> MkdirAll(const std::string& dir)
       return r;
   }
 #if defined(_WIN32)
+  // A drive root ("C:") or a UNC prefix is an existing filesystem root;
+  // _mkdir would fail with EACCES.
+  if (dir.size() == 2 && dir[1] == ':') {
+    return base::Error();
+  }
   if (_mkdir(dir.c_str()) != 0 && errno != EEXIST) {
     return base::Error::Io("mkdir(" + dir + ") failed: " + std::strerror(errno));
   }

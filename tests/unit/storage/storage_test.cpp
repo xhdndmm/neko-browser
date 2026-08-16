@@ -633,7 +633,7 @@ TEST(FileUtilTest, AtomicWriteDoesNotFollowSymlink)
   ASSERT_TRUE(WriteFileAtomic(target, "keep").has_value());
   // Try a temp-name symlink pointing at |target| (the classic attack).
   const std::string tmp_name = target + ".tmp";
-  static_cast<void>(::symlink(victim.c_str(), tmp_name.c_str()));
+  (void)::symlink(victim.c_str(), tmp_name.c_str());
   ASSERT_TRUE(WriteFileAtomic(target, "overwritten").has_value());
   ::unlink(tmp_name.c_str());
   // |victim| must still hold its original contents.
