@@ -755,7 +755,7 @@ void MainWindow::PopulateComputedStyle(QTreeWidget* tree, QTreeWidgetItem* item)
           QStringLiteral("%1 %2 %3pt %4")
               .arg(FromUtf8(style.font_family))
               .arg(style.font_weight)
-              .arg(style.font_size)
+              .arg(static_cast<double>(style.font_size))
               .arg(style.font_italic ? tr("italic") : tr("normal")));
   add_row(tr("line-height"), QString::number(static_cast<double>(style.line_height)));
   add_row(tr("text-align"), FromUtf8(style::ToString(style.text_align)));
@@ -767,7 +767,9 @@ void MainWindow::PopulateComputedStyle(QTreeWidget* tree, QTreeWidgetItem* item)
               ? FromUtf8(style::ToString(style.background_color.value()))
               : tr("transparent"));
   add_row(tr("flex"),
-          QStringLiteral("grow=%1 shrink=%2").arg(style.flex_grow).arg(style.flex_shrink));
+          QStringLiteral("grow=%1 shrink=%2")
+              .arg(static_cast<double>(style.flex_grow))
+              .arg(static_cast<double>(style.flex_shrink)));
   if (style.flex_direction != style::FlexDirection::kRow) {
     add_row(tr("flex-direction"), FromUtf8(style::ToString(style.flex_direction)));
   }

@@ -56,7 +56,7 @@ base::Result<void> SetSocketTimeouts(int fd, int timeout_ms)
     return base::Err(base::Error::Network("cannot set socket timeouts"));
   }
 #else
-  struct timeval tv{};
+  struct timeval tv = {};
   tv.tv_sec = timeout_ms / 1000;
   tv.tv_usec = (timeout_ms % 1000) * 1000;
   if (::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) != 0 ||
@@ -214,12 +214,12 @@ base::Result<std::string> TlsSocket::Receive(std::size_t max_bytes, int timeout_
       fd_set readfds;
       FD_ZERO(&readfds);
       FD_SET(impl_->tcp.fd(), &readfds);
-      timeval tv{};
+      timeval tv = {};
       tv.tv_sec = timeout_ms / 1000;
       tv.tv_usec = (timeout_ms % 1000) * 1000;
       const int pr = ::select(impl_->tcp.fd() + 1, &readfds, nullptr, nullptr, &tv);
 #else
-      struct pollfd pfd{impl_->tcp.fd(), static_cast<short>(POLLIN), 0};
+      struct pollfd pfd = {impl_->tcp.fd(), static_cast<short>(POLLIN), 0};
       const int pr = ::poll(&pfd, 1, timeout_ms);
 #endif
       if (pr == 0) {

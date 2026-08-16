@@ -98,8 +98,10 @@ base::Result<void> WriteFileAtomic(std::string_view path, std::string_view conte
   }
   if (!MoveFileExA(
           tmp.c_str(), path_str.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    const unsigned long win_err = ::GetLastError();
     std::remove(tmp.c_str());
-    return base::Error::Io("rename failed for '" + path_str + "'");
+    return base::Error::Io("rename failed for '" + path_str + "' (windows error " +
+                           std::to_string(win_err) + ")");
   }
 #else
   // POSIX: write to an unpredictable temp file created with O_EXCL (so an

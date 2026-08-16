@@ -340,7 +340,8 @@ TEST(CookieStoreTest, SaveLoadRoundTrip)
     ASSERT_TRUE(store.SetCookieFromHeader(
         MakeUrl("http://example.com/"), "name=value%20with%20spaces; Path=/x; Max-Age=3600", now));
     ASSERT_TRUE(store.SetCookieFromHeader(MakeUrl("http://example.com/"), "session=only", now));
-    ASSERT_TRUE(store.Save().has_value());
+    const auto save_res = store.Save();
+    ASSERT_TRUE(save_res.has_value()) << (save_res.has_value() ? "" : save_res.error().message());
   }
   {
     CookieStore store(tp.path());
@@ -418,7 +419,8 @@ TEST(HistoryStoreTest, SaveLoadRoundTrip)
     ASSERT_TRUE(store.Load().has_value());
     store.RecordVisit("http://example.com/", "Title with\ttabs and\nnewlines", 42);
     store.RecordVisit("http://example.com/a", "A", 7);
-    ASSERT_TRUE(store.Save().has_value());
+    const auto save_res = store.Save();
+    ASSERT_TRUE(save_res.has_value()) << (save_res.has_value() ? "" : save_res.error().message());
   }
   {
     HistoryStore store(tp.path());
@@ -475,7 +477,8 @@ TEST(BookmarkStoreTest, SaveLoadRoundTrip)
     ASSERT_TRUE(store.Load().has_value());
     auto id = store.Add("http://example.com/", "a title\twith tab", "Folder", 123);
     ASSERT_TRUE(id.has_value());
-    ASSERT_TRUE(store.Save().has_value());
+    const auto save_res = store.Save();
+    ASSERT_TRUE(save_res.has_value()) << (save_res.has_value() ? "" : save_res.error().message());
   }
   {
     BookmarkStore store(tp.path());
@@ -570,7 +573,8 @@ TEST(LocalStorageTest, SaveLoadRoundTrip)
     store.SetItem("https://example.com/", "theme", "dark");
     // Values may contain tabs, newlines and other hostile bytes.
     store.SetItem("https://example.com/", "note", "a\tb\nc\x01d");
-    ASSERT_TRUE(store.Save().has_value());
+    const auto save_res = store.Save();
+    ASSERT_TRUE(save_res.has_value()) << (save_res.has_value() ? "" : save_res.error().message());
   }
   {
     LocalStorage store(tp.path());
@@ -629,7 +633,7 @@ TEST(FileUtilTest, AtomicWriteDoesNotFollowSymlink)
   ASSERT_TRUE(WriteFileAtomic(target, "keep").has_value());
   // Try a temp-name symlink pointing at |target| (the classic attack).
   const std::string tmp_name = target + ".tmp";
-  ::symlink(victim.c_str(), tmp_name.c_str());
+  static_cast<void>(::symlink(victim.c_str(), tmp_name.c_str()));
   ASSERT_TRUE(WriteFileAtomic(target, "overwritten").has_value());
   ::unlink(tmp_name.c_str());
   // |victim| must still hold its original contents.
