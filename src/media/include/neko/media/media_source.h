@@ -1,9 +1,9 @@
 #pragma once
 
+#include "neko/base/status.h"
+
 #include <string>
 #include <string_view>
-
-#include "neko/base/status.h"
 
 namespace neko::media {
 
@@ -19,16 +19,18 @@ namespace neko::media {
 // returns an explicit NOT IMPLEMENTED error so callers can detect and
 // report the limitation honestly.
 // ---------------------------------------------------------------------------
-class MediaSource {
- public:
+class MediaSource
+{
+public:
   MediaSource() = default;
 
   // Opens a media container from raw bytes.
-  static base::Result<MediaSource> Open(std::string_view /*data*/) {
+  static base::Result<MediaSource> Open(std::string_view /*data*/)
+  {
     return base::Error::NotImplemented(
         "video demuxing/decoding is not implemented (media pipeline is "
         "reserved architecture; see src/media/README.md)");
   }
 };
 
-}  // namespace neko::media
+} // namespace neko::media

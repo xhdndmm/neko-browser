@@ -3,27 +3,6 @@
 // needed.  The tests exercise the real BrowserWorker + MainWindow + WebView
 // stack end to end.
 
-#include <QApplication>
-#include <QImage>
-#include <QKeyEvent>
-#include <QLineEdit>
-#include <QMouseEvent>
-#include <QPixmap>
-#include <QPlainTextEdit>
-#include <QScrollBar>
-#include <QtTest>
-#include <QWheelEvent>
-#include <QTabBar>
-#include <QWidget>
-
-#include <atomic>
-#include <chrono>
-#include <thread>
-#include <filesystem>
-#include <string>
-
-#include <gtest/gtest.h>
-
 #include "neko/browser/browser_controller.h"
 #include "neko/dom/query.h"
 #include "neko/layout/layout_tree.h"
@@ -32,7 +11,27 @@
 #include "neko/ui/main_window.h"
 #include "neko/ui/web_view.h"
 
-int main(int argc, char** argv) {
+#include <QApplication>
+#include <QImage>
+#include <QKeyEvent>
+#include <QLineEdit>
+#include <QMouseEvent>
+#include <QPixmap>
+#include <QPlainTextEdit>
+#include <QScrollBar>
+#include <QTabBar>
+#include <QWheelEvent>
+#include <QWidget>
+#include <QtTest>
+#include <atomic>
+#include <chrono>
+#include <filesystem>
+#include <gtest/gtest.h>
+#include <string>
+#include <thread>
+
+int main(int argc, char** argv)
+{
   // These tests must run without a display; force the offscreen platform
   // unless the caller already chose one (ctest discovery also runs this
   // binary, so the variable must be set here rather than only as a test
@@ -47,18 +46,25 @@ int main(int argc, char** argv) {
 
 namespace {
 
-class TempProfile {
- public:
-  TempProfile() {
+class TempProfile
+{
+public:
+  TempProfile()
+  {
     dir_ = std::filesystem::temp_directory_path() /
-           ("neko-ui-test-" + std::to_string(::getpid()) + "-" +
-            std::to_string(++seq_));
+           ("neko-ui-test-" + std::to_string(::getpid()) + "-" + std::to_string(++seq_));
     std::filesystem::create_directories(dir_);
   }
-  ~TempProfile() { std::filesystem::remove_all(dir_); }
-  const std::string path() const { return dir_.string(); }
+  ~TempProfile()
+  {
+    std::filesystem::remove_all(dir_);
+  }
+  const std::string path() const
+  {
+    return dir_.string();
+  }
 
- private:
+private:
   static int seq_;
   std::filesystem::path dir_;
 };
@@ -66,13 +72,14 @@ int TempProfile::seq_ = 0;
 
 // Pumps the event loop while polling a GUI-thread predicate (safe because
 // the predicate only reads widgets, which are owned by the GUI thread).
-template <typename Predicate>
-bool WaitFor(Predicate predicate, int timeout_ms = 5000) {
+template <typename Predicate> bool WaitFor(Predicate predicate, int timeout_ms = 5000)
+{
   const int step = 20;
   int elapsed = 0;
   while (elapsed < timeout_ms) {
     QCoreApplication::processEvents();
-    if (predicate()) return true;
+    if (predicate())
+      return true;
     std::this_thread::sleep_for(std::chrono::milliseconds(step));
     elapsed += step;
   }
@@ -81,20 +88,23 @@ bool WaitFor(Predicate predicate, int timeout_ms = 5000) {
 
 // Sends a real key press+release pair to |widget| through the Qt event
 // system, exactly as the platform would deliver it.
-void SendKey(QWidget* widget, int key, Qt::KeyboardModifiers mods = Qt::NoModifier) {
+void SendKey(QWidget* widget, int key, Qt::KeyboardModifiers mods = Qt::NoModifier)
+{
   QKeyEvent press(QEvent::KeyPress, key, mods);
   QKeyEvent release(QEvent::KeyRelease, key, mods);
   QApplication::sendEvent(widget, &press);
   QApplication::sendEvent(widget, &release);
 }
 
-TEST(UiSmokeTest, RendersLocalHtmlPage) {
+TEST(UiSmokeTest, RendersLocalHtmlPage)
+{
   TempProfile tp;
   const std::string html_file = tp.path() + "/page.html";
-  ASSERT_TRUE(neko::storage::WriteFileAtomic(
-      html_file, "<html><head><title>UI Test</title></head>"
-                 "<body><h1>Hello UI</h1><p>body text</p></body></html>")
-                    .has_value());
+  ASSERT_TRUE(
+      neko::storage::WriteFileAtomic(html_file,
+                                     "<html><head><title>UI Test</title></head>"
+                                     "<body><h1>Hello UI</h1><p>body text</p></body></html>")
+          .has_value());
 
   neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
   neko::ui::MainWindow window(&worker);
@@ -111,7 +121,8 @@ TEST(UiSmokeTest, RendersLocalHtmlPage) {
   // bar (which implies the controller finished routing/parsing it).
   ASSERT_TRUE(WaitFor([&] {
     for (int i = 0; i < window.TabBarWidget()->count(); ++i) {
-      if (window.TabBarWidget()->tabText(i).contains("UI Test")) return true;
+      if (window.TabBarWidget()->tabText(i).contains("UI Test"))
+        return true;
     }
     return false;
   }));
@@ -119,8 +130,7 @@ TEST(UiSmokeTest, RendersLocalHtmlPage) {
   // The controller routed and parsed the page (read through the thread-safe
   // snapshot API, the same path the GUI uses).
   EXPECT_EQ(worker.SnapshotActiveTab().title, "UI Test");
-  EXPECT_EQ(worker.SnapshotActiveTab().content_type,
-            neko::browser::ContentType::kHtml);
+  EXPECT_EQ(worker.SnapshotActiveTab().content_type, neko::browser::ContentType::kHtml);
 
   // The address bar shows the file path and history has one entry.
   EXPECT_GE(window.TabBarWidget()->count(), 1);
@@ -133,12 +143,13 @@ TEST(UiSmokeTest, RendersLocalHtmlPage) {
   EXPECT_GT(shot.width(), 0);
 }
 
-TEST(UiSmokeTest, NavigationUpdatesAddressBarAndHistory) {
+TEST(UiSmokeTest, NavigationUpdatesAddressBarAndHistory)
+{
   TempProfile tp;
   const std::string html_file = tp.path() + "/nav.html";
   ASSERT_TRUE(neko::storage::WriteFileAtomic(
-      html_file, "<html><head><title>Nav</title></head><body>ok</body></html>")
-                    .has_value());
+                  html_file, "<html><head><title>Nav</title></head><body>ok</body></html>")
+                  .has_value());
 
   neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
   neko::ui::MainWindow window(&worker);
@@ -151,24 +162,22 @@ TEST(UiSmokeTest, NavigationUpdatesAddressBarAndHistory) {
   // URL sync (the real GUI loses focus when the user clicks the page); mimic
   // that by dropping focus so the refresh can write the URL.
   window.AddressBar()->clearFocus();
-  ASSERT_TRUE(WaitFor([&] {
-    return window.AddressBar()->text().contains("nav.html");
-  }));
+  ASSERT_TRUE(WaitFor([&] { return window.AddressBar()->text().contains("nav.html"); }));
   ASSERT_EQ(worker.SnapshotHistory().size(), 1u);
-  EXPECT_NE(window.AddressBar()->text().toStdString().find("nav.html"),
-            std::string::npos);
+  EXPECT_NE(window.AddressBar()->text().toStdString().find("nav.html"), std::string::npos);
 }
 
-TEST(UiSmokeTest, BackUpdatesAddressBar) {
+TEST(UiSmokeTest, BackUpdatesAddressBar)
+{
   TempProfile tp;
   const std::string a = tp.path() + "/a.html";
   const std::string b = tp.path() + "/b.html";
-  ASSERT_TRUE(neko::storage::WriteFileAtomic(
-      a, "<html><head><title>A</title></head><body>a</body></html>")
-                  .has_value());
-  ASSERT_TRUE(neko::storage::WriteFileAtomic(
-      b, "<html><head><title>B</title></head><body>b</body></html>")
-                  .has_value());
+  ASSERT_TRUE(
+      neko::storage::WriteFileAtomic(a, "<html><head><title>A</title></head><body>a</body></html>")
+          .has_value());
+  ASSERT_TRUE(
+      neko::storage::WriteFileAtomic(b, "<html><head><title>B</title></head><body>b</body></html>")
+          .has_value());
 
   neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
   neko::ui::MainWindow window(&worker);
@@ -191,7 +200,8 @@ TEST(UiSmokeTest, BackUpdatesAddressBar) {
   ASSERT_TRUE(WaitFor([&] { return window.AddressBar()->text().contains("a.html"); }));
 }
 
-TEST(UiSmokeTest, DevToolsConsoleEvaluatesJavaScript) {
+TEST(UiSmokeTest, DevToolsConsoleEvaluatesJavaScript)
+{
   TempProfile tp;
   neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
   neko::ui::MainWindow window(&worker);
@@ -214,12 +224,12 @@ TEST(UiSmokeTest, DevToolsConsoleEvaluatesJavaScript) {
   // Errors are echoed as errors.
   input->setText("throw new Error('ui boom')");
   emit input->returnPressed();
-  ASSERT_TRUE(WaitFor([&] {
-    return window.ConsoleView()->toPlainText().contains("Error: ui boom");
-  }));
+  ASSERT_TRUE(
+      WaitFor([&] { return window.ConsoleView()->toPlainText().contains("Error: ui boom"); }));
 }
 
-TEST(UiSmokeTest, AddressBarBackspaceDeletesCharacter) {
+TEST(UiSmokeTest, AddressBarBackspaceDeletesCharacter)
+{
   TempProfile tp;
   neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
   neko::ui::MainWindow window(&worker);
@@ -237,12 +247,13 @@ TEST(UiSmokeTest, AddressBarBackspaceDeletesCharacter) {
   EXPECT_EQ(address->text(), QStringLiteral("https://example.com/fo"));
 }
 
-TEST(UiSmokeTest, AddressBarEditSurvivesPeriodicRefresh) {
+TEST(UiSmokeTest, AddressBarEditSurvivesPeriodicRefresh)
+{
   TempProfile tp;
   const std::string html_file = tp.path() + "/edit.html";
   ASSERT_TRUE(neko::storage::WriteFileAtomic(
-      html_file, "<html><head><title>Edit</title></head><body>ok</body></html>")
-                    .has_value());
+                  html_file, "<html><head><title>Edit</title></head><body>ok</body></html>")
+                  .has_value());
 
   neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
   neko::ui::MainWindow window(&worker);
@@ -280,15 +291,16 @@ TEST(UiSmokeTest, AddressBarEditSurvivesPeriodicRefresh) {
   EXPECT_EQ(address->text(), original.left(mid - 1) + original.mid(mid));
 }
 
-TEST(UiSmokeTest, MultiTabNavigationWorks) {
+TEST(UiSmokeTest, MultiTabNavigationWorks)
+{
   TempProfile tp;
   const std::string a = tp.path() + "/tab_a.html";
   const std::string b = tp.path() + "/tab_b.html";
   ASSERT_TRUE(neko::storage::WriteFileAtomic(
-      a, "<html><head><title>TabA</title></head><body>a</body></html>")
+                  a, "<html><head><title>TabA</title></head><body>a</body></html>")
                   .has_value());
   ASSERT_TRUE(neko::storage::WriteFileAtomic(
-      b, "<html><head><title>TabB</title></head><body>b</body></html>")
+                  b, "<html><head><title>TabB</title></head><body>b</body></html>")
                   .has_value());
 
   neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
@@ -320,7 +332,8 @@ TEST(UiSmokeTest, MultiTabNavigationWorks) {
   EXPECT_EQ(worker.SnapshotTab(worker.SnapshotTabs()[0].id).title, "TabA");
 }
 
-TEST(UiSmokeTest, KeyboardShortcutOpensAndClosesTabs) {
+TEST(UiSmokeTest, KeyboardShortcutOpensAndClosesTabs)
+{
   TempProfile tp;
   neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
   neko::ui::MainWindow window(&worker);
@@ -341,7 +354,8 @@ TEST(UiSmokeTest, KeyboardShortcutOpensAndClosesTabs) {
   EXPECT_EQ(window.TabBarWidget()->count(), initial);
 }
 
-TEST(UiSmokeTest, HoverDoesNotResetScroll) {
+TEST(UiSmokeTest, HoverDoesNotResetScroll)
+{
   TempProfile tp;
   std::string html = "<html><head><title>Scroll</title>"
                      "<style>p:hover { color: red; }</style></head><body>";
@@ -386,7 +400,8 @@ TEST(UiSmokeTest, HoverDoesNotResetScroll) {
   EXPECT_EQ(view->verticalScrollBar()->value(), 200);
 }
 
-TEST(UiSmokeTest, ClickRunsPageClickListener) {
+TEST(UiSmokeTest, ClickRunsPageClickListener)
+{
   TempProfile tp;
   const std::string html =
       "<html><head><title>Click</title></head>"
@@ -416,8 +431,14 @@ TEST(UiSmokeTest, ClickRunsPageClickListener) {
 
   // Click the button's center: body margin 0, button margin 10 + 200x40 →
   // the button spans roughly (10,10)..(210,50); (100,30) hits it.
-  QTest::mousePress(view->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(static_cast<int>(100), static_cast<int>(30)));
-  QTest::mouseRelease(view->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(static_cast<int>(100), static_cast<int>(30)));
+  QTest::mousePress(view->viewport(),
+                    Qt::LeftButton,
+                    Qt::NoModifier,
+                    QPoint(static_cast<int>(100), static_cast<int>(30)));
+  QTest::mouseRelease(view->viewport(),
+                      Qt::LeftButton,
+                      Qt::NoModifier,
+                      QPoint(static_cast<int>(100), static_cast<int>(30)));
 
   // The click is dispatched on the worker thread; wait until the page script
   // observed it and updated #status.
@@ -433,8 +454,11 @@ TEST(UiSmokeTest, ClickRunsPageClickListener) {
 
 // Finds the first laid-out text run belonging to |target| and returns its
 // top-left point (document coordinates, before scroll).
-bool FindElementRunPoint(const neko::layout::LayoutBox& box, const neko::dom::Element* target,
-                         float& x, float& y) {
+bool FindElementRunPoint(const neko::layout::LayoutBox& box,
+                         const neko::dom::Element* target,
+                         float& x,
+                         float& y)
+{
   for (const neko::layout::Line& line : box.lines) {
     for (const neko::layout::TextRun& run : line.runs) {
       if (run.element == target) {
@@ -462,13 +486,13 @@ bool FindElementRunPoint(const neko::layout::LayoutBox& box, const neko::dom::El
   return false;
 }
 
-TEST(UiSmokeTest, ClickInputAndTypeUpdatesValue) {
+TEST(UiSmokeTest, ClickInputAndTypeUpdatesValue)
+{
   TempProfile tp;
-  const std::string html =
-      "<html><head><title>Input</title></head>"
-      "<body style=\"margin:0\">"
-      "<input id=\"q\" value=\"hi\" style=\"margin:10px\">"
-      "</body></html>";
+  const std::string html = "<html><head><title>Input</title></head>"
+                           "<body style=\"margin:0\">"
+                           "<input id=\"q\" value=\"hi\" style=\"margin:10px\">"
+                           "</body></html>";
   const std::string html_file = tp.path() + "/input.html";
   ASSERT_TRUE(neko::storage::WriteFileAtomic(html_file, html).has_value());
 
@@ -509,8 +533,14 @@ TEST(UiSmokeTest, ClickInputAndTypeUpdatesValue) {
     float x = 0;
     float y = 0;
     ASSERT_TRUE(FindElementRunPoint(*snap.page->layout_root(), input, x, y));
-    QTest::mousePress(view->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(static_cast<int>(x), static_cast<int>(y)));
-    QTest::mouseRelease(view->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(static_cast<int>(x), static_cast<int>(y)));
+    QTest::mousePress(view->viewport(),
+                      Qt::LeftButton,
+                      Qt::NoModifier,
+                      QPoint(static_cast<int>(x), static_cast<int>(y)));
+    QTest::mouseRelease(view->viewport(),
+                        Qt::LeftButton,
+                        Qt::NoModifier,
+                        QPoint(static_cast<int>(x), static_cast<int>(y)));
   }
   // The focused control is published on the page (read by caret painting).
   ASSERT_TRUE(WaitFor([&] {
@@ -539,8 +569,12 @@ TEST(UiSmokeTest, ClickInputAndTypeUpdatesValue) {
 
 // Returns the caret point of |target|: the end of its first text run
 // (document coordinates, before scroll).
-bool FindCaretPoint(const neko::layout::LayoutBox& box, const neko::dom::Element* target,
-                    float& x, float& y, float& h) {
+bool FindCaretPoint(const neko::layout::LayoutBox& box,
+                    const neko::dom::Element* target,
+                    float& x,
+                    float& y,
+                    float& h)
+{
   for (const neko::layout::Line& line : box.lines) {
     for (const neko::layout::TextRun& run : line.runs) {
       if (run.element == target) {
@@ -569,13 +603,13 @@ bool FindCaretPoint(const neko::layout::LayoutBox& box, const neko::dom::Element
   return false;
 }
 
-TEST(UiSmokeTest, FocusedInputDrawsCaret) {
+TEST(UiSmokeTest, FocusedInputDrawsCaret)
+{
   TempProfile tp;
-  const std::string html =
-      "<html><head><title>I</title></head>"
-      "<body style=\"margin:0\">"
-      "<input id=\"q\" value=\"ab\" style=\"margin:10px\">"
-      "</body></html>";
+  const std::string html = "<html><head><title>I</title></head>"
+                           "<body style=\"margin:0\">"
+                           "<input id=\"q\" value=\"ab\" style=\"margin:10px\">"
+                           "</body></html>";
   const std::string html_file = tp.path() + "/caret.html";
   ASSERT_TRUE(neko::storage::WriteFileAtomic(html_file, html).has_value());
 
@@ -613,9 +647,13 @@ TEST(UiSmokeTest, FocusedInputDrawsCaret) {
     float y = 0;
     float h = 0;
     ASSERT_TRUE(FindCaretPoint(*snap.page->layout_root(), input, x, y, h));
-    QTest::mousePress(view->viewport(), Qt::LeftButton, Qt::NoModifier,
+    QTest::mousePress(view->viewport(),
+                      Qt::LeftButton,
+                      Qt::NoModifier,
                       QPoint(static_cast<int>(x - 2.0f), static_cast<int>(y)));
-    QTest::mouseRelease(view->viewport(), Qt::LeftButton, Qt::NoModifier,
+    QTest::mouseRelease(view->viewport(),
+                        Qt::LeftButton,
+                        Qt::NoModifier,
                         QPoint(static_cast<int>(x - 2.0f), static_cast<int>(y)));
   }
   ASSERT_TRUE(WaitFor([&] {
@@ -637,7 +675,9 @@ TEST(UiSmokeTest, FocusedInputDrawsCaret) {
   for (int i = 0; i < 5; ++i) {
     const QImage img = view->viewport()->grab().toImage();
     bool has = false;
-    for (int y = std::max(0, static_cast<int>(cy)); y < static_cast<int>(cy + ch) && y < img.height(); ++y) {
+    for (int y = std::max(0, static_cast<int>(cy));
+         y < static_cast<int>(cy + ch) && y < img.height();
+         ++y) {
       if (static_cast<int>(cx) < img.width()) {
         const QColor c = img.pixelColor(static_cast<int>(cx), y);
         if (c.red() < 100 && c.green() < 100 && c.blue() < 100) {
@@ -688,7 +728,9 @@ TEST(UiSmokeTest, FocusedInputDrawsCaret) {
   for (int i = 0; i < 5; ++i) {
     const QImage img = view->viewport()->grab().toImage();
     bool has = false;
-    for (int y = std::max(0, static_cast<int>(cy2)); y < static_cast<int>(cy2 + ch2) && y < img.height(); ++y) {
+    for (int y = std::max(0, static_cast<int>(cy2));
+         y < static_cast<int>(cy2 + ch2) && y < img.height();
+         ++y) {
       if (static_cast<int>(cx2) < img.width()) {
         const QColor c = img.pixelColor(static_cast<int>(cx2), y);
         if (c.red() < 100 && c.green() < 100 && c.blue() < 100) {
@@ -708,16 +750,16 @@ TEST(UiSmokeTest, FocusedInputDrawsCaret) {
   EXPECT_TRUE(saw_no_caret2);
 }
 
-TEST(UiSmokeTest, WheelFiresPageWheelEvent) {
+TEST(UiSmokeTest, WheelFiresPageWheelEvent)
+{
   TempProfile tp;
-  const std::string html =
-      "<html><head><title>W</title></head>"
-      "<body style=\"margin:0\"><div style=\"height:2000px\">tall</div>"
-      "<script>"
-      "document.body.onwheel = function(e){"
-      "  document.body.setAttribute('data-d', e.deltaY);"
-      "};"
-      "</script></body></html>";
+  const std::string html = "<html><head><title>W</title></head>"
+                           "<body style=\"margin:0\"><div style=\"height:2000px\">tall</div>"
+                           "<script>"
+                           "document.body.onwheel = function(e){"
+                           "  document.body.setAttribute('data-d', e.deltaY);"
+                           "};"
+                           "</script></body></html>";
   const std::string html_file = tp.path() + "/wheel.html";
   ASSERT_TRUE(neko::storage::WriteFileAtomic(html_file, html).has_value());
 
@@ -737,8 +779,14 @@ TEST(UiSmokeTest, WheelFiresPageWheelEvent) {
   view->Refresh();
 
   // One wheel notch: deltaY = the line step chosen by the view.
-  QWheelEvent wheel(QPointF(100, 100), QPointF(100, 100), QPoint(0, 0), QPoint(0, -120),
-                    Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, /*inverted=*/false);
+  QWheelEvent wheel(QPointF(100, 100),
+                    QPointF(100, 100),
+                    QPoint(0, 0),
+                    QPoint(0, -120),
+                    Qt::NoButton,
+                    Qt::NoModifier,
+                    Qt::NoScrollPhase,
+                    /*inverted=*/false);
   QApplication::sendEvent(view->viewport(), &wheel);
 
   // The page's onwheel handler observed a non-zero vertical delta.
@@ -753,17 +801,17 @@ TEST(UiSmokeTest, WheelFiresPageWheelEvent) {
   }));
 }
 
-TEST(UiSmokeTest, HoverOverElementFiresPageMouseOver) {
+TEST(UiSmokeTest, HoverOverElementFiresPageMouseOver)
+{
   TempProfile tp;
-  const std::string html =
-      "<html><head><title>H</title></head>"
-      "<body style=\"margin:0\">"
-      "<div id=\"box\" style=\"width:200px;height:80px\">hover me</div>"
-      "<script>"
-      "var box = document.getElementById('box');"
-      "box.onmouseover = function(){ box.setAttribute('data-h', '1'); };"
-      "box.onmouseout = function(){ box.setAttribute('data-h', '0'); };"
-      "</script></body></html>";
+  const std::string html = "<html><head><title>H</title></head>"
+                           "<body style=\"margin:0\">"
+                           "<div id=\"box\" style=\"width:200px;height:80px\">hover me</div>"
+                           "<script>"
+                           "var box = document.getElementById('box');"
+                           "box.onmouseover = function(){ box.setAttribute('data-h', '1'); };"
+                           "box.onmouseout = function(){ box.setAttribute('data-h', '0'); };"
+                           "</script></body></html>";
   const std::string html_file = tp.path() + "/hover.html";
   ASSERT_TRUE(neko::storage::WriteFileAtomic(html_file, html).has_value());
 
@@ -806,12 +854,11 @@ TEST(UiSmokeTest, HoverOverElementFiresPageMouseOver) {
   }));
 }
 
-
-TEST(UiSmokeTest, ClickLinkNavigates) {
+TEST(UiSmokeTest, ClickLinkNavigates)
+{
   TempProfile tp;
-  const std::string html =
-      "<html><head><title>Link</title></head>"
-      "<body style=\"margin:0\"><a href=\"/nav\" id=\"lk\">go</a></body>";
+  const std::string html = "<html><head><title>Link</title></head>"
+                           "<body style=\"margin:0\"><a href=\"/nav\" id=\"lk\">go</a></body>";
   const std::string html_file = tp.path() + "/link.html";
   ASSERT_TRUE(neko::storage::WriteFileAtomic(html_file, html).has_value());
 
@@ -836,8 +883,14 @@ TEST(UiSmokeTest, ClickLinkNavigates) {
   float y = 0;
   ASSERT_TRUE(FindElementRunPoint(*snap.page->layout_root(), link, x, y));
 
-  QTest::mousePress(view->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(static_cast<int>(x), static_cast<int>(y)));
-  QTest::mouseRelease(view->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(static_cast<int>(x), static_cast<int>(y)));
+  QTest::mousePress(view->viewport(),
+                    Qt::LeftButton,
+                    Qt::NoModifier,
+                    QPoint(static_cast<int>(x), static_cast<int>(y)));
+  QTest::mouseRelease(view->viewport(),
+                      Qt::LeftButton,
+                      Qt::NoModifier,
+                      QPoint(static_cast<int>(x), static_cast<int>(y)));
 
   // The default action navigates the link to /nav.
   ASSERT_TRUE(WaitFor([&] {
@@ -846,11 +899,11 @@ TEST(UiSmokeTest, ClickLinkNavigates) {
   }));
 }
 
-TEST(UiSmokeTest, HoverLinkShowsPointingHand) {
+TEST(UiSmokeTest, HoverLinkShowsPointingHand)
+{
   TempProfile tp;
-  const std::string html =
-      "<html><head><title>Hover</title></head>"
-      "<body style=\"margin:0\"><a href=\"/x\" id=\"lk\">go</a></body>";
+  const std::string html = "<html><head><title>Hover</title></head>"
+                           "<body style=\"margin:0\"><a href=\"/x\" id=\"lk\">go</a></body>";
   const std::string html_file = tp.path() + "/hover.html";
   ASSERT_TRUE(neko::storage::WriteFileAtomic(html_file, html).has_value());
 
@@ -884,4 +937,4 @@ TEST(UiSmokeTest, HoverLinkShowsPointingHand) {
   EXPECT_EQ(view->viewport()->cursor().shape(), Qt::ArrowCursor);
 }
 
-}  // namespace
+} // namespace

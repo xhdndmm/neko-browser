@@ -1,9 +1,9 @@
 #pragma once
 
+#include "neko/base/status.h"
+
 #include <string>
 #include <string_view>
-
-#include "neko/base/status.h"
 
 namespace neko::storage {
 
@@ -18,4 +18,4 @@ base::Result<void> CreateDirectory(std::string_view dir);
 // store behind.  The parent directory is created if needed.
 base::Result<void> WriteFileAtomic(std::string_view path, std::string_view content);
 
-}  // namespace neko::storage
+} // namespace neko::storage

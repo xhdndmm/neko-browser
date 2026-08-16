@@ -12,7 +12,8 @@ namespace neko::base {
 // ---------------------------------------------------------------------------
 // Error model
 // ---------------------------------------------------------------------------
-enum class ErrorCategory : int {
+enum class ErrorCategory : int
+{
   kNone = 0,
   kInvalidArgument,
   kOutOfMemory,
@@ -31,8 +32,9 @@ std::string_view ToString(ErrorCategory category);
 
 // A single, recoverable error.  Prefer the named factories (InvalidArgument(),
 // Io(), ...) so call sites read clearly.  See docs/design/errors.md.
-class Error {
- public:
+class Error
+{
+public:
   Error() = default;
   Error(ErrorCategory category, std::string message);
 
@@ -53,7 +55,7 @@ class Error {
   bool ok() const;
   explicit operator bool() const;
 
- private:
+private:
   ErrorCategory category_ = ErrorCategory::kNone;
   std::string message_;
 };
@@ -62,12 +64,13 @@ bool operator==(const Error& lhs, const Error& rhs);
 bool operator!=(const Error& lhs, const Error& rhs);
 
 // Thrown when .value() is called on a Result that holds an Error.
-class BadResultAccess : public std::runtime_error {
- public:
+class BadResultAccess : public std::runtime_error
+{
+public:
   explicit BadResultAccess(const Error& error);
   ErrorCategory category() const;
 
- private:
+private:
   ErrorCategory category_;
 };
 
@@ -82,9 +85,9 @@ class BadResultAccess : public std::runtime_error {
 //   Result<int> r = Parse("42");
 //   if (!r) { LOG(...); return r.error(); }
 //   int v = r.value();
-template <typename T>
-class [[nodiscard]] Result {
- public:
+template <typename T> class [[nodiscard]] Result
+{
+public:
   using ValueType = T;
 
   // Implicit conversions make `return 42;` / `return Error::Io(...)` natural.
@@ -93,37 +96,61 @@ class [[nodiscard]] Result {
   Result(Error error) : state_(std::in_place_index<1>, std::move(error)) {}
   // NOLINTEND(google-explicit-constructor)
 
-  static Result Ok(T value) { return Result(std::move(value)); }
-  static Result Err(Error error) { return Result(std::move(error)); }
+  static Result Ok(T value)
+  {
+    return Result(std::move(value));
+  }
+  static Result Err(Error error)
+  {
+    return Result(std::move(error));
+  }
 
-  bool has_value() const { return state_.index() == 0; }
-  explicit operator bool() const { return has_value(); }
+  bool has_value() const
+  {
+    return state_.index() == 0;
+  }
+  explicit operator bool() const
+  {
+    return has_value();
+  }
 
-  T& value() & {
+  T& value() &
+  {
     Check();
     return std::get<0>(state_);
   }
-  const T& value() const& {
+  const T& value() const&
+  {
     Check();
     return std::get<0>(state_);
   }
-  T&& value() && {
+  T&& value() &&
+  {
     Check();
     return std::move(std::get<0>(state_));
   }
 
-  const Error& error() const { return std::get<1>(state_); }
-  Error& error() { return std::get<1>(state_); }
+  const Error& error() const
+  {
+    return std::get<1>(state_);
+  }
+  Error& error()
+  {
+    return std::get<1>(state_);
+  }
 
-  T value_or(T fallback) const& {
+  T value_or(T fallback) const&
+  {
     return has_value() ? std::get<0>(state_) : std::move(fallback);
   }
-  T value_or(T fallback) && {
+  T value_or(T fallback) &&
+  {
     return has_value() ? std::move(std::get<0>(state_)) : std::move(fallback);
   }
 
- private:
-  void Check() const {
+private:
+  void Check() const
+  {
     if (!has_value()) {
       throw BadResultAccess(std::get<1>(state_));
     }
@@ -133,24 +160,46 @@ class [[nodiscard]] Result {
 };
 
 // Specialization for operations that produce no value.
-template <>
-class [[nodiscard]] Result<void> {
- public:
+template <> class [[nodiscard]] Result<void>
+{
+public:
   Result() = default;
-  Result(Error error) : error_(std::move(error)) {}  // NOLINT
+  Result(Error error) : error_(std::move(error)) {} // NOLINT
 
-  static Result Ok() { return Result(); }
-  static Result Err(Error error) { return Result(std::move(error)); }
+  static Result Ok()
+  {
+    return Result();
+  }
+  static Result Err(Error error)
+  {
+    return Result(std::move(error));
+  }
 
-  bool has_value() const { return error_.ok(); }
-  explicit operator bool() const { return has_value(); }
-  void value() const { Check(); }
+  bool has_value() const
+  {
+    return error_.ok();
+  }
+  explicit operator bool() const
+  {
+    return has_value();
+  }
+  void value() const
+  {
+    Check();
+  }
 
-  const Error& error() const { return error_; }
-  Error& error() { return error_; }
+  const Error& error() const
+  {
+    return error_;
+  }
+  Error& error()
+  {
+    return error_;
+  }
 
- private:
-  void Check() const {
+private:
+  void Check() const
+  {
     if (!has_value()) {
       throw BadResultAccess(error_);
     }
@@ -169,31 +218,41 @@ using Status = Result<void>;
 // ErrorResult is a lightweight carrier: `Err(e)` yields an ErrorResult which
 // implicitly converts to any Result<T> (including Result<void>), so it can be
 // returned from functions with any value type.
-class [[nodiscard]] ErrorResult {
- public:
-  explicit ErrorResult(Error error) : error_(std::move(error)) {}  // NOLINT
+class [[nodiscard]] ErrorResult
+{
+public:
+  explicit ErrorResult(Error error) : error_(std::move(error)) {} // NOLINT
 
-  template <typename T>
-  operator Result<T>() const {
+  template <typename T> operator Result<T>() const
+  {
     return Result<T>::Err(error_);
   }
 
-  operator Result<void>() const { return Result<void>::Err(error_); }  // NOLINT
+  operator Result<void>() const
+  {
+    return Result<void>::Err(error_);
+  } // NOLINT
 
- private:
+private:
   Error error_;
 };
 
-inline ErrorResult Err(Error error) { return ErrorResult(std::move(error)); }
+inline ErrorResult Err(Error error)
+{
+  return ErrorResult(std::move(error));
+}
 
-inline Result<void> Ok() { return Result<void>::Ok(); }
+inline Result<void> Ok()
+{
+  return Result<void>::Ok();
+}
 
-template <typename T>
-Result<T> Ok(T value) {
+template <typename T> Result<T> Ok(T value)
+{
   return Result<T>::Ok(std::move(value));
 }
 
-}  // namespace neko::base
+} // namespace neko::base
 
 // ---------------------------------------------------------------------------
 // NEKO_TRY
@@ -214,15 +273,15 @@ Result<T> Ok(T value) {
 #if defined(__GNUC__) || defined(__clang__)
 // __extension__ silences the -Wpedantic warning for the GNU statement
 // expression; GCC and Clang both support it.
-#define NEKO_TRY(expr)                                                        \
-  __extension__({                                                             \
-    auto&& neko_try_result_ = (expr);                                         \
-    if (!neko_try_result_.has_value()) {                                      \
-      return neko_try_result_.error();                                        \
-    }                                                                         \
-    std::forward<decltype(neko_try_result_)>(neko_try_result_).value();       \
+#define NEKO_TRY(expr)                                                                             \
+  __extension__({                                                                                  \
+    auto&& neko_try_result_ = (expr);                                                              \
+    if (!neko_try_result_.has_value()) {                                                           \
+      return neko_try_result_.error();                                                             \
+    }                                                                                              \
+    std::forward<decltype(neko_try_result_)>(neko_try_result_).value();                            \
   })
 #else
-#define NEKO_TRY(expr) \
+#define NEKO_TRY(expr)                                                                             \
   static_assert(false, "NEKO_TRY requires GNU statement expressions (GCC/Clang)")
 #endif

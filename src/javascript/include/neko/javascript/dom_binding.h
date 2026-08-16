@@ -226,14 +226,16 @@ public:
 
   // Dispatches a cancelable keyboard event (keydown/keyup) to |element| with
   // the UI Events key/code strings.  Returns true when NOT canceled.
-  bool DispatchKeyboardEvent(dom::Element& element, std::string_view type, std::string_view key,
+  bool DispatchKeyboardEvent(dom::Element& element,
+                             std::string_view type,
+                             std::string_view key,
                              std::string_view code);
 
   // Dispatches a cancelable pointer event (mousedown/mouseup/click) to
   // |element| with client coordinates and the mouse button.  Returns true
   // when NOT canceled.
-  bool DispatchMouseEvent(dom::Element& element, std::string_view type, double client_x,
-                          double client_y, int button);
+  bool DispatchMouseEvent(
+      dom::Element& element, std::string_view type, double client_x, double client_y, int button);
 
   // Dispatches a cancelable wheel event to |element| with the vertical scroll
   // delta (px).  Returns true when NOT canceled.

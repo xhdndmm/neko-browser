@@ -2,7 +2,8 @@
 
 namespace neko::base {
 
-std::string EncodeUtf8(char32_t code_point) {
+std::string EncodeUtf8(char32_t code_point)
+{
   if (code_point > 0x10FFFF || (code_point >= 0xD800 && code_point <= 0xDFFF)) {
     code_point = 0xFFFD;
   }
@@ -25,7 +26,8 @@ std::string EncodeUtf8(char32_t code_point) {
   return out;
 }
 
-bool DecodeUtf8Next(std::string_view input, std::size_t& pos, char32_t& out) {
+bool DecodeUtf8Next(std::string_view input, std::size_t& pos, char32_t& out)
+{
   if (pos >= input.size()) {
     return false;
   }
@@ -66,8 +68,7 @@ bool DecodeUtf8Next(std::string_view input, std::size_t& pos, char32_t& out) {
     code_point = (code_point << 6) | (b & 0x3F);
   }
   // Overlong encodings and surrogates are malformed.
-  const bool overlong = (extra == 1 && code_point < 0x80) ||
-                        (extra == 2 && code_point < 0x800) ||
+  const bool overlong = (extra == 1 && code_point < 0x80) || (extra == 2 && code_point < 0x800) ||
                         (extra == 3 && code_point < 0x10000);
   if (overlong || code_point > 0x10FFFF || (code_point >= 0xD800 && code_point <= 0xDFFF)) {
     out = 0xFFFD;
@@ -79,4 +80,4 @@ bool DecodeUtf8Next(std::string_view input, std::size_t& pos, char32_t& out) {
   return true;
 }
 
-}  // namespace neko::base
+} // namespace neko::base

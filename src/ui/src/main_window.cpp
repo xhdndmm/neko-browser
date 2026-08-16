@@ -687,8 +687,8 @@ void MainWindow::PopulateDomTree(QTreeWidget* tree)
     // dereferencing freed memory.
     if (node->node_type() == dom::NodeType::kElement) {
       item->setData(0, Qt::UserRole, QVariant::fromValue(static_cast<const void*>(node)));
-      item->setData(0, Qt::UserRole + 1,
-                    QVariant::fromValue(static_cast<const void*>(tab.page.get())));
+      item->setData(
+          0, Qt::UserRole + 1, QVariant::fromValue(static_cast<const void*>(tab.page.get())));
     }
     if (parent == nullptr) {
       tree->addTopLevelItem(item);

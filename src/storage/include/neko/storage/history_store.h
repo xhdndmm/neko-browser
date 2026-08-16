@@ -1,20 +1,21 @@
 #pragma once
 
+#include "neko/base/status.h"
+
 #include <cstdint>
 #include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include "neko/base/status.h"
-
 namespace neko::storage {
 
 // One entry in the browsing history.
-struct HistoryEntry {
+struct HistoryEntry
+{
   std::string url;
   std::string title;
-  int64_t last_visit = 0;   // unix seconds
+  int64_t last_visit = 0; // unix seconds
   int64_t visit_count = 1;
 };
 
@@ -26,8 +27,9 @@ struct HistoryEntry {
 //
 // Threading: internally synchronized — every public method guards its
 // mutation/read with |mutex_|; the GUI thread reads copies through All().
-class HistoryStore {
- public:
+class HistoryStore
+{
+public:
   explicit HistoryStore(std::string profile_dir);
   ~HistoryStore() = default;
 
@@ -50,18 +52,23 @@ class HistoryStore {
   bool Remove(std::string_view url);
 
   void Clear();
-  size_t size() const {
+  size_t size() const
+  {
     std::lock_guard<std::mutex> lock(mutex_);
     return entries_.size();
   }
-  bool empty() const {
+  bool empty() const
+  {
     std::lock_guard<std::mutex> lock(mutex_);
     return entries_.empty();
   }
 
-  const std::string& profile_dir() const { return profile_dir_; }
+  const std::string& profile_dir() const
+  {
+    return profile_dir_;
+  }
 
- private:
+private:
   // All entries sorted by last_visit, with |mutex_| already held.
   std::vector<HistoryEntry> AllLocked() const;
 
@@ -71,4 +78,4 @@ class HistoryStore {
   std::vector<HistoryEntry> entries_;
 };
 
-}  // namespace neko::storage
+} // namespace neko::storage

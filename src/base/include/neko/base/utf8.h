@@ -1,7 +1,7 @@
 #pragma once
 
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -21,4 +21,4 @@ std::string EncodeUtf8(char32_t code_point);
 // only when |pos| was already at the end of |input|.
 bool DecodeUtf8Next(std::string_view input, std::size_t& pos, char32_t& out);
 
-}  // namespace neko::base
+} // namespace neko::base

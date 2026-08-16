@@ -6,7 +6,8 @@
 
 namespace neko::graphics {
 
-void DecodeUtf8(std::string_view text, std::vector<uint32_t>& out) {
+void DecodeUtf8(std::string_view text, std::vector<uint32_t>& out)
+{
   std::size_t i = 0;
   while (i < text.size()) {
     const unsigned char lead = static_cast<unsigned char>(text[i]);
@@ -52,4 +53,4 @@ void DecodeUtf8(std::string_view text, std::vector<uint32_t>& out) {
   }
 }
 
-}  // namespace neko::graphics
+} // namespace neko::graphics

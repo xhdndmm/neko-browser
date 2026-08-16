@@ -9,15 +9,23 @@
 namespace neko::dom {
 namespace {
 
-bool IsNameStart(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'; }
+bool IsNameStart(char c)
+{
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+}
 
-bool IsNameChar(char c) {
+bool IsNameChar(char c)
+{
   return IsNameStart(c) || (c >= '0' && c <= '9') || c == '-';
 }
 
-bool IsWhitespace(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
+bool IsWhitespace(char c)
+{
+  return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
 
-std::string ToLower(std::string_view s) {
+std::string ToLower(std::string_view s)
+{
   std::string out;
   out.reserve(s.size());
   for (const char c : s) {
@@ -26,21 +34,28 @@ std::string ToLower(std::string_view s) {
   return out;
 }
 
-struct Compound {
-  std::optional<std::string> tag;  // lowercased
+struct Compound
+{
+  std::optional<std::string> tag; // lowercased
   std::optional<std::string> id;
   std::vector<std::string> classes;
 };
 
-enum class Combinator { kDescendant, kChild };
+enum class Combinator
+{
+  kDescendant,
+  kChild
+};
 
-struct SelectorChain {
+struct SelectorChain
+{
   std::vector<Compound> compounds;
-  std::vector<Combinator> combinators;  // size == compounds.size() - 1
+  std::vector<Combinator> combinators; // size == compounds.size() - 1
 };
 
 // Parses a single compound selector like "div#main.a.b".
-bool ParseCompound(std::string_view text, Compound& out) {
+bool ParseCompound(std::string_view text, Compound& out)
+{
   std::size_t i = 0;
   while (i < text.size()) {
     const char c = text[i];
@@ -84,7 +99,8 @@ bool ParseCompound(std::string_view text, Compound& out) {
 }
 
 // Parses a full selector chain ("div > p .note").
-bool ParseSelector(std::string_view selector, SelectorChain& chain) {
+bool ParseSelector(std::string_view selector, SelectorChain& chain)
+{
   std::size_t i = 0;
   for (;;) {
     while (i < selector.size() && IsWhitespace(selector[i])) {
@@ -116,11 +132,11 @@ bool ParseSelector(std::string_view selector, SelectorChain& chain) {
       chain.combinators.push_back(Combinator::kDescendant);
     }
   }
-  return !chain.compounds.empty() &&
-         chain.combinators.size() == chain.compounds.size() - 1;
+  return !chain.compounds.empty() && chain.combinators.size() == chain.compounds.size() - 1;
 }
 
-bool CompoundMatches(const Element& element, const Compound& compound) {
+bool CompoundMatches(const Element& element, const Compound& compound)
+{
   if (compound.tag.has_value() && *compound.tag != element.tag_name()) {
     return false;
   }
@@ -143,7 +159,8 @@ bool CompoundMatches(const Element& element, const Compound& compound) {
 
 // Matches the element against compound |index| (walking backwards through the
 // chain for combinators).
-bool MatchOnElement(const Element& element, const SelectorChain& chain, std::size_t index) {
+bool MatchOnElement(const Element& element, const SelectorChain& chain, std::size_t index)
+{
   if (!CompoundMatches(element, chain.compounds[index])) {
     return false;
   }
@@ -168,7 +185,8 @@ bool MatchOnElement(const Element& element, const SelectorChain& chain, std::siz
   return false;
 }
 
-void CollectMatches(Node& node, const SelectorChain& chain, std::vector<Element*>& out) {
+void CollectMatches(Node& node, const SelectorChain& chain, std::vector<Element*>& out)
+{
   for (Node* child : node.ChildNodes()) {
     if (child->node_type() != NodeType::kElement) {
       continue;
@@ -181,14 +199,16 @@ void CollectMatches(Node& node, const SelectorChain& chain, std::vector<Element*
   }
 }
 
-}  // namespace
+} // namespace
 
-bool MatchesCompoundSelector(const Element& element, std::string_view selector) {
+bool MatchesCompoundSelector(const Element& element, std::string_view selector)
+{
   Compound compound;
   return ParseCompound(selector, compound) && CompoundMatches(element, compound);
 }
 
-Element* QuerySelector(Node& root, std::string_view selector) {
+Element* QuerySelector(Node& root, std::string_view selector)
+{
   SelectorChain chain;
   if (!ParseSelector(selector, chain)) {
     return nullptr;
@@ -205,7 +225,8 @@ Element* QuerySelector(Node& root, std::string_view selector) {
   return matches.empty() ? nullptr : matches.front();
 }
 
-std::vector<Element*> QuerySelectorAll(Node& root, std::string_view selector) {
+std::vector<Element*> QuerySelectorAll(Node& root, std::string_view selector)
+{
   std::vector<Element*> matches;
   SelectorChain chain;
   if (!ParseSelector(selector, chain)) {
@@ -221,4 +242,4 @@ std::vector<Element*> QuerySelectorAll(Node& root, std::string_view selector) {
   return matches;
 }
 
-}  // namespace neko::dom
+} // namespace neko::dom

@@ -41,4 +41,4 @@ std::string Join(const std::vector<std::string_view>& parts, std::string_view se
 // Replaces every non-overlapping occurrence of |from| with |to|.
 std::string ReplaceAll(std::string_view text, std::string_view from, std::string_view to);
 
-}  // namespace neko::base
+} // namespace neko::base

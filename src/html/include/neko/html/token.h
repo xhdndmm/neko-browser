@@ -6,7 +6,8 @@
 
 namespace neko::html {
 
-enum class TokenType {
+enum class TokenType
+{
   kDoctype,
   kStartTag,
   kEndTag,
@@ -15,8 +16,9 @@ enum class TokenType {
   kEOF,
 };
 
-struct Attribute {
-  std::string name;  // lowercased
+struct Attribute
+{
+  std::string name; // lowercased
   std::string value;
 };
 
@@ -24,7 +26,8 @@ struct Attribute {
 //
 // Plain struct with public fields: the tokenizer/parser pair is the only
 // consumer, so accessor boilerplate is deliberately avoided.
-struct Token {
+struct Token
+{
   TokenType type = TokenType::kEOF;
 
   // Start/end tag and doctype name (lowercased for tags).
@@ -41,8 +44,7 @@ struct Token {
   bool force_quirks = false;
 
   static Token MakeDoctype(std::string name, bool force_quirks);
-  static Token MakeStartTag(std::string name, std::vector<Attribute> attributes,
-                            bool self_closing);
+  static Token MakeStartTag(std::string name, std::vector<Attribute> attributes, bool self_closing);
   static Token MakeEndTag(std::string name);
   static Token MakeComment(std::string data);
   static Token MakeCharacter(std::string data);
@@ -58,4 +60,4 @@ bool IsAsciiAlnum(char c);
 // Lowercases an ASCII string.
 std::string ToLowerAscii(std::string_view s);
 
-}  // namespace neko::html
+} // namespace neko::html

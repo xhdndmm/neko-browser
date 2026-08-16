@@ -84,8 +84,7 @@ public:
   // Dispatches a wheel event (vertical delta px) to the page's script runtime.
   void DispatchWheel(int tab_id, double delta_y);
   // Dispatches a keyboard event (keydown/keyup) to the page's script runtime.
-  void DispatchKeyboard(int tab_id, const QString& type, const QString& key,
-                        const QString& code);
+  void DispatchKeyboard(int tab_id, const QString& type, const QString& key, const QString& code);
   void NewTab(const QString& url, bool activate);
   void CloseTab(int id);
   void ActivateTab(int id);

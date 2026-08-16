@@ -66,9 +66,7 @@ base::Result<Socket> Socket::Connect(std::string_view host, uint16_t port, int t
   (void)timeout_ms;
   return base::Err(base::Error::NotImplemented("Windows sockets are not implemented yet"));
 #else
-  struct addrinfo hints
-  {
-  };
+  struct addrinfo hints{};
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
   struct addrinfo* results = nullptr;
@@ -93,10 +91,7 @@ base::Result<Socket> Socket::Connect(std::string_view host, uint16_t port, int t
     if (c == 0) {
       connected = true;
     } else if (errno == EINPROGRESS) {
-      struct pollfd pfd
-      {
-        fd, static_cast<short>(POLLOUT), 0
-      };
+      struct pollfd pfd{fd, static_cast<short>(POLLOUT), 0};
       const int pr = ::poll(&pfd, 1, timeout_ms);
       if (pr > 0) {
         int so_error = 0;
@@ -151,10 +146,7 @@ base::Result<std::string> Socket::Receive(std::size_t max_bytes, int timeout_ms)
   std::string out;
   char buffer[16384];
   while (out.size() < max_bytes) {
-    struct pollfd pfd
-    {
-      fd_, static_cast<short>(POLLIN), 0
-    };
+    struct pollfd pfd{fd_, static_cast<short>(POLLIN), 0};
     const int pr = ::poll(&pfd, 1, timeout_ms);
     if (pr == 0) {
       return out; // timeout: hand back what we have

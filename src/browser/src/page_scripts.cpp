@@ -59,8 +59,8 @@ std::map<std::string, std::string> SerializeComputedStyle(const style::ComputedS
   out["border-right-width"] = style::ToString(s.border_right);
   out["border-bottom-width"] = style::ToString(s.border_bottom);
   out["border-left-width"] = style::ToString(s.border_left);
-  out["font-size"] = style::ToString(style::SizeSpec{
-      static_cast<float>(s.font_size), false, false, {}, false, false, false, {}});
+  out["font-size"] = style::ToString(
+      style::SizeSpec{static_cast<float>(s.font_size), false, false, {}, false, false, false, {}});
   out["font-family"] = s.font_family;
   out["font-weight"] = std::to_string(s.font_weight);
   out["line-height"] = std::to_string(s.line_height);
@@ -204,7 +204,8 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
 
   // Element layout geometry (getBoundingClientRect / offsetWidth etc): the
   // union of the element's laid-out border box and inline fragments.
-  apis.element_geometry = [&page](const dom::Element& element) -> std::optional<javascript::ElementGeometry> {
+  apis.element_geometry =
+      [&page](const dom::Element& element) -> std::optional<javascript::ElementGeometry> {
     const std::optional<renderer::ElementGeometry> g = page.ElementBoxGeometry(element);
     if (!g.has_value()) {
       return std::nullopt;

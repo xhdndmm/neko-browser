@@ -10,16 +10,17 @@ namespace neko::paint {
 // Painting order: box background, border, inline text runs, then block
 // children (back to front).  Only solid colors are emitted; images and other
 // content types are not supported yet.
-class Painter {
- public:
+class Painter
+{
+public:
   explicit Painter(const layout::LayoutBox* root) : root_(root) {}
 
   DisplayList Paint() const;
 
- private:
+private:
   void PaintBox(const layout::LayoutBox& box, DisplayList& list) const;
 
   const layout::LayoutBox* root_;
 };
 
-}  // namespace neko::paint
+} // namespace neko::paint

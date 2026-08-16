@@ -23,19 +23,35 @@ class WebView;
 // The main browser window: toolbar + tabs + content view, plus DevTools,
 // History, Bookmarks, Downloads and Settings docks.  It talks only to
 // BrowserWorker (which owns the BrowserController).
-class MainWindow : public QMainWindow {
+class MainWindow : public QMainWindow
+{
   Q_OBJECT
- public:
+public:
   explicit MainWindow(BrowserWorker* worker, QWidget* parent = nullptr);
 
   // Test/automation accessors.
-  QTabBar* TabBarWidget() const { return tab_bar_; }
-  QLineEdit* AddressBar() const { return address_; }
-  QLineEdit* ConsoleInput() const { return console_input_; }
-  QPlainTextEdit* ConsoleView() const { return js_console_view_; }
-  qsizetype viewCount() const { return views_.size(); }
+  QTabBar* TabBarWidget() const
+  {
+    return tab_bar_;
+  }
+  QLineEdit* AddressBar() const
+  {
+    return address_;
+  }
+  QLineEdit* ConsoleInput() const
+  {
+    return console_input_;
+  }
+  QPlainTextEdit* ConsoleView() const
+  {
+    return js_console_view_;
+  }
+  qsizetype viewCount() const
+  {
+    return views_.size();
+  }
 
- private slots:
+private slots:
   void OnStateChanged();
   void OnNavigateRequested();
   void OnAddressEdited();
@@ -50,7 +66,7 @@ class MainWindow : public QMainWindow {
   void OnConsoleCommand();
   void OnDomSelectionChanged();
 
- private:
+private:
   void BuildUi();
   void BuildToolbar();
   void BuildDocks();
@@ -73,7 +89,7 @@ class MainWindow : public QMainWindow {
   QTabBar* tab_bar_ = nullptr;
   QStackedWidget* pages_ = nullptr;
   QVector<WebView*> views_;
-  QVector<int> view_ids_;  // tab id for each view, in order
+  QVector<int> view_ids_; // tab id for each view, in order
   QLineEdit* address_ = nullptr;
   // True while the user is editing the address bar; RefreshAll() then leaves
   // the text alone instead of clobbering it with the tab's URL.
@@ -84,11 +100,11 @@ class MainWindow : public QMainWindow {
 
   // Docks.
   QTreeWidget* dom_tree_ = nullptr;
-  QTreeWidget* style_tree_ = nullptr;   // computed style of the selected node
+  QTreeWidget* style_tree_ = nullptr; // computed style of the selected node
   QListWidget* network_list_ = nullptr;
-  QListWidget* cookie_list_ = nullptr;  // cookies of the active page
-  QPlainTextEdit* console_view_ = nullptr;   // engine DevTools console log
-  QPlainTextEdit* js_console_view_ = nullptr;  // JS REPL output (not cleared)
+  QListWidget* cookie_list_ = nullptr;        // cookies of the active page
+  QPlainTextEdit* console_view_ = nullptr;    // engine DevTools console log
+  QPlainTextEdit* js_console_view_ = nullptr; // JS REPL output (not cleared)
   QLineEdit* console_input_ = nullptr;
   QListWidget* history_list_ = nullptr;
   QListWidget* bookmark_list_ = nullptr;
@@ -97,4 +113,4 @@ class MainWindow : public QMainWindow {
   QLabel* settings_counts_ = nullptr;
 };
 
-}  // namespace neko::ui
+} // namespace neko::ui

@@ -1038,19 +1038,17 @@ TEST(SvgTest, PathDataDoesNotHangOnUnrecognizedChar)
 {
   // A '#' in the path data is consumed by neither the argument parser nor the
   // command switch; it must not spin forever.
-  const std::string svg =
-      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">"
-      "<path d=\"M0 0 #\"/></svg>";
+  const std::string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">"
+                          "<path d=\"M0 0 #\"/></svg>";
   const auto r = DecodeSvg(svg);
-  EXPECT_TRUE(r.has_value());  // tolerated, no hang
+  EXPECT_TRUE(r.has_value()); // tolerated, no hang
 }
 
 TEST(SvgTest, PathDataMissingArgumentsDoesNotOverrun)
 {
   // d=\"M\" has no coordinates; reading args[1] must not overrun the vector.
-  const std::string svg =
-      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">"
-      "<path d=\"M\"/></svg>";
+  const std::string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">"
+                          "<path d=\"M\"/></svg>";
   const auto r = DecodeSvg(svg);
   EXPECT_TRUE(r.has_value());
 }
@@ -1061,8 +1059,9 @@ TEST(SvgTest, NonFiniteDimensionsAreRejected)
   // allocation / int conversion.
   EXPECT_FALSE(DecodeSvg("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"NaN\" height=\"10\"/>")
                    .has_value());
-  EXPECT_FALSE(DecodeSvg("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"Infinity\"/>")
-                   .has_value());
+  EXPECT_FALSE(
+      DecodeSvg("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"Infinity\"/>")
+          .has_value());
 }
 
 TEST(WebpTest, DecodesSolidColors)
@@ -1082,7 +1081,8 @@ TEST(WebpTest, DecodesSolidColors)
   EXPECT_EQ(img.width, 2);
   EXPECT_EQ(img.height, 2);
   // Lossless WebP (VP8L): the solid colors decode exactly.
-  ExpectPixels(img, {255, 0, 0, 255, 0, 0, 255, 255, 0, 255, 0, 255, 255, 255, 0, 255},
+  ExpectPixels(img,
+               {255, 0, 0, 255, 0, 0, 255, 255, 0, 255, 0, 255, 255, 255, 0, 255},
                /*tolerance=*/0);
 }
 

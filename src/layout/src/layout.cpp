@@ -1194,8 +1194,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         box->padding_top = box->padding_bottom = 2;
       }
 
-      const float border_padding_w = box->border_left + box->border_right + box->padding_left +
-                                     box->padding_right;
+      const float border_padding_w =
+          box->border_left + box->border_right + box->padding_left + box->padding_right;
       float content_width = 0;
       if (box->style.width.has_value() && !box->style.width.value().percent &&
           !box->style.width.value().is_calc && !box->style.width.value().is_extremum) {
@@ -1206,8 +1206,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       box->width = content_width + border_padding_w;
 
       const float line_h = std::max(1.0f, box->style.font_size * 1.2f);
-      box->height = line_h + box->padding_top + box->padding_bottom + box->border_top +
-                    box->border_bottom;
+      box->height =
+          line_h + box->padding_top + box->padding_bottom + box->border_top + box->border_bottom;
       box->x = box->margin_left;
       box->y = box->margin_top;
 
@@ -1248,10 +1248,9 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         // offset is included), matching how the painter draws runs.
         run.x = box->x + box->border_left + box->padding_left;
         run.y = box->y + box->border_top + box->padding_top;
-        run.color = is_placeholder ? css::Color{160, 160, 160, 255}
-                                   : css::Color{0, 0, 0, 255};
-        run.width = MeasureTextWidth(registry, run.font_family, run.font_weight, run.font_italic,
-                                     run.text, run.font_size);
+        run.color = is_placeholder ? css::Color{160, 160, 160, 255} : css::Color{0, 0, 0, 255};
+        run.width = MeasureTextWidth(
+            registry, run.font_family, run.font_weight, run.font_italic, run.text, run.font_size);
         run.element = &element;
         Line line;
         line.height = line_h;
@@ -1645,20 +1644,18 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       // min/max-width clamp (CSS 2.2 §10.4); min wins over max.  The clamps
       // constrain the same box as the width (content-box or border-box).
       if (box->style.min_width.has_value()) {
-        content_width = std::max(
-            content_width,
-            SpecToContent(box->style.min_width.value(),
-                          containing_width,
-                          border_padding_w,
-                          box->style.box_sizing));
+        content_width = std::max(content_width,
+                                 SpecToContent(box->style.min_width.value(),
+                                               containing_width,
+                                               border_padding_w,
+                                               box->style.box_sizing));
       }
       if (box->style.max_width.has_value()) {
-        content_width = std::min(
-            content_width,
-            SpecToContent(box->style.max_width.value(),
-                          containing_width,
-                          border_padding_w,
-                          box->style.box_sizing));
+        content_width = std::min(content_width,
+                                 SpecToContent(box->style.max_width.value(),
+                                               containing_width,
+                                               border_padding_w,
+                                               box->style.box_sizing));
       }
       box->width = content_width + border_padding_w;
 

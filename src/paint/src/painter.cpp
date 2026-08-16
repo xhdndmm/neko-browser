@@ -117,12 +117,8 @@ void Painter::PaintBox(const layout::LayoutBox& box, DisplayList& list) const
     // the image filling the box without distortion.
     if (!box.background_image_url.empty() && box.background_image != nullptr &&
         !box.background_image->empty()) {
-      list.DrawImage(box.x,
-                     box.y,
-                     box.width,
-                     box.height,
-                     *box.background_image,
-                     style::ObjectFit::kCover);
+      list.DrawImage(
+          box.x, box.y, box.width, box.height, *box.background_image, style::ObjectFit::kCover);
     }
 
     // Border.

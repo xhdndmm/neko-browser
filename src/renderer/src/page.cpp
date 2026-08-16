@@ -18,8 +18,7 @@ namespace {
 
 // Depth-first search for the first layout box owned by |target| (block-level
 // boxes and atomic inline boxes carry the element's own geometry).
-const layout::LayoutBox* FindElementBox(const layout::LayoutBox& box,
-                                        const dom::Element* target)
+const layout::LayoutBox* FindElementBox(const layout::LayoutBox& box, const dom::Element* target)
 {
   if (box.element == target) {
     return &box;
@@ -81,9 +80,8 @@ bool CollectFragmentRect(const layout::LayoutBox& box,
   for (const layout::Line& line : box.lines) {
     for (const layout::TextRun& run : line.runs) {
       if (run.element == target) {
-        const float w = run.width > 0
-                            ? run.width
-                            : static_cast<float>(run.text.size()) * run.font_size;
+        const float w =
+            run.width > 0 ? run.width : static_cast<float>(run.text.size()) * run.font_size;
         add(run.x, run.y, w, run.font_size);
       }
     }

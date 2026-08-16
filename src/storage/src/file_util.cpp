@@ -1,10 +1,10 @@
 #include "neko/storage/file_util.h"
 
+#include "neko/base/logging.h"
+
 #include <cstdio>
 #include <cstring>
 #include <string>
-
-#include "neko/base/logging.h"
 
 #if defined(_WIN32)
 #include <direct.h>
@@ -21,14 +21,17 @@ namespace neko::storage {
 namespace {
 
 // Recursively creates |dir|.  Empty string or "." succeeds trivially.
-base::Result<void> MkdirAll(const std::string& dir) {
-  if (dir.empty() || dir == "." || dir == "/") return base::Error();
+base::Result<void> MkdirAll(const std::string& dir)
+{
+  if (dir.empty() || dir == "." || dir == "/")
+    return base::Error();
   // Create the parent first.
   const size_t slash = dir.find_last_of("/\\");
   if (slash != std::string::npos && slash > 0) {
     const std::string parent = dir.substr(0, slash);
     auto r = MkdirAll(parent);
-    if (!r) return r;
+    if (!r)
+      return r;
   }
 #if defined(_WIN32)
   if (_mkdir(dir.c_str()) != 0 && errno != EEXIST) {
@@ -42,9 +45,10 @@ base::Result<void> MkdirAll(const std::string& dir) {
   return base::Error();
 }
 
-}  // namespace
+} // namespace
 
-base::Result<std::string> ReadFile(std::string_view path) {
+base::Result<std::string> ReadFile(std::string_view path)
+{
   FILE* f = std::fopen(std::string(path).c_str(), "rb");
   if (f == nullptr) {
     return base::Error::Io("cannot open '" + std::string(path) + "' for reading");
@@ -63,16 +67,19 @@ base::Result<std::string> ReadFile(std::string_view path) {
   return data;
 }
 
-base::Result<void> CreateDirectory(std::string_view dir) {
+base::Result<void> CreateDirectory(std::string_view dir)
+{
   return MkdirAll(std::string(dir));
 }
 
-base::Result<void> WriteFileAtomic(std::string_view path, std::string_view content) {
+base::Result<void> WriteFileAtomic(std::string_view path, std::string_view content)
+{
   const std::string path_str(path);
   const size_t slash = path_str.find_last_of("/\\");
   if (slash != std::string::npos && slash > 0) {
     auto r = MkdirAll(path_str.substr(0, slash));
-    if (!r) return r;
+    if (!r)
+      return r;
   }
 
 #if defined(_WIN32)
@@ -89,8 +96,8 @@ base::Result<void> WriteFileAtomic(std::string_view path, std::string_view conte
     std::remove(tmp.c_str());
     return base::Error::Io("failed writing '" + tmp + "'");
   }
-  if (!MoveFileExA(tmp.c_str(), path_str.c_str(),
-                   MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+  if (!MoveFileExA(
+          tmp.c_str(), path_str.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
     std::remove(tmp.c_str());
     return base::Error::Io("rename failed for '" + path_str + "'");
   }
@@ -100,19 +107,19 @@ base::Result<void> WriteFileAtomic(std::string_view path, std::string_view conte
   // parent directory, and rename into place.  fsync before rename makes the
   // replace durable across power loss.
   static unsigned int counter = 0;
-  const std::string tmp = path_str + ".tmp." + std::to_string(::getpid()) + "." +
-                          std::to_string(counter++);
+  const std::string tmp =
+      path_str + ".tmp." + std::to_string(::getpid()) + "." + std::to_string(counter++);
   const int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
   if (fd < 0) {
-    return base::Error::Io("cannot open '" + tmp + "' for writing: " +
-                           std::strerror(errno));
+    return base::Error::Io("cannot open '" + tmp + "' for writing: " + std::strerror(errno));
   }
   bool ok = true;
   size_t written = 0;
   while (written < content.size()) {
     const ssize_t n = ::write(fd, content.data() + written, content.size() - written);
     if (n < 0) {
-      if (errno == EINTR) continue;
+      if (errno == EINTR)
+        continue;
       ok = false;
       break;
     }
@@ -130,8 +137,7 @@ base::Result<void> WriteFileAtomic(std::string_view path, std::string_view conte
   }
   if (::rename(tmp.c_str(), path_str.c_str()) != 0) {
     ::unlink(tmp.c_str());
-    return base::Error::Io("rename failed for '" + path_str + "': " +
-                           std::strerror(errno));
+    return base::Error::Io("rename failed for '" + path_str + "': " + std::strerror(errno));
   }
   // Persist the directory entry (rename durability).
   const size_t dslash = path_str.find_last_of('/');
@@ -145,4 +151,4 @@ base::Result<void> WriteFileAtomic(std::string_view path, std::string_view conte
   return base::Error();
 }
 
-}  // namespace neko::storage
+} // namespace neko::storage

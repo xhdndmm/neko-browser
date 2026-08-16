@@ -186,7 +186,9 @@ private:
 // Stops with false once |max_output| bytes would be emitted, so a crafted
 // stream cannot balloon memory before the caller validates the length.
 // Returns false on any malformed input.
-bool LzwDecompress(const std::vector<uint8_t>& data, int min_code_size, std::size_t max_output,
+bool LzwDecompress(const std::vector<uint8_t>& data,
+                   int min_code_size,
+                   std::size_t max_output,
                    std::vector<uint8_t>& out)
 {
   if (min_code_size < 2 || min_code_size > 8) {

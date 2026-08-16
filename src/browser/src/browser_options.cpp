@@ -6,7 +6,8 @@
 
 namespace neko::browser {
 
-std::string UsageText() {
+std::string UsageText()
+{
   return "Usage: neko-browser [options] [url]\n"
          "\n"
          "A from-scratch, cross-platform browser engine (Phase 0 bootstrap).\n"
@@ -36,7 +37,8 @@ std::string UsageText() {
          "software rendering are implemented; the GUI is not yet available.\n";
 }
 
-ParseResult ParseCommandLine(int argc, char** argv) {
+ParseResult ParseCommandLine(int argc, char** argv)
+{
   ParseResult result;
   const std::vector<std::string_view> args(argv + 1, argv + argc);
 
@@ -208,4 +210,4 @@ ParseResult ParseCommandLine(int argc, char** argv) {
   return result;
 }
 
-}  // namespace neko::browser
+} // namespace neko::browser

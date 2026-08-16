@@ -1294,7 +1294,8 @@ TEST(DomBinderGeometryTest, GeometryGettersUseCallback)
   </body></html>)")
                       .Parse();
   javascript::PageApis apis;
-  apis.element_geometry = [](const dom::Element& element) -> std::optional<javascript::ElementGeometry> {
+  apis.element_geometry =
+      [](const dom::Element& element) -> std::optional<javascript::ElementGeometry> {
     const std::string id = std::string(element.GetAttribute("id").value_or(""));
     if (id == "box") {
       javascript::ElementGeometry g;
@@ -1374,13 +1375,15 @@ TEST(DomBinderGeometryTest, GeometryGettersUseCallback)
 TEST_F(DomBinderTest, InsertAdjacentHTML)
 {
   // beforeend: append as the last child.
-  EvalString("document.getElementById('main').insertAdjacentHTML('beforeend','<span id=\"x\">X</span>');");
+  EvalString(
+      "document.getElementById('main').insertAdjacentHTML('beforeend','<span id=\"x\">X</span>');");
   ASSERT_TRUE(EvalBool("document.getElementById('x')!==null"));
   EXPECT_EQ(EvalString("document.getElementById('x').tagName"), "SPAN");
   EXPECT_EQ(EvalString("document.getElementById('x').textContent"), "X");
 
   // afterbegin: insert as the first child.
-  EvalString("document.getElementById('main').insertAdjacentHTML('afterbegin','<span id=\"y\">Y</span>');");
+  EvalString("document.getElementById('main').insertAdjacentHTML('afterbegin','<span "
+             "id=\"y\">Y</span>');");
   ASSERT_TRUE(EvalBool("document.getElementById('y')!==null"));
   EXPECT_EQ(EvalString("document.getElementById('main').firstChild.id"), "y");
 

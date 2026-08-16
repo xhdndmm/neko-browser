@@ -120,21 +120,64 @@ bool QtKeyToDomKey(int qkey, std::string& key, std::string& code)
   }
   switch (qkey) {
   case Qt::Key_Return:
-  case Qt::Key_Enter: key = "Enter"; code = "Enter"; return true;
-  case Qt::Key_Backspace: key = "Backspace"; code = "Backspace"; return true;
-  case Qt::Key_Space: key = " "; code = "Space"; return true;
-  case Qt::Key_Escape: key = "Escape"; code = "Escape"; return true;
-  case Qt::Key_Tab: key = "Tab"; code = "Tab"; return true;
-  case Qt::Key_Delete: key = "Delete"; code = "Delete"; return true;
-  case Qt::Key_Up: key = "ArrowUp"; code = "ArrowUp"; return true;
-  case Qt::Key_Down: key = "ArrowDown"; code = "ArrowDown"; return true;
-  case Qt::Key_Left: key = "ArrowLeft"; code = "ArrowLeft"; return true;
-  case Qt::Key_Right: key = "ArrowRight"; code = "ArrowRight"; return true;
-  case Qt::Key_Home: key = "Home"; code = "Home"; return true;
-  case Qt::Key_End: key = "End"; code = "End"; return true;
-  case Qt::Key_PageUp: key = "PageUp"; code = "PageUp"; return true;
-  case Qt::Key_PageDown: key = "PageDown"; code = "PageDown"; return true;
-  default: return false;
+  case Qt::Key_Enter:
+    key = "Enter";
+    code = "Enter";
+    return true;
+  case Qt::Key_Backspace:
+    key = "Backspace";
+    code = "Backspace";
+    return true;
+  case Qt::Key_Space:
+    key = " ";
+    code = "Space";
+    return true;
+  case Qt::Key_Escape:
+    key = "Escape";
+    code = "Escape";
+    return true;
+  case Qt::Key_Tab:
+    key = "Tab";
+    code = "Tab";
+    return true;
+  case Qt::Key_Delete:
+    key = "Delete";
+    code = "Delete";
+    return true;
+  case Qt::Key_Up:
+    key = "ArrowUp";
+    code = "ArrowUp";
+    return true;
+  case Qt::Key_Down:
+    key = "ArrowDown";
+    code = "ArrowDown";
+    return true;
+  case Qt::Key_Left:
+    key = "ArrowLeft";
+    code = "ArrowLeft";
+    return true;
+  case Qt::Key_Right:
+    key = "ArrowRight";
+    code = "ArrowRight";
+    return true;
+  case Qt::Key_Home:
+    key = "Home";
+    code = "Home";
+    return true;
+  case Qt::Key_End:
+    key = "End";
+    code = "End";
+    return true;
+  case Qt::Key_PageUp:
+    key = "PageUp";
+    code = "PageUp";
+    return true;
+  case Qt::Key_PageDown:
+    key = "PageDown";
+    code = "PageDown";
+    return true;
+  default:
+    return false;
   }
 }
 
@@ -144,10 +187,15 @@ void WebView::keyPressEvent(QKeyEvent* event)
 {
   std::string key;
   std::string code;
-  if (snapshot_.content_type == browser::ContentType::kHtml && QtKeyToDomKey(event->key(), key, code)) {
-    worker_->DispatchKeyboard(tab_id_, QStringLiteral("keydown"), QString::fromStdString(key),
+  if (snapshot_.content_type == browser::ContentType::kHtml &&
+      QtKeyToDomKey(event->key(), key, code)) {
+    worker_->DispatchKeyboard(tab_id_,
+                              QStringLiteral("keydown"),
+                              QString::fromStdString(key),
                               QString::fromStdString(code));
-    worker_->DispatchKeyboard(tab_id_, QStringLiteral("keyup"), QString::fromStdString(key),
+    worker_->DispatchKeyboard(tab_id_,
+                              QStringLiteral("keyup"),
+                              QString::fromStdString(key),
                               QString::fromStdString(code));
   }
   QAbstractScrollArea::keyPressEvent(event);
@@ -441,8 +489,8 @@ void WebView::PaintHtml(QPainter& painter)
 
 // Finds the caret point for |target|: the end of its first laid-out text run
 // (document coordinates, before scroll).
-bool FindCaretPosition(const layout::LayoutBox& box, const dom::Element* target, float& x, float& y,
-                       float& h)
+bool FindCaretPosition(
+    const layout::LayoutBox& box, const dom::Element* target, float& x, float& y, float& h)
 {
   for (const layout::Line& line : box.lines) {
     for (const layout::TextRun& run : line.runs) {
@@ -489,7 +537,9 @@ void WebView::PaintCaret(QPainter& painter)
     return;
   }
   const int scroll = verticalScrollBar()->value();
-  painter.fillRect(QRect(static_cast<int>(x), static_cast<int>(y - static_cast<float>(scroll)), 1,
+  painter.fillRect(QRect(static_cast<int>(x),
+                         static_cast<int>(y - static_cast<float>(scroll)),
+                         1,
                          std::max(1, static_cast<int>(h))),
                    QColor(0, 0, 0));
 }

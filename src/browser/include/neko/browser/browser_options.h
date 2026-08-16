@@ -1,9 +1,9 @@
 #pragma once
 
+#include "neko/base/logging.h"
+
 #include <optional>
 #include <string>
-
-#include "neko/base/logging.h"
 
 namespace neko::browser {
 
@@ -11,7 +11,8 @@ namespace neko::browser {
 //
 // Phase 0 honors the flags syntactically; navigation/rendering options are
 // reported as NOT IMPLEMENTED by main() until their owning phases land.
-struct BrowserOptions {
+struct BrowserOptions
+{
   // URL requested via --url or as a positional argument.
   std::optional<std::string> url;
   // --headless: run without a GUI (engine-only mode).
@@ -28,9 +29,9 @@ struct BrowserOptions {
   base::LogLevel log_level = base::LogLevel::kInfo;
 
   // Storage / content commands.
-  bool dump_history = false;    // print the browsing history
-  bool dump_bookmarks = false;  // print bookmarks
-  bool show_cookies = false;    // print stored cookies
+  bool dump_history = false;                   // print the browsing history
+  bool dump_bookmarks = false;                 // print bookmarks
+  bool show_cookies = false;                   // print stored cookies
   std::optional<std::string> download_url;     // --download <url>
   std::optional<std::string> download_dir;     // --download-dir <dir>
   std::optional<std::string> extract_pdf_path; // --extract-pdf <file>
@@ -41,8 +42,15 @@ struct BrowserOptions {
   std::optional<std::string> eval_script;
 };
 
-struct ParseResult {
-  enum class Action { kRun, kHelp, kVersion, kError };
+struct ParseResult
+{
+  enum class Action
+  {
+    kRun,
+    kHelp,
+    kVersion,
+    kError
+  };
 
   Action action = Action::kRun;
   std::string error_message;
@@ -54,4 +62,4 @@ ParseResult ParseCommandLine(int argc, char** argv);
 
 std::string UsageText();
 
-}  // namespace neko::browser
+} // namespace neko::browser

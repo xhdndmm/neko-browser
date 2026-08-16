@@ -1,10 +1,10 @@
 #pragma once
 
+#include "neko/dom/node.h"
+
 #include <optional>
 #include <string>
 #include <string_view>
-
-#include "neko/dom/node.h"
 
 namespace neko::browser {
 
@@ -17,7 +17,6 @@ namespace neko::browser {
 //
 // Returns nullopt when |node| is null, no ancestor is an <a>, the <a> has no
 // href, or the href cannot be resolved (e.g. an empty href with no base).
-std::optional<std::string> HyperlinkTarget(const dom::Node* node,
-                                           std::string_view base_url);
+std::optional<std::string> HyperlinkTarget(const dom::Node* node, std::string_view base_url);
 
-}  // namespace neko::browser
+} // namespace neko::browser

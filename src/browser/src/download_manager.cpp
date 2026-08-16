@@ -1,21 +1,27 @@
 #include "neko/browser/download_manager.h"
 
-#include <algorithm>
-#include <cctype>
-
 #include "neko/base/logging.h"
 #include "neko/network/http.h"
 #include "neko/storage/file_util.h"
 
+#include <algorithm>
+#include <cctype>
+
 namespace neko::browser {
 
-std::string_view ToString(DownloadState state) {
+std::string_view ToString(DownloadState state)
+{
   switch (state) {
-    case DownloadState::kPending: return "pending";
-    case DownloadState::kInProgress: return "in-progress";
-    case DownloadState::kCompleted: return "completed";
-    case DownloadState::kFailed: return "failed";
-    case DownloadState::kCancelled: return "cancelled";
+  case DownloadState::kPending:
+    return "pending";
+  case DownloadState::kInProgress:
+    return "in-progress";
+  case DownloadState::kCompleted:
+    return "completed";
+  case DownloadState::kFailed:
+    return "failed";
+  case DownloadState::kCancelled:
+    return "cancelled";
   }
   return "unknown";
 }
@@ -24,29 +30,37 @@ namespace {
 
 // Extracts a safe basename for |url|: the last path segment, percent-decoded
 // and stripped of control characters and path separators.
-std::string BasenameFromUrl(const url::Url& url) {
+std::string BasenameFromUrl(const url::Url& url)
+{
   std::string name = url.path();
   const size_t slash = name.find_last_of('/');
-  if (slash != std::string::npos) name = name.substr(slash + 1);
+  if (slash != std::string::npos)
+    name = name.substr(slash + 1);
   name = url::PercentDecode(name);
   // Strip characters that are unsafe in filenames.
   std::string clean;
   for (const char raw : name) {
     const unsigned char c = static_cast<unsigned char>(raw);
-    if (c == '/' || c == '\\' || c < 0x20 || c == 0x7F) continue;
+    if (c == '/' || c == '\\' || c < 0x20 || c == 0x7F)
+      continue;
     clean.push_back(static_cast<char>(c));
   }
-  if (clean.empty() || clean == "." || clean == "..") clean = "download";
-  if (clean.size() > 120) clean = clean.substr(0, 120);
+  if (clean.empty() || clean == "." || clean == "..")
+    clean = "download";
+  if (clean.size() > 120)
+    clean = clean.substr(0, 120);
   return clean;
 }
 
 // Extracts filename= from a Content-Disposition header (quoted or bare).
-std::string FilenameFromDisposition(std::string_view value) {
+std::string FilenameFromDisposition(std::string_view value)
+{
   const size_t pos = value.find("filename=");
-  if (pos == std::string_view::npos) return {};
+  if (pos == std::string_view::npos)
+    return {};
   std::string_view rest = value.substr(pos + 9);
-  if (rest.empty()) return {};
+  if (rest.empty())
+    return {};
   if (rest.front() == '"') {
     rest.remove_prefix(1);
     const size_t end = rest.find('"');
@@ -56,22 +70,24 @@ std::string FilenameFromDisposition(std::string_view value) {
   return std::string(end == std::string_view::npos ? rest : rest.substr(0, end));
 }
 
-}  // namespace
+} // namespace
 
 DownloadManager::DownloadManager(std::string download_dir, FetchFn fetch)
-    : download_dir_(std::move(download_dir)), fetch_(std::move(fetch)) {
+    : download_dir_(std::move(download_dir)), fetch_(std::move(fetch))
+{
   custom_fetch_ = static_cast<bool>(fetch_);
 }
 
-const Download* DownloadManager::Find(int64_t id) const {
+const Download* DownloadManager::Find(int64_t id) const
+{
   std::lock_guard<std::mutex> lock(mutex_);
-  const auto it = std::find_if(items_.begin(), items_.end(),
-                               [id](const Download& d) { return d.id == id; });
+  const auto it =
+      std::find_if(items_.begin(), items_.end(), [id](const Download& d) { return d.id == id; });
   return it == items_.end() ? nullptr : &*it;
 }
 
-base::Result<Download> DownloadManager::Start(const url::Url& url,
-                                              std::string_view cookie_header) {
+base::Result<Download> DownloadManager::Start(const url::Url& url, std::string_view cookie_header)
+{
   Download record;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -89,7 +105,7 @@ base::Result<Download> DownloadManager::Start(const url::Url& url,
     network::HeaderProvider provider;
     if (!cookie_header.empty()) {
       provider = [cookie_header = std::string(cookie_header)](const url::Url&) {
-        return std::vector<network::HttpHeader>{{ "cookie", cookie_header }};
+        return std::vector<network::HttpHeader>{{"cookie", cookie_header}};
       };
     }
     return network::HttpGet(url, 5, provider);
@@ -113,11 +129,13 @@ base::Result<Download> DownloadManager::Start(const url::Url& url,
 
   // Destination filename: Content-Disposition wins, else URL basename.
   std::string filename = FilenameFromDisposition(response.value().GetHeader("content-disposition"));
-  if (filename.empty()) filename = BasenameFromUrl(url);
+  if (filename.empty())
+    filename = BasenameFromUrl(url);
   // Prevent directory traversal in Content-Disposition.
   std::replace(filename.begin(), filename.end(), '/', '_');
   std::replace(filename.begin(), filename.end(), '\\', '_');
-  if (filename.empty()) filename = "download";
+  if (filename.empty())
+    filename = "download";
   record.filename = download_dir_ + "/" + filename;
 
   auto written = storage::WriteFileAtomic(record.filename, response.value().body);
@@ -136,9 +154,9 @@ base::Result<Download> DownloadManager::Start(const url::Url& url,
     std::lock_guard<std::mutex> lock(mutex_);
     items_.push_back(record);
   }
-  NEKO_LOG_INFO("download " + std::to_string(record.id) + " -> " + record.filename +
-                " (" + std::to_string(record.total_bytes) + " bytes)");
+  NEKO_LOG_INFO("download " + std::to_string(record.id) + " -> " + record.filename + " (" +
+                std::to_string(record.total_bytes) + " bytes)");
   return record;
 }
 
-}  // namespace neko::browser
+} // namespace neko::browser

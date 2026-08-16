@@ -1,14 +1,14 @@
 #include "neko/url/url.h"
 
+#include <gtest/gtest.h>
 #include <string>
 #include <string_view>
-
-#include <gtest/gtest.h>
 
 namespace neko::url {
 namespace {
 
-TEST(UrlTest, ParseSimpleHttp) {
+TEST(UrlTest, ParseSimpleHttp)
+{
   const auto r = Url::Parse("http://example.com");
   ASSERT_TRUE(r.has_value());
   const Url& u = r.value();
@@ -21,7 +21,8 @@ TEST(UrlTest, ParseSimpleHttp) {
   EXPECT_EQ(u.Origin(), "http://example.com");
 }
 
-TEST(UrlTest, ParseHttpsWithPath) {
+TEST(UrlTest, ParseHttpsWithPath)
+{
   const auto r = Url::Parse("https://example.com/a/b");
   ASSERT_TRUE(r.has_value());
   const Url& u = r.value();
@@ -30,7 +31,8 @@ TEST(UrlTest, ParseHttpsWithPath) {
   EXPECT_EQ(u.effective_port(), 443);
 }
 
-TEST(UrlTest, ParsePort) {
+TEST(UrlTest, ParsePort)
+{
   const auto r = Url::Parse("https://example.com:8443/path");
   ASSERT_TRUE(r.has_value());
   const Url& u = r.value();
@@ -40,7 +42,8 @@ TEST(UrlTest, ParsePort) {
   EXPECT_EQ(u.Origin(), "https://example.com:8443");
 }
 
-TEST(UrlTest, ParseQueryAndFragment) {
+TEST(UrlTest, ParseQueryAndFragment)
+{
   const auto r = Url::Parse("https://example.com/a/b?x=1#section");
   ASSERT_TRUE(r.has_value());
   const Url& u = r.value();
@@ -53,7 +56,8 @@ TEST(UrlTest, ParseQueryAndFragment) {
   EXPECT_EQ(u.Serialize(/*include_fragment=*/true), "https://example.com/a/b?x=1#section");
 }
 
-TEST(UrlTest, ParseUserInfo) {
+TEST(UrlTest, ParseUserInfo)
+{
   const auto r = Url::Parse("https://user:password@example.com/");
   ASSERT_TRUE(r.has_value());
   const Url& u = r.value();
@@ -63,7 +67,8 @@ TEST(UrlTest, ParseUserInfo) {
   EXPECT_EQ(u.Serialize(), "https://user:password@example.com/");
 }
 
-TEST(UrlTest, SchemeAndHostLowercased) {
+TEST(UrlTest, SchemeAndHostLowercased)
+{
   const auto r = Url::Parse("HTTP://EXAMPLE.COM/Path");
   ASSERT_TRUE(r.has_value());
   const Url& u = r.value();
@@ -73,25 +78,29 @@ TEST(UrlTest, SchemeAndHostLowercased) {
   EXPECT_EQ(u.path(), "/Path");
 }
 
-TEST(UrlTest, DefaultPortOmittedInSerialization) {
+TEST(UrlTest, DefaultPortOmittedInSerialization)
+{
   const auto r = Url::Parse("http://example.com:80/");
   ASSERT_TRUE(r.has_value());
   EXPECT_EQ(r.value().Serialize(), "http://example.com/");
 }
 
-TEST(UrlTest, DotSegmentsRemoved) {
+TEST(UrlTest, DotSegmentsRemoved)
+{
   const auto r = Url::Parse("http://example.com/a/b/../c/./d");
   ASSERT_TRUE(r.has_value());
   EXPECT_EQ(r.value().path(), "/a/c/d");
 }
 
-TEST(UrlTest, TrailingDotDot) {
+TEST(UrlTest, TrailingDotDot)
+{
   const auto r = Url::Parse("http://example.com/a/b/..");
   ASSERT_TRUE(r.has_value());
   EXPECT_EQ(r.value().path(), "/a/");
 }
 
-TEST(UrlTest, RelativePathResolution) {
+TEST(UrlTest, RelativePathResolution)
+{
   const auto base = Url::Parse("http://a.example/dir/page.html");
   ASSERT_TRUE(base.has_value());
   const Url& b = base.value();
@@ -121,7 +130,8 @@ TEST(UrlTest, RelativePathResolution) {
   EXPECT_EQ(r6.value().Serialize(true), "http://a.example/dir/page.html");
 }
 
-TEST(UrlTest, NetworkPathResolution) {
+TEST(UrlTest, NetworkPathResolution)
+{
   const auto base = Url::Parse("https://a.example/dir/page.html");
   ASSERT_TRUE(base.has_value());
   const auto r = Url::Parse("//b.example/root", base.value());
@@ -129,7 +139,8 @@ TEST(UrlTest, NetworkPathResolution) {
   EXPECT_EQ(r.value().Serialize(), "https://b.example/root");
 }
 
-TEST(UrlTest, AbsoluteBeatsBase) {
+TEST(UrlTest, AbsoluteBeatsBase)
+{
   const auto base = Url::Parse("http://a.example/x");
   ASSERT_TRUE(base.has_value());
   const auto r = Url::Parse("https://b.example/y", base.value());
@@ -138,13 +149,15 @@ TEST(UrlTest, AbsoluteBeatsBase) {
   EXPECT_EQ(r.value().host(), "b.example");
 }
 
-TEST(UrlTest, Rfc3986ResolutionExamples) {
+TEST(UrlTest, Rfc3986ResolutionExamples)
+{
   // RFC 3986 5.4.1 Normal Examples
   const auto base = Url::Parse("http://a/b/c/d;p?q");
   ASSERT_TRUE(base.has_value());
   const Url& b = base.value();
 
-  struct Case {
+  struct Case
+  {
     std::string_view ref;
     std::string_view expected;
   };
@@ -181,16 +194,17 @@ TEST(UrlTest, Rfc3986ResolutionExamples) {
   }
 }
 
-TEST(UrlTest, InvalidUrls) {
+TEST(UrlTest, InvalidUrls)
+{
   EXPECT_FALSE(Url::Parse("").has_value());
-  EXPECT_FALSE(Url::Parse("example.com").has_value());  // no scheme
-  EXPECT_FALSE(Url::Parse("1http://x.com").has_value());  // scheme must start with letter
-  EXPECT_FALSE(Url::Parse("http://").has_value());       // empty host
-  EXPECT_FALSE(Url::Parse("http://example.com:abc").has_value());  // bad port
-  EXPECT_FALSE(Url::Parse("http://example.com:99999").has_value());  // port overflow
-  EXPECT_FALSE(Url::Parse("http://exa mple.com/").has_value());  // space in host
-  EXPECT_FALSE(Url::Parse("http:/example.com").has_value());  // special scheme needs //
-  EXPECT_FALSE(Url::Parse("http://[::1").has_value());        // unterminated IPv6
+  EXPECT_FALSE(Url::Parse("example.com").has_value());              // no scheme
+  EXPECT_FALSE(Url::Parse("1http://x.com").has_value());            // scheme must start with letter
+  EXPECT_FALSE(Url::Parse("http://").has_value());                  // empty host
+  EXPECT_FALSE(Url::Parse("http://example.com:abc").has_value());   // bad port
+  EXPECT_FALSE(Url::Parse("http://example.com:99999").has_value()); // port overflow
+  EXPECT_FALSE(Url::Parse("http://exa mple.com/").has_value());     // space in host
+  EXPECT_FALSE(Url::Parse("http:/example.com").has_value());        // special scheme needs //
+  EXPECT_FALSE(Url::Parse("http://[::1").has_value());              // unterminated IPv6
   // Control characters in path/query would let untrusted input inject bytes
   // into the HTTP request line; they must be rejected.
   EXPECT_FALSE(Url::Parse("http://example.com/\r\nX-Injected: 1").has_value());
@@ -203,7 +217,8 @@ TEST(UrlTest, InvalidUrls) {
   EXPECT_FALSE(Url::Parse("x\r\n", base.value()).has_value());
 }
 
-TEST(UrlTest, IPv6Host) {
+TEST(UrlTest, IPv6Host)
+{
   const auto r = Url::Parse("http://[::1]:8080/x");
   ASSERT_TRUE(r.has_value());
   EXPECT_EQ(r.value().host(), "::1");
@@ -212,7 +227,8 @@ TEST(UrlTest, IPv6Host) {
   EXPECT_EQ(r.value().Serialize(), "http://[::1]:8080/x");
 }
 
-TEST(UrlTest, NonSpecialScheme) {
+TEST(UrlTest, NonSpecialScheme)
+{
   const auto r = Url::Parse("mailto:user@example.com");
   ASSERT_TRUE(r.has_value());
   EXPECT_EQ(r.value().scheme(), "mailto");
@@ -220,16 +236,18 @@ TEST(UrlTest, NonSpecialScheme) {
   EXPECT_EQ(r.value().path(), "user@example.com");
 }
 
-TEST(UrlTest, PercentEncodeDecode) {
+TEST(UrlTest, PercentEncodeDecode)
+{
   EXPECT_EQ(PercentEncode("a b/c"), "a%20b%2Fc");
   EXPECT_EQ(PercentEncode("AZaz09-._~"), "AZaz09-._~");
   EXPECT_EQ(PercentDecode("a%20b%2Fc"), "a b/c");
-  EXPECT_EQ(PercentDecode("100%"), "100%");         // lone % kept
-  EXPECT_EQ(PercentDecode("x%zz"), "x%zz");         // invalid hex kept
+  EXPECT_EQ(PercentDecode("100%"), "100%"); // lone % kept
+  EXPECT_EQ(PercentDecode("x%zz"), "x%zz"); // invalid hex kept
   EXPECT_EQ(PercentDecode(PercentEncode("héllo/世界")), "héllo/世界");
 }
 
-TEST(UrlTest, EffectivePort) {
+TEST(UrlTest, EffectivePort)
+{
   EXPECT_EQ(DefaultPortForScheme("http"), 80);
   EXPECT_EQ(DefaultPortForScheme("https"), 443);
   EXPECT_EQ(DefaultPortForScheme("ftp"), 21);
@@ -238,7 +256,8 @@ TEST(UrlTest, EffectivePort) {
   EXPECT_EQ(DefaultPortForScheme("custom"), 0);
 }
 
-TEST(UrlTest, OriginForDefaultAndCustomPort) {
+TEST(UrlTest, OriginForDefaultAndCustomPort)
+{
   const auto a = Url::Parse("http://example.com/path");
   ASSERT_TRUE(a.has_value());
   EXPECT_EQ(a.value().Origin(), "http://example.com");
@@ -248,5 +267,5 @@ TEST(UrlTest, OriginForDefaultAndCustomPort) {
   EXPECT_EQ(b.value().Origin(), "http://example.com:8080");
 }
 
-}  // namespace
-}  // namespace neko::url
+} // namespace
+} // namespace neko::url

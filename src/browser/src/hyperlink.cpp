@@ -1,16 +1,16 @@
 #include "neko/browser/hyperlink.h"
 
+#include "neko/dom/element.h"
+#include "neko/url/url.h"
+
 #include <optional>
 #include <string>
 #include <string_view>
 
-#include "neko/dom/element.h"
-#include "neko/url/url.h"
-
 namespace neko::browser {
 
-std::optional<std::string> HyperlinkTarget(const dom::Node* node,
-                                           std::string_view base_url) {
+std::optional<std::string> HyperlinkTarget(const dom::Node* node, std::string_view base_url)
+{
   // Walk up to the nearest <a> ancestor.
   for (const dom::Node* current = node; current != nullptr; current = current->parent()) {
     if (current->node_type() != dom::NodeType::kElement) {
@@ -63,4 +63,4 @@ std::optional<std::string> HyperlinkTarget(const dom::Node* node,
   return std::nullopt;
 }
 
-}  // namespace neko::browser
+} // namespace neko::browser

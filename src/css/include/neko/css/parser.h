@@ -1,8 +1,8 @@
 #pragma once
 
-#include <string_view>
-
 #include "neko/css/stylesheet.h"
+
+#include <string_view>
 
 namespace neko::css {
 
@@ -15,4 +15,4 @@ StyleSheet ParseStyleSheet(std::string_view text);
 // style attributes.
 std::vector<Declaration> ParseDeclarationBlock(std::string_view text);
 
-}  // namespace neko::css
+} // namespace neko::css

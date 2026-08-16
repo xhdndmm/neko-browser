@@ -1,13 +1,13 @@
 #pragma once
 
-#include <memory>
-#include <string>
-#include <vector>
-
 #include "neko/css/color.h"
 #include "neko/dom/element.h"
 #include "neko/style/computed_style.h"
 #include "neko/style/style_engine.h"
+
+#include <memory>
+#include <string>
+#include <vector>
 
 namespace neko::graphics {
 class FontRegistry;
@@ -24,32 +24,35 @@ struct LayoutBox;
 
 // Lookup of decoded images for replaced elements (implemented by the renderer
 // page; the layout engine is network/image-free).
-class ImageProvider {
- public:
+class ImageProvider
+{
+public:
   virtual ~ImageProvider() = default;
   // Image for |element| (an <img>), or nullptr when not loaded yet.
   virtual const image::Image* Find(const dom::Element& element) const = 0;
 };
 
 // A positioned text run within a line box.
-struct TextRun {
+struct TextRun
+{
   std::string text;
-  std::string font_family;  // CSS font-family the run was measured with
+  std::string font_family; // CSS font-family the run was measured with
   int font_weight = 400;
   bool font_italic = false;
   float x = 0;
-  float y = 0;  // top of the run (glyph ascent area)
+  float y = 0; // top of the run (glyph ascent area)
   float font_size = 16;
-  float width = 0;  // measured advance width (real font or monospace fallback)
+  float width = 0; // measured advance width (real font or monospace fallback)
   css::Color color{0, 0, 0, 255};
   bool underline = false;
-  const dom::Element* element = nullptr;  // source element (for hit-testing)
+  const dom::Element* element = nullptr; // source element (for hit-testing)
 };
 
 // A positioned atomic inline box within a line.  It is either a replaced
 // <img> (|image| set) or an inline-block (|block_box| set); the box's width/
 // height on the line is |width|/|height|.
-struct InlineBox {
+struct InlineBox
+{
   const dom::Element* element = nullptr;
   const image::Image* image = nullptr;
   style::ComputedStyle style;
@@ -68,12 +71,13 @@ struct InlineBox {
 };
 
 // A line of inline content.
-struct Line {
+struct Line
+{
   std::vector<TextRun> runs;
-  std::vector<InlineBox> boxes;  // atomic inline boxes (replaced <img>)
+  std::vector<InlineBox> boxes; // atomic inline boxes (replaced <img>)
   float height = 0;
-  float baseline_offset = 0;  // distance from line top to run top
-  float baseline = 0;         // distance from line top to the text baseline
+  float baseline_offset = 0; // distance from line top to run top
+  float baseline = 0;        // distance from line top to the text baseline
 };
 
 // A laid-out box.
@@ -81,7 +85,8 @@ struct Line {
 // Coordinates: (x, y) is the border-box top-left; width/height are the
 // border-box size.  Margins are stored separately and sit outside the border
 // box.  Children and lines are positioned relative to this box's border box.
-struct LayoutBox {
+struct LayoutBox
+{
   // Owning element (null for anonymous/root handling).
   const dom::Element* element = nullptr;
   style::ComputedStyle style;
@@ -113,21 +118,25 @@ struct LayoutBox {
   float padding_bottom = 0;
   float padding_left = 0;
 
-  std::vector<std::unique_ptr<LayoutBox>> children;  // block-level children
-  std::vector<std::unique_ptr<LayoutBox>> positioned_children;  // position:absolute/fixed
-  std::vector<std::unique_ptr<LayoutBox>> floats;       // floats (out of flow)
-  std::vector<Line> lines;                           // inline content
+  std::vector<std::unique_ptr<LayoutBox>> children;            // block-level children
+  std::vector<std::unique_ptr<LayoutBox>> positioned_children; // position:absolute/fixed
+  std::vector<std::unique_ptr<LayoutBox>> floats;              // floats (out of flow)
+  std::vector<Line> lines;                                     // inline content
 
-  float content_x() const {
+  float content_x() const
+  {
     return x + border_left + padding_left;
   }
-  float content_y() const {
+  float content_y() const
+  {
     return y + border_top + padding_top;
   }
-  float content_width() const {
+  float content_width() const
+  {
     return width - border_left - border_right - padding_left - padding_right;
   }
-  float content_height() const {
+  float content_height() const
+  {
     return height - border_top - border_bottom - padding_top - padding_bottom;
   }
 };
@@ -138,8 +147,9 @@ struct LayoutBox {
 // default style is used for every element).  Viewport width drives the root
 // box width; block boxes fill their containing block, inline content wraps at
 // word boundaries.  See docs/design/layout.md for the supported scope.
-class LayoutEngine {
- public:
+class LayoutEngine
+{
+public:
   // |styles| must outlive the engine; it holds the computed styles for the
   // documents being laid out.  |registry| (optional) provides real glyph
   // advances (with per-character font fallback) for text measurement; when
@@ -148,15 +158,16 @@ class LayoutEngine {
   explicit LayoutEngine(const style::StyleEngine& styles,
                         const graphics::FontRegistry* registry = nullptr,
                         const ImageProvider* images = nullptr)
-      : styles_(styles), registry_(registry), images_(images) {}
+      : styles_(styles), registry_(registry), images_(images)
+  {}
 
-  std::unique_ptr<LayoutBox> BuildLayoutTree(dom::Document& document, float viewport_width,
-                                             float viewport_height = 0);
+  std::unique_ptr<LayoutBox>
+  BuildLayoutTree(dom::Document& document, float viewport_width, float viewport_height = 0);
 
- private:
+private:
   const style::StyleEngine& styles_;
   const graphics::FontRegistry* registry_ = nullptr;
   const ImageProvider* images_ = nullptr;
 };
 
-}  // namespace neko::layout
+} // namespace neko::layout
