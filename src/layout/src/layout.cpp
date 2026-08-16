@@ -657,8 +657,9 @@ IntrinsicWidths MeasureContent(const dom::Element& element,
                                const graphics::FontRegistry* registry)
 {
   const style::ComputedStyle& style = styles.StyleFor(element);
-  const bool replaced = element.tag_name() == "img" || element.tag_name() == "input" ||
-                        element.tag_name() == "textarea" || element.tag_name() == "select";
+  const bool replaced = element.tag_name() == "img" || element.tag_name() == "video" ||
+                        element.tag_name() == "input" || element.tag_name() == "textarea" ||
+                        element.tag_name() == "select";
   if (replaced) {
     IntrinsicWidths w;
     // Only a definite plain length (not a percentage / calc / extremum) is a
@@ -833,8 +834,14 @@ void ComputeReplacedSize(const style::ComputedStyle& style,
                          float& out_w,
                          float& out_h)
 {
-  const float intrinsic_w = img != nullptr ? static_cast<float>(img->width) : 0.0f;
-  const float intrinsic_h = img != nullptr ? static_cast<float>(img->height) : 0.0f;
+  // Intrinsic size: the decoded frame when available; <video> without a
+  // frame falls back to the HTML-spec default 300x150 box.
+  float intrinsic_w = img != nullptr ? static_cast<float>(img->width) : 0.0f;
+  float intrinsic_h = img != nullptr ? static_cast<float>(img->height) : 0.0f;
+  if (img == nullptr && element.tag_name() == "video") {
+    intrinsic_w = 300;
+    intrinsic_h = 150;
+  }
 
   // Specified size: CSS width/height win over the width/height attributes
   // (presentational hints, HTML spec).
@@ -1347,12 +1354,12 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         items.push_back(InlineItem{{}, &child_style, &child_element, /*line_break=*/true});
         return;
       }
-      if (child_element.tag_name() == "img") {
+      if (child_element.tag_name() == "img" || child_element.tag_name() == "video") {
         const image::Image* img = images != nullptr ? images->Find(child_element) : nullptr;
         float w = 0;
         float h = 0;
         ComputeReplacedSize(child_style, child_element, img, containing_width, w, h);
-        // A replaced <img>'s baseline is its bottom edge.
+        // A replaced <img>/<video>'s baseline is its bottom edge.
         items.push_back(InlineItem{{},
                                    &child_style,
                                    &child_element,

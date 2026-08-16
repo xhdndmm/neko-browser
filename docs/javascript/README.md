@@ -97,6 +97,12 @@
   `prefers-reduced-motion`、`(any-)pointer`/`hover`），逗号列表按 OR 求值；
   返回的 MediaQueryList 是静态的（`addEventListener`/`removeListener` 等
   为 no-op），未知特性保守返回 `matches:false`。
+- **HTMLMediaElement（`<video>` 子集）**：`play()`/`pause()`（非媒体元素
+  上调用抛 TypeError）、`currentTime`（读写，秒）、`duration`/`paused`
+  （只读，无媒体时 duration/currentTime 为 NaN、paused 为 true）。状态由
+  页面的视频帧时钟驱动（与 GIF/定时器同泵），对应
+  `Page::PlayVideo/PauseVideo/SeekVideo/VideoDuration/VideoCurrentTime`。
+  无 `controls`/音轨/缓冲（buffered/readyState 未实现）。
 - `window.performance`：`now()`、`timeOrigin`、`timing.navigationStart`
   （均为页面加载起点）。bing 的启动脚本读取 `performance.timing.
   navigationStart`。

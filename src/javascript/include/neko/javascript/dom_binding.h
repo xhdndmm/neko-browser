@@ -97,6 +97,16 @@ struct PageApis
   // 0 / the zero rect.
   std::function<std::optional<ElementGeometry>(const dom::Element&)> element_geometry;
 
+  // HTMLMediaElement (video) controls.  Wired by the browser layer from the
+  // renderer's video playback state; when absent, the media properties
+  // report defaults (NaN duration, paused = true).
+  std::function<void(const dom::Element&)> video_play;
+  std::function<void(const dom::Element&)> video_pause;
+  std::function<void(const dom::Element&, double)> video_seek;
+  std::function<std::optional<double>(const dom::Element&)> video_duration;
+  std::function<std::optional<double>(const dom::Element&)> video_current_time;
+  std::function<bool(const dom::Element&)> video_paused;
+
   // window.indexedDB (per-origin; the caller scopes everything by origin).
   // Records travel as JSON text (the structured-clone subset); keys are JSON
   // numbers or strings.  Errors carry an "IDB:<ExceptionName>:" prefix.

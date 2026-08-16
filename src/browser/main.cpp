@@ -141,8 +141,13 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page, const std::strin
           url.Serialize(),
           [](const neko::url::Url& u, std::string_view) { return neko::network::HttpGet(u); },
           pool);
-      // Fetch and decode the page's <img> subresources (headless path).
+      // Fetch and decode the page's <img>/<video> subresources (headless path).
       neko::browser::FetchPageImages(
+          page,
+          url.Serialize(),
+          [](const neko::url::Url& u, std::string_view) { return neko::network::HttpGet(u); },
+          pool);
+      neko::browser::FetchPageVideos(
           page,
           url.Serialize(),
           [](const neko::url::Url& u, std::string_view) { return neko::network::HttpGet(u); },
@@ -179,6 +184,7 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page, const std::strin
       neko::base::ThreadPool pool;
       neko::browser::FetchExternalStylesheets(page, url.Serialize(), FetchAny, pool);
       neko::browser::FetchPageImages(page, url.Serialize(), FetchAny, pool);
+      neko::browser::FetchPageVideos(page, url.Serialize(), FetchAny, pool);
       return neko::base::Ok();
     }
     return neko::base::Err(
@@ -213,6 +219,7 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page, const std::strin
       "file://" + std::filesystem::absolute(std::filesystem::path(target)).generic_string();
   neko::browser::FetchExternalStylesheets(page, base_url, FetchAny, pool);
   neko::browser::FetchPageImages(page, base_url, FetchAny, pool);
+  neko::browser::FetchPageVideos(page, base_url, FetchAny, pool);
   return neko::base::Ok();
 }
 

@@ -1040,8 +1040,10 @@ void BrowserController::LoadBytes(Tab& tab,
       return;
     }
 
-    // Fetch and decode the page's <img> subresources before publishing.
+    // Fetch and decode the page's <img>/<video> subresources before
+    // publishing.
     FetchPageImages(*new_page, final_url, fetch_, *pool_);
+    FetchPageVideos(*new_page, final_url, fetch_, *pool_);
     std::string title = new_page->document()->Title();
     if (title.empty())
       title = final_url;
@@ -1544,6 +1546,123 @@ void FetchPageImages(renderer::Page& page,
                          std::move(decoded.value().animation));
     NEKO_LOG_INFO("img: injected " + pending[i].url + " -> <" +
                   std::string(pending[i].element->tag_name()) + ">");
+  }
+}
+
+void FetchPageVideos(renderer::Page& page,
+                     const std::string& base_url,
+                     const BrowserController::FetchFn& fetch,
+                     base::ThreadPool& pool)
+{
+  dom::Document* doc = page.document();
+  if (doc == nullptr) {
+    return;
+  }
+  const base::Result<url::Url> base = url::Url::Parse(base_url);
+
+  struct PendingVideo
+  {
+    dom::Element* element = nullptr;
+    std::string url;
+    bool autoplay = false;
+    bool loop = false;
+  };
+  std::vector<PendingVideo> pending;
+  std::vector<dom::Node*> stack;
+  for (dom::Node* child : doc->ChildNodes()) {
+    stack.push_back(child);
+  }
+  while (!stack.empty()) {
+    dom::Node* node = stack.back();
+    stack.pop_back();
+    if (node->node_type() != dom::NodeType::kElement) {
+      continue;
+    }
+    dom::Element* element = static_cast<dom::Element*>(node);
+    if (element->tag_name() == "video") {
+      const std::optional<std::string_view> src = element->GetAttribute("src");
+      if (src.has_value() && !src->empty()) {
+        base::Result<url::Url> target = url::Url::Parse(std::string(*src));
+        if (base.has_value()) {
+          target = url::Url::Parse(std::string(*src), base.value());
+        }
+        if (target.has_value()) {
+          PendingVideo item;
+          item.element = element;
+          item.url = target.value().Serialize();
+          item.autoplay = element->HasAttribute("autoplay");
+          item.loop = element->HasAttribute("loop");
+          pending.push_back(std::move(item));
+        } else {
+          NEKO_LOG_WARNING("video: cannot resolve url \"" + std::string(*src) + "\"");
+        }
+      }
+    }
+    for (dom::Node* child : node->ChildNodes()) {
+      stack.push_back(child);
+    }
+  }
+  if (pending.empty()) {
+    return;
+  }
+
+  auto fetch_and_decode = [&fetch](const std::string& url) -> base::Result<media::VideoClip> {
+    const base::Result<url::Url> parsed = url::Url::Parse(url);
+    if (!parsed.has_value()) {
+      return base::Err(base::Error::InvalidArgument("invalid video URL"));
+    }
+    const auto response = fetch(parsed.value(), {});
+    if (!response) {
+      return base::Err(response.error());
+    }
+    // The decoder is budgeted (frame count + total RGBA bytes), so a huge
+    // video degrades to a bounded prefix rather than exhausting memory.
+    return media::DecodeVideo(response.value().body);
+  };
+
+  const auto attach = [&page](const PendingVideo& item, media::VideoClip clip) {
+    if (clip.frames.empty()) {
+      return;
+    }
+    auto frames = std::make_shared<std::vector<image::Image>>();
+    frames->reserve(clip.frames.size());
+    for (media::VideoFrame& frame : clip.frames) {
+      frames->push_back(std::move(frame.image));
+    }
+    renderer::Page::VideoStrip strip;
+    strip.frames = std::move(frames);
+    strip.frame_rate = clip.frame_rate;
+    strip.loop = item.loop;
+    const std::size_t frame_count = strip.frames->size();
+    const image::Image first_frame = (*strip.frames)[0]; // copy: strip moves below
+    page.SetElementVideo(*item.element, first_frame, std::move(strip), item.autoplay);
+    NEKO_LOG_INFO("video: injected " + item.url + " (" +
+                  std::to_string(frame_count) + " frames) -> <" +
+                  std::string(item.element->tag_name()) + ">");
+  };
+
+  if (pending.size() == 1) {
+    auto decoded = fetch_and_decode(pending[0].url);
+    if (!decoded) {
+      NEKO_LOG_WARNING("video: fetch/decode failed for " + pending[0].url);
+      return;
+    }
+    attach(pending[0], std::move(decoded.value()));
+    return;
+  }
+  std::vector<std::future<base::Result<media::VideoClip>>> futures;
+  futures.reserve(pending.size());
+  for (const PendingVideo& item : pending) {
+    futures.push_back(
+        pool.Submit([&fetch_and_decode, url = item.url]() { return fetch_and_decode(url); }));
+  }
+  for (std::size_t i = 0; i < pending.size(); ++i) {
+    auto decoded = futures[i].get();
+    if (!decoded) {
+      NEKO_LOG_WARNING("video: fetch/decode failed for " + pending[i].url);
+      continue;
+    }
+    attach(pending[i], std::move(decoded.value()));
   }
 }
 

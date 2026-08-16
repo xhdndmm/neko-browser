@@ -1743,5 +1743,45 @@ TEST_F(IndexedDbTest, DeleteDatabase)
   EXPECT_EQ(store_->CurrentVersion("https://idb.test", "kv").value(), 0);
 }
 
+TEST_F(DomBinderTest, VideoMediaControls)
+{
+  PageApis apis;
+  double position = 1.5;
+  bool playing = false;
+  apis.video_play = [&playing](const dom::Element&) { playing = true; };
+  apis.video_pause = [&playing](const dom::Element&) { playing = false; };
+  apis.video_seek = [&position](const dom::Element&, double seconds) { position = seconds; };
+  apis.video_duration = [](const dom::Element&) -> std::optional<double> { return 3.0; };
+  apis.video_current_time = [&position](const dom::Element&) -> std::optional<double> {
+    return position;
+  };
+  apis.video_paused = [&playing](const dom::Element&) { return !playing; };
+
+  DomBinder binder(*document_, apis);
+  const auto eval = [&](const std::string& code) -> std::string {
+    auto r = binder.Evaluate(code);
+    if (!r.has_value()) {
+      return "<error>";
+    }
+    auto s = r.value().ToString();
+    return s.has_value() ? s.value() : "<tostring-error>";
+  };
+  ASSERT_TRUE(binder.Evaluate("var v = document.createElement('video');").has_value());
+  EXPECT_EQ(eval("v.duration"), "3");
+  EXPECT_EQ(eval("v.currentTime"), "1.5");
+  EXPECT_EQ(eval("v.paused"), "true");
+  ASSERT_TRUE(binder.Evaluate("v.play();").has_value());
+  EXPECT_TRUE(playing);
+  EXPECT_EQ(eval("v.paused"), "false");
+  ASSERT_TRUE(binder.Evaluate("v.currentTime = 0.25;").has_value());
+  EXPECT_DOUBLE_EQ(position, 0.25);
+  ASSERT_TRUE(binder.Evaluate("v.pause();").has_value());
+  EXPECT_FALSE(playing);
+
+  // play() on a non-media element throws.
+  const auto r = binder.Evaluate("document.getElementById('main').play()");
+  EXPECT_FALSE(r.has_value());
+}
+
 } // namespace
 } // namespace neko::javascript

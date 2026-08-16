@@ -199,6 +199,9 @@ add_executable(neko_browser_tests
   browser/hyperlink_test.cpp
 )
 target_link_libraries(neko_browser_tests PRIVATE neko::browser neko::browser_options gmock_main)
+target_compile_definitions(neko_browser_tests PRIVATE
+  NEKO_TEST_PAGES_DIR="${CMAKE_SOURCE_DIR}/tests/pages"
+)
 apply_compiler_warnings(neko_browser_tests)
 gtest_discover_tests(neko_browser_tests DISCOVERY_MODE PRE_TEST)
 

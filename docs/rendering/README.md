@@ -35,7 +35,8 @@
 - 图片增量加载/懒加载、alt 文本渲染、srcset
 - `text-align` 对齐、连字符断行、CJK 逐字断行
 - 完整系统字体目录扫描（当前内置候选路径表；具体名按文件名匹配）
-- GIF 动画、WebP/AVIF、渐变、变换、滤镜、分层合成、GPU 后端
+- `<video>` 播放的音频轨道、controls 与缓冲（视频帧动画已接入，见渲染器 `Page::AdvanceAnimations`）
+- 分层合成、GPU 后端（Compositor 仍在计划中）
 - 布局增量失效（当前布局每次全量重算；显示列表/光栅化已增量）
 
 ## 架构

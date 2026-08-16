@@ -2486,6 +2486,99 @@ JSValue ElementGetCurrentSrc(JSContext* ctx, JSValueConst this_val)
   return JS_NewStringLen(ctx, resolved.data(), resolved.size());
 }
 
+// ---- HTMLMediaElement (video) ----------------------------------------------
+
+bool IsVideoElement(const dom::Element* element)
+{
+  return element != nullptr && element->tag_name() == "video";
+}
+
+JSValue ElementPlayVideo(JSContext* ctx, JSValueConst this_val, int /*argc*/,
+                         JSValueConst* /*argv*/)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (impl == nullptr || element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  if (!IsVideoElement(element)) {
+    return JS_ThrowTypeError(ctx, "play() is only defined on <video>");
+  }
+  if (!impl->apis.video_play) {
+    return JS_ThrowTypeError(ctx, "video playback is not available");
+  }
+  impl->apis.video_play(*element);
+  return JS_UNDEFINED;
+}
+
+JSValue ElementPauseVideo(JSContext* ctx, JSValueConst this_val, int /*argc*/,
+                          JSValueConst* /*argv*/)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (impl == nullptr || element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  if (!IsVideoElement(element)) {
+    return JS_ThrowTypeError(ctx, "pause() is only defined on <video>");
+  }
+  if (impl->apis.video_pause) {
+    impl->apis.video_pause(*element);
+  }
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetVideoDuration(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (impl == nullptr || element == nullptr || !IsVideoElement(element) ||
+      !impl->apis.video_duration) {
+    return JS_NewFloat64(ctx, std::nan(""));
+  }
+  const std::optional<double> duration = impl->apis.video_duration(*element);
+  return JS_NewFloat64(ctx, duration.value_or(std::nan("")));
+}
+
+JSValue ElementGetVideoCurrentTime(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (impl == nullptr || element == nullptr || !IsVideoElement(element) ||
+      !impl->apis.video_current_time) {
+    return JS_NewFloat64(ctx, 0);
+  }
+  return JS_NewFloat64(ctx, impl->apis.video_current_time(*element).value_or(0));
+}
+
+JSValue ElementSetVideoCurrentTime(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (impl == nullptr || element == nullptr || !IsVideoElement(element) ||
+      !impl->apis.video_seek) {
+    return JS_UNDEFINED;
+  }
+  double seconds = 0;
+  if (JS_ToFloat64(ctx, &seconds, value) != 0) {
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return JS_UNDEFINED;
+  }
+  impl->apis.video_seek(*element, seconds);
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetVideoPaused(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (impl == nullptr || element == nullptr || !IsVideoElement(element) ||
+      !impl->apis.video_paused) {
+    return JS_NewBool(ctx, 1);
+  }
+  return JS_NewBool(ctx, impl->apis.video_paused(*element) ? 1 : 0);
+}
+
 JSValue ElementGetText(JSContext* ctx, JSValueConst this_val)
 {
   dom::Element* element = AsElement(UnwrapNode(this_val));
@@ -4348,7 +4441,7 @@ void DefineNodePrototype(JSContext* ctx, Impl& impl)
 
 void DefineElementPrototype(JSContext* ctx, Impl& impl)
 {
-  static const std::array<JSCFunctionListEntry, 13> kMethods = {{
+  static const std::array<JSCFunctionListEntry, 15> kMethods = {{
       JS_CFUNC_DEF("getAttribute", 1, ElementGetAttribute),
       JS_CFUNC_DEF("setAttribute", 2, ElementSetAttribute),
       JS_CFUNC_DEF("removeAttribute", 1, ElementRemoveAttribute),
@@ -4362,6 +4455,8 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
       JS_CFUNC_DEF("remove", 0, ElementRemove),
       JS_CFUNC_DEF("insertAdjacentHTML", 2, ElementInsertAdjacentHTML),
       JS_CFUNC_DEF("getBoundingClientRect", 0, ElementGetBoundingClientRect),
+      JS_CFUNC_DEF("play", 0, ElementPlayVideo),
+      JS_CFUNC_DEF("pause", 0, ElementPauseVideo),
   }};
   JS_SetPropertyFunctionList(
       ctx, impl.element_proto, kMethods.data(), static_cast<int>(kMethods.size()));
@@ -4546,6 +4641,22 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
                MakeGetter(ctx, "naturalHeight", ElementGetNaturalHeight));
   DefineGetter(
       ctx, impl.element_proto, "complete", MakeGetter(ctx, "complete", ElementGetComplete));
+  // Media (<video>): duration/currentTime/paused + play()/pause() (methods
+  // above).  currentTime is seekable; non-video elements report the media
+  // defaults (NaN duration, paused = true).
+  DefineGetter(ctx,
+               impl.element_proto,
+               "duration",
+               MakeGetter(ctx, "duration", ElementGetVideoDuration));
+  DefineAccessor(ctx,
+                 impl.element_proto,
+                 "currentTime",
+                 MakeGetter(ctx, "currentTime", ElementGetVideoCurrentTime),
+                 MakeSetter(ctx, "currentTime", ElementSetVideoCurrentTime));
+  DefineGetter(ctx,
+               impl.element_proto,
+               "paused",
+               MakeGetter(ctx, "paused", ElementGetVideoPaused));
 }
 
 void DefineDocumentPrototype(JSContext* ctx, Impl& impl)

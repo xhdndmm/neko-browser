@@ -211,6 +211,88 @@ image::Image SolidImage(int w, int h, uint8_t r, uint8_t g, uint8_t b)
   return img;
 }
 
+// A 3-frame 2x1 video strip whose frames are solid shades of red.
+renderer::Page::VideoStrip MakeTestVideoStrip()
+{
+  auto frames = std::make_shared<std::vector<image::Image>>();
+  for (int i = 0; i < 3; ++i) {
+    frames->push_back(SolidImage(2, 1, static_cast<uint8_t>(i * 80), 0, 0));
+  }
+  renderer::Page::VideoStrip strip;
+  strip.frames = std::move(frames);
+  strip.frame_rate = 20; // 50 ms per frame
+  strip.loop = true;
+  return strip;
+}
+
+TEST(PageTest, VideoAutoplayAdvancesFrames)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body><video id=\"v\" src=\"a.mp4\"></video></body>").has_value());
+  page.Layout(400);
+  dom::Element* video = dom::QuerySelector(*page.document(), "#v");
+  ASSERT_NE(video, nullptr);
+
+  renderer::Page::VideoStrip strip = MakeTestVideoStrip();
+  const image::Image& f0 = (*strip.frames)[0];
+  page.SetElementVideo(*video, f0, std::move(strip), /*autoplay=*/true);
+
+  const image::Image* current = page.Find(*video);
+  ASSERT_NE(current, nullptr);
+  EXPECT_EQ(current->rgba[0], 0); // first frame
+
+  // The first tick starts autoplay at the current frame (no change yet).
+  EXPECT_FALSE(page.AdvanceAnimations());
+  // After well over one frame duration the next tick advances to frame 2.
+  std::this_thread::sleep_for(std::chrono::milliseconds(120));
+  const std::uint64_t before = page.layout_version();
+  EXPECT_TRUE(page.AdvanceAnimations());
+  EXPECT_NE(page.layout_version(), before);
+  current = page.Find(*video);
+  ASSERT_NE(current, nullptr);
+  EXPECT_EQ(current->rgba[0], 160); // frame 2 (2.4 * 20 fps -> frame 2)
+}
+
+TEST(PageTest, VideoPlayPauseSeekAndDuration)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body><video id=\"v\" src=\"a.mp4\"></video></body>").has_value());
+  page.Layout(400);
+  dom::Element* video = dom::QuerySelector(*page.document(), "#v");
+  ASSERT_NE(video, nullptr);
+
+  renderer::Page::VideoStrip strip = MakeTestVideoStrip();
+  const image::Image& f0 = (*strip.frames)[0];
+  page.SetElementVideo(*video, f0, std::move(strip), /*autoplay=*/false);
+
+  EXPECT_FALSE(page.IsVideoPlaying(*video));
+  EXPECT_NEAR(page.VideoDuration(*video).value(), 0.15, 0.001); // 3 frames / 20 fps
+  EXPECT_NEAR(page.VideoCurrentTime(*video).value(), 0.0, 0.001);
+
+  page.PlayVideo(*video);
+  EXPECT_TRUE(page.IsVideoPlaying(*video));
+  std::this_thread::sleep_for(std::chrono::milliseconds(120));
+  page.AdvanceAnimations();
+  const image::Image* current = page.Find(*video);
+  ASSERT_NE(current, nullptr);
+  EXPECT_EQ(current->rgba[0], 160); // frame 2 while playing
+
+  page.PauseVideo(*video);
+  EXPECT_FALSE(page.IsVideoPlaying(*video));
+  const double paused_at = page.VideoCurrentTime(*video).value();
+  EXPECT_GT(paused_at, 0.1);
+
+  page.SeekVideo(*video, 0.0);
+  current = page.Find(*video);
+  ASSERT_NE(current, nullptr);
+  EXPECT_EQ(current->rgba[0], 0); // back to the first frame
+  EXPECT_NEAR(page.VideoCurrentTime(*video).value(), 0.0, 0.001);
+
+  // Resuming from frame 0 after a seek plays forward again.
+  page.PlayVideo(*video);
+  EXPECT_TRUE(page.IsVideoPlaying(*video));
+}
+
 TEST(PageTest, RendersElementImageAtIntrinsicSize)
 {
   Page page;

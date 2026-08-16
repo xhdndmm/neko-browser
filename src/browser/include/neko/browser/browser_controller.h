@@ -378,4 +378,14 @@ void FetchExternalStylesheets(renderer::Page& page,
                               const BrowserController::FetchFn& fetch,
                               base::ThreadPool& pool);
 
+// Fetches and decodes the videos referenced by <video src> elements in |page|
+// and attaches them via Page::SetElementVideo (first frame + budgeted frame
+// strip; autoplay/loop attributes carry over).  |base_url| resolves relative
+// src attributes; failing subresources are skipped silently.  Used by both
+// the controller (GUI) and the headless CLI.
+void FetchPageVideos(renderer::Page& page,
+                     const std::string& base_url,
+                     const BrowserController::FetchFn& fetch,
+                     base::ThreadPool& pool);
+
 } // namespace neko::browser

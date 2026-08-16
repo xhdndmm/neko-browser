@@ -14,6 +14,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <map>
@@ -762,6 +764,69 @@ TEST(BrowserControllerTest, PageScriptLocalStoragePersists)
   ASSERT_TRUE(read.has_value());
   ASSERT_TRUE(read.value().ToString().has_value());
   EXPECT_EQ(read.value().ToString().value(), "value-1");
+}
+
+// The page's <video src> subresource is fetched, decoded (FFmpeg) and
+// attached; autoplay advances frames on the script/animation pump.
+TEST(BrowserControllerTest, PageVideoDecodesAndAutoplays)
+{
+  // Read the committed H.264 fixture (NEKO_TEST_PAGES_DIR from CMake).
+  std::ifstream clip(std::string(NEKO_TEST_PAGES_DIR) + "/sample_8x6_h264.mp4",
+                     std::ios::binary);
+  ASSERT_TRUE(clip.good());
+  const std::string bytes((std::istreambuf_iterator<char>(clip)),
+                          std::istreambuf_iterator<char>());
+  ASSERT_FALSE(bytes.empty());
+
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<video id=\"v\" src=\"/clip.mp4\" autoplay></video>"
+                               "<script>window.__boot = 1;</script>"
+                               "</body></html>"});
+  fetch.Add("http://example.com/clip.mp4",
+            FakeFetcher::Route{200, {{"content-type", "video/mp4"}}, bytes});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  ASSERT_NE(tab->page, nullptr);
+
+  // The decoded first frame is attached to the element with the clip's
+  // intrinsic size (8x6).
+  dom::Element* video = dom::QuerySelector(*tab->page->document(), "#v");
+  ASSERT_NE(video, nullptr);
+  const image::Image* frame = tab->page->Find(*video);
+  ASSERT_NE(frame, nullptr);
+  EXPECT_EQ(frame->width, 8);
+  EXPECT_EQ(frame->height, 6);
+
+  // Autoplay: the first pump tick starts playback at frame 0; after well
+  // past one 2 fps frame interval, the next pump advances the displayed
+  // frame and bumps the layout version.
+  controller.PumpScriptTimers();
+  const std::uint64_t before = tab->page->layout_version();
+  std::this_thread::sleep_for(std::chrono::milliseconds(600));
+  controller.PumpScriptTimers();
+  EXPECT_NE(tab->page->layout_version(), before);
+
+  // Playback state is reachable from scripts (HTMLMediaElement subset).
+  ASSERT_NE(tab->script_runtime, nullptr);
+  ASSERT_EQ(tab, controller.ActiveTab());
+  auto playing = tab->script_runtime->Evaluate(
+      "document.getElementById('v').paused === false");
+  ASSERT_TRUE(playing.has_value());
+  ASSERT_TRUE(playing.value().ToBoolean().has_value());
+  EXPECT_TRUE(playing.value().ToBoolean().value());
+  auto duration = tab->script_runtime->Evaluate("document.getElementById('v').duration");
+  ASSERT_TRUE(duration.has_value());
+  ASSERT_TRUE(duration.value().ToNumber().has_value());
+  EXPECT_GT(duration.value().ToNumber().value(), 1.0);
 }
 
 // The page's scripts can use window.indexedDB (scoped to the page origin),

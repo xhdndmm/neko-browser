@@ -286,6 +286,23 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     return out;
   };
 
+  // HTMLMediaElement (<video>) controls: drive the renderer's playback state
+  // directly (frames advance on the same tick as script timers/GIFs).
+  apis.video_play = [&page](const dom::Element& element) { page.PlayVideo(element); };
+  apis.video_pause = [&page](const dom::Element& element) { page.PauseVideo(element); };
+  apis.video_seek = [&page](const dom::Element& element, double seconds) {
+    page.SeekVideo(element, seconds);
+  };
+  apis.video_duration = [&page](const dom::Element& element) {
+    return page.VideoDuration(element);
+  };
+  apis.video_current_time = [&page](const dom::Element& element) {
+    return page.VideoCurrentTime(element);
+  };
+  apis.video_paused = [&page](const dom::Element& element) {
+    return !page.IsVideoPlaying(element);
+  };
+
   auto binder = std::make_shared<javascript::DomBinder>(*document, apis);
   binder->SetConsoleSink(std::move(sink));
 
