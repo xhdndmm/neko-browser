@@ -116,6 +116,16 @@ apply_compiler_warnings(neko_paint_tests)
 gtest_discover_tests(neko_paint_tests DISCOVERY_MODE PRE_TEST)
 
 # -----------------------------------------------------------------------------
+# neko_compositor_tests
+# -----------------------------------------------------------------------------
+add_executable(neko_compositor_tests
+  compositor/compositor_test.cpp
+)
+target_link_libraries(neko_compositor_tests PRIVATE neko::compositor gtest_main)
+apply_compiler_warnings(neko_compositor_tests)
+gtest_discover_tests(neko_compositor_tests DISCOVERY_MODE PRE_TEST)
+
+# -----------------------------------------------------------------------------
 # neko_graphics_tests
 # -----------------------------------------------------------------------------
 add_executable(neko_graphics_tests

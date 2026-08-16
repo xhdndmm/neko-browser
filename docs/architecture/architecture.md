@@ -249,11 +249,12 @@ src/style/      UA 表 + 级联 + 继承 + 计算样式 —— Tested
 src/layout/     盒模型、block/inline 布局、表格、换行 —— Tested
 src/graphics/   FreeType 封装：FontLibrary/FontFace/GlyphCache/系统字体发现/FontSelector+FontRegistry（font-family 匹配与 CJK 回退）—— Tested
 src/paint/      显示列表、软件光栅化、FreeType 文本 + 8x8 回退、PPM —— Tested
+src/compositor/ 软件合成器抽象（Surface + Compositor 接口 + SoftwareCompositor，ADR 0015）—— Tested
 src/renderer/   页面管线编排（headless）—— Tested
 src/storage/    CookieStore / HistoryStore / BookmarkStore（行式文件 + 原子写）—— Tested
 src/image/      PNG 自研解码 + JPEG(libjpeg) —— Tested
-src/media/      WAV 解码（自研）—— Tested；视频 NOT IMPLEMENTED
-src/pdf/        PDF 文本提取（FlateDecode、xref、文本操作符）—— Partial
+src/media/      WAV 解码（自研）—— Tested；视频（FFmpeg，ADR 0014）—— Tested
+src/pdf/        PDF 文本提取 + 页面渲染（xref stream/ObjStm/矢量/文本）—— Partial
 src/javascript/ QuickJS runtime 封装（ScriptEngine/ScriptValue）—— Tested
 src/browser/    BrowserController + DownloadManager + CLI —— Tested
 src/ui/         Qt6 GUI（标签页/地址栏/DevTools/历史/书签/下载/设置）—— Partial

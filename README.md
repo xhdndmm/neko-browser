@@ -50,6 +50,9 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
 - **Style**：UA 样式表 + 级联 + 继承 + 计算样式（em/rem/百分比解析）
 - **Layout**：盒模型、block/inline 布局、文字换行、relative 定位
 - **Paint**：显示列表 + 软件光栅化 + 8x8 位图字体 + PPM 输出
+- **合成器**：软件合成器抽象层（ADR 0015，`Surface` + `Compositor` 接口，
+  CPU 实现，图层/alpha/脏矩形/滚动 blit；GUI 已接线：页面层 + caret 覆盖层）
+  —— GPU 后端尚未实现
 - **存储**：Cookie（RFC 6265 子集）、历史、书签 —— 自研行式文件 + 原子写入；
   **IndexedDB**：版本化数据库（open/onupgradeneeded）、对象存储
   （keyPath/autoIncrement）、事务 + add/put/get/delete/clear/count/getAll、
@@ -76,7 +79,8 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
   `--dump-bookmarks` / `--show-cookies` / `--download` / `--extract-pdf` /
   `--audio-info` / `--image-info` 等
 
-> **诚实声明**：**GPU 合成**、多进程均 **尚未实现**；
+> **诚实声明**：**GPU 合成**（Compositor 缝已就位，仅有 CPU 软件实现）、
+> 多进程均 **尚未实现**；
 > 视频解码已接入 FFmpeg（MP4/H.264、WebM/VP9 实测），`<video>` 元素
 > 支持子集（播放/暂停/seek/duration，无 controls/音轨/缓冲）
 > （见[兼容性矩阵](docs/compatibility/compatibility-matrix.md)）。

@@ -1,11 +1,13 @@
 #pragma once
 
 #include "neko/browser/browser_controller.h"
+#include "neko/compositor/compositor.h"
 #include "neko/paint/rasterizer.h"
 
 #include <QAbstractScrollArea>
 #include <QTimer>
 #include <cstdint>
+#include <memory>
 #include <optional>
 
 class QPlainTextEdit;
@@ -53,7 +55,10 @@ protected:
 private:
   void PaintHtml(QPainter& painter);
   void PaintImage(QPainter& painter);
-  void PaintCaret(QPainter& painter);
+  // Recomputes the caret overlay layer (layer 1) from the focused element
+  // and the current scroll.  Returns true when the caret's screen rect or
+  // visibility changed since the last call.
+  bool UpdateCaretLayer();
   void OnCaretBlink();
   void UpdateTextOverlay();
   void EnsureLayout(int width);
@@ -93,6 +98,15 @@ private:
   int cached_height_ = -1;
   int cached_scroll_ = -1;
   std::uint64_t cached_layout_version_ = 0;
+
+  // Presentation compositor (ADR 0015): layer 0 = rasterized page, layer 1 =
+  // the caret overlay.  The GUI paints the compositor's output surface.
+  std::unique_ptr<compositor::Compositor> compositor_;
+  // Last computed caret overlay rect/visibility (output coordinates).
+  int caret_x_ = -1;
+  int caret_y_ = -1;
+  int caret_h_ = 0;
+  bool caret_drawn_ = false;
 };
 
 } // namespace neko::ui
