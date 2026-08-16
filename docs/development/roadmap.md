@@ -194,7 +194,16 @@ graph LR
 
 ## Phase 12 — Multi-process
 
-- [ ] Browser/Renderer/Network/GPU/Utility 进程模型 + IPC + 序列化
+- [x] **M1（ADR 0016）**：`neko::ipc`（帧协议 Channel + 跨平台 Subprocess）+
+      **Renderer 子进程**（`--renderer-child` 独立地址空间跑完整页面管线，
+      位图 + DOM 经 IPC 回传，子进程崩溃不带走浏览器）；CLI
+      `--renderer-process` 接入；12 IPC + 9 协议 + 1 端到端子进程测试
+- [ ] M2：GUI/BrowserController 接入 RendererHost（每站点子进程、崩溃
+      重建、会话复用）
+- [ ] M3：Network 进程（HTTP/TLS/DNS 搬出 Browser；cookie 裁决留在 Browser）
+- [ ] M4：GPU 进程（SoftwareCompositor 的 GPU 后端 + 共享内存大帧传输）
+- [ ] M5：沙箱（Linux seccomp/namespace、Windows AppContainer、macOS
+      sandbox-exec）+ 站点隔离
 - [ ] 崩溃处理与沙箱
 
 ## Phase 13 — Compatibility

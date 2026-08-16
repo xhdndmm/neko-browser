@@ -24,6 +24,12 @@ struct BrowserOptions {
   std::optional<std::string> profile_name;
   // --disable-gpu: force software rendering.
   bool disable_gpu = false;
+  // --renderer-process: load pages through an out-of-process renderer child
+  // (ADR 0016 M1; headless CLI only for now).
+  bool renderer_process = false;
+  // --renderer-child: internal mode — run as a renderer child serving
+  // LoadRequest frames on stdin/stdout (spawned by RendererHost).
+  bool renderer_child = false;
   // --verbose / --log-level <level>.
   base::LogLevel log_level = base::LogLevel::kInfo;
 

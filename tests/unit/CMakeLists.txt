@@ -201,16 +201,28 @@ apply_compiler_warnings(neko_storage_tests)
 gtest_discover_tests(neko_storage_tests DISCOVERY_MODE PRE_TEST)
 
 # -----------------------------------------------------------------------------
+# neko_ipc_tests
+# -----------------------------------------------------------------------------
+add_executable(neko_ipc_tests
+  ipc/ipc_test.cpp
+)
+target_link_libraries(neko_ipc_tests PRIVATE neko::ipc gtest_main)
+apply_compiler_warnings(neko_ipc_tests)
+gtest_discover_tests(neko_ipc_tests DISCOVERY_MODE PRE_TEST)
+
+# -----------------------------------------------------------------------------
 # neko_browser_tests
 # -----------------------------------------------------------------------------
 add_executable(neko_browser_tests
   browser/options_test.cpp
   browser/browser_controller_test.cpp
   browser/hyperlink_test.cpp
+  browser/renderer_protocol_test.cpp
 )
 target_link_libraries(neko_browser_tests PRIVATE neko::browser neko::browser_options gmock_main)
 target_compile_definitions(neko_browser_tests PRIVATE
   NEKO_TEST_PAGES_DIR="${CMAKE_SOURCE_DIR}/tests/pages"
+  NEKO_BROWSER_BIN="$<TARGET_FILE:neko_browser>"
 )
 apply_compiler_warnings(neko_browser_tests)
 gtest_discover_tests(neko_browser_tests DISCOVERY_MODE PRE_TEST)

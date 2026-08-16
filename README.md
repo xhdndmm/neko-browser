@@ -75,12 +75,17 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
 - **GUI（Qt6）**：标签页、地址栏、后退/前进/刷新/新标签/书签/下载、DevTools
   （DOM 树/网络日志/**JS Console REPL**）、历史/书签/下载/设置面板
 - **下载器**：Content-Disposition/URL 文件名、原子写入
+- **多进程（M1，ADR 0016）**：`neko::ipc`（帧协议 Channel + 跨平台 Subprocess）+
+  **Renderer 子进程**（`--renderer-child` 独立地址空间跑完整页面管线，位图 + DOM
+  经 IPC 回传，子进程崩溃不带走浏览器）；CLI `--renderer-process` 路由加载——
+  **PARTIAL**（GUI 接入/Network/GPU 进程/沙箱未开始）
 - **CLI**：`--url` / `--dump-dom` / `--screenshot` / `--dump-history` /
   `--dump-bookmarks` / `--show-cookies` / `--download` / `--extract-pdf` /
   `--audio-info` / `--image-info` 等
 
 > **诚实声明**：**GPU 合成**（Compositor 缝已就位，仅有 CPU 软件实现）、
-> 多进程均 **尚未实现**；
+> **完整多进程架构**均 **尚未实现**（M1 已交付：Renderer 子进程 + IPC，仅
+> CLI 接入；无沙箱/Network/GPU 进程，见 ADR 0016）；
 > 视频解码已接入 FFmpeg（MP4/H.264、WebM/VP9 实测），`<video>` 元素
 > 支持子集（播放/暂停/seek/duration，无 controls/音轨/缓冲）
 > （见[兼容性矩阵](docs/compatibility/compatibility-matrix.md)）。

@@ -30,6 +30,10 @@ std::string UsageText() {
       "      --video-out <file>     With --video-info: write the first frame as PPM.\n"         "      --eval <script>         Evaluate a JavaScript expression.\n"
          "      --profile <dir>        Browser profile directory.\n"
          "      --disable-gpu          Force software rendering.\n"
+         "      --renderer-process    Load pages through an out-of-process renderer\n"
+         "                            child (ADR 0016 M1; headless CLI).\n"
+         "      --renderer-child      Internal: serve renderer protocol on\n"
+         "                            stdin/stdout (spawned by --renderer-process).\n"
          "      --verbose              Enable debug logging.\n"
          "      --log-level <level>    One of trace, debug, info, warning, error, fatal.\n"
          "\n"
@@ -62,6 +66,14 @@ ParseResult ParseCommandLine(int argc, char** argv) {
     }
     if (arg == "--disable-gpu") {
       result.options.disable_gpu = true;
+      continue;
+    }
+    if (arg == "--renderer-process") {
+      result.options.renderer_process = true;
+      continue;
+    }
+    if (arg == "--renderer-child") {
+      result.options.renderer_child = true;
       continue;
     }
     if (arg == "--verbose") {

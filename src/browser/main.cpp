@@ -13,7 +13,10 @@
 #include "neko/browser/browser_controller.h"
 #include "neko/browser/browser_options.h"
 #include "neko/browser/page_scripts.h"
+#include "neko/browser/renderer_host.h"
+#include "neko/browser/renderer_protocol.h"
 #include "neko/image/image.h"
+#include "neko/ipc/channel.h"
 #include "neko/javascript/script_engine.h"
 #include "neko/media/audio.h"
 #include "neko/media/video.h"
@@ -33,6 +36,10 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+
+#ifndef _WIN32
+#include <csignal>
+#endif
 
 namespace {
 
@@ -301,8 +308,67 @@ void PrintJsResult(const neko::javascript::ScriptValue& value)
 
 } // namespace
 
+// Renderer child mode (ADR 0016 M1): the browser process spawns this binary
+// with --renderer-child and speaks the renderer protocol over stdin/stdout.
+// One LoadRequest per process for now (no session reuse); the child loads
+// the page through the same in-process pipeline the CLI uses, rasterizes the
+// viewport and replies with the frame + DOM text.
+int RunRendererChild()
+{
+  neko::ipc::Channel channel = neko::ipc::Channel::FromHandles(0, 1);
+
+  const auto request_frame = channel.Receive();
+  if (!request_frame.has_value()) {
+    std::cerr << "renderer child: failed to read request: "
+              << request_frame.error().message() << "\n";
+    return 1;
+  }
+  const auto request = neko::browser::DecodeLoadRequest(request_frame.value());
+  if (!request.has_value()) {
+    std::cerr << "renderer child: malformed request: " << request.error().message() << "\n";
+    return 1;
+  }
+
+  neko::browser::RendererLoadResult result;
+  neko::renderer::Page page;
+  const neko::base::Result<void> loaded =
+      LoadTarget(page, request.value().url, /*local_storage=*/nullptr, /*indexed_db=*/nullptr);
+  if (!loaded.has_value()) {
+    result.ok = false;
+    result.error = loaded.error().message();
+  } else {
+    const int width = std::max(1, request.value().viewport_width);
+    const int height = std::max(1, request.value().viewport_height);
+    // A fixed initial viewport height gives percentage-height chains a
+    // definite basis, mirroring the CLI screenshot path.
+    page.Layout(static_cast<float>(width), height);
+    const float content_height =
+        page.layout_root() != nullptr ? page.layout_root()->height : static_cast<float>(height);
+    const int full_height = std::max(height, static_cast<int>(content_height) + 40);
+    neko::paint::Rasterizer raster = page.Rasterize(width, full_height);
+    result.ok = true;
+    result.width = raster.width();
+    result.height = raster.height();
+    result.rgba = raster.pixels();
+    result.dom = page.DumpDom();
+    result.title = page.document()->Title();
+  }
+
+  const auto encoded = neko::browser::EncodeLoadResult(result);
+  if (!encoded.has_value() || !channel.Send(encoded.value())) {
+    std::cerr << "renderer child: failed to send the result\n";
+    return 1;
+  }
+  return 0;
+}
+
 int main(int argc, char** argv)
 {
+#ifndef _WIN32
+  // A peer (e.g. a renderer child) closing its pipe mid-write must surface
+  // as a failed write, not SIGPIPE terminating the browser process.
+  std::signal(SIGPIPE, SIG_IGN);
+#endif
   const neko::browser::ParseResult parsed = neko::browser::ParseCommandLine(argc, argv);
 
   switch (parsed.action) {
@@ -321,6 +387,12 @@ int main(int argc, char** argv)
 
   neko::base::Logger::Instance().SetLevel(parsed.options.log_level);
   NEKO_LOG_INFO("neko-browser " + std::string(neko::base::GetVersionString()));
+
+  // Renderer child mode: serve one load request on stdin/stdout and exit
+  // (spawned by browser::RendererHost; ADR 0016 M1).
+  if (parsed.options.renderer_child) {
+    return RunRendererChild();
+  }
 
   const std::string profile_dir = parsed.options.profile_name.has_value()
                                       ? parsed.options.profile_name.value()
@@ -527,8 +599,25 @@ int main(int argc, char** argv)
     NEKO_LOG_WARNING("failed to load indexedDB profile");
   }
   neko::renderer::Page page;
+  // The renderer-process result (ADR 0016 M1): set when --renderer-process
+  // routes the load through a child process instead of the in-process
+  // pipeline.
+  std::optional<neko::browser::RendererLoadResult> renderer_result;
 
-  if (parsed.options.url.has_value()) {
+  if (parsed.options.renderer_process) {
+    if (!parsed.options.url.has_value()) {
+      std::cerr << "error: --renderer-process requires --url\n";
+      return 1;
+    }
+    neko::browser::RendererHost host(neko::browser::SelfExecutablePath());
+    auto loaded = host.Load(parsed.options.url.value(), /*width=*/800, /*height=*/600);
+    if (!loaded.has_value()) {
+      std::cerr << "error: " << loaded.error().message() << "\n";
+      return 1;
+    }
+    renderer_result = std::move(loaded.value());
+    NEKO_LOG_INFO("renderer child loaded document title: " + renderer_result->title);
+  } else if (parsed.options.url.has_value()) {
     const neko::base::Result<void> loaded =
         LoadTarget(page, parsed.options.url.value(), &local_storage, &indexed_db);
     if (!loaded) {
@@ -541,7 +630,8 @@ int main(int argc, char** argv)
   }
 
   if (parsed.options.dump_dom) {
-    const std::string dump = page.DumpDom();
+    const std::string dump =
+        renderer_result.has_value() ? renderer_result->dom : page.DumpDom();
     std::cout << dump;
     if (!dump.empty() && dump.back() != '\n') {
       std::cout << '\n';
@@ -549,22 +639,38 @@ int main(int argc, char** argv)
   }
 
   if (parsed.options.screenshot_path.has_value()) {
-    constexpr float kViewportWidth = 800;
-    constexpr int kMinHeight = 600;
-    // A fixed initial viewport height gives percentage-height chains
-    // (html/body/... { height: 100% }) a definite basis to resolve against,
-    // matching a browser window rather than an unbounded "whole page" canvas.
-    page.Layout(kViewportWidth, kMinHeight);
-    const float content_height =
-        page.layout_root() != nullptr ? page.layout_root()->height : kMinHeight;
-    const int height = std::max(kMinHeight, static_cast<int>(content_height) + 40);
-    neko::paint::Rasterizer image = page.Rasterize(800, height);
-    const auto written = neko::paint::WritePpm(parsed.options.screenshot_path.value(), image);
-    if (!written) {
-      std::cerr << "error: " << written.error().message() << "\n";
-      return 1;
+    if (renderer_result.has_value()) {
+      // The child already rasterized the page; composite alpha over white
+      // and write the frame.
+      neko::image::Image frame;
+      frame.width = renderer_result->width;
+      frame.height = renderer_result->height;
+      frame.rgba = renderer_result->rgba;
+      const auto written = WriteImagePpm(parsed.options.screenshot_path.value(), frame);
+      if (!written) {
+        std::cerr << "error: " << written.error().message() << "\n";
+        return 1;
+      }
+      std::cout << "wrote screenshot (renderer process): "
+                << parsed.options.screenshot_path.value() << "\n";
+    } else {
+      constexpr float kViewportWidth = 800;
+      constexpr int kMinHeight = 600;
+      // A fixed initial viewport height gives percentage-height chains
+      // (html/body/... { height: 100% }) a definite basis to resolve against,
+      // matching a browser window rather than an unbounded "whole page" canvas.
+      page.Layout(kViewportWidth, kMinHeight);
+      const float content_height =
+          page.layout_root() != nullptr ? page.layout_root()->height : kMinHeight;
+      const int height = std::max(kMinHeight, static_cast<int>(content_height) + 40);
+      neko::paint::Rasterizer image = page.Rasterize(800, height);
+      const auto written = neko::paint::WritePpm(parsed.options.screenshot_path.value(), image);
+      if (!written) {
+        std::cerr << "error: " << written.error().message() << "\n";
+        return 1;
+      }
+      std::cout << "wrote screenshot: " << parsed.options.screenshot_path.value() << "\n";
     }
-    std::cout << "wrote screenshot: " << parsed.options.screenshot_path.value() << "\n";
   }
 
   NEKO_LOG_INFO("done");
