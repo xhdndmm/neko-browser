@@ -805,6 +805,67 @@ TEST_F(DomBinderTest, DocumentElementCollections)
                        "    && d.links instanceof Array && d.scripts instanceof Array; })()"));
 }
 
+TEST_F(DomBinderTest, DocumentCurrentScriptNullByDefault)
+{
+  // Outside of script execution document.currentScript is null.
+  EXPECT_TRUE(EvalBool("document.currentScript === null"));
+}
+
+TEST_F(DomBinderTest, DocumentCurrentScriptClearedBeforeTimers)
+{
+  // RunPageScripts clears currentScript right after each script body, so a
+  // timer scheduled by a script must never observe a stale script element
+  // (WHATWG HTML: currentScript is only set during synchronous execution).
+  dom::Element* el = dom::QuerySelector(*document_, "#main");
+  ASSERT_NE(el, nullptr);
+  binder_->SetCurrentScript(el);
+  binder_->SetCurrentScript(nullptr);
+
+  ASSERT_TRUE(EvalBool("(function(){ "
+                       "window._seen = 'unset'; "
+                       "setTimeout(function(){ window._seen = document.currentScript; }, 0); "
+                       "return true; })()"));
+  ASSERT_GT(binder_->RunPendingTimers(), 0);
+  EXPECT_TRUE(EvalBool("window._seen === null"));
+}
+
+TEST_F(DomBinderTest, DocumentCurrentScriptReturnsExecutingScript)
+{
+  // A real <script> element in the document (external src, as umi/utoo
+  // bundles use: they read currentScript.getAttribute('src') to locate their
+  // chunk manifest).
+  auto doc = html::Parser(R"(<html><head><script id="entry" src="app.js"></script></head>
+<body></body></html>)")
+                 .Parse();
+  DomBinder binder(*doc);
+  auto eval_bool = [&](const std::string& code) {
+    auto r = binder.Evaluate(code);
+    return r.has_value() && r.value().ToBoolean().has_value() && r.value().ToBoolean().value();
+  };
+
+  // Not executing: null.
+  EXPECT_TRUE(eval_bool("document.currentScript === null"));
+
+  dom::Element* script = dom::QuerySelector(*doc, "#entry");
+  ASSERT_NE(script, nullptr);
+
+  // While executing (as RunPageScripts does around each script body): the
+  // getter returns the element; src and getAttribute('src') both resolve.
+  binder.SetCurrentScript(script);
+  {
+    auto r = binder.Evaluate("document.currentScript.id + '|' + document.currentScript.src + '|' + "
+                             "document.currentScript.getAttribute('src')");
+    ASSERT_TRUE(r.has_value());
+    auto s = r.value().ToString();
+    ASSERT_TRUE(s.has_value());
+    EXPECT_EQ(s.value(), "entry|app.js|app.js");
+  }
+
+  // Cleared again: null.
+  binder.SetCurrentScript(nullptr);
+  EXPECT_TRUE(eval_bool("document.currentScript === null"));
+}
+
 // ---------------------------------------------------------------------------
 // Window extensions.
 // ---------------------------------------------------------------------------

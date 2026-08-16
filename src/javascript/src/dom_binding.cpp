@@ -690,6 +690,15 @@ struct Impl
     return dirty;
   }
 
+  // The <script> element whose body is currently executing (WHATWG HTML
+  // §4.12.1 document.currentScript); null outside of classic script
+  // execution.  Set/cleared by the browser layer around each script body.
+  dom::Element* current_script = nullptr;
+  void SetCurrentScript(dom::Element* element)
+  {
+    current_script = element;
+  }
+
   // Optional browser Web APIs (localStorage/fetch) wired by the browser layer.
   PageApis apis;
 
@@ -3683,6 +3692,19 @@ JSValue DocGetScripts(JSContext* ctx, JSValueConst this_val)
   return impl->MakeElementArray(CollectByTag(*node, "script"));
 }
 
+JSValue DocGetCurrentScript(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  // The element whose classic script body is currently executing (WHATWG
+  // HTML §4.12.1), or null outside of script execution.  Bundlers (e.g.
+  // umi/utoo) read this at entry time to locate their chunk manifest.
+  return impl->WrapNode(impl->current_script);
+}
+
 JSValue DocGetLinks(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
@@ -4749,6 +4771,10 @@ void DefineDocumentPrototype(JSContext* ctx, Impl& impl)
   DefineGetter(ctx, impl.document_proto, "images", MakeGetter(ctx, "images", DocGetImages));
   DefineGetter(ctx, impl.document_proto, "links", MakeGetter(ctx, "links", DocGetLinks));
   DefineGetter(ctx, impl.document_proto, "scripts", MakeGetter(ctx, "scripts", DocGetScripts));
+  DefineGetter(ctx,
+               impl.document_proto,
+               "currentScript",
+               MakeGetter(ctx, "currentScript", DocGetCurrentScript));
 }
 
 void DefineStylePrototype(JSContext* ctx, Impl& impl)
@@ -7727,6 +7753,11 @@ DomBinder::~DomBinder() = default;
 base::Result<ScriptValue> DomBinder::Evaluate(std::string_view source, std::string_view filename)
 {
   return impl_->engine.Evaluate(source, filename);
+}
+
+void DomBinder::SetCurrentScript(dom::Element* element)
+{
+  impl_->SetCurrentScript(element);
 }
 
 void DomBinder::SetConsoleSink(ScriptEngine::ConsoleSink sink)

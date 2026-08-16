@@ -315,6 +315,13 @@ public:
   // page's scripts have run.
   void DispatchDocumentEvent(std::string_view type);
 
+  // Sets the <script> element whose body is currently executing (WHATWG HTML
+  // §4.12.1).  The document.currentScript getter returns it while set, and
+  // null otherwise.  RunPageScripts sets it immediately before evaluating a
+  // script body and clears it afterwards; callers must always clear it (a
+  // script element left set would leak into later timers/events).
+  void SetCurrentScript(dom::Element* element);
+
   // Underlying engine (for tests and integration).
   ScriptEngine& engine();
   [[nodiscard]] dom::Document& document() const;

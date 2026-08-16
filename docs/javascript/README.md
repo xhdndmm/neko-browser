@@ -46,7 +46,10 @@
   `colorDepth`/`pixelDepth`（24）。
 - **Document**：`documentElement`、`body`、`head`、`readyState`（恒为
   `"complete"`，脚本在解析完成后运行）、`title`（读写）、`getElementById`、
-  `querySelector(All)`、`createElement`、`createTextNode`。
+  `querySelector(All)`、`createElement`、`createTextNode`、
+  `currentScript`（只读：返回正在执行脚本体的 `<script>` 元素，非脚本执行
+  期间为 `null`；`browser::RunPageScripts` 在每个脚本体执行前后设置/清除，
+  见下）。
 - **Node**：`nodeType`、`nodeName`、`textContent`（读写）、`parentNode`、
   `firstChild`、`lastChild`、`childNodes`、`appendChild`、`append`、
   `replaceChildren`、`insertBefore`、`removeChild`、`hasChildNodes`、

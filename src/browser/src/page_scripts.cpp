@@ -314,9 +314,14 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
   binder->SetConsoleSink(std::move(sink));
 
   // Runs one script body (inline text or fetched external file); failures are
-  // logged and do not stop the remaining scripts.
-  auto run_source = [&](std::string_view source, std::string_view filename) {
+  // logged and do not stop the remaining scripts.  |script| identifies the
+  // executing element for document.currentScript (WHATWG HTML §4.12.1): set
+  // while the body runs and cleared right after, so the getter is only
+  // non-null during the script's synchronous execution.
+  auto run_source = [&](dom::Element* script, std::string_view source, std::string_view filename) {
+    binder->SetCurrentScript(script);
     const auto result = binder->Evaluate(source, filename);
+    binder->SetCurrentScript(nullptr);
     if (!result.has_value()) {
       const std::string message = "Uncaught " + result.error().message();
       NEKO_LOG_WARNING("page script error: " + message);
@@ -364,7 +369,7 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     }
     const std::optional<std::string> source = script_source(script);
     if (source.has_value()) {
-      run_source(source.value(), "inline-script");
+      run_source(script, source.value(), "inline-script");
     }
   }
   // Pass 2: defer scripts in document order (they run after parsing, which
@@ -376,7 +381,7 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     }
     const std::optional<std::string> source = script_source(script);
     if (source.has_value()) {
-      run_source(source.value(), "deferred-script");
+      run_source(script, source.value(), "deferred-script");
     }
   }
   // Pass 3: async scripts in document order (approximation of the spec's
@@ -387,7 +392,7 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     }
     const std::optional<std::string> source = script_source(script);
     if (source.has_value()) {
-      run_source(source.value(), "async-script");
+      run_source(script, source.value(), "async-script");
     }
   }
 
