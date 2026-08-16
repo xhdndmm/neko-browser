@@ -20,16 +20,38 @@
 #include "neko/paint/rasterizer.h"
 #include "neko/pdf/pdf.h"
 #include "neko/renderer/page.h"
+#include "neko/security/origin.h"
 #include "neko/storage/file_util.h"
+#include "neko/storage/indexed_db.h"
+#include "neko/storage/local_storage.h"
 #include "neko/url/url.h"
 
 #include <algorithm>
 #include <cstdlib>
 #include <ctime>
+#include <filesystem>
 #include <iostream>
 #include <string>
 
 namespace {
+
+// Fetches http(s) URLs over the network and file:// URLs from disk, so local
+// pages resolve their relative subresources the same way a served page does.
+neko::base::Result<neko::network::HttpResponse> FetchAny(const neko::url::Url& url,
+                                                         std::string_view)
+{
+  if (url.scheme() == "file") {
+    auto bytes = neko::storage::ReadFile(url.path());
+    if (!bytes) {
+      return neko::base::Err(bytes.error());
+    }
+    neko::network::HttpResponse response;
+    response.status_code = 200;
+    response.body = std::move(bytes.value());
+    return response;
+  }
+  return neko::network::HttpGet(url);
+}
 
 std::string DefaultProfileDir()
 {
@@ -46,9 +68,12 @@ std::string DefaultProfileDir()
 
 // Loads a URL (http via the network stack) or a local file into the page.
 // Follows page-script navigation requests (window.location) recursively, up to
-// a depth cap so a redirect loop terminates.
-neko::base::Result<void>
-LoadTarget(neko::renderer::Page& page, const std::string& target, int depth = 0)
+// a depth cap so a redirect loop terminates.  When |local_storage| and
+// |indexed_db| are provided, page scripts get localStorage/indexedDB scoped
+// to the loaded page's origin.
+neko::base::Result<void> LoadTarget(neko::renderer::Page& page, const std::string& target,
+                                    neko::storage::LocalStorage* local_storage,
+                                    neko::storage::IndexedDbStore* indexed_db, int depth = 0)
 {
   constexpr int kMaxNavigationDepth = 20;
   if (depth >= kMaxNavigationDepth) {
@@ -85,6 +110,10 @@ LoadTarget(neko::renderer::Page& page, const std::string& target, int depth = 0)
       // async/defer); scripts may mutate the DOM and RunPageScripts
       // re-applies styles inside.
       neko::browser::ScriptRequestedNavigation requested;
+      neko::browser::PageScriptServices services;
+      services.local_storage = local_storage;
+      services.indexed_db = indexed_db;
+      services.origin = neko::security::Origin::FromUrl(url).Serialize();
       neko::browser::RunPageScripts(
           page,
           url.Serialize(),
@@ -92,16 +121,16 @@ LoadTarget(neko::renderer::Page& page, const std::string& target, int depth = 0)
           [](std::string_view level, std::string_view text) {
             std::cout << "[" << level << "] " << text << "\n";
           },
-          {},
+          services,
           &requested);
       // A script may have redirected the page (e.g. location.replace()).
       if (!requested.url.empty()) {
         NEKO_LOG_INFO("script navigated to " + requested.url);
-        return LoadTarget(page, requested.url, depth + 1);
+        return LoadTarget(page, requested.url, local_storage, indexed_db, depth + 1);
       }
       if (requested.is_reload) {
         NEKO_LOG_INFO("script reloaded " + url.Serialize());
-        return LoadTarget(page, url.Serialize(), depth + 1);
+        return LoadTarget(page, url.Serialize(), local_storage, indexed_db, depth + 1);
       }
       // Scripts may have injected <link rel=stylesheet> (e.g. Bing's
       // as-css-link) after the initial stylesheet pass; fetch those so the
@@ -125,6 +154,12 @@ LoadTarget(neko::renderer::Page& page, const std::string& target, int depth = 0)
         return r;
       }
       neko::browser::ScriptRequestedNavigation requested;
+      neko::browser::PageScriptServices services;
+      services.local_storage = local_storage;
+      services.indexed_db = indexed_db;
+      // Local pages share the opaque file origin (same treatment as the
+      // controller's non-URL content).
+      services.origin = "null";
       neko::browser::RunPageScripts(
           page,
           "",
@@ -132,19 +167,17 @@ LoadTarget(neko::renderer::Page& page, const std::string& target, int depth = 0)
           [](std::string_view level, std::string_view text) {
             std::cout << "[" << level << "] " << text << "\n";
           },
-          {},
+          services,
           &requested);
       if (!requested.url.empty()) {
         NEKO_LOG_INFO("script navigated to " + requested.url);
-        return LoadTarget(page, requested.url, depth + 1);
+        return LoadTarget(page, requested.url, local_storage, indexed_db, depth + 1);
       }
-      // Local pages may still reference absolute http(s) images; fetch those.
+      // Fetch the page's subresources: relative URLs resolve against the
+      // file:// base so local pages behave like served ones.
       neko::base::ThreadPool pool;
-      neko::browser::FetchPageImages(
-          page,
-          /*base_url=*/"",
-          [](const neko::url::Url& u, std::string_view) { return neko::network::HttpGet(u); },
-          pool);
+      neko::browser::FetchExternalStylesheets(page, url.Serialize(), FetchAny, pool);
+      neko::browser::FetchPageImages(page, url.Serialize(), FetchAny, pool);
       return neko::base::Ok();
     }
     return neko::base::Err(
@@ -155,6 +188,10 @@ LoadTarget(neko::renderer::Page& page, const std::string& target, int depth = 0)
     return r;
   }
   neko::browser::ScriptRequestedNavigation requested;
+  neko::browser::PageScriptServices services;
+  services.local_storage = local_storage;
+  services.indexed_db = indexed_db;
+  services.origin = "null";
   neko::browser::RunPageScripts(
       page,
       "",
@@ -162,12 +199,19 @@ LoadTarget(neko::renderer::Page& page, const std::string& target, int depth = 0)
       [](std::string_view level, std::string_view text) {
         std::cout << "[" << level << "] " << text << "\n";
       },
-      {},
+      services,
       &requested);
   if (!requested.url.empty()) {
     NEKO_LOG_INFO("script navigated to " + requested.url);
-    return LoadTarget(page, requested.url, depth + 1);
+    return LoadTarget(page, requested.url, local_storage, indexed_db, depth + 1);
   }
+  // Local page (opened by path without a scheme): fetch its subresources
+  // against an absolute file:// base so relative URLs resolve.
+  neko::base::ThreadPool pool;
+  const std::string base_url =
+      "file://" + std::filesystem::absolute(std::filesystem::path(target)).generic_string();
+  neko::browser::FetchExternalStylesheets(page, base_url, FetchAny, pool);
+  neko::browser::FetchPageImages(page, base_url, FetchAny, pool);
   return neko::base::Ok();
 }
 
@@ -300,6 +344,21 @@ int main(int argc, char** argv)
     for (const auto& page : doc.value().pages) {
       std::cout << "\n--- Page " << (page.index + 1) << " ---\n" << page.text << "\n";
     }
+    if (parsed.options.pdf_render_out.has_value()) {
+      const auto rendered = neko::pdf::RenderPage(
+          bytes.value(), parsed.options.pdf_page, parsed.options.pdf_scale);
+      if (!rendered) {
+        std::cerr << "error: pdf render: " << rendered.error().message() << "\n";
+        return 1;
+      }
+      const auto written =
+          WriteImagePpm(parsed.options.pdf_render_out.value(), rendered.value());
+      if (!written) {
+        std::cerr << "error: " << written.error().message() << "\n";
+        return 1;
+      }
+      std::cout << "wrote: " << parsed.options.pdf_render_out.value() << "\n";
+    }
     return 0;
   }
 
@@ -333,8 +392,27 @@ int main(int argc, char** argv)
       std::cerr << "error: " << image.error().message() << "\n";
       return 1;
     }
-    std::cout << "format      : " << (neko::image::IsPng(bytes.value()) ? "PNG" : "JPEG") << "\n"
+    const char* format = "unknown";
+    if (neko::image::IsPng(bytes.value())) {
+      format = "PNG";
+    } else if (neko::image::IsJpeg(bytes.value())) {
+      format = "JPEG";
+    } else if (neko::image::IsGif(bytes.value())) {
+      format = "GIF";
+    } else if (neko::image::IsWebp(bytes.value())) {
+      format = "WebP";
+    } else if (neko::image::IsAvif(bytes.value())) {
+      format = "AVIF";
+    }
+    std::cout << "format      : " << format << "\n"
               << "size        : " << image.value().width << " x " << image.value().height << "\n";
+    if (neko::image::IsGif(bytes.value())) {
+      const auto anim = neko::image::DecodeGifAnimation(bytes.value());
+      if (anim.has_value()) {
+        std::cout << "frames      : " << anim.value().frames.size()
+                  << (anim.value().loop_count == 0 ? " (loop forever)" : "") << "\n";
+      }
+    }
     if (parsed.options.image_out_ppm.has_value()) {
       const auto written = WriteImagePpm(parsed.options.image_out_ppm.value(), image.value());
       if (!written) {
@@ -396,10 +474,21 @@ int main(int argc, char** argv)
   // -------------------------------------------------------------------------
   // Page commands (--url / --dump-dom / --screenshot).
   // -------------------------------------------------------------------------
+  // Page scripts get localStorage/indexedDB scoped to the loaded origin; the
+  // stores persist into the profile and outlive the page load.
+  neko::storage::LocalStorage local_storage(profile_dir);
+  neko::storage::IndexedDbStore indexed_db(profile_dir);
+  if (!local_storage.Load()) {
+    NEKO_LOG_WARNING("failed to load local storage profile");
+  }
+  if (!indexed_db.Load()) {
+    NEKO_LOG_WARNING("failed to load indexedDB profile");
+  }
   neko::renderer::Page page;
 
   if (parsed.options.url.has_value()) {
-    const neko::base::Result<void> loaded = LoadTarget(page, parsed.options.url.value());
+    const neko::base::Result<void> loaded =
+        LoadTarget(page, parsed.options.url.value(), &local_storage, &indexed_db);
     if (!loaded) {
       std::cerr << "error: " << loaded.error().message() << "\n";
       return 1;

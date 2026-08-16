@@ -151,6 +151,72 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
       return keys;
     };
   }
+  // window.indexedDB: drive the per-origin IndexedDB store through the same
+  // callback pattern as localStorage.
+  if (services.indexed_db != nullptr) {
+    storage::IndexedDbStore* idb = services.indexed_db;
+    const std::string origin = services.origin;
+    apis.idb_current_version = [idb, origin](std::string_view db) {
+      return idb->CurrentVersion(origin, db);
+    };
+    apis.idb_create_db = [idb, origin](std::string_view db) {
+      return idb->CreateDatabase(origin, db);
+    };
+    apis.idb_set_version = [idb, origin](std::string_view db, int64_t version) {
+      return idb->SetVersion(origin, db, version);
+    };
+    apis.idb_delete_db = [idb, origin](std::string_view db) {
+      return idb->DeleteDatabase(origin, db);
+    };
+    apis.idb_store_names = [idb, origin](std::string_view db) {
+      const base::Result<std::vector<storage::IndexedDbStore::ObjectStoreMeta>> metas =
+          idb->ObjectStores(origin, db);
+      if (!metas.has_value()) {
+        return base::Result<std::vector<javascript::IdbStoreMeta>>(metas.error());
+      }
+      std::vector<javascript::IdbStoreMeta> out;
+      out.reserve(metas.value().size());
+      for (const auto& meta : metas.value()) {
+        javascript::IdbStoreMeta item;
+        item.name = meta.name;
+        item.key_path = meta.key_path;
+        item.auto_increment = meta.auto_increment;
+        out.push_back(std::move(item));
+      }
+      return base::Result<std::vector<javascript::IdbStoreMeta>>(std::move(out));
+    };
+    apis.idb_create_store = [idb, origin](std::string_view db, std::string_view store,
+                                          std::string_view key_path, bool auto_increment) {
+      return idb->CreateObjectStore(origin, db, store, key_path, auto_increment);
+    };
+    apis.idb_delete_store = [idb, origin](std::string_view db, std::string_view store) {
+      return idb->DeleteObjectStore(origin, db, store);
+    };
+    apis.idb_add = [idb, origin](std::string_view db, std::string_view store,
+                                 std::optional<std::string> key, std::string value) {
+      return idb->Add(origin, db, store, std::move(key), std::move(value));
+    };
+    apis.idb_put = [idb, origin](std::string_view db, std::string_view store,
+                                 std::optional<std::string> key, std::string value) {
+      return idb->Put(origin, db, store, std::move(key), std::move(value));
+    };
+    apis.idb_get = [idb, origin](std::string_view db, std::string_view store, std::string key) {
+      return idb->Get(origin, db, store, std::move(key));
+    };
+    apis.idb_delete = [idb, origin](std::string_view db, std::string_view store,
+                                    std::string key) {
+      return idb->Delete(origin, db, store, std::move(key));
+    };
+    apis.idb_clear = [idb, origin](std::string_view db, std::string_view store) {
+      return idb->Clear(origin, db, store);
+    };
+    apis.idb_count = [idb, origin](std::string_view db, std::string_view store) {
+      return idb->Count(origin, db, store);
+    };
+    apis.idb_get_all = [idb, origin](std::string_view db, std::string_view store) {
+      return idb->GetAll(origin, db, store);
+    };
+  }
   // Resolve relative URLs against the page's base URL.  Used by fetch() and
   // window.location assignments.
   const base::Result<url::Url> base = url::Url::Parse(base_url);

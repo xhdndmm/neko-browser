@@ -6,8 +6,10 @@
 #include "neko/dom/query.h"
 #include "neko/html/parser.h"
 #include "neko/javascript/dom_binding.h"
+#include "neko/storage/indexed_db.h"
 
 #include <chrono>
+#include <filesystem>
 #include <gtest/gtest.h>
 #include <map>
 #include <memory>
@@ -15,6 +17,8 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#include <unistd.h>
 
 namespace neko::javascript {
 namespace {
@@ -1394,6 +1398,349 @@ TEST_F(DomBinderTest, InsertAdjacentHTML)
   EvalString("document.getElementById('p1').insertAdjacentHTML('afterend','<i id=\"i1\">I</i>');");
   ASSERT_TRUE(EvalBool("document.getElementById('i1')!==null"));
   EXPECT_EQ(EvalString("document.getElementById('p1').nextSibling.id"), "i1");
+}
+
+// ---------------------------------------------------------------------------
+// window.indexedDB — binding tests over the real storage core
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Wires a real storage::IndexedDbStore (backed by a temp profile) into the
+// PageApis callbacks, mirroring browser::RunPageScripts.
+class IdbApis
+{
+public:
+  IdbApis(storage::IndexedDbStore& store) : store_(store) {}
+
+  PageApis Make()
+  {
+    // Capture the store by pointer (not |this|): the wiring object is a
+    // local, but the callbacks outlive it.
+    storage::IndexedDbStore* store = &store_;
+    PageApis apis;
+    apis.idb_current_version = [store](std::string_view db) { return store->CurrentVersion("https://idb.test", db); };
+    apis.idb_create_db = [store](std::string_view db) { return store->CreateDatabase("https://idb.test", db); };
+    apis.idb_set_version = [store](std::string_view db, int64_t version) {
+      return store->SetVersion("https://idb.test", db, version);
+    };
+    apis.idb_delete_db = [store](std::string_view db) { return store->DeleteDatabase("https://idb.test", db); };
+    apis.idb_store_names = [store](std::string_view db) {
+      const base::Result<std::vector<storage::IndexedDbStore::ObjectStoreMeta>> metas =
+          store->ObjectStores("https://idb.test", db);
+      if (!metas.has_value()) {
+        return base::Result<std::vector<IdbStoreMeta>>(metas.error());
+      }
+      std::vector<IdbStoreMeta> out;
+      for (const auto& meta : metas.value()) {
+        IdbStoreMeta item;
+        item.name = meta.name;
+        item.key_path = meta.key_path;
+        item.auto_increment = meta.auto_increment;
+        out.push_back(std::move(item));
+      }
+      return base::Result<std::vector<IdbStoreMeta>>(std::move(out));
+    };
+    apis.idb_create_store = [store](std::string_view db, std::string_view store_name,
+                                    std::string_view key_path, bool auto_increment) {
+      return store->CreateObjectStore("https://idb.test", db, store_name, key_path,
+                                      auto_increment);
+    };
+    apis.idb_delete_store = [store](std::string_view db, std::string_view store_name) {
+      return store->DeleteObjectStore("https://idb.test", db, store_name);
+    };
+    apis.idb_add = [store](std::string_view db, std::string_view store_name,
+                           std::optional<std::string> key, std::string value) {
+      return store->Add("https://idb.test", db, store_name, std::move(key), std::move(value));
+    };
+    apis.idb_put = [store](std::string_view db, std::string_view store_name,
+                           std::optional<std::string> key, std::string value) {
+      return store->Put("https://idb.test", db, store_name, std::move(key), std::move(value));
+    };
+    apis.idb_get = [store](std::string_view db, std::string_view store_name, std::string key) {
+      return store->Get("https://idb.test", db, store_name, std::move(key));
+    };
+    apis.idb_delete = [store](std::string_view db, std::string_view store_name, std::string key) {
+      return store->Delete("https://idb.test", db, store_name, std::move(key));
+    };
+    apis.idb_clear = [store](std::string_view db, std::string_view store_name) {
+      return store->Clear("https://idb.test", db, store_name);
+    };
+    apis.idb_count = [store](std::string_view db, std::string_view store_name) {
+      return store->Count("https://idb.test", db, store_name);
+    };
+    apis.idb_get_all = [store](std::string_view db, std::string_view store_name) {
+      return store->GetAll("https://idb.test", db, store_name);
+    };
+    return apis;
+  }
+
+private:
+  storage::IndexedDbStore& store_;
+};
+
+// A temp profile directory (removed on destruction) for the real store.
+class IdbTempProfile
+{
+public:
+  IdbTempProfile()
+  {
+    path_ = std::filesystem::temp_directory_path() /
+            ("neko_idb_js_" + std::to_string(::getpid()) + "_" + std::to_string(counter_++));
+    std::filesystem::create_directories(path_);
+  }
+  ~IdbTempProfile()
+  {
+    std::error_code ec;
+    std::filesystem::remove_all(path_, ec);
+  }
+  const std::string& path() const
+  {
+    return path_;
+  }
+
+private:
+  static int counter_;
+  std::string path_;
+};
+int IdbTempProfile::counter_ = 0;
+
+// A DomBinder wired to a real IndexedDbStore over a temp profile.
+class IndexedDbTest : public DomBinderTest
+{
+protected:
+  void SetUp() override
+  {
+    DomBinderTest::SetUp();
+    store_ = std::make_unique<storage::IndexedDbStore>(profile_.path());
+    ASSERT_TRUE(store_->Load().has_value());
+    IdbApis wiring(*store_);
+    idb_binder_ = std::make_unique<DomBinder>(*document_, wiring.Make());
+    idb_binder_->SetConsoleSink([this](std::string_view level, std::string_view text) {
+      console_.push_back(std::string(level) + ": " + std::string(text));
+    });
+  }
+
+  std::string IdbEval(const std::string& code)
+  {
+    auto r = idb_binder_->Evaluate(code);
+    if (!r.has_value()) {
+      return "<error: " + r.error().message() + ">";
+    }
+    auto s = r.value().ToString();
+    return s.has_value() ? s.value() : "<tostring-error>";
+  }
+
+  IdbTempProfile profile_;
+  std::unique_ptr<storage::IndexedDbStore> store_;
+  std::unique_ptr<DomBinder> idb_binder_;
+};
+
+} // namespace
+
+TEST_F(IndexedDbTest, OpenRunsUpgradeAndSucceeds)
+{
+  ASSERT_TRUE(idb_binder_
+                  ->Evaluate("var db, upgraded = false, store;\n"
+                             "var req = indexedDB.open('kv', 1);\n"
+                             "req.onupgradeneeded = function(e) {\n"
+                             "  upgraded = true;\n"
+                             "  db = e.target.result;\n"
+                             "  store = db.createObjectStore('items', {keyPath: 'id'});\n"
+                             "};\n"
+                             "req.onsuccess = function(e) { db = e.target.result; };")
+                  .has_value());
+  EXPECT_EQ(IdbEval("upgraded"), "true");
+  EXPECT_EQ(IdbEval("db.name"), "kv");
+  EXPECT_EQ(IdbEval("db.version"), "1");
+  EXPECT_EQ(IdbEval("db.objectStoreNames.length"), "1");
+  EXPECT_EQ(IdbEval("db.objectStoreNames[0]"), "items");
+  EXPECT_EQ(IdbEval("store.keyPath"), "id");
+  EXPECT_EQ(IdbEval("store.autoIncrement"), "false");
+}
+
+TEST_F(IndexedDbTest, AddGetAndTransactionComplete)
+{
+  ASSERT_TRUE(idb_binder_
+                  ->Evaluate("var db;\n"
+                             "indexedDB.open('kv', 1).onupgradeneeded = function(e) {\n"
+                             "  db = e.target.result;\n"
+                             "  db.createObjectStore('items', {keyPath: 'id'});\n"
+                             "};")
+                  .has_value());
+  ASSERT_TRUE(idb_binder_
+                  ->Evaluate("var got, done = false;\n"
+                             "var tx = db.transaction('items', 'readwrite');\n"
+                             "tx.oncomplete = function() { done = true; };\n"
+                             "var st = tx.objectStore('items');\n"
+                             "st.add({id: 1, label: 'one'});\n"
+                             "st.get(1).onsuccess = function(e) { got = e.target.result; };")
+                  .has_value());
+  EXPECT_EQ(IdbEval("got.label"), "one");
+  EXPECT_EQ(IdbEval("done"), "true");
+}
+
+TEST_F(IndexedDbTest, DuplicateAddFailsWithConstraintError)
+{
+  ASSERT_TRUE(idb_binder_
+                  ->Evaluate("var db;\n"
+                             "indexedDB.open('kv', 1).onupgradeneeded = function(e) {\n"
+                             "  db = e.target.result;\n"
+                             "  db.createObjectStore('items', {keyPath: 'id'});\n"
+                             "};")
+                  .has_value());
+  ASSERT_TRUE(idb_binder_
+                  ->Evaluate("var err;\n"
+                             "var tx = db.transaction('items', 'readwrite');\n"
+                             "tx.objectStore('items').add({id: 1, x: 1});\n"
+                             "var tx2 = db.transaction('items', 'readwrite');\n"
+                             "tx2.objectStore('items').add({id: 1, x: 2}).onerror = function(e) {\n"
+                             "  err = e.target.error;\n"
+                             "};")
+                  .has_value());
+  EXPECT_EQ(IdbEval("err.name"), "ConstraintError");
+}
+
+TEST_F(IndexedDbTest, AutoIncrementGeneratesKeys)
+{
+  ASSERT_TRUE(idb_binder_
+                  ->Evaluate("var db;\n"
+                             "indexedDB.open('auto', 1).onupgradeneeded = function(e) {\n"
+                             "  db = e.target.result;\n"
+                             "  db.createObjectStore('items', {autoIncrement: true});\n"
+                             "};")
+                  .has_value());
+  ASSERT_TRUE(idb_binder_
+                  ->Evaluate("var k1, k2;\n"
+                             "var tx = db.transaction('items', 'readwrite');\n"
+                             "var st = tx.objectStore('items');\n"
+                             "st.add({label: 'first'}).onsuccess = function(e) { k1 = e.target.result; };\n"
+                             "st.add({label: 'second'}).onsuccess = function(e) { k2 = e.target.result; };")
+                  .has_value());
+  EXPECT_EQ(IdbEval("k1"), "1");
+  EXPECT_EQ(IdbEval("k2"), "2");
+}
+
+TEST_F(IndexedDbTest, GetAllSortedAndCount)
+{
+  ASSERT_TRUE(idb_binder_
+                  ->Evaluate("var db;\n"
+                             "indexedDB.open('sorted', 1).onupgradeneeded = function(e) {\n"
+                             "  db = e.target.result;\n"
+                             "  db.createObjectStore('items');\n"
+                             "};")
+                  .has_value());
+  ASSERT_TRUE(idb_binder_
+                  ->Evaluate("var all, n;\n"
+                             "var tx = db.transaction('items', 'readwrite');\n"
+                             "var st = tx.objectStore('items');\n"
+                             "st.add('string-a', 'a');\n"
+                             "st.add('two', 2);\n"
+                             "st.add('one', 1);\n"
+                             "st.getAll().onsuccess = function(e) { all = e.target.result; };\n"
+                             "st.count().onsuccess = function(e) { n = e.target.result; };")
+                  .has_value());
+  // Numbers before strings, each ascending (values follow their keys).
+  EXPECT_EQ(IdbEval("JSON.stringify(all)"), "[\"one\",\"two\",\"string-a\"]");
+  EXPECT_EQ(IdbEval("n"), "3");
+}
+
+TEST_F(IndexedDbTest, LowerVersionFailsWithVersionError)
+{
+  ASSERT_TRUE(idb_binder_
+                  ->Evaluate("var db;\n"
+                             "indexedDB.open('kv', 2).onupgradeneeded = function(e) {\n"
+                             "  db = e.target.result;\n"
+                             "};")
+                  .has_value());
+  ASSERT_TRUE(idb_binder_
+                  ->Evaluate("var verr;\n"
+                             "indexedDB.open('kv', 1).onerror = function(e) { verr = e.target.error; };")
+                  .has_value());
+  EXPECT_EQ(IdbEval("verr.name"), "VersionError");
+}
+
+TEST_F(IndexedDbTest, ReadonlyTransactionRejectsWrites)
+{
+  ASSERT_TRUE(idb_binder_
+                  ->Evaluate("var db;\n"
+                             "indexedDB.open('kv', 1).onupgradeneeded = function(e) {\n"
+                             "  db = e.target.result;\n"
+                             "  db.createObjectStore('items');\n"
+                             "};")
+                  .has_value());
+  ASSERT_TRUE(idb_binder_
+                  ->Evaluate("var rerr;\n"
+                             "var tx = db.transaction('items', 'readonly');\n"
+                             "try { tx.objectStore('items').add({}); }\n"
+                             "catch (e) { rerr = e.name; }")
+                  .has_value());
+  EXPECT_EQ(IdbEval("rerr"), "ReadOnlyError");
+}
+
+TEST_F(IndexedDbTest, CreateStoreOutsideUpgradeThrows)
+{
+  ASSERT_TRUE(idb_binder_
+                  ->Evaluate("var db;\n"
+                             "indexedDB.open('kv', 1).onupgradeneeded = function(e) {\n"
+                             "  db = e.target.result;\n"
+                             "  db.createObjectStore('items');\n"
+                             "};")
+                  .has_value());
+  ASSERT_TRUE(idb_binder_
+                  ->Evaluate("var thrown;\n"
+                             "try { db.createObjectStore('late'); } catch (e) { thrown = e.name; }")
+                  .has_value());
+  EXPECT_EQ(IdbEval("thrown"), "InvalidStateError");
+}
+
+TEST_F(IndexedDbTest, DataPersistsAcrossBinders)
+{
+  ASSERT_TRUE(idb_binder_
+                  ->Evaluate("var db;\n"
+                             "indexedDB.open('kv', 1).onupgradeneeded = function(e) {\n"
+                             "  db = e.target.result;\n"
+                             "  db.createObjectStore('items', {keyPath: 'id'});\n"
+                             "};")
+                  .has_value());
+  ASSERT_TRUE(idb_binder_
+                  ->Evaluate("var tx = db.transaction('items', 'readwrite');\n"
+                             "tx.objectStore('items').add({id: 7, label: 'seven'});")
+                  .has_value());
+  // A second binder over the same store (a new page load) sees the record.
+  IdbApis wiring(*store_);
+  DomBinder second(*document_, wiring.Make());
+  ASSERT_TRUE(second
+                  .Evaluate("var db2, got;\n"
+                            "var req = indexedDB.open('kv');\n"
+                            "req.onsuccess = function(e) {\n"
+                            "  db2 = e.target.result;\n"
+                            "  var tx = db2.transaction('items');\n"
+                            "  tx.objectStore('items').get(7).onsuccess = function(e2) {\n"
+                            "    got = e2.target.result;\n"
+                            "  };\n"
+                            "};")
+                  .has_value());
+  auto label = second.Evaluate("got.label");
+  ASSERT_TRUE(label.has_value());
+  ASSERT_TRUE(label.value().ToString().has_value());
+  EXPECT_EQ(label.value().ToString().value(), "seven");
+}
+
+TEST_F(IndexedDbTest, DeleteDatabase)
+{
+  ASSERT_TRUE(idb_binder_
+                  ->Evaluate("var db;\n"
+                             "indexedDB.open('kv', 1).onupgradeneeded = function(e) {\n"
+                             "  db = e.target.result;\n"
+                             "};")
+                  .has_value());
+  ASSERT_TRUE(idb_binder_
+                  ->Evaluate("var del_ok = false;\n"
+                             "indexedDB.deleteDatabase('kv').onsuccess = function() { del_ok = true; };")
+                  .has_value());
+  EXPECT_EQ(IdbEval("del_ok"), "true");
+  EXPECT_EQ(store_->CurrentVersion("https://idb.test", "kv").value(), 0);
 }
 
 } // namespace

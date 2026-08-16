@@ -764,6 +764,71 @@ TEST(BrowserControllerTest, PageScriptLocalStoragePersists)
   EXPECT_EQ(read.value().ToString().value(), "value-1");
 }
 
+// The page's scripts can use window.indexedDB (scoped to the page origin),
+// persisting records across navigations to the same origin.
+TEST(BrowserControllerTest, PageScriptIndexedDbPersists)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<script>"
+                               "window._idb = 'pending';"
+                               "var req = indexedDB.open('kv', 1);"
+                               "req.onupgradeneeded = function(e) {"
+                               "  window._idb = 'upgraded';"
+                               "  var db = e.target.result;"
+                               "  db.createObjectStore('items', {keyPath: 'id'});"
+                               "};"
+                               "req.onsuccess = function(e) {"
+                               "  window._idb = 'opened';"
+                               "  var db = e.target.result;"
+                               "  var tx = db.transaction('items', 'readwrite');"
+                               "  tx.objectStore('items').add({id: 1, label: 'stored'});"
+                               "};"
+                               "</script>"
+                               "</body></html>"});
+  fetch.Add("http://example.com/other",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body><p>other</p>"
+                               "<script>"
+                               "window._idb = 'pending';"
+                               "var req = indexedDB.open('kv');"
+                               "req.onsuccess = function(e) {"
+                               "  var db = e.target.result;"
+                               "  var tx = db.transaction('items');"
+                               "  tx.objectStore('items').get(1).onsuccess = function(e2) {"
+                               "    window._idb = e2.target.result.label;"
+                               "  };"
+                               "};"
+                               "</script>"
+                               "</body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  ASSERT_NE(tab->script_runtime, nullptr);
+  auto opened = tab->script_runtime->Evaluate("window._idb");
+  ASSERT_TRUE(opened.has_value());
+  ASSERT_TRUE(opened.value().ToString().has_value());
+  EXPECT_EQ(opened.value().ToString().value(), "opened");
+
+  // A later page on the same origin reads the persisted record.
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/other").has_value());
+  Tab* tab2 = controller.ActiveTab();
+  ASSERT_NE(tab2, nullptr);
+  ASSERT_NE(tab2->script_runtime, nullptr);
+  auto read = tab2->script_runtime->Evaluate("window._idb");
+  ASSERT_TRUE(read.has_value());
+  ASSERT_TRUE(read.value().ToString().has_value());
+  EXPECT_EQ(read.value().ToString().value(), "stored");
+}
+
 // window.fetch resolves relative URLs and surfaces the response to the page.
 TEST(BrowserControllerTest, PageScriptFetch)
 {

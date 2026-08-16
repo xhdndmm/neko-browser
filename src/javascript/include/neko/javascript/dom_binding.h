@@ -45,6 +45,14 @@ struct ElementGeometry
   double border_left = 0;
 };
 
+// Metadata of one IndexedDB object store (name + key configuration).
+struct IdbStoreMeta
+{
+  std::string name;
+  std::string key_path; // empty = out-of-line keys
+  bool auto_increment = false;
+};
+
 // Optional browser Web APIs exposed to page scripts (Phase 8 M3 subset:
 // window.localStorage + window.fetch).  Callbacks keep the binder decoupled
 // from the storage/network implementations; the browser layer wires them
@@ -88,6 +96,37 @@ struct PageApis
   // absent (or for elements with no laid-out box) the geometry getters report
   // 0 / the zero rect.
   std::function<std::optional<ElementGeometry>(const dom::Element&)> element_geometry;
+
+  // window.indexedDB (per-origin; the caller scopes everything by origin).
+  // Records travel as JSON text (the structured-clone subset); keys are JSON
+  // numbers or strings.  Errors carry an "IDB:<ExceptionName>:" prefix.
+  std::function<base::Result<int64_t>(std::string_view db)> idb_current_version;
+  std::function<base::Result<int64_t>(std::string_view db)> idb_create_db;
+  std::function<base::Result<void>(std::string_view db, int64_t version)> idb_set_version;
+  std::function<base::Result<void>(std::string_view db)> idb_delete_db;
+  std::function<base::Result<std::vector<IdbStoreMeta>>(std::string_view db)> idb_store_names;
+  std::function<base::Result<void>(std::string_view db, std::string_view store,
+                                   std::string_view key_path, bool auto_increment)>
+      idb_create_store;
+  std::function<base::Result<void>(std::string_view db, std::string_view store)>
+      idb_delete_store;
+  std::function<base::Result<std::string>(std::string_view db, std::string_view store,
+                                          std::optional<std::string> key, std::string value)>
+      idb_add;
+  std::function<base::Result<std::string>(std::string_view db, std::string_view store,
+                                          std::optional<std::string> key, std::string value)>
+      idb_put;
+  std::function<base::Result<std::optional<std::string>>(std::string_view db,
+                                                         std::string_view store,
+                                                         std::string key)>
+      idb_get;
+  std::function<base::Result<void>(std::string_view db, std::string_view store, std::string key)>
+      idb_delete;
+  std::function<base::Result<void>(std::string_view db, std::string_view store)> idb_clear;
+  std::function<base::Result<int64_t>(std::string_view db, std::string_view store)> idb_count;
+  std::function<base::Result<std::vector<std::string>>(std::string_view db,
+                                                       std::string_view store)>
+      idb_get_all;
 };
 
 // Binds a DOM document into a JavaScript runtime, exposing a practical subset
@@ -109,7 +148,11 @@ struct PageApis
 //   window:     navigator, screen, innerWidth/innerHeight/devicePixelRatio
 //               (engine-default viewport 800x600@1x; real window-size wiring
 //               is future work), location, localStorage, fetch, history,
-//               performance.now(), requestAnimationFrame
+//               performance.now(), requestAnimationFrame, indexedDB
+//               (versioned databases, object stores with key path /
+//               auto-increment, add/put/get/delete/clear/count/getAll via
+//               transactions and IDBRequest-style objects with onsuccess/
+//               onerror handlers fired from microtasks; no cursors/indexes)
 //   navigator:  userAgent (same string the network stack sends), platform,
 //               language/languages ("en-US" defaults), onLine, cookieEnabled,
 //               hardwareConcurrency, vendor

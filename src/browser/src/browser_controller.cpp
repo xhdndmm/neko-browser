@@ -310,7 +310,7 @@ std::string_view ToString(ContentType type)
 BrowserController::BrowserController(std::string profile_dir, FetchFn fetch)
     : profile_dir_(std::move(profile_dir)), fetch_(std::move(fetch)), cookies_(profile_dir_),
       history_(profile_dir_), bookmarks_(profile_dir_), local_storage_(profile_dir_),
-      downloads_(profile_dir_ + "/downloads")
+      indexed_db_(profile_dir_), downloads_(profile_dir_ + "/downloads")
 {
   pool_ = std::make_unique<base::ThreadPool>();
   // Default fetch: network::HttpGet with the controller-provided cookie
@@ -862,15 +862,19 @@ void BrowserController::Reload()
 void BrowserController::PumpScriptTimers()
 {
   Tab* tab = ActiveTab();
-  if (tab == nullptr || tab->script_runtime == nullptr) {
+  if (tab == nullptr) {
     return;
   }
-  if (tab->script_runtime->RunPendingTimers() > 0) {
+  if (tab->script_runtime != nullptr && tab->script_runtime->RunPendingTimers() > 0 &&
+      tab->page != nullptr) {
     // Timers may have mutated the DOM; re-run the cascade so the next
     // Layout/Rasterize reflects the new state.
-    if (tab->page != nullptr) {
-      tab->page->ReapplyStyles();
-    }
+    tab->page->ReapplyStyles();
+  }
+  // Animated images (GIF) advance on the same frame clock; a changed frame
+  // bumps the page version so the UI repaints.
+  if (tab->page != nullptr) {
+    (void)tab->page->AdvanceAnimations();
   }
 }
 
@@ -1007,6 +1011,7 @@ void BrowserController::LoadBytes(Tab& tab,
     // localStorage (scoped to the page origin) and fetch.
     browser::PageScriptServices services;
     services.local_storage = &local_storage_;
+    services.indexed_db = &indexed_db_;
     services.origin = origin;
     // Fetch and apply the page's external <link rel=stylesheet> sheets before
     // scripts run, so scripts see the fully styled cascade.
@@ -1178,13 +1183,16 @@ base::Result<void> BrowserController::Load()
   auto r2 = history_.Load();
   auto r3 = bookmarks_.Load();
   auto r4 = local_storage_.Load();
+  auto r5 = indexed_db_.Load();
   if (!r1)
     return r1.error();
   if (!r2)
     return r2.error();
   if (!r3)
     return r3.error();
-  return r4;
+  if (!r4)
+    return r4.error();
+  return r5;
 }
 
 base::Result<void> BrowserController::Save()
@@ -1194,13 +1202,16 @@ base::Result<void> BrowserController::Save()
   auto r2 = history_.Save();
   auto r3 = bookmarks_.Save();
   auto r4 = local_storage_.Save();
+  auto r5 = indexed_db_.Save();
   if (!r1)
     return r1.error();
   if (!r2)
     return r2.error();
   if (!r3)
     return r3.error();
-  return r4;
+  if (!r4)
+    return r4.error();
+  return r5;
 }
 
 // ---------------------------------------------------------------------------
@@ -1231,6 +1242,7 @@ void BrowserController::ClearAllStorage()
   history_.Clear();
   bookmarks_.Clear();
   local_storage_.ClearAll();
+  indexed_db_.ClearAll();
   ClearNetworkLog();
   (void)Save();
 }
@@ -1456,7 +1468,14 @@ void FetchPageImages(renderer::Page& page,
     return;
   }
 
-  auto fetch_and_decode = [&fetch](const std::string& url) -> base::Result<image::Image> {
+  // A decoded image plus, for animated GIFs, the full frame set (the Image
+  // carries the first frame).
+  struct DecodedImage
+  {
+    image::Image image;
+    std::shared_ptr<image::GifAnimation> animation;
+  };
+  auto fetch_and_decode = [&fetch](const std::string& url) -> base::Result<DecodedImage> {
     const base::Result<url::Url> parsed = url::Url::Parse(url);
     if (!parsed.has_value()) {
       return base::Err(base::Error::InvalidArgument("invalid image URL"));
@@ -1467,7 +1486,30 @@ void FetchPageImages(renderer::Page& page,
     if (!response) {
       return base::Err(response.error());
     }
-    return image::DecodeImage(response.value().body);
+    const std::string& body = response.value().body;
+    DecodedImage out;
+    if (image::IsGif(body)) {
+      // Animated GIF: decode every frame; keep them for playback when the
+      // GIF has more than one.  A static GIF falls through to DecodeImage.
+      auto anim = image::DecodeGifAnimation(body);
+      if (!anim.has_value()) {
+        return base::Err(anim.error());
+      }
+      if (anim.value().frames.size() > 1) {
+        out.animation = std::make_shared<image::GifAnimation>(std::move(anim.value()));
+        out.image.width = out.animation->width;
+        out.image.height = out.animation->height;
+        out.image.rgba = out.animation->frames[0].rgba;
+        return out;
+      }
+      // Single-frame GIF: fall back to the plain decode path below.
+    }
+    auto decoded = image::DecodeImage(body);
+    if (!decoded.has_value()) {
+      return base::Err(decoded.error());
+    }
+    out.image = std::move(decoded.value());
+    return out;
   };
 
   if (pending.size() == 1) {
@@ -1477,13 +1519,15 @@ void FetchPageImages(renderer::Page& page,
       NEKO_LOG_WARNING("img: fetch/decode failed for " + pending[0].url);
       return;
     }
-    page.SetElementImage(*pending[0].element, std::move(decoded.value()));
+    page.SetElementImage(*pending[0].element,
+                         std::move(decoded.value().image),
+                         std::move(decoded.value().animation));
     NEKO_LOG_INFO("img: injected " + pending[0].url + " -> <" +
                   std::string(pending[0].element->tag_name()) + ">");
     return;
   }
 
-  std::vector<std::future<base::Result<image::Image>>> futures;
+  std::vector<std::future<base::Result<DecodedImage>>> futures;
   futures.reserve(pending.size());
   for (const PendingImage& item : pending) {
     futures.push_back(
@@ -1495,7 +1539,9 @@ void FetchPageImages(renderer::Page& page,
       NEKO_LOG_WARNING("img: fetch/decode failed for " + pending[i].url);
       continue;
     }
-    page.SetElementImage(*pending[i].element, std::move(decoded.value()));
+    page.SetElementImage(*pending[i].element,
+                         std::move(decoded.value().image),
+                         std::move(decoded.value().animation));
     NEKO_LOG_INFO("img: injected " + pending[i].url + " -> <" +
                   std::string(pending[i].element->tag_name()) + ">");
   }

@@ -11,6 +11,7 @@
 #include "neko/storage/bookmark_store.h"
 #include "neko/storage/cookie_store.h"
 #include "neko/storage/history_store.h"
+#include "neko/storage/indexed_db.h"
 #include "neko/storage/local_storage.h"
 
 #include <cstdint>
@@ -271,6 +272,10 @@ public:
   {
     return local_storage_;
   }
+  storage::IndexedDbStore& indexed_db()
+  {
+    return indexed_db_;
+  }
   DownloadManager& downloads()
   {
     return downloads_;
@@ -348,6 +353,7 @@ private:
   storage::HistoryStore history_;
   storage::BookmarkStore bookmarks_;
   storage::LocalStorage local_storage_;
+  storage::IndexedDbStore indexed_db_;
   DownloadManager downloads_;
 
   std::vector<NetworkLogEntry> network_log_;

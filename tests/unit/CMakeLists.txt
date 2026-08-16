@@ -181,6 +181,7 @@ gtest_discover_tests(neko_pdf_tests DISCOVERY_MODE PRE_TEST)
 # -----------------------------------------------------------------------------
 add_executable(neko_storage_tests
   storage/storage_test.cpp
+  storage/idb_test.cpp
 )
 target_link_libraries(neko_storage_tests PRIVATE neko::storage gmock_main)
 apply_compiler_warnings(neko_storage_tests)
@@ -216,7 +217,7 @@ add_executable(neko_javascript_tests
   javascript/dom_binding_test.cpp
   javascript/event_test.cpp
 )
-target_link_libraries(neko_javascript_tests PRIVATE neko::javascript gtest_main)
+target_link_libraries(neko_javascript_tests PRIVATE neko::javascript neko::storage gtest_main)
 apply_compiler_warnings(neko_javascript_tests)
 gtest_discover_tests(neko_javascript_tests DISCOVERY_MODE PRE_TEST)
 

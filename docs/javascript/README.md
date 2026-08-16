@@ -81,6 +81,17 @@
   相对 URL 按页面 base 解析；网络错误 reject。同步网络调用立即 resolve，
   由 microtask 泵送推进 `await`/`.then` 链。无 Request/AbortController/
   FormData。
+- `window.indexedDB`：`open(name[, version])`/`deleteDatabase(name)`（返回带
+  `onsuccess`/`onerror`/`onupgradeneeded` 与 `result`/`error`/`readyState`
+  的 IDBRequest 风格对象，回调经 microtask 派发）；`IDBDatabase` 提供
+  `createObjectStore`/`deleteObjectStore`（仅升级事务内）/`transaction`/
+  `objectStoreNames`；`IDBTransaction` 提供 `objectStore`/`oncomplete`/
+  `onabort`/`abort`（只读事务写入同步抛 `ReadOnlyError`，auto-commit）； 
+  `IDBObjectStore` 提供 `add`/`put`/`get`/`delete`/`clear`/`count`/`getAll`
+  （keyPath/autoIncrement 支持，键为 number|string，值走 JSON 结构化克隆
+  子集，重复 add 报 `ConstraintError`）。数据由 C++ `storage::IndexedDbStore`
+  按 origin 持久化到 `indexed_db.txt`（跨导航保留）。无游标/索引/范围、
+  无 Date/BinaryData/循环克隆；错误对象带 DOMException 风格 `.name`。
 - `window.matchMedia(query)`：按引擎固定视口（800×600）对常见媒体查询
   求值（`(min|max)-(width|height): Npx`、`orientation`、`prefers-color-scheme`、
   `prefers-reduced-motion`、`(any-)pointer`/`hover`），逗号列表按 OR 求值；

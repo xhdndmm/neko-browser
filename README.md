@@ -50,13 +50,19 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
 - **Style**：UA 样式表 + 级联 + 继承 + 计算样式（em/rem/百分比解析）
 - **Layout**：盒模型、block/inline 布局、文字换行、relative 定位
 - **Paint**：显示列表 + 软件光栅化 + 8x8 位图字体 + PPM 输出
-- **存储**：Cookie（RFC 6265 子集）、历史、书签 —— 自研行式文件 + 原子写入
-- **图像**：自研 PNG 解码器（chunk/CRC/滤波/Adam7/全部颜色类型）+ libjpeg/libwebp 封装
+- **存储**：Cookie（RFC 6265 子集）、历史、书签 —— 自研行式文件 + 原子写入；
+  **IndexedDB**：版本化数据库（open/onupgradeneeded）、对象存储
+  （keyPath/autoIncrement）、事务 + add/put/get/delete/clear/count/getAll、
+  微任务回调 —— **PARTIAL**（无游标/索引）
+- **图像**：自研 PNG 解码器（chunk/CRC/滤波/Adam7/全部颜色类型）+ 自研 GIF 解码器
+  （LZW/交错/透明/disposal + **动画**：全帧解码、循环次数、延迟钳制，页面内 `<img>`
+  与背景图由 50ms 帧时钟驱动播放）+ libjpeg/libwebp/libavif 封装（JPEG/WebP/**AVIF**）
 - **媒体**：自研 WAV 解码（PCM+float，8/16/24/32-bit）
-- **PDF**：文本提取（xref/FlateDecode/文本操作符）—— **PARTIAL**
+- **PDF**：文本提取 + **页面渲染**（矢量图形/描边/填充/文本、q-Q/cm 变换、xref
+  stream 与对象流、/MediaBox 继承）—— **PARTIAL**
 - **JavaScript**：QuickJS（quickjs-ng）runtime 封装 —— 核心语言 + console
   + 执行时限/内存上限 + **DOM 绑定与页内脚本执行**（`window === globalThis`、
-  事件/CustomEvent、setTimeout 事件循环、fetch/localStorage、matchMedia、
+  事件/CustomEvent、setTimeout 事件循环、fetch/localStorage/indexedDB、matchMedia、
   innerText 等子集，详见[兼容性矩阵](docs/compatibility/compatibility-matrix.md)）
 - **GUI（Qt6）**：标签页、地址栏、后退/前进/刷新/新标签/书签/下载、DevTools
   （DOM 树/网络日志/**JS Console REPL**）、历史/书签/下载/设置面板
@@ -65,11 +71,14 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
   `--dump-bookmarks` / `--show-cookies` / `--download` / `--extract-pdf` /
   `--audio-info` / `--image-info` 等
 
-> **诚实声明**：grid、**视频解码**、WebP/AVIF/GPU 合成、多进程、IndexedDB
-> 均 **尚未实现**
+> **诚实声明**：**视频解码**、GPU 合成、多进程均 **尚未实现**
 > （见[兼容性矩阵](docs/compatibility/compatibility-matrix.md)）。
-> JavaScript 仅接入 runtime（QuickJS），**无 DOM 绑定**；PDF 仅文本提取（无渲染）；
-> GIF 仅渲染首帧（无动画）；flexbox 为基础布局（无 auto 外边距/min-max/order）。
+> JavaScript 为 QuickJS runtime + 常用 DOM 绑定子集（无完整 Web IDL、WebSocket/XHR 等）；
+> IndexedDB 为子集（无游标/索引；值走 JSON 克隆，无 Date/BinaryData）；
+> PDF 渲染为子集（矢量路径填充/描边、变换、文本；无图像 XObject/裁剪/pattern/CMap）；
+> flexbox 已支持 order/min-max/auto 外边距；
+> grid 已支持 minmax()/命名线/命名区域/auto-flow/inline-grid；
+> GIF 已支持动画（直接导航到 .gif 仍显示首帧）。
 
 ---
 
@@ -161,7 +170,7 @@ src/
   storage/              Cookie / 历史 / 书签 持久化
   image/                PNG 自研解码 + JPEG(libjpeg)
   media/                WAV 解码
-  pdf/                  PDF 文本提取
+  pdf/                  PDF 文本提取 + 页面渲染
   javascript/           QuickJS runtime 封装
   browser/              BrowserController + 下载器 + CLI
   ui/                   Qt6 GUI（neko_gui / neko_gui_screenshot）
