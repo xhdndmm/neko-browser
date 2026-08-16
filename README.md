@@ -57,7 +57,10 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
 - **图像**：自研 PNG 解码器（chunk/CRC/滤波/Adam7/全部颜色类型）+ 自研 GIF 解码器
   （LZW/交错/透明/disposal + **动画**：全帧解码、循环次数、延迟钳制，页面内 `<img>`
   与背景图由 50ms 帧时钟驱动播放）+ libjpeg/libwebp/libavif 封装（JPEG/WebP/**AVIF**）
-- **媒体**：自研 WAV 解码（PCM+float，8/16/24/32-bit）
+- **媒体**：自研 WAV 解码（PCM+float，8/16/24/32-bit）；
+  **视频**：FFmpeg 解复用/解码（MP4/WebM、H.264/VP9 等，LGPL 动态链接，
+  ADR 0014）封装在 `media::MediaSource`/`DecodeVideo` 后 —— **PARTIAL**
+  （解码核心 + CLI，`<video>` 元素播放未接入）
 - **PDF**：文本提取 + **页面渲染**（矢量图形/描边/填充/文本、q-Q/cm 变换、xref
   stream 与对象流、/MediaBox 继承）—— **PARTIAL**
 - **JavaScript**：QuickJS（quickjs-ng）runtime 封装 —— 核心语言 + console
@@ -71,7 +74,9 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
   `--dump-bookmarks` / `--show-cookies` / `--download` / `--extract-pdf` /
   `--audio-info` / `--image-info` 等
 
-> **诚实声明**：**视频解码**、GPU 合成、多进程均 **尚未实现**
+> **诚实声明**：**GPU 合成**、多进程均 **尚未实现**；
+> 视频解码已接入 FFmpeg（MP4/H.264、WebM/VP9 实测）但 `<video>` 元素
+> 播放尚未接入（解码核心 + CLI 可用）
 > （见[兼容性矩阵](docs/compatibility/compatibility-matrix.md)）。
 > JavaScript 为 QuickJS runtime + 常用 DOM 绑定子集（无完整 Web IDL、WebSocket/XHR 等）；
 > IndexedDB 为子集（无游标/索引；值走 JSON 克隆，无 Date/BinaryData）；

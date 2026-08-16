@@ -35,11 +35,18 @@
 | Qt6 Widgets | 系统包 | GUI 基础设施（窗口/事件/控件，见 ADR 0006） | find_package | LGPL |
 | FreeType | 系统包 | 字体光栅化（封装在 neko::graphics 后，见 ADR 0009） | find_package | FTL（双许可选 FTL） |
 | OpenSSL | 系统包 | TLS/HTTPS（封装在 neko::network::TlsSocket 后，见 ADR 0010） | find_package | Apache-2.0 |
+| FFmpeg | 6.1（系统包） | 视频解复用/解码/像素转换（封装在 neko::media 后，见 ADR 0014） | find_package（pkg-config） | LGPL-2.1-or-later |
 
 > **libwebp 说明**：WebP 是当前 web 内容（尤其 Bing 等站点壁纸）的主要图片格式。
 > 自研 VP8/VP8L 解码器成本高且非本项目核心，因此封装 libwebp（BSD-3-Clause，
 > Google 维护，Linux/Windows/macOS 全平台，安全更新活跃）。封装在
 > `neko::image` 之后，接口与 PNG/JPEG/GIF 解码器一致。
+
+> **FFmpeg 说明**：视频解复用/解码（MP4/WebM、H.264/VP8/VP9 等）自研不现实
+> 且非本项目核心，故封装 FFmpeg（见 ADR 0014）。**LGPL 约束**：仅动态链接
+> 发行版构建（默认配置不含 GPL 组件），禁止链接 `libx264` 等 GPL 编解码器；
+> 如未来需静态链接，须随发行提供重链接目标文件（LGPL §4）。FFmpeg 头文件
+> 不越过 `src/media/src/video.cpp`。
 
 ## 未来候选依赖（引入时逐个评估）
 

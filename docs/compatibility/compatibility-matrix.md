@@ -49,7 +49,7 @@
 | 图像解码 AVIF | Implemented | 4 AVIF 单元测试（真实 AV1 无损夹具、magic 检测、分发） | libavif 封装（ISO-BMFF ftypavif/avis 检测，8 位 RGBA，画布 128 MiB 上限）；动画 AVIF（avis）仅首帧 |
 | 页面内 `<img>` 渲染 | Partial | Renderer + Layout + Paint 套件 | 子资源抓取+解码注入、行内原子盒（与文字同行）、replaced 尺寸（固有/显式/比例、presentational width/height）、object-fit fill/contain/cover/none/scale-down、vertical-align baseline/middle/top/bottom |
 | WAV 音频解码 | Tested | 13 媒体单元测试 | 自研 RIFF/WAVE，PCM+float，8/16/24/32-bit |
-| 视频解码（H.264/VP9 等） | Not Started | — | 显式 NOT IMPLEMENTED，架构预留 |
+| 视频解码（H.264/VP9 等） | Partial | 5 视频单元测试 | FFmpeg（ADR 0014）解复用/解码/像素转换，封装在 MediaSource/DecodeVideo 后（MP4/WebM 实测）；音频轨道忽略；`<video>` 元素播放尚未接入 |
 | PDF 文本提取 | Partial | 13 文本提取测试 | xref（含 /Prev）与 xref stream、FlateDecode、内容流文本操作符；无 CMap/加密 |
 | PDF 页面渲染 | Partial | 8 渲染测试（含 xref stream/ObjStm） | 矢量路径（非零/奇偶填充、描边）、q-Q/cm、文本（FreeType + /Widths）、/ObjStm、/MediaBox 继承与实数值；无图像 XObject/裁剪/pattern/CMap |
 | Cookie（RFC 6265 子集） | Tested | 29 存储单元测试 | Set-Cookie、域/路径匹配、Max-Age、Secure/HttpOnly/SameSite；PSL 与 SameSite 强制标注为限制 |

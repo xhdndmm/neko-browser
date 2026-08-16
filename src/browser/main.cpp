@@ -16,6 +16,7 @@
 #include "neko/image/image.h"
 #include "neko/javascript/script_engine.h"
 #include "neko/media/audio.h"
+#include "neko/media/video.h"
 #include "neko/network/http.h"
 #include "neko/paint/rasterizer.h"
 #include "neko/pdf/pdf.h"
@@ -420,6 +421,40 @@ int main(int argc, char** argv)
         return 1;
       }
       std::cout << "wrote: " << parsed.options.image_out_ppm.value() << "\n";
+    }
+    return 0;
+  }
+
+  if (parsed.options.video_info_path.has_value()) {
+    auto bytes = neko::storage::ReadFile(parsed.options.video_info_path.value());
+    if (!bytes) {
+      std::cerr << "error: " << bytes.error().message() << "\n";
+      return 1;
+    }
+    auto video = neko::media::DecodeVideo(bytes.value());
+    if (!video) {
+      std::cerr << "error: " << video.error().message() << "\n";
+      return 1;
+    }
+    std::cout << "container   : " << video.value().format_name << "\n"
+              << "codec       : " << video.value().codec_name << "\n"
+              << "size        : " << video.value().width << " x " << video.value().height
+              << "\n"
+              << "duration    : " << video.value().duration_seconds << " s\n"
+              << "frame rate  : " << video.value().frame_rate << " fps\n"
+              << "frames      : " << video.value().frames.size() << "\n";
+    if (parsed.options.video_out_ppm.has_value()) {
+      if (video.value().frames.empty()) {
+        std::cerr << "error: no frames decoded\n";
+        return 1;
+      }
+      const auto written =
+          WriteImagePpm(parsed.options.video_out_ppm.value(), video.value().frames[0].image);
+      if (!written) {
+        std::cerr << "error: " << written.error().message() << "\n";
+        return 1;
+      }
+      std::cout << "wrote: " << parsed.options.video_out_ppm.value() << "\n";
     }
     return 0;
   }

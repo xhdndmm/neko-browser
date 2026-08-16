@@ -26,8 +26,8 @@ std::string UsageText() {
          "      --extract-pdf <file>   Extract text from a PDF; with --pdf-render-out,\n"
          "                            rasterize a page to PPM.\n"
          "      --audio-info <file>    Print WAV metadata.\n"
-         "      --image-info <file>    Decode an image; optionally write PPM via --image-out.\n"
-         "      --eval <script>         Evaluate a JavaScript expression.\n"
+         "      --image-info <file>    Decode an image; optionally write PPM via --image-out.\n"      "      --video-info <file>    Decode a video (FFmpeg); print container/codec/metadata.\n"
+      "      --video-out <file>     With --video-info: write the first frame as PPM.\n"         "      --eval <script>         Evaluate a JavaScript expression.\n"
          "      --profile <dir>        Browser profile directory.\n"
          "      --disable-gpu          Force software rendering.\n"
          "      --verbose              Enable debug logging.\n"
@@ -178,6 +178,24 @@ ParseResult ParseCommandLine(int argc, char** argv) {
         return result;
       }
       result.options.image_out_ppm = std::string(args[++i]);
+      continue;
+    }
+    if (arg == "--video-info") {
+      if (i + 1 >= args.size()) {
+        result.action = ParseResult::Action::kError;
+        result.error_message = "option '--video-info' requires an argument";
+        return result;
+      }
+      result.options.video_info_path = std::string(args[++i]);
+      continue;
+    }
+    if (arg == "--video-out") {
+      if (i + 1 >= args.size()) {
+        result.action = ParseResult::Action::kError;
+        result.error_message = "option '--video-out' requires an argument";
+        return result;
+      }
+      result.options.video_out_ppm = std::string(args[++i]);
       continue;
     }
     if (arg == "--eval") {

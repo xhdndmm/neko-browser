@@ -163,6 +163,9 @@ add_executable(neko_media_tests
   media/media_test.cpp
 )
 target_link_libraries(neko_media_tests PRIVATE neko::media gtest_main)
+target_compile_definitions(neko_media_tests PRIVATE
+  NEKO_TEST_PAGES_DIR="${CMAKE_SOURCE_DIR}/tests/pages"
+)
 apply_compiler_warnings(neko_media_tests)
 gtest_discover_tests(neko_media_tests DISCOVERY_MODE PRE_TEST)
 

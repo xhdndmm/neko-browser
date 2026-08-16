@@ -42,6 +42,8 @@ struct BrowserOptions {
   std::optional<std::string> audio_info_path;  // --audio-info <file>
   std::optional<std::string> image_info_path;  // --image-info <file>
   std::optional<std::string> image_out_ppm;    // --image-out <path>
+  std::optional<std::string> video_info_path;  // --video-info <file>
+  std::optional<std::string> video_out_ppm;    // --video-out <path> (first frame)
   // --eval <script>: evaluate a JavaScript expression (QuickJS runtime).
   std::optional<std::string> eval_script;
 };
