@@ -109,7 +109,8 @@ TEST(FrameTest, RejectsOversizedFrameLength)
 TEST(FrameTest, RejectsTruncatedBody)
 {
   // Header claims 10 bytes but only 3 follow.
-  std::string frame = "\x0a\x00\x00\x00abc";
+  std::string frame = "\x0a\x00\x00\x00"
+                      "abc";
   const auto decoded = DecodeFrame(frame);
   ASSERT_FALSE(decoded.has_value());
   EXPECT_EQ(decoded.error().category(), base::ErrorCategory::kInvalidArgument);

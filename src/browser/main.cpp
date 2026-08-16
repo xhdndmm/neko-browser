@@ -343,7 +343,7 @@ int RunRendererChild()
     const int height = std::max(1, request.value().viewport_height);
     // A fixed initial viewport height gives percentage-height chains a
     // definite basis, mirroring the CLI screenshot path.
-    page.Layout(static_cast<float>(width), height);
+    page.Layout(static_cast<float>(width), static_cast<float>(height));
     const float content_height =
         page.layout_root() != nullptr ? page.layout_root()->height : static_cast<float>(height);
     const int full_height = std::max(height, static_cast<int>(content_height) + 40);

@@ -5430,7 +5430,8 @@ void SettleIdbDataRequest(Impl* impl,
   }
   if (request->tx_handle >= 0 &&
       static_cast<std::size_t>(request->tx_handle) < impl->idb_handles.size()) {
-    const std::shared_ptr<Impl::IdbHandle>& tx = impl->idb_handles[request->tx_handle];
+    const std::shared_ptr<Impl::IdbHandle>& tx =
+        impl->idb_handles[static_cast<std::size_t>(request->tx_handle)];
     if (tx->kind == Impl::IdbHandle::Kind::kTransaction && tx->pending > 0) {
       --tx->pending;
       if (tx->pending == 0 && !tx->completed && !tx->aborted) {
@@ -5832,7 +5833,8 @@ JSValue IdbStoreOp(
       static_cast<std::size_t>(store->tx_handle) >= impl->idb_handles.size()) {
     return ThrowIdbError(ctx, "InvalidStateError", "transaction is no longer active");
   }
-  const std::shared_ptr<Impl::IdbHandle>& tx = impl->idb_handles[store->tx_handle];
+  const std::shared_ptr<Impl::IdbHandle>& tx =
+      impl->idb_handles[static_cast<std::size_t>(store->tx_handle)];
   if (tx->aborted) {
     return ThrowIdbError(ctx, "TransactionInactiveError", "transaction was aborted");
   }
@@ -6067,7 +6069,8 @@ JSValue IdbTransactionObjectStore(JSContext* ctx,
   if (tx->db_handle < 0 || static_cast<std::size_t>(tx->db_handle) >= impl->idb_handles.size()) {
     return ThrowIdbError(ctx, "InvalidStateError", "transaction is no longer active");
   }
-  const std::shared_ptr<Impl::IdbHandle>& db = impl->idb_handles[tx->db_handle];
+  const std::shared_ptr<Impl::IdbHandle>& db =
+      impl->idb_handles[static_cast<std::size_t>(tx->db_handle)];
   const Impl::IdbStoreInfo* info = nullptr;
   for (const Impl::IdbStoreInfo& candidate : db->stores) {
     if (candidate.name == name) {
@@ -6156,7 +6159,8 @@ BindIdbMethod(JSContext* ctx, JSValue obj, const char* name, JSCFunctionData* fn
 
 JSValue MakeIdbDatabaseObject(Impl* impl, JSContext* ctx, int handle_idx)
 {
-  const std::shared_ptr<Impl::IdbHandle>& handle = impl->idb_handles[handle_idx];
+  const std::shared_ptr<Impl::IdbHandle>& handle =
+      impl->idb_handles[static_cast<std::size_t>(handle_idx)];
   JSValue obj = JS_NewObject(ctx);
   JS_SetPropertyStr(ctx, obj, "name", JS_NewString(ctx, handle->db_name.c_str()));
   JS_SetPropertyStr(ctx, obj, "version", JS_NewInt64(ctx, handle->version));
@@ -6179,7 +6183,8 @@ JSValue MakeIdbDatabaseObject(Impl* impl, JSContext* ctx, int handle_idx)
 
 JSValue MakeIdbTransactionObject(Impl* impl, JSContext* ctx, int handle_idx)
 {
-  const std::shared_ptr<Impl::IdbHandle>& handle = impl->idb_handles[handle_idx];
+  const std::shared_ptr<Impl::IdbHandle>& handle =
+      impl->idb_handles[static_cast<std::size_t>(handle_idx)];
   JSValue obj = JS_NewObject(ctx);
   JS_SetPropertyStr(ctx, obj, "mode", JS_NewString(ctx, handle->mode.c_str()));
   JS_SetPropertyStr(ctx, obj, "oncomplete", JS_UNDEFINED);
@@ -6197,11 +6202,12 @@ JSValue MakeIdbTransactionObject(Impl* impl, JSContext* ctx, int handle_idx)
 
 JSValue MakeIdbStoreObject(Impl* impl, JSContext* ctx, int handle_idx)
 {
-  const std::shared_ptr<Impl::IdbHandle>& handle = impl->idb_handles[handle_idx];
+  const std::shared_ptr<Impl::IdbHandle>& handle =
+      impl->idb_handles[static_cast<std::size_t>(handle_idx)];
   const Impl::IdbHandle* db = nullptr;
   if (handle->db_handle >= 0 &&
       static_cast<std::size_t>(handle->db_handle) < impl->idb_handles.size()) {
-    db = impl->idb_handles[handle->db_handle].get();
+    db = impl->idb_handles[static_cast<std::size_t>(handle->db_handle)].get();
   }
   JSValue obj = JS_NewObject(ctx);
   JS_SetPropertyStr(ctx, obj, "name", JS_NewString(ctx, handle->store_name.c_str()));

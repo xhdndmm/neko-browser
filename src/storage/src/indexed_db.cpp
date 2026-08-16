@@ -139,11 +139,9 @@ base::Result<void> IndexedDbStore::Load()
     }
     return file.error();
   }
-  std::size_t line_no = 0;
   std::size_t pos = 0;
   const std::string& data = file.value();
   while (pos < data.size()) {
-    ++line_no;
     const std::size_t nl = data.find('\n', pos);
     const std::size_t len = nl == std::string::npos ? data.size() - pos : nl - pos;
     // NOTE: view directly into |data| — binding to the temporary returned by

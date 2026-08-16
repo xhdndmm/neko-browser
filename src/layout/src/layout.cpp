@@ -2562,27 +2562,28 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
 
       // Named lines per axis: the explicit [name] lines plus the implicit
       // <name>-start / <name>-end lines the template areas create.
-      const auto build_line_names = [](const std::vector<std::vector<std::string>>& explicit_lines,
-                                       int track_count,
-                                       const std::vector<std::vector<std::string>>& areas,
-                                       bool horizontal,
-                                       const std::map<std::string, AreaRect>& rects) {
-        std::vector<std::vector<std::string>> lines(static_cast<std::size_t>(track_count) + 1);
-        for (std::size_t i = 0; i < explicit_lines.size() && i < lines.size(); ++i) {
-          lines[i] = explicit_lines[i];
-        }
-        for (const auto& [name, rect] : rects) {
-          const int start = horizontal ? rect.c0 : rect.r0;
-          const int end = horizontal ? rect.c1 + 1 : rect.r1 + 1;
-          if (start >= 0 && start < static_cast<int>(lines.size())) {
-            lines[static_cast<std::size_t>(start)].push_back(name + "-start");
-          }
-          if (end >= 0 && end < static_cast<int>(lines.size())) {
-            lines[static_cast<std::size_t>(end)].push_back(name + "-end");
-          }
-        }
-        return lines;
-      };
+      const auto build_line_names =
+          [](const std::vector<std::vector<std::string>>& explicit_lines,
+             int track_count,
+             [[maybe_unused]] const std::vector<std::vector<std::string>>& areas,
+             bool horizontal,
+             const std::map<std::string, AreaRect>& rects) {
+            std::vector<std::vector<std::string>> lines(static_cast<std::size_t>(track_count) + 1);
+            for (std::size_t i = 0; i < explicit_lines.size() && i < lines.size(); ++i) {
+              lines[i] = explicit_lines[i];
+            }
+            for (const auto& [name, rect] : rects) {
+              const int start = horizontal ? rect.c0 : rect.r0;
+              const int end = horizontal ? rect.c1 + 1 : rect.r1 + 1;
+              if (start >= 0 && start < static_cast<int>(lines.size())) {
+                lines[static_cast<std::size_t>(start)].push_back(name + "-start");
+              }
+              if (end >= 0 && end < static_cast<int>(lines.size())) {
+                lines[static_cast<std::size_t>(end)].push_back(name + "-end");
+              }
+            }
+            return lines;
+          };
       const std::vector<std::vector<std::string>> col_lines = build_line_names(
           cs.grid_column_lines, explicit_cols, areas, /*horizontal=*/true, area_rects);
       const std::vector<std::vector<std::string>> row_lines = build_line_names(

@@ -36,6 +36,8 @@ std::string_view ToString(Display display)
     return "table-caption";
   case Display::kListItem:
     return "list-item";
+  case Display::kInlineGrid:
+    return "inline-grid";
   }
   return "unknown";
 }
