@@ -16,5 +16,5 @@ target_compile_features(neko_pdf PUBLIC cxx_std_20)
 target_include_directories(neko_pdf PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
-target_link_libraries(neko_pdf PUBLIC neko::base ZLIB::ZLIB)
+target_link_libraries(neko_pdf PUBLIC neko::base neko::graphics neko::image ZLIB::ZLIB)
 apply_compiler_warnings(neko_pdf)

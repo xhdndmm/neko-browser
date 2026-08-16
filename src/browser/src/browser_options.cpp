@@ -23,7 +23,8 @@ std::string UsageText() {
          "      --show-cookies         Print the stored cookies.\n"
          "      --download <url>       Download a URL to the download directory.\n"
          "      --download-dir <dir>   Download directory (default: <profile>/downloads).\n"
-         "      --extract-pdf <file>   Extract text from a PDF.\n"
+         "      --extract-pdf <file>   Extract text from a PDF; with --pdf-render-out,\n"
+         "                            rasterize a page to PPM.\n"
          "      --audio-info <file>    Print WAV metadata.\n"
          "      --image-info <file>    Decode an image; optionally write PPM via --image-out.\n"
          "      --eval <script>         Evaluate a JavaScript expression.\n"
@@ -122,6 +123,34 @@ ParseResult ParseCommandLine(int argc, char** argv) {
         return result;
       }
       result.options.extract_pdf_path = std::string(args[++i]);
+      continue;
+    }
+    if (arg == "--pdf-render-out") {
+      if (i + 1 >= args.size()) {
+        result.action = ParseResult::Action::kError;
+        result.error_message = "option '--pdf-render-out' requires an argument";
+        return result;
+      }
+      result.options.pdf_render_out = std::string(args[++i]);
+      continue;
+    }
+    if (arg == "--pdf-page") {
+      if (i + 1 >= args.size()) {
+        result.action = ParseResult::Action::kError;
+        result.error_message = "option '--pdf-page' requires an argument";
+        return result;
+      }
+      result.options.pdf_page = std::atoi(std::string(args[++i]).c_str());
+      continue;
+    }
+    if (arg == "--pdf-scale") {
+      if (i + 1 >= args.size()) {
+        result.action = ParseResult::Action::kError;
+        result.error_message = "option '--pdf-scale' requires an argument";
+        return result;
+      }
+      result.options.pdf_scale =
+          static_cast<float>(std::atof(std::string(args[++i]).c_str()));
       continue;
     }
     if (arg == "--audio-info") {

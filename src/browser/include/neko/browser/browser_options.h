@@ -34,6 +34,11 @@ struct BrowserOptions {
   std::optional<std::string> download_url;     // --download <url>
   std::optional<std::string> download_dir;     // --download-dir <dir>
   std::optional<std::string> extract_pdf_path; // --extract-pdf <file>
+  // PDF page rendering (with --extract-pdf): write the rasterized page as a
+  // binary PPM.
+  std::optional<std::string> pdf_render_out; // --pdf-render-out <path>
+  int pdf_page = 0;                          // --pdf-page <n> (0-based)
+  float pdf_scale = 1.0f;                    // --pdf-scale <f> (1 = 72 dpi)
   std::optional<std::string> audio_info_path;  // --audio-info <file>
   std::optional<std::string> image_info_path;  // --image-info <file>
   std::optional<std::string> image_out_ppm;    // --image-out <path>
