@@ -699,6 +699,10 @@ struct Impl
     current_script = element;
   }
 
+  // DOMImplementation object (document.implementation): a small subset of
+  // the DOM Core contract used by script bootstraps and legacy libraries.
+  JSValue document_implementation = JS_UNDEFINED;
+
   // Optional browser Web APIs (localStorage/fetch) wired by the browser layer.
   PageApis apis;
 
@@ -3315,6 +3319,83 @@ JSValue DocGetTitle(JSContext* ctx, JSValueConst this_val)
   return JS_NewStringLen(ctx, title.data(), title.size());
 }
 
+JSValue DocumentImplementationHasFeature(JSContext* ctx,
+                                        JSValueConst /*this_val*/,
+                                        int argc,
+                                        JSValueConst* argv)
+{
+  if (argc < 1) {
+    return JS_FALSE;
+  }
+  bool ok = false;
+  const std::string feature = ToLower(ArgString(ctx, argv[0], &ok));
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  if (argc >= 2) {
+    // |version| is accepted but not yet used to differentiate partial support.
+    bool version_ok = false;
+    (void)ArgString(ctx, argv[1], &version_ok);
+  }
+  return feature == "html" || feature == "dom" || feature == "core" || feature == "xml" ||
+                 feature == "css" || feature == "css2" || feature == "html5"
+             ? JS_TRUE
+             : JS_FALSE;
+}
+
+JSValue DocumentImplementationCreateHTMLDocument(JSContext* ctx,
+                                                JSValueConst this_val,
+                                                int argc,
+                                                JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  bool ok = false;
+  const std::string title = argc >= 1 ? ArgString(ctx, argv[0], &ok) : std::string();
+  if (argc >= 1 && !ok) {
+    return JS_EXCEPTION;
+  }
+
+  auto document = std::make_unique<dom::Document>();
+  auto html = std::make_unique<dom::Element>("html");
+  auto head = std::make_unique<dom::Element>("head");
+  auto body = std::make_unique<dom::Element>("body");
+  if (!title.empty()) {
+    auto title_el = std::make_unique<dom::Element>("title");
+    title_el->AppendChild(std::make_unique<dom::Text>(title));
+    head->AppendChild(std::move(title_el));
+  }
+  html->AppendChild(std::move(head));
+  html->AppendChild(std::move(body));
+  document->AppendChild(std::move(html));
+
+  dom::Document* raw = document.get();
+  impl->created[raw] = std::move(document);
+  return impl->WrapNode(raw);
+}
+
+JSValue DocGetImplementation(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr || node->node_type() != dom::NodeType::kDocument) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  if (JS_IsUndefined(impl->document_implementation)) {
+    JSValue doc_impl = JS_NewObject(ctx);
+    JSValue has_feature = JS_NewCFunction(ctx, DocumentImplementationHasFeature, "hasFeature", 2);
+    JS_SetPropertyStr(ctx, doc_impl, "hasFeature", has_feature); // steals
+    JSValue create_html =
+        JS_NewCFunction(ctx, DocumentImplementationCreateHTMLDocument, "createHTMLDocument", 1);
+    JS_SetPropertyStr(ctx, doc_impl, "createHTMLDocument", create_html); // steals
+    impl->document_implementation = JS_DupValue(ctx, doc_impl);
+    JS_FreeValue(ctx, doc_impl);
+  }
+  return JS_DupValue(ctx, impl->document_implementation);
+}
+
 JSValue DocSetTitle(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
   Impl* impl = ImplFor(ctx, this_val);
@@ -4743,6 +4824,10 @@ void DefineDocumentPrototype(JSContext* ctx, Impl& impl)
   JS_SetPropertyFunctionList(
       ctx, impl.document_proto, kMethods.data(), static_cast<int>(kMethods.size()));
 
+  DefineGetter(ctx,
+               impl.document_proto,
+               "implementation",
+               MakeGetter(ctx, "implementation", DocGetImplementation));
   DefineGetter(ctx,
                impl.document_proto,
                "documentElement",
@@ -6756,6 +6841,7 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   // EventsToDuplicate, sj_evt, ... all failed downstream).
   JSValue global = JS_GetGlobalObject(ctx);
   JSValue doc_wrap = WrapNode(&document);
+  JS_SetPropertyStr(ctx, doc_wrap, "visibilityState", JS_NewString(ctx, "visible"));
   JS_SetPropertyStr(ctx, global, "document", doc_wrap); // steals doc_wrap
   window = JS_DupValue(ctx, global);
 
@@ -6824,6 +6910,45 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
     JSValue fn = JS_GetPropertyStr(ctx, window, name);
     JS_SetPropertyStr(ctx, global, name, fn); // steals fn
   }
+
+  // Legacy jQuery compatibility aliases (common on ad/tracking/bootstraps):
+  // these are intentionally minimal and only prevent startup ReferenceErrors.
+  // A real selector engine is still out of scope.
+  JSValue jquery = JS_NewCFunction(ctx,
+                                   [](JSContext* inner_ctx,
+                                      JSValueConst /*this_val*/,
+                                      int /*argc*/,
+                                      JSValueConst* /*argv*/) -> JSValue {
+    return JS_NewArray(inner_ctx);
+  },
+                                   "jQuery",
+                                   1);
+  JSValue jquery_ready = JS_NewCFunction(ctx,
+                                         [](JSContext* inner_ctx,
+                                            JSValueConst /*this_val*/,
+                                            int argc,
+                                            JSValueConst* argv) -> JSValue {
+    if (argc > 0 && JS_IsFunction(inner_ctx, argv[0])) {
+      JSValue callback = JS_DupValue(inner_ctx, argv[0]);
+      JSValue set_timeout = JS_GetPropertyStr(inner_ctx, JS_GetGlobalObject(inner_ctx), "setTimeout");
+      JSValue args[2] = {callback, JS_NewInt32(inner_ctx, 0)};
+      JSValue result = JS_Call(inner_ctx, set_timeout, JS_UNDEFINED, 2, args);
+      JS_FreeValue(inner_ctx, callback);
+      JS_FreeValue(inner_ctx, set_timeout);
+      JS_FreeValue(inner_ctx, result);
+    }
+    return JS_UNDEFINED;
+  }, "ready", 1);
+  JS_SetPropertyStr(ctx, jquery, "ready", jquery_ready); // steals
+  JSValue jquery_window = JS_DupValue(ctx, jquery);
+  JSValue jquery_global = JS_DupValue(ctx, jquery);
+  JSValue dollar_window = JS_DupValue(ctx, jquery);
+  JSValue dollar_global = JS_DupValue(ctx, jquery);
+  JS_SetPropertyStr(ctx, window, "jQuery", jquery_window); // steals
+  JS_SetPropertyStr(ctx, global, "jQuery", jquery_global); // steals
+  JS_SetPropertyStr(ctx, window, "$", dollar_window);      // steals
+  JS_SetPropertyStr(ctx, global, "$", dollar_global);      // steals
+  JS_FreeValue(ctx, jquery);
 
   // window.history: a minimal History object (script-visible session length
   // plus no-op traversal/mutation; the browser's navigation stack is separate
@@ -6930,6 +7055,77 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   JS_SetPropertyStr(ctx, navigator, "vendor", JS_NewString(ctx, ""));
   JS_SetPropertyStr(ctx, window, "navigator", JS_DupValue(ctx, navigator)); // steals dup
   JS_SetPropertyStr(ctx, global, "navigator", navigator);                   // steals
+
+  // Legacy bootstrap shims used by Bing and other real-world pages.  These are
+  // intentionally minimal and only supply the objects/scripts expect during
+  // startup; they are not a full compatibility layer for the full browser.
+  JS_SetPropertyStr(ctx, window, "_w", JS_DupValue(ctx, window));
+  JS_SetPropertyStr(ctx, window, "_d", JS_DupValue(ctx, doc_wrap));
+  JS_SetPropertyStr(ctx, global, "_w", JS_DupValue(ctx, window));
+  JS_SetPropertyStr(ctx, global, "_d", JS_DupValue(ctx, doc_wrap));
+
+  auto make_noop_function = [&](const char* name) {
+    return JS_NewCFunction(ctx,
+                           [](JSContext* /*inner_ctx*/, JSValueConst /*this_val*/, int /*argc*/, JSValueConst* /*argv*/) -> JSValue {
+                             return JS_UNDEFINED;
+                           },
+                           name,
+                           0);
+  };
+
+  JSValue perf_observer_proto = JS_NewObject(ctx);
+  static const std::array<JSCFunctionListEntry, 3> kPerformanceObserver = {{
+      JS_CFUNC_DEF("observe", 0, nullptr),
+      JS_CFUNC_DEF("disconnect", 0, nullptr),
+      JS_CFUNC_DEF("takeRecords", 0, nullptr),
+  }};
+  JS_SetPropertyFunctionList(
+      ctx, perf_observer_proto, kPerformanceObserver.data(), static_cast<int>(kPerformanceObserver.size()));
+  JSValue performance_observer_ctor =
+      JS_NewCFunction2(ctx,
+                       [](JSContext* inner_ctx,
+                          JSValueConst /*this_val*/,
+                          int /*argc*/,
+                          JSValueConst* /*argv*/) -> JSValue {
+                         JSValue observer = JS_NewObject(inner_ctx);
+                         return observer;
+                       },
+                       "PerformanceObserver",
+                       1,
+                       JS_CFUNC_constructor,
+                       0);
+  JS_SetPropertyStr(ctx, performance_observer_ctor, "prototype", perf_observer_proto); // steals
+  JS_SetPropertyStr(ctx, window, "PerformanceObserver", JS_DupValue(ctx, performance_observer_ctor));
+  JS_SetPropertyStr(ctx, global, "PerformanceObserver", performance_observer_ctor);
+
+  JSValue service_worker = JS_NewObject(ctx);
+  JS_SetPropertyStr(ctx, service_worker, "controller", JS_NULL);
+  JS_SetPropertyStr(ctx, navigator, "serviceWorker", JS_DupValue(ctx, service_worker));
+  JS_SetPropertyStr(ctx, window, "serviceWorker", JS_DupValue(ctx, service_worker));
+  JS_SetPropertyStr(ctx, global, "serviceWorker", service_worker);
+
+  JSValue visual_viewport = JS_NewObject(ctx);
+  JS_SetPropertyStr(ctx, visual_viewport, "width", JS_NewFloat64(ctx, 800.0));
+  JS_SetPropertyStr(ctx, visual_viewport, "height", JS_NewFloat64(ctx, 600.0));
+  JS_SetPropertyStr(ctx, visual_viewport, "scale", JS_NewFloat64(ctx, 1.0));
+  JS_SetPropertyStr(ctx, window, "visualViewport", JS_DupValue(ctx, visual_viewport));
+  JS_SetPropertyStr(ctx, global, "visualViewport", visual_viewport);
+
+  JSValue feedback = JS_NewObject(ctx);
+  JSValue feedback_bootstrap = JS_NewObject(ctx);
+  JS_SetPropertyStr(ctx, feedback, "Bootstrap", feedback_bootstrap); // steals
+  JS_SetPropertyStr(ctx, window, "Feedback", JS_DupValue(ctx, feedback));
+  JS_SetPropertyStr(ctx, global, "Feedback", feedback);
+
+  JSValue bm = JS_NewObject(ctx);
+  JS_SetPropertyStr(ctx, bm, "trigger", make_noop_function("trigger"));
+  JS_SetPropertyStr(ctx, window, "BM", JS_DupValue(ctx, bm));
+  JS_SetPropertyStr(ctx, global, "BM", bm);
+
+  JSValue log = JS_NewObject(ctx);
+  JS_SetPropertyStr(ctx, log, "Log", make_noop_function("Log"));
+  JS_SetPropertyStr(ctx, window, "Log", JS_DupValue(ctx, log));
+  JS_SetPropertyStr(ctx, global, "Log", log);
 
   // screen: the engine's default viewport (matches renderer::Page's default
   // layout width).  Wiring real window dimensions is future work, so scripts
@@ -7090,6 +7286,16 @@ Impl::~Impl()
   // what keeps JS_FreeRuntime's "gc_obj_list is empty" assertion green.
   for (const char* name : {"document",
                            "window",
+                           "_w",
+                           "_d",
+                           "$",
+                           "jQuery",
+                           "PerformanceObserver",
+                           "serviceWorker",
+                           "visualViewport",
+                           "Feedback",
+                           "BM",
+                           "Log",
                            "setTimeout",
                            "setInterval",
                            "clearTimeout",
@@ -7138,7 +7344,14 @@ Impl::~Impl()
   // (window === global here, so "document" was already deleted above; the
   // separate window object no longer exists.)
 
-  // Free prototypes and window (own references).
+  // Free cached DOMImplementation singleton and prototypes/window.  This value
+  // is not a property on the global object; it is held by the binder for the
+  // document wrapper, so its ref must be released explicitly before the runtime
+  // teardown can pass the GC assertion check.
+  if (!JS_IsUndefined(document_implementation)) {
+    JS_FreeValue(ctx, document_implementation);
+    document_implementation = JS_UNDEFINED;
+  }
   JS_FreeValue(ctx, node_proto);
   JS_FreeValue(ctx, element_proto);
   JS_FreeValue(ctx, text_proto);

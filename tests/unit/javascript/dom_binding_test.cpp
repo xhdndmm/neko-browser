@@ -107,6 +107,35 @@ TEST_F(DomBinderTest, DocumentReadyState)
   EXPECT_EQ(EvalString("document.readyState"), "complete");
 }
 
+TEST_F(DomBinderTest, DocumentImplementationSupportsBasicFeatures)
+{
+  EXPECT_TRUE(EvalBool("document.implementation !== null && typeof document.implementation === 'object'"));
+  EXPECT_TRUE(EvalBool("document.implementation.hasFeature('HTML', '1.0')"));
+  EXPECT_TRUE(EvalBool("document.implementation.hasFeature('DOM', '1.0')"));
+  EXPECT_FALSE(EvalBool("document.implementation.hasFeature('NoSuchFeature', '1.0')"));
+
+  EXPECT_TRUE(EvalBool("(function(){ var d = document.implementation.createHTMLDocument('Doc Title'); "
+                       "return d instanceof Document && d.title === 'Doc Title'; })()"));
+}
+
+TEST_F(DomBinderTest, JQueryCompatibilityAliasesAreDefined)
+{
+  EXPECT_TRUE(EvalBool("typeof $ === 'function' && typeof jQuery === 'function'"));
+  EXPECT_TRUE(EvalBool("(function(){ var called = false; $.ready = function(fn){ called = typeof fn === 'function'; }; $.ready(function(){}); return called && typeof jQuery.ready === 'function'; })()"));
+}
+
+TEST_F(DomBinderTest, LegacyBootstrapCompatibilityGlobals)
+{
+  EXPECT_TRUE(EvalBool("_w === window && _d === document"));
+  EXPECT_TRUE(EvalBool("typeof PerformanceObserver === 'function'"));
+  EXPECT_TRUE(EvalBool("document.visibilityState === 'visible'"));
+  EXPECT_TRUE(EvalBool("navigator.serviceWorker && navigator.serviceWorker.controller === null"));
+  EXPECT_TRUE(EvalBool("window.visualViewport && typeof window.visualViewport.width === 'number'"));
+  EXPECT_TRUE(EvalBool("typeof Feedback === 'object' && Feedback && typeof Feedback.Bootstrap === 'object'"));
+  EXPECT_TRUE(EvalBool("BM && typeof BM.trigger === 'function'"));
+  EXPECT_TRUE(EvalBool("Log && typeof Log.Log === 'function'"));
+}
+
 TEST_F(DomBinderTest, InterfaceGlobalsAndInstanceof)
 {
   EXPECT_TRUE(EvalBool("document instanceof Document"));
