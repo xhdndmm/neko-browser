@@ -2023,6 +2023,12 @@ void StyleEngine::ComputeElement(dom::Element& element,
   }
 
   // width / height.
+  if (const css::Declaration* d = find("zoom")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kNumber && v.number > 0) {
+      out.zoom = v.number;
+    }
+  }
   if (const css::Declaration* d = find("width")) {
     out.width = ParseSize(d->value, size_ctx);
   }

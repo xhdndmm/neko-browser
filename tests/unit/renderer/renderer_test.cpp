@@ -60,6 +60,27 @@ TEST(PageTest, RasterizeProducesImage)
   EXPECT_EQ(image.pixels()[offset + 2], 0);
 }
 
+TEST(PageTest, BodyZoomScalesLayoutAndPaint)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body style=\"zoom:0.5;background-color:#ffffff\">"
+                            "<div style=\"background-color:#ff0000;width:100px;height:50px\"></div>"
+                            "</body>")
+                  .has_value());
+  page.Layout(400, 300);
+  paint::Rasterizer image = page.Rasterize(400, 300);
+
+  // The 100x50 CSS-pixel box paints at 50x25 screen pixels after body zoom.
+  const std::size_t inside = (static_cast<std::size_t>(12) * 400 + 20) * 4;
+  const std::size_t outside = (static_cast<std::size_t>(40) * 400 + 60) * 4;
+  EXPECT_EQ(image.pixels()[inside], 255);
+  EXPECT_EQ(image.pixels()[inside + 1], 0);
+  EXPECT_EQ(image.pixels()[inside + 2], 0);
+  EXPECT_EQ(image.pixels()[outside], 255);
+  EXPECT_EQ(image.pixels()[outside + 1], 255);
+  EXPECT_EQ(image.pixels()[outside + 2], 255);
+}
+
 TEST(PageTest, BodyBackgroundPropagatesToCanvas)
 {
   // CSS canvas background: a <body> background paints the whole viewport when

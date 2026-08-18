@@ -290,6 +290,10 @@ struct ComputedStyle
   std::optional<SizeSpec> min_height;
   std::optional<SizeSpec> max_height;
 
+  // Legacy CSS zoom. A positive number scales the root content subtree at
+  // layout and paint time; 1 is the initial value.
+  float zoom = 1.0f;
+
   // Box insets (percentages resolve against the containing block width).
   // Each margin carries an *auto flag: margin: auto (CSS 2.2 §10.3.4) leaves
   // the resolved value at 0 in normal flow but lets flex layout distribute

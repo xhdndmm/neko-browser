@@ -94,6 +94,9 @@ public:
   // with the enclosing clip.
   void PushClip(float x, float y, float width, float height);
   void PopClip();
+  // Applies a uniform page scale to all geometric commands. Used for legacy
+  // CSS zoom after layout has run in unscaled CSS pixels.
+  void Scale(float factor);
 
   const std::vector<DrawCommand>& commands() const
   {

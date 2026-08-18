@@ -309,8 +309,22 @@ void Page::LayoutLocked(float viewport_width, float viewport_height)
   }
   viewport_width_ = viewport_width;
   viewport_height_ = viewport_height;
+  page_zoom_ = 1.0f;
+  if (dom::Element* html = document_->document_element()) {
+    for (dom::Node* child : html->ChildNodes()) {
+      if (child->node_type() != dom::NodeType::kElement) {
+        continue;
+      }
+      auto* element = static_cast<dom::Element*>(child);
+      if (element->tag_name() == "body") {
+        page_zoom_ = styles_.StyleFor(*element).zoom;
+        break;
+      }
+    }
+  }
   layout::LayoutEngine engine(styles_, &fonts_, this);
-  root_ = engine.BuildLayoutTree(*document_, viewport_width, viewport_height);
+  root_ = engine.BuildLayoutTree(
+      *document_, viewport_width / page_zoom_, viewport_height / page_zoom_);
   display_list_.reset();
   BumpVersion();
 }
@@ -555,6 +569,7 @@ const paint::DisplayList& Page::EnsureDisplayList() const
   if (!display_list_.has_value() || display_list_version_ != version_) {
     const paint::Painter painter(root_.get());
     display_list_ = painter.Paint();
+    display_list_->Scale(page_zoom_);
     display_list_version_ = version_;
   }
   return *display_list_;
@@ -652,7 +667,7 @@ float Page::ContentHeight() const
     return 0;
   }
   // The root box spans the full laid-out content.
-  return root_->height;
+  return root_->height * page_zoom_;
 }
 
 const dom::Element* Page::ElementAt(float x, float y) const
@@ -661,7 +676,7 @@ const dom::Element* Page::ElementAt(float x, float y) const
   if (root_ == nullptr) {
     return nullptr;
   }
-  return renderer::ElementAt(*root_, x, y);
+  return renderer::ElementAt(*root_, x / page_zoom_, y / page_zoom_);
 }
 
 std::optional<ElementGeometry> Page::ElementBoxGeometry(const dom::Element& element)
@@ -681,14 +696,16 @@ std::optional<ElementGeometry> Page::ElementBoxGeometry(const dom::Element& elem
   // An element with its own layout box: report the box geometry directly.
   if (const layout::LayoutBox* box = FindElementBox(*root_, &element)) {
     ElementGeometry g;
-    g.x = box->x;
-    g.y = box->y;
-    g.width = box->width;
-    g.height = box->height;
-    g.border_top = box->border_top;
-    g.border_left = box->border_left;
-    g.client_width = std::max(0.0f, box->width - box->border_left - box->border_right);
-    g.client_height = std::max(0.0f, box->height - box->border_top - box->border_bottom);
+    g.x = box->x * page_zoom_;
+    g.y = box->y * page_zoom_;
+    g.width = box->width * page_zoom_;
+    g.height = box->height * page_zoom_;
+    g.border_top = box->border_top * page_zoom_;
+    g.border_left = box->border_left * page_zoom_;
+    g.client_width =
+        std::max(0.0f, box->width - box->border_left - box->border_right) * page_zoom_;
+    g.client_height =
+        std::max(0.0f, box->height - box->border_top - box->border_bottom) * page_zoom_;
     return g;
   }
   // Inline text and replaced elements without their own box: aggregate their
@@ -699,10 +716,10 @@ std::optional<ElementGeometry> Page::ElementBoxGeometry(const dom::Element& elem
   float max_bottom = 0;
   if (CollectFragmentRect(*root_, &element, min_x, min_y, max_right, max_bottom)) {
     ElementGeometry g;
-    g.x = min_x;
-    g.y = min_y;
-    g.width = max_right - min_x;
-    g.height = max_bottom - min_y;
+    g.x = min_x * page_zoom_;
+    g.y = min_y * page_zoom_;
+    g.width = (max_right - min_x) * page_zoom_;
+    g.height = (max_bottom - min_y) * page_zoom_;
     g.client_width = g.width;
     g.client_height = g.height;
     return g;

@@ -117,4 +117,23 @@ void DisplayList::PopClip()
   commands_.push_back(std::move(command));
 }
 
+void DisplayList::Scale(float factor)
+{
+  if (factor == 1.0f) {
+    return;
+  }
+  for (DrawCommand& command : commands_) {
+    command.x *= factor;
+    command.y *= factor;
+    command.width *= factor;
+    command.height *= factor;
+    command.radius *= factor;
+    command.border_top *= factor;
+    command.border_right *= factor;
+    command.border_bottom *= factor;
+    command.border_left *= factor;
+    command.font_size *= factor;
+  }
+}
+
 } // namespace neko::paint

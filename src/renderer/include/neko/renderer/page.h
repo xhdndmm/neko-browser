@@ -226,6 +226,7 @@ private:
   std::unique_ptr<layout::LayoutBox> root_;
   float viewport_width_ = 800;
   float viewport_height_ = 0;
+  float page_zoom_ = 1.0f;
 
   graphics::FontRegistry fonts_;
   std::unordered_map<const dom::Element*, image::Image> images_;

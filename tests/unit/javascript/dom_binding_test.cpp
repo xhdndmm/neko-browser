@@ -395,6 +395,10 @@ TEST_F(DomBinderTest, StyleDeclaration)
                        "return e.style.getPropertyValue('color') === ''; })()"));
   // The C++ style attribute was updated.
   EXPECT_NE(document_->ToString().find("style=\"font-size: 20px\""), std::string::npos);
+
+  EXPECT_TRUE(EvalBool("(function(){ var e = document.body; e.style.zoom = '0.9'; "
+                       "return e.style.zoom === '0.9' && "
+                       "e.style.getPropertyValue('zoom') === '0.9'; })()"));
 }
 
 TEST_F(DomBinderTest, InnerHTMLGetAndSet)

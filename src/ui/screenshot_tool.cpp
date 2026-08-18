@@ -49,17 +49,16 @@ int main(int argc, char** argv)
 
   worker.NavigateActive(url);
 
-  // Wait for the GUI to reflect the navigation.  The tab bar is only
-  // populated by RefreshAll(), which runs after the worker's StateChanged()
-  // has been delivered — so a non-empty tab label also guarantees the
-  // WebView's snapshot (and therefore the rendered page) is up to date.
-  // (Waiting on the controller title alone is racy: it becomes visible as
-  // soon as the worker publishes, before the queued StateChanged refreshes
-  // the views.)
+  // Wait until navigation and synchronous subresource loading complete, then
+  // let the queued StateChanged refresh publish the final page snapshot to the
+  // WebView. A tab title alone appears before images and stylesheets finish.
   bool ready = false;
   for (int i = 0; i < 200 && !ready; ++i) {
     QCoreApplication::processEvents();
-    ready = window.TabBarWidget()->count() > 0 && !window.TabBarWidget()->tabText(0).isEmpty();
+    const neko::browser::TabSnapshot tab = worker.SnapshotActiveTab();
+    ready = window.TabBarWidget()->count() > 0 && !tab.loading &&
+            (tab.page != nullptr || tab.image != nullptr || tab.pdf != nullptr ||
+             tab.audio != nullptr || tab.raw_text != nullptr || tab.error != nullptr);
     if (!ready)
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }

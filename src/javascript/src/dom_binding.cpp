@@ -515,7 +515,7 @@ void SetStyleAttr(dom::Element& element, const std::string& value)
 
 // The CSS property names reachable through the direct style accessors.  The
 // magic value of a getter/setter indexes this table.
-constexpr std::array<std::string_view, 17> kStyleProps = {
+constexpr std::array<std::string_view, 18> kStyleProps = {
     "width",
     "height",
     "color",
@@ -533,6 +533,7 @@ constexpr std::array<std::string_view, 17> kStyleProps = {
     "padding-right",
     "padding-bottom",
     "padding-left",
+    "zoom",
 };
 
 // ---------------------------------------------------------------------------
