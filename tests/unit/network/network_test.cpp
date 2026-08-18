@@ -238,6 +238,24 @@ private:
       // Content-Length above the 512 MiB body limit must be rejected by
       // ClassifyBody before any allocation.
       response = "HTTP/1.1 200 OK\r\nContent-Length: 1073741824\r\n\r\nx";
+    } else if (path == "/unframed-oversized") {
+      // Exercise the until-close body limit without constructing the entire
+      // response in memory at once.
+      response = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n";
+      ::send(fd, response.data(), response.size(), 0);
+      const std::string chunk(1024u * 1024u, 'x');
+      // Send a little extra so the client reaches the cap even if the final
+      // socket read observes close before consuming the last packet.
+      std::size_t remaining = 512u * 1024u * 1024u + 1024u * 1024u;
+      while (remaining != 0) {
+        const std::size_t count = std::min(remaining, chunk.size());
+        const ssize_t sent = ::send(fd, chunk.data(), count, MSG_NOSIGNAL);
+        if (sent <= 0) {
+          return;
+        }
+        remaining -= static_cast<std::size_t>(sent);
+      }
+      return;
     } else {
       response = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nnot found";
     }
@@ -609,6 +627,21 @@ TEST(HttpTest, RejectsOversizedContentLength)
   const auto result = HttpGet(url.value());
   ASSERT_FALSE(result.has_value());
   EXPECT_NE(result.error().message().find("content-length"), std::string::npos);
+}
+
+TEST(HttpTest, RejectsOversizedUnframedBody)
+{
+  // Without Content-Length or chunked framing, the connection-close path must
+  // still enforce the aggregate response body limit.
+  TestHttpServer server;
+  ASSERT_TRUE(server.IsValid());
+  const std::string host = "http://127.0.0.1:" + std::to_string(server.port()) +
+                           "/unframed-oversized";
+  const auto url = url::Url::Parse(host);
+  ASSERT_TRUE(url.has_value());
+  const auto result = HttpGet(url.value());
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error().message(), "response body too large");
 }
 
 TEST(TlsTest, HttpsToHttpRedirectIsRefused)

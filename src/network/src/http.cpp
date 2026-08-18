@@ -506,6 +506,9 @@ base::Result<std::string> ReadChunkedBody(ResponseReader<Transport>& reader)
     if (!data) {
       return base::Err(data.error());
     }
+    if (data.value().size() > kMaxBodySize - body.size()) {
+      return base::Err(base::Error::Parse("response body too large"));
+    }
     body += data.value();
     const base::Result<std::string> terminator = reader.ReadLine();
     if (!terminator) {
@@ -573,6 +576,9 @@ base::Result<HttpResponse> PerformRequest(Transport& transport, const std::strin
       }
       if (chunk.value().empty()) {
         return response;
+      }
+      if (chunk.value().size() > kMaxBodySize - response.body.size()) {
+        return base::Err(base::Error::Parse("response body too large"));
       }
       response.body += chunk.value();
     }
