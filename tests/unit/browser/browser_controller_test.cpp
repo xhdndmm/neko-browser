@@ -240,6 +240,16 @@ std::string LastCookie(const FakeFetcher& f)
   return f.cookies_seen_.empty() ? std::string() : f.cookies_seen_.back();
 }
 
+std::string CookieForRequest(const FakeFetcher& f, std::string_view url)
+{
+  for (std::size_t index = 0; index < f.requests_.size(); ++index) {
+    if (f.requests_[index] == url) {
+      return f.cookies_seen_[index];
+    }
+  }
+  return {};
+}
+
 // ---------------------------------------------------------------------------
 // In-test encoders for image / pdf / wav payloads
 // ---------------------------------------------------------------------------
@@ -1244,6 +1254,33 @@ TEST(BrowserControllerTest, FetchesAndAppliesExternalStylesheets)
   EXPECT_EQ(style.color.value().g, 0);
   EXPECT_EQ(style.color.value().b, 0);
   EXPECT_FLOAT_EQ(style.font_size, 24.0f);
+}
+
+TEST(BrowserControllerTest, SendsCookiesToAuthenticatedSubresources)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  const std::string page_url = "http://example.com/";
+  const std::string css_url = "http://example.com/style.css";
+  const std::string image_url = "http://example.com/image.png";
+  fetch.Add(page_url,
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><link rel=\"stylesheet\" href=\"/style.css\"></head>"
+                               "<body><img src=\"/image.png\"></body></html>"});
+  fetch.Add(css_url, FakeFetcher::Route{200, {{"content-type", "text/css"}}, "body {}"});
+  fetch.Add(image_url, FakeFetcher::Route{200, {{"content-type", "image/png"}}, MakePng()});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  const auto origin = url::Url::Parse(page_url);
+  ASSERT_TRUE(origin.has_value());
+  ASSERT_TRUE(controller.cookies().SetCookieFromHeader(origin.value(), "session=abc; Path=/", 1));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive(page_url).has_value());
+
+  EXPECT_NE(CookieForRequest(fetch, page_url).find("session=abc"), std::string::npos);
+  EXPECT_NE(CookieForRequest(fetch, css_url).find("session=abc"), std::string::npos);
+  EXPECT_NE(CookieForRequest(fetch, image_url).find("session=abc"), std::string::npos);
 }
 
 TEST(BrowserControllerTest, ExternalStylesheetsCascadeInDocumentOrder)

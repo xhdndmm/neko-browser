@@ -1022,9 +1022,13 @@ void BrowserController::LoadBytes(Tab& tab,
     services.local_storage = &local_storage_;
     services.indexed_db = &indexed_db_;
     services.origin = origin;
+    const auto fetch_subresource = [this](const url::Url& resource_url,
+                                          std::string_view) {
+      return fetch_(resource_url, CookieHeader(resource_url, NowUnix()));
+    };
     // Fetch and apply the page's external <link rel=stylesheet> sheets before
     // scripts run, so scripts see the fully styled cascade.
-    FetchExternalStylesheets(*new_page, final_url, fetch_, *pool_);
+    FetchExternalStylesheets(*new_page, final_url, fetch_subresource, *pool_);
     browser::ScriptRequestedNavigation requested;
     tab.script_runtime = RunPageScripts(
         *new_page,
@@ -1051,8 +1055,8 @@ void BrowserController::LoadBytes(Tab& tab,
 
     // Fetch and decode the page's <img>/<video> subresources before
     // publishing.
-    FetchPageImages(*new_page, final_url, fetch_, *pool_);
-    FetchPageVideos(*new_page, final_url, fetch_, *pool_);
+    FetchPageImages(*new_page, final_url, fetch_subresource, *pool_);
+    FetchPageVideos(*new_page, final_url, fetch_subresource, *pool_);
     std::string title = new_page->document()->Title();
     if (title.empty())
       title = final_url;
