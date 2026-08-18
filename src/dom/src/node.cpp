@@ -73,44 +73,71 @@ Node* Node::child_at(std::size_t index) const
   return index < children_.size() ? children_[index].get() : nullptr;
 }
 
-void Node::AppendChild(std::unique_ptr<Node> child)
+bool Node::CanInsert(const Node& child) const
+{
+  if (&child == this || child.parent() != nullptr) {
+    return false;
+  }
+  for (const Node* ancestor = parent_; ancestor != nullptr; ancestor = ancestor->parent_) {
+    if (ancestor == &child) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool Node::AppendChild(std::unique_ptr<Node> child)
 {
   // The DOM "insert" algorithm (dom.spec.whatwg.org §4.2.3): inserting a
   // DocumentFragment inserts its children instead of the fragment itself.
+  if (child == nullptr || !CanInsert(*child)) {
+    return false;
+  }
   if (child->node_type() == NodeType::kDocumentFragment) {
     while (child->first_child() != nullptr) {
       Node* c = child->first_child();
       std::unique_ptr<Node> detached = child->RemoveChild(c);
-      AppendChild(std::move(detached));
+      if (!AppendChild(std::move(detached))) {
+        return false;
+      }
     }
-    return;
+    return true;
   }
   child->SetParent(this);
   children_.push_back(std::move(child));
+  return true;
 }
 
-void Node::InsertBefore(std::unique_ptr<Node> child, Node* reference)
+bool Node::InsertBefore(std::unique_ptr<Node> child, Node* reference)
 {
+  if (child == nullptr || !CanInsert(*child)) {
+    return false;
+  }
   if (child->node_type() == NodeType::kDocumentFragment) {
     while (child->first_child() != nullptr) {
       Node* c = child->first_child();
       std::unique_ptr<Node> detached = child->RemoveChild(c);
-      InsertBefore(std::move(detached), reference);
+      if (!InsertBefore(std::move(detached), reference)) {
+        return false;
+      }
     }
-    return;
+    return true;
   }
   const auto it =
       std::find_if(children_.begin(), children_.end(), [&](const std::unique_ptr<Node>& c) {
         return c.get() == reference;
       });
   if (it == children_.end()) {
-    // Reference not found: append at the end (WHATWG: reference is nullptr).
+    if (reference != nullptr) {
+      return false;
+    }
     child->SetParent(this);
     children_.push_back(std::move(child));
-    return;
+    return true;
   }
   child->SetParent(this);
   children_.insert(it, std::move(child));
+  return true;
 }
 
 std::unique_ptr<Node> Node::RemoveChild(Node* child)

@@ -110,11 +110,13 @@ public:
     return ChildList(children_);
   }
 
-  // Tree mutation.  The parent takes ownership of the inserted node.
+  // Tree mutation. The parent takes ownership of the inserted node. Returns
+  // false without modifying this tree for null, already-attached, or cyclic
+  // nodes; InsertBefore also rejects a non-null reference outside this parent.
   // Inserting a DocumentFragment inserts its children instead (DOM spec
   // "insert" algorithm).
-  void AppendChild(std::unique_ptr<Node> child);
-  void InsertBefore(std::unique_ptr<Node> child, Node* reference);
+  bool AppendChild(std::unique_ptr<Node> child);
+  bool InsertBefore(std::unique_ptr<Node> child, Node* reference);
   std::unique_ptr<Node> RemoveChild(Node* child);
 
   // The DOM "node value" (nodeValue): the data of a Text or Comment node,
@@ -137,7 +139,9 @@ protected:
     parent_ = parent;
   }
 
-private:
+ private:
+  bool CanInsert(const Node& child) const;
+
   NodeType node_type_;
   Node* parent_ = nullptr;
   std::vector<std::unique_ptr<Node>> children_;

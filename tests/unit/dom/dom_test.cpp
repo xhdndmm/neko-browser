@@ -82,6 +82,23 @@ TEST(DomTest, InsertBeforeAndRemove)
   EXPECT_EQ(document->child_count(), 2u);
 }
 
+TEST(DomTest, RejectsInvalidInsertionsWithoutMutatingTree)
+{
+  auto parent = std::make_unique<Element>("parent");
+  auto foreign_parent = std::make_unique<Element>("foreign");
+  foreign_parent->AppendChild(std::make_unique<Element>("foreign-child"));
+
+  EXPECT_FALSE(parent->AppendChild(nullptr));
+  EXPECT_EQ(parent->child_count(), 0u);
+
+  EXPECT_FALSE(parent->InsertBefore(std::make_unique<Element>("child"),
+                                    foreign_parent->first_child()));
+  EXPECT_EQ(parent->child_count(), 0u);
+
+  EXPECT_TRUE(parent->InsertBefore(std::make_unique<Element>("child"), nullptr));
+  EXPECT_EQ(parent->child_count(), 1u);
+}
+
 TEST(DomTest, Attributes)
 {
   auto element = std::make_unique<Element>("div");
