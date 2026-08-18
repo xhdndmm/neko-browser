@@ -695,6 +695,7 @@ struct Impl
   struct MutationObserver
   {
     JSValue callback = JS_UNDEFINED;
+    JSValue self = JS_UNDEFINED;
     dom::Node* target = nullptr;
     bool child_list = false;
     bool attributes = false;
@@ -903,6 +904,116 @@ JSValue ThrowDomException(JSContext* ctx, std::string_view name, std::string_vie
   return JS_Throw(ctx, err);
 }
 
+int MutationObserverIndex(JSContext* ctx, JSValueConst value)
+{
+  JSValue index = JS_GetPropertyStr(ctx, value, "_nekoMutationObserver");
+  int32_t out = -1;
+  if (!JS_IsUndefined(index)) {
+    (void)JS_ToInt32(ctx, &out, index);
+  }
+  JS_FreeValue(ctx, index);
+  return out;
+}
+
+JSValue MutationObserverObserve(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  const int index = MutationObserverIndex(ctx, this_val);
+  if (impl == nullptr || index < 0 || index >= static_cast<int>(impl->mutation_observers.size())) {
+    return JS_ThrowTypeError(ctx, "not a MutationObserver");
+  }
+  if (argc < 2) {
+    return JS_ThrowTypeError(ctx, "observe requires target and options");
+  }
+  dom::Node* target = UnwrapNode(argv[0]);
+  if (target == nullptr) {
+    return JS_ThrowTypeError(ctx, "observe target is not a Node");
+  }
+  auto read_flag = [&](const char* name) {
+    JSValue value = JS_GetPropertyStr(ctx, argv[1], name);
+    const int result = JS_ToBool(ctx, value);
+    JS_FreeValue(ctx, value);
+    return result > 0;
+  };
+  Impl::MutationObserver& observer = impl->mutation_observers[static_cast<std::size_t>(index)];
+  observer.target = target;
+  observer.child_list = read_flag("childList");
+  observer.attributes = read_flag("attributes");
+  observer.character_data = read_flag("characterData");
+  observer.subtree = read_flag("subtree");
+  if (!observer.child_list && !observer.attributes && !observer.character_data) {
+    return JS_ThrowTypeError(ctx, "observe options must enable a mutation type");
+  }
+  return JS_UNDEFINED;
+}
+
+JSValue MutationObserverDisconnect(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  const int index = MutationObserverIndex(ctx, this_val);
+  if (impl == nullptr || index < 0 || index >= static_cast<int>(impl->mutation_observers.size())) {
+    return JS_ThrowTypeError(ctx, "not a MutationObserver");
+  }
+  Impl::MutationObserver& observer = impl->mutation_observers[static_cast<std::size_t>(index)];
+  observer.target = nullptr;
+  observer.records.clear();
+  return JS_UNDEFINED;
+}
+
+JSValue MutationObserverTakeRecords(JSContext* ctx,
+                                    JSValueConst this_val,
+                                    int /*argc*/,
+                                    JSValueConst* /*argv*/)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  const int index = MutationObserverIndex(ctx, this_val);
+  if (impl == nullptr || index < 0 || index >= static_cast<int>(impl->mutation_observers.size())) {
+    return JS_ThrowTypeError(ctx, "not a MutationObserver");
+  }
+  Impl::MutationObserver& observer = impl->mutation_observers[static_cast<std::size_t>(index)];
+  JSValue records = JS_NewArray(ctx);
+  for (std::size_t i = 0; i < observer.records.size(); ++i) {
+    const Impl::MutationRecord& record = observer.records[i];
+    JSValue item = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, item, "type", JS_NewString(ctx, record.type.c_str()));
+    JS_SetPropertyStr(ctx, item, "target", impl->WrapNode(record.target));
+    JS_SetPropertyStr(ctx,
+                      item,
+                      "attributeName",
+                      record.attribute_name.empty() ? JS_NULL
+                                                    : JS_NewString(ctx, record.attribute_name.c_str()));
+    JSValue added = impl->MakeNodeArray(record.added_nodes);
+    JSValue removed = impl->MakeNodeArray(record.removed_nodes);
+    JS_SetPropertyStr(ctx, item, "addedNodes", added);
+    JS_SetPropertyStr(ctx, item, "removedNodes", removed);
+    JS_SetPropertyUint32(ctx, records, static_cast<uint32_t>(i), item);
+  }
+  observer.records.clear();
+  return records;
+}
+
+JSValue MutationObserverConstructor(JSContext* ctx,
+                                    JSValueConst /*new_target*/,
+                                    int argc,
+                                    JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, JS_UNDEFINED);
+  if (impl == nullptr || argc < 1 || !JS_IsFunction(ctx, argv[0])) {
+    return JS_ThrowTypeError(ctx, "MutationObserver callback must be a function");
+  }
+  JSValue observer = JS_NewObject(ctx);
+  const int index = static_cast<int>(impl->mutation_observers.size());
+  JS_SetPropertyStr(ctx, observer, "_nekoMutationObserver", JS_NewInt32(ctx, index));
+  JS_SetPropertyStr(ctx, observer, "observe", JS_NewCFunction(ctx, MutationObserverObserve, "observe", 2));
+  JS_SetPropertyStr(ctx, observer, "disconnect", JS_NewCFunction(ctx, MutationObserverDisconnect, "disconnect", 0));
+  JS_SetPropertyStr(ctx, observer, "takeRecords", JS_NewCFunction(ctx, MutationObserverTakeRecords, "takeRecords", 0));
+  Impl::MutationObserver state;
+  state.callback = JS_DupValue(ctx, argv[0]);
+  state.self = JS_DupValue(ctx, observer);
+  impl->mutation_observers.push_back(std::move(state));
+  return observer;
+}
+
 JSValue NodeAppendChild(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
@@ -941,6 +1052,7 @@ JSValue NodeAppendChild(JSContext* ctx, JSValueConst this_val, int argc, JSValue
     return JS_ThrowTypeError(ctx, "appendChild: internal ownership error");
   }
   parent->AppendChild(std::move(owned));
+  impl->RecordChildListMutation(parent, {child}, {});
   impl->MarkDomDirty();
   return impl->WrapNode(child);
 }
@@ -1030,6 +1142,7 @@ JSValue NodeInsertBefore(JSContext* ctx, JSValueConst this_val, int argc, JSValu
     return JS_ThrowTypeError(ctx, "insertBefore: internal ownership error");
   }
   parent->InsertBefore(std::move(owned), reference);
+  impl->RecordChildListMutation(parent, {child}, {});
   impl->MarkDomDirty();
   return impl->WrapNode(child);
 }
@@ -1051,6 +1164,7 @@ JSValue NodeRemoveChild(JSContext* ctx, JSValueConst this_val, int argc, JSValue
   }
   std::unique_ptr<dom::Node> removed = parent->RemoveChild(child);
   impl->TakeOwnership(child, std::move(removed));
+  impl->RecordChildListMutation(parent, {}, {child});
   impl->MarkDomDirty();
   return impl->WrapNode(child);
 }
@@ -3177,7 +3291,9 @@ JSValue ElementSetAttribute(JSContext* ctx, JSValueConst this_val, int argc, JSV
     return JS_EXCEPTION;
   }
   element->SetAttribute(name, value);
-  ImplFor(ctx, this_val)->MarkDomDirty();
+  Impl* impl = ImplFor(ctx, this_val);
+  impl->RecordAttributeMutation(element, name);
+  impl->MarkDomDirty();
   return JS_UNDEFINED;
 }
 
@@ -3196,7 +3312,9 @@ JSValue ElementRemoveAttribute(JSContext* ctx, JSValueConst this_val, int argc, 
     return JS_EXCEPTION;
   }
   element->RemoveAttribute(name);
-  ImplFor(ctx, this_val)->MarkDomDirty();
+  Impl* impl = ImplFor(ctx, this_val);
+  impl->RecordAttributeMutation(element, name);
+  impl->MarkDomDirty();
   return JS_UNDEFINED;
 }
 
@@ -7176,6 +7294,15 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   DefineInterface(ctx, global, "HTMLElement", element_proto, /*set_constructor=*/false);
   DefineInterface(ctx, global, "HTMLIFrameElement", html_iframe_element_proto);
   DefineInterface(ctx, global, "SVGElement", svg_element_proto);
+  JS_SetPropertyStr(ctx,
+                    global,
+                    "MutationObserver",
+                    JS_NewCFunction2(ctx,
+                                     MutationObserverConstructor,
+                                     "MutationObserver",
+                                     1,
+                                     JS_CFUNC_constructor,
+                                     0));
   // Event is constructable: new Event(type, {bubbles, cancelable}).
   {
     JSValue event_ctor =
@@ -7486,8 +7613,11 @@ Impl::~Impl()
                            "DocumentFragment",
                            "CSSStyleDeclaration",
                            "Element",
-                           "HTMLElement",
-                           "Event",
+                            "HTMLElement",
+                            "HTMLIFrameElement",
+                            "SVGElement",
+                            "MutationObserver",
+                            "Event",
                            "CustomEvent",
                            "navigator",
                            "screen",
@@ -7532,6 +7662,11 @@ Impl::~Impl()
   JS_FreeValue(ctx, class_list_proto);
   JS_FreeValue(ctx, html_iframe_element_proto);
   JS_FreeValue(ctx, svg_element_proto);
+  for (MutationObserver& observer : mutation_observers) {
+    JS_FreeValue(ctx, observer.callback);
+    JS_FreeValue(ctx, observer.self);
+  }
+  mutation_observers.clear();
   JS_FreeValue(ctx, window);
 
   // Free the IndexedDB object-model references (databases/transactions/stores).
@@ -7638,6 +7773,110 @@ JSValue Impl::MakeElementArray(const std::vector<dom::Element*>& elements)
     JS_SetPropertyUint32(ctx, arr, static_cast<uint32_t>(i), w); // steals w
   }
   return arr;
+}
+
+void Impl::RecordChildListMutation(dom::Node* target,
+                                   std::vector<dom::Node*> added,
+                                   std::vector<dom::Node*> removed)
+{
+  for (MutationObserver& observer : mutation_observers) {
+    if (observer.target == nullptr || !observer.child_list) {
+      continue;
+    }
+    bool matches = target == observer.target;
+    if (!matches && observer.subtree) {
+      for (dom::Node* ancestor = target->parent(); ancestor != nullptr; ancestor = ancestor->parent()) {
+        if (ancestor == observer.target) {
+          matches = true;
+          break;
+        }
+      }
+    }
+    if (matches) {
+      observer.records.push_back(MutationRecord{"childList", target, std::move(added), std::move(removed), {}});
+    }
+  }
+}
+
+void Impl::RecordAttributeMutation(dom::Node* target, std::string attribute_name)
+{
+  for (MutationObserver& observer : mutation_observers) {
+    if (observer.target == nullptr || !observer.attributes) {
+      continue;
+    }
+    bool matches = target == observer.target;
+    if (!matches && observer.subtree) {
+      for (dom::Node* ancestor = target->parent(); ancestor != nullptr; ancestor = ancestor->parent()) {
+        if (ancestor == observer.target) {
+          matches = true;
+          break;
+        }
+      }
+    }
+    if (matches) {
+      observer.records.push_back(MutationRecord{"attributes", target, {}, {}, std::move(attribute_name)});
+    }
+  }
+}
+
+void Impl::RecordCharacterDataMutation(dom::Node* target)
+{
+  for (MutationObserver& observer : mutation_observers) {
+    if (observer.target == nullptr || !observer.character_data) {
+      continue;
+    }
+    bool matches = target == observer.target;
+    if (!matches && observer.subtree) {
+      for (dom::Node* ancestor = target->parent(); ancestor != nullptr; ancestor = ancestor->parent()) {
+        if (ancestor == observer.target) {
+          matches = true;
+          break;
+        }
+      }
+    }
+    if (matches) {
+      observer.records.push_back(MutationRecord{"characterData", target, {}, {}, {}});
+    }
+  }
+}
+
+void Impl::DeliverMutationObservers()
+{
+  if (delivering_mutation_observers) {
+    return;
+  }
+  delivering_mutation_observers = true;
+  for (MutationObserver& observer : mutation_observers) {
+    if (observer.records.empty()) {
+      continue;
+    }
+    JSValue records = JS_NewArray(ctx);
+    for (std::size_t i = 0; i < observer.records.size(); ++i) {
+      const MutationRecord& record = observer.records[i];
+      JSValue item = JS_NewObject(ctx);
+      JS_SetPropertyStr(ctx, item, "type", JS_NewString(ctx, record.type.c_str()));
+      JS_SetPropertyStr(ctx, item, "target", WrapNode(record.target));
+      JS_SetPropertyStr(ctx,
+                        item,
+                        "attributeName",
+                        record.attribute_name.empty() ? JS_NULL
+                                                      : JS_NewString(ctx, record.attribute_name.c_str()));
+      JS_SetPropertyStr(ctx, item, "addedNodes", MakeNodeArray(record.added_nodes));
+      JS_SetPropertyStr(ctx, item, "removedNodes", MakeNodeArray(record.removed_nodes));
+      JS_SetPropertyUint32(ctx, records, static_cast<uint32_t>(i), item);
+    }
+    observer.records.clear();
+    JSValue args[2] = {records, JS_DupValue(ctx, observer.self)};
+    JSValue result = JS_Call(ctx, observer.callback, JS_UNDEFINED, 2, args);
+    JS_FreeValue(ctx, args[1]);
+    JS_FreeValue(ctx, records);
+    if (JS_IsException(result)) {
+      JS_FreeValue(ctx, JS_GetException(ctx));
+    } else {
+      JS_FreeValue(ctx, result);
+    }
+  }
+  delivering_mutation_observers = false;
 }
 
 void Impl::TakeOwnership(dom::Node* node, std::unique_ptr<dom::Node> owned)
@@ -8148,7 +8387,9 @@ DomBinder::~DomBinder() = default;
 
 base::Result<ScriptValue> DomBinder::Evaluate(std::string_view source, std::string_view filename)
 {
-  return impl_->engine.Evaluate(source, filename);
+  const base::Result<ScriptValue> result = impl_->engine.Evaluate(source, filename);
+  impl_->DeliverMutationObservers();
+  return result;
 }
 
 void DomBinder::SetCurrentScript(dom::Element* element)

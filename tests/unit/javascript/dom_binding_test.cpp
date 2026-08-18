@@ -202,6 +202,29 @@ TEST_F(DomBinderTest, DocumentEventListener)
                        "       && window._ev.target === document; })()"));
 }
 
+TEST_F(DomBinderTest, MutationObserverDeliversChildListRecords)
+{
+  ASSERT_TRUE(EvalBool("(function(){ window._records = []; "
+                       "var root = document.createElement('div'); "
+                       "var observer = new MutationObserver(function(records, self) { "
+                       "window._records.push([records[0].type, records[0].target === root, "
+                       "records[0].addedNodes[0].tagName, self === observer]); }); "
+                       "observer.observe(root, {childList:true}); "
+                       "root.appendChild(document.createElement('span')); return true; })()"));
+  EXPECT_EQ(EvalString("window._records[0].join(',')"), "childList,true,SPAN,true");
+}
+
+TEST_F(DomBinderTest, MutationObserverDeliversSubtreeAttributeRecords)
+{
+  ASSERT_TRUE(EvalBool("(function(){ window._record = ''; var root = document.createElement('div'); "
+                       "var child = document.createElement('span'); root.appendChild(child); "
+                       "new MutationObserver(function(records) { window._record = records[0].type + ':' + "
+                       "records[0].attributeName + ':' + (records[0].target === child); })"
+                       ".observe(root, {attributes:true, subtree:true}); child.setAttribute('data-x', '1'); "
+                       "return true; })()"));
+  EXPECT_EQ(EvalString("window._record"), "attributes:data-x:true");
+}
+
 TEST_F(DomBinderTest, WindowEventListenerAndGlobalAlias)
 {
   // window.addEventListener and the bare global alias both register listeners
