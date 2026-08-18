@@ -431,7 +431,8 @@ std::unique_ptr<dom::Node> CloneNodeImpl(const dom::Node& source, bool deep)
   switch (source.node_type()) {
   case dom::NodeType::kElement: {
     const auto& el = static_cast<const dom::Element&>(source);
-    auto clone = std::make_unique<dom::Element>(std::string(el.tag_name()));
+    auto clone =
+        std::make_unique<dom::Element>(std::string(el.tag_name()), std::string(el.namespace_uri()));
     for (const dom::Attribute& attr : el.attributes()) {
       clone->SetAttribute(attr.name, attr.value);
     }
@@ -619,6 +620,8 @@ struct Impl
   JSValue event_proto = JS_UNDEFINED;
   JSValue custom_event_proto = JS_UNDEFINED;
   JSValue class_list_proto = JS_UNDEFINED;
+  JSValue html_iframe_element_proto = JS_UNDEFINED;
+  JSValue svg_element_proto = JS_UNDEFINED;
   JSValue window = JS_UNDEFINED;
 
   // Wrapper registry: node -> kept-alive wrapper (JS_DupValue'd).  Wrappers
@@ -680,6 +683,34 @@ struct Impl
   // the wrapper itself because reading the property would re-enter its
   // prototype accessor.
   std::unordered_map<const dom::Node*, std::unordered_map<std::string, JSValue>> event_handlers;
+
+  struct MutationRecord
+  {
+    std::string type;
+    dom::Node* target = nullptr;
+    std::vector<dom::Node*> added_nodes;
+    std::vector<dom::Node*> removed_nodes;
+    std::string attribute_name;
+  };
+  struct MutationObserver
+  {
+    JSValue callback = JS_UNDEFINED;
+    dom::Node* target = nullptr;
+    bool child_list = false;
+    bool attributes = false;
+    bool character_data = false;
+    bool subtree = false;
+    std::vector<MutationRecord> records;
+  };
+  std::vector<MutationObserver> mutation_observers;
+  bool delivering_mutation_observers = false;
+
+  void RecordChildListMutation(dom::Node* target,
+                               std::vector<dom::Node*> added,
+                               std::vector<dom::Node*> removed);
+  void RecordAttributeMutation(dom::Node* target, std::string attribute_name);
+  void RecordCharacterDataMutation(dom::Node* target);
+  void DeliverMutationObservers();
 
   // Set whenever a JS DOM mutation runs (textContent/attribute/style/node
   // tree edits).  The browser layer reads it after dispatching user
@@ -3663,13 +3694,26 @@ JSValue DocCreateComment(JSContext* ctx, JSValueConst this_val, int argc, JSValu
 
 JSValue DocCreateElementNS(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-  // The namespace is accepted and ignored (HTML semantics; no SVG/MathML
-  // element types are distinguished).  createElementNS(ns, "svg") yields a
-  // plain element, matching the HTML parser's behavior for unknown tags.
   if (argc < 2) {
     return JS_ThrowTypeError(ctx, "createElementNS requires (namespace, tagName)");
   }
-  return DocCreateElement(ctx, this_val, 1, &argv[1]);
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  bool ok = false;
+  const std::string namespace_uri = ArgString(ctx, argv[0], &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  const std::string tag = ArgString(ctx, argv[1], &ok);
+  if (!ok || tag.empty()) {
+    return JS_ThrowTypeError(ctx, "createElementNS requires a tag name");
+  }
+  auto element = std::make_unique<dom::Element>(tag, namespace_uri);
+  dom::Element* raw = element.get();
+  impl->created[raw] = std::move(element);
+  return impl->WrapNode(raw);
 }
 
 // All elements with the given tag name, in document order.
@@ -6935,6 +6979,8 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   // Event); instances are created with this prototype by CustomEventConstructor.
   custom_event_proto = JS_NewObjectProto(ctx, event_proto);
   class_list_proto = JS_NewObject(ctx);
+  html_iframe_element_proto = JS_NewObjectProto(ctx, element_proto);
+  svg_element_proto = JS_NewObjectProto(ctx, element_proto);
 
   DefineNodePrototype(ctx, *this);
   DefineElementPrototype(ctx, *this);
@@ -7128,6 +7174,8 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   DefineInterface(ctx, global, "CSSStyleDeclaration", style_proto);
   DefineInterface(ctx, global, "Element", element_proto);
   DefineInterface(ctx, global, "HTMLElement", element_proto, /*set_constructor=*/false);
+  DefineInterface(ctx, global, "HTMLIFrameElement", html_iframe_element_proto);
+  DefineInterface(ctx, global, "SVGElement", svg_element_proto);
   // Event is constructable: new Event(type, {bubbles, cancelable}).
   {
     JSValue event_ctor =
@@ -7482,6 +7530,8 @@ Impl::~Impl()
   JS_FreeValue(ctx, event_proto);
   JS_FreeValue(ctx, custom_event_proto);
   JS_FreeValue(ctx, class_list_proto);
+  JS_FreeValue(ctx, html_iframe_element_proto);
+  JS_FreeValue(ctx, svg_element_proto);
   JS_FreeValue(ctx, window);
 
   // Free the IndexedDB object-model references (databases/transactions/stores).
@@ -7550,8 +7600,16 @@ JSValue Impl::PrototypeFor(const dom::Node* node) const
   switch (node->node_type()) {
   case dom::NodeType::kDocument:
     return document_proto;
-  case dom::NodeType::kElement:
+  case dom::NodeType::kElement: {
+    const auto* element = static_cast<const dom::Element*>(node);
+    if (element->namespace_uri() == "http://www.w3.org/2000/svg") {
+      return svg_element_proto;
+    }
+    if (element->tag_name() == "iframe") {
+      return html_iframe_element_proto;
+    }
     return element_proto;
+  }
   case dom::NodeType::kText:
     return text_proto;
   case dom::NodeType::kComment:

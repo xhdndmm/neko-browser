@@ -20,7 +20,7 @@ struct Attribute
 class Element : public Node
 {
 public:
-  explicit Element(std::string tag_name);
+  explicit Element(std::string tag_name, std::string namespace_uri = "http://www.w3.org/1999/xhtml");
 
   std::string_view tag_name() const
   {
@@ -29,6 +29,10 @@ public:
   std::string_view node_name() const override
   {
     return tag_name_;
+  }
+  std::string_view namespace_uri() const
+  {
+    return namespace_uri_;
   }
 
   bool HasAttribute(std::string_view name) const;
@@ -48,6 +52,7 @@ public:
 
 private:
   std::string tag_name_;
+  std::string namespace_uri_;
   std::vector<Attribute> attributes_;
 };
 

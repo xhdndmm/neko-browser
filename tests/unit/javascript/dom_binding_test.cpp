@@ -160,6 +160,15 @@ TEST_F(DomBinderTest, InterfaceGlobalsAndInstanceof)
   EXPECT_TRUE(EvalBool("document.head instanceof Element"));
   EXPECT_TRUE(EvalBool("document.createTextNode('x') instanceof Text"));
   EXPECT_TRUE(EvalBool("document.createElement('div') instanceof Element"));
+  EXPECT_TRUE(EvalBool("(function(){ var frame = document.createElement('iframe'); "
+                       "return typeof HTMLIFrameElement === 'function' && "
+                       "frame instanceof HTMLIFrameElement && frame instanceof HTMLElement && "
+                       "frame instanceof Element && frame instanceof Node && "
+                       "!(document.body instanceof HTMLIFrameElement); })()"));
+  EXPECT_TRUE(EvalBool("(function(){ var svg = document.createElementNS("
+                       "'http://www.w3.org/2000/svg', 'svg'); "
+                       "return typeof SVGElement === 'function' && svg instanceof SVGElement && "
+                       "svg instanceof Element && !(document.body instanceof SVGElement); })()"));
 }
 
 TEST_F(DomBinderTest, InterfacePrototypeExtension)
