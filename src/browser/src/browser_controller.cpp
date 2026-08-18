@@ -312,16 +312,18 @@ BrowserController::BrowserController(std::string profile_dir, FetchFn fetch)
       indexed_db_(profile_dir_), downloads_(profile_dir_ + "/downloads")
 {
   pool_ = std::make_unique<base::ThreadPool>();
-  // Default fetch: network::HttpGet with the controller-provided cookie
-  // header.
+  // Default fetch: compute cookies for each redirect hop from the controller's
+  // cookie jar.  HttpGet invokes HeaderProvider with the current hop URL.
   if (!fetch_) {
-    fetch_ = [](const url::Url& u, std::string_view cookie_header) {
+    fetch_ = [this](const url::Url& u, std::string_view) {
       network::HeaderProvider provider;
-      if (!cookie_header.empty()) {
-        provider = [cookie = std::string(cookie_header)](const url::Url&) {
-          return std::vector<network::HttpHeader>{{"cookie", cookie}};
-        };
-      }
+      provider = [this](const url::Url& target) {
+        const std::string cookie = CookieHeader(target, NowUnix());
+        if (cookie.empty()) {
+          return std::vector<network::HttpHeader>{};
+        }
+        return std::vector<network::HttpHeader>{{"cookie", cookie}};
+      };
       return network::HttpGet(u, 5, provider);
     };
   }

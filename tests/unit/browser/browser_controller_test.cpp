@@ -26,6 +26,13 @@
 #include <vector>
 #include <zlib.h>
 
+#ifndef _WIN32
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
 namespace neko::browser {
 namespace {
 
@@ -105,6 +112,128 @@ public:
 private:
   std::mutex mutex_;
 };
+
+#ifndef _WIN32
+class RedirectCookieServer
+{
+public:
+  RedirectCookieServer()
+  {
+    listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (listen_fd_ < 0) {
+      return;
+    }
+    int yes = 1;
+    ::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0 ||
+        ::listen(listen_fd_, 2) != 0) {
+      ::close(listen_fd_);
+      listen_fd_ = -1;
+      return;
+    }
+    socklen_t length = sizeof(address);
+    if (::getsockname(listen_fd_, reinterpret_cast<sockaddr*>(&address), &length) != 0) {
+      ::close(listen_fd_);
+      listen_fd_ = -1;
+      return;
+    }
+    port_ = ntohs(address.sin_port);
+    thread_ = std::thread([this] { Run(); });
+  }
+
+  ~RedirectCookieServer()
+  {
+    if (listen_fd_ >= 0) {
+      ::shutdown(listen_fd_, SHUT_RDWR);
+      ::close(listen_fd_);
+    }
+    if (thread_.joinable()) {
+      thread_.join();
+    }
+  }
+
+  bool IsValid() const
+  {
+    return listen_fd_ >= 0;
+  }
+
+  uint16_t port() const
+  {
+    return port_;
+  }
+
+  std::vector<std::string> Requests() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return requests_;
+  }
+
+private:
+  static void SendAll(int fd, std::string_view data)
+  {
+    std::size_t sent = 0;
+    while (sent < data.size()) {
+      const ssize_t count = ::send(fd, data.data() + sent, data.size() - sent, MSG_NOSIGNAL);
+      if (count <= 0) {
+        return;
+      }
+      sent += static_cast<std::size_t>(count);
+    }
+  }
+
+  static std::string ReadRequest(int fd)
+  {
+    std::string request;
+    char buffer[1024];
+    while (request.find("\r\n\r\n") == std::string::npos) {
+      const ssize_t count = ::recv(fd, buffer, sizeof(buffer), 0);
+      if (count <= 0) {
+        break;
+      }
+      request.append(buffer, static_cast<std::size_t>(count));
+    }
+    return request;
+  }
+
+  void Run()
+  {
+    for (int request_number = 0; request_number < 2; ++request_number) {
+      sockaddr_in client{};
+      socklen_t length = sizeof(client);
+      const int fd = ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&client), &length);
+      if (fd < 0) {
+        return;
+      }
+      const std::string request = ReadRequest(fd);
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        requests_.push_back(request);
+      }
+      if (request_number == 0) {
+        const std::string location = "http://localhost:" + std::to_string(port_) + "/target";
+        SendAll(fd, "HTTP/1.1 302 Found\r\nLocation: " + location +
+                    "\r\nContent-Length: 0\r\n\r\n");
+      } else {
+        const std::string body = "<html><body>target</body></html>";
+        SendAll(fd, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: " +
+                    std::to_string(body.size()) + "\r\n\r\n" + body);
+      }
+      ::shutdown(fd, SHUT_RDWR);
+      ::close(fd);
+    }
+  }
+
+  int listen_fd_ = -1;
+  uint16_t port_ = 0;
+  std::thread thread_;
+  mutable std::mutex mutex_;
+  std::vector<std::string> requests_;
+};
+#endif
 
 std::string LastCookie(const FakeFetcher& f)
 {
@@ -1203,6 +1332,28 @@ TEST(BrowserControllerTest, ExtractsCookiesAndSendsThemNextRequest)
   EXPECT_NE(cookie.find("session=abc"), std::string::npos);
   EXPECT_NE(cookie.find("theme=dark"), std::string::npos);
 }
+
+#ifndef _WIN32
+TEST(BrowserControllerTest, DoesNotSendSourceCookieToRedirectTarget)
+{
+  TempProfile tp;
+  RedirectCookieServer server;
+  ASSERT_TRUE(server.IsValid());
+  const std::string source = "http://127.0.0.1:" + std::to_string(server.port()) + "/start";
+  const auto source_url = url::Url::Parse(source);
+  ASSERT_TRUE(source_url.has_value());
+
+  BrowserController controller(tp.path());
+  ASSERT_TRUE(controller.cookies().SetCookieFromHeader(source_url.value(), "session=secret; Path=/", 1));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive(source).has_value());
+
+  const auto requests = server.Requests();
+  ASSERT_EQ(requests.size(), 2u);
+  EXPECT_NE(requests[0].find("cookie: session=secret"), std::string::npos);
+  EXPECT_EQ(requests[1].find("cookie:"), std::string::npos);
+}
+#endif
 
 TEST(BrowserControllerTest, RoutesImageContent)
 {
