@@ -576,6 +576,25 @@ std::string CookieStore::CookieHeaderFor(const url::Url& url, int64_t now) const
   return header;
 }
 
+std::string CookieStore::DocumentCookieFor(const url::Url& url, int64_t now) const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto cookies = CookiesForLocked(url, now);
+  std::string value;
+  for (const Cookie* cookie : cookies) {
+    if (cookie->http_only) {
+      continue;
+    }
+    if (!value.empty()) {
+      value += "; ";
+    }
+    value += cookie->name;
+    value += '=';
+    value += cookie->value;
+  }
+  return value;
+}
+
 void CookieStore::PurgeExpired(int64_t now)
 {
   std::lock_guard<std::mutex> lock(mutex_);

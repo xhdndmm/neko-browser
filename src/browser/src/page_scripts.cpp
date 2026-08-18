@@ -11,9 +11,11 @@
 #include "neko/browser/page_scripts.h"
 
 #include "neko/base/logging.h"
+#include "neko/base/string_util.h"
 #include "neko/style/computed_style.h"
 #include "neko/url/url.h"
 
+#include <ctime>
 #include <map>
 #include <memory>
 #include <optional>
@@ -24,6 +26,28 @@
 
 namespace neko::browser {
 namespace {
+
+bool HasHttpOnlyAttribute(std::string_view assignment)
+{
+  while (!assignment.empty()) {
+    const std::size_t separator = assignment.find(';');
+    std::string_view attribute = assignment.substr(0, separator);
+    while (!attribute.empty() && (attribute.front() == ' ' || attribute.front() == '\t')) {
+      attribute.remove_prefix(1);
+    }
+    while (!attribute.empty() && (attribute.back() == ' ' || attribute.back() == '\t')) {
+      attribute.remove_suffix(1);
+    }
+    if (base::AsciiEqualsIgnoreCase(attribute, "httponly")) {
+      return true;
+    }
+    if (separator == std::string_view::npos) {
+      break;
+    }
+    assignment.remove_prefix(separator + 1);
+  }
+  return false;
+}
 
 // Serializes an element's computed style as property -> resolved value
 // (kebab-case keys, px strings) for window.getComputedStyle().  Covers the
@@ -151,6 +175,23 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
       }
       return keys;
     };
+  }
+  if (services.cookies != nullptr) {
+    storage::CookieStore* cookies = services.cookies;
+    const base::Result<url::Url> document_url = url::Url::Parse(base_url);
+    if (document_url.has_value()) {
+      const url::Url current_url = document_url.value();
+      apis.cookie_get = [cookies, current_url]() {
+        return cookies->DocumentCookieFor(current_url, static_cast<int64_t>(std::time(nullptr)));
+      };
+      apis.cookie_set = [cookies, current_url](std::string_view assignment) {
+        if (HasHttpOnlyAttribute(assignment)) {
+          return;
+        }
+        (void)cookies->SetCookieFromHeader(
+            current_url, assignment, static_cast<int64_t>(std::time(nullptr)));
+      };
+    }
   }
   // window.indexedDB: drive the per-origin IndexedDB store through the same
   // callback pattern as localStorage.

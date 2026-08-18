@@ -74,6 +74,10 @@ public:
   // "name=value; name2=value2" request header value for |url|, or empty.
   std::string CookieHeaderFor(const url::Url& url, int64_t now) const;
 
+  // The document.cookie view. HttpOnly cookies are excluded because page
+  // scripts must not be able to read them.
+  std::string DocumentCookieFor(const url::Url& url, int64_t now) const;
+
   // Removes expired cookies.
   void PurgeExpired(int64_t now);
 

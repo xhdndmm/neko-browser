@@ -401,6 +401,20 @@ TEST_F(EventDispatchTest, InputEventFires)
   EXPECT_EQ(EvalNumber("return window._n;"), 11);
 }
 
+TEST_F(EventDispatchTest, InputHandlerGetterDoesNotReenterAccessor)
+{
+  ASSERT_TRUE(EvalBool(R"(
+    var b = document.getElementById('main');
+    var handler = function(){ window._n = 1; };
+    b.oninput = handler;
+    return b.oninput === handler;
+  )"));
+  dom::Element* main = ById("main");
+  ASSERT_NE(main, nullptr);
+  binder_->DispatchInputEvent(*main);
+  EXPECT_EQ(EvalNumber("return window._n;"), 1);
+}
+
 // The cancelable wheel event carries the vertical delta.
 TEST_F(EventDispatchTest, WheelEventDelta)
 {

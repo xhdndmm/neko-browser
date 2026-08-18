@@ -6,6 +6,7 @@
 #include "neko/renderer/page.h"
 #include "neko/storage/indexed_db.h"
 #include "neko/storage/local_storage.h"
+#include "neko/storage/cookie_store.h"
 #include "neko/url/url.h"
 
 #include <functional>
@@ -26,6 +27,7 @@ struct PageScriptServices
   storage::LocalStorage* local_storage = nullptr;
   // When non-null, window.indexedDB is installed, scoped to |origin|.
   storage::IndexedDbStore* indexed_db = nullptr;
+  storage::CookieStore* cookies = nullptr;
   std::string origin;
 };
 

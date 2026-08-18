@@ -25,6 +25,7 @@
 #include "neko/dom/query.h"
 #include "neko/html/parser.h"
 #include "neko/javascript/script_engine_internal.h"
+#include "neko/url/url.h"
 
 #include <algorithm>
 #include <array>
@@ -673,6 +674,11 @@ struct Impl
   };
   using ListenerMap = std::unordered_map<std::string, std::vector<Listener>>;
   std::unordered_map<const dom::Node*, ListenerMap> listeners;
+
+  // Element IDL event handlers (element.oninput = fn). These cannot live on
+  // the wrapper itself because reading the property would re-enter its
+  // prototype accessor.
+  std::unordered_map<const dom::Node*, std::unordered_map<std::string, JSValue>> event_handlers;
 
   // Set whenever a JS DOM mutation runs (textContent/attribute/style/node
   // tree edits).  The browser layer reads it after dispatching user
@@ -1670,9 +1676,12 @@ JSValue ElementGetAttributes(JSContext* ctx, JSValueConst this_val)
     JS_SetPropertyStr(
         ctx, obj, "value", JS_NewStringLen(ctx, attrs[i].value.data(), attrs[i].value.size()));
     JS_SetPropertyUint32(ctx, // NOLINT: (this_obj, index, value); steals obj
-                         arr,
-                         static_cast<uint32_t>(i),
-                         obj);
+                          arr,
+                          static_cast<uint32_t>(i),
+                          JS_DupValue(ctx, obj));
+    // NamedNodeMap supports both indexed and named access, e.g.
+    // element.attributes.style.value.
+    JS_SetPropertyStr(ctx, arr, attrs[i].name.c_str(), obj);
   }
   return arr;
 }
@@ -2283,6 +2292,61 @@ JSValue ElementGetHref(JSContext* ctx, JSValueConst this_val)
   const std::string raw = RawAttr(*element, "href");
   const std::string resolved = ResolvedUrl(*impl, raw);
   return JS_NewStringLen(ctx, resolved.data(), resolved.size());
+}
+
+enum class AnchorUrlPart
+{
+  kProtocol,
+  kHost,
+  kHostname,
+  kPort,
+  kPathname,
+  kSearch,
+  kHash,
+};
+
+JSValue ElementGetAnchorUrlPart(JSContext* ctx, JSValueConst this_val, int magic)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (impl == nullptr || element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const base::Result<url::Url> parsed =
+      url::Url::Parse(ResolvedUrl(*impl, RawAttr(*element, "href")));
+  if (!parsed.has_value()) {
+    return JS_NewStringLen(ctx, "", 0);
+  }
+
+  const url::Url& parsed_url = parsed.value();
+  std::string value;
+  switch (static_cast<AnchorUrlPart>(magic)) {
+  case AnchorUrlPart::kProtocol:
+    value = parsed_url.scheme().empty() ? "" : parsed_url.scheme() + ":";
+    break;
+  case AnchorUrlPart::kHost:
+    value = parsed_url.host();
+    if (parsed_url.port().has_value()) {
+      value += ":" + std::to_string(parsed_url.port().value());
+    }
+    break;
+  case AnchorUrlPart::kHostname:
+    value = parsed_url.host();
+    break;
+  case AnchorUrlPart::kPort:
+    value = parsed_url.port().has_value() ? std::to_string(parsed_url.port().value()) : "";
+    break;
+  case AnchorUrlPart::kPathname:
+    value = parsed_url.path().empty() ? "/" : parsed_url.path();
+    break;
+  case AnchorUrlPart::kSearch:
+    value = parsed_url.has_query() ? "?" + parsed_url.query() : "";
+    break;
+  case AnchorUrlPart::kHash:
+    value = parsed_url.has_fragment() ? "#" + parsed_url.fragment() : "";
+    break;
+  }
+  return JS_NewStringLen(ctx, value.data(), value.size());
 }
 
 JSValue ElementSetHref(JSContext* ctx, JSValueConst this_val, JSValueConst value)
@@ -3715,6 +3779,31 @@ JSValue DocGetURL(JSContext* ctx, JSValueConst this_val)
   return JS_NewStringLen(ctx, url.data(), url.size());
 }
 
+JSValue DocGetCookie(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.cookie_get) {
+    return JS_NewStringLen(ctx, "", 0);
+  }
+  const std::string cookies = impl->apis.cookie_get();
+  return JS_NewStringLen(ctx, cookies.data(), cookies.size());
+}
+
+JSValue DocSetCookie(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.cookie_set) {
+    return JS_UNDEFINED;
+  }
+  bool ok = false;
+  const std::string assignment = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  impl->apis.cookie_set(assignment);
+  return JS_UNDEFINED;
+}
+
 JSValue DocGetBaseURI(JSContext* ctx, JSValueConst this_val)
 {
   return DocGetURL(ctx, this_val);
@@ -4282,9 +4371,8 @@ const char* OnHandlerForType(std::string_view type)
 }
 
 // Element-level global event handler IDL attributes (onclick/oninput/...).
-// The handler is stored as a property on the element's wrapper so JS sees a
-// regular function value; a content attribute (on*="code") is compiled to a
-// function on first fire and cached on the wrapper.
+// IDL handlers are stored by Impl. A content attribute (on*="code") is
+// compiled when it fires.
 static constexpr std::array<const char*, 19> kElementEventHandlers = {"onclick",
                                                                       "ondblclick",
                                                                       "onmousedown",
@@ -4315,15 +4403,16 @@ JSValue ElementGetEventHandler(JSContext* ctx, JSValueConst this_val, int magic)
       magic >= static_cast<int>(kElementEventHandlers.size())) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
-  JSValue wrapper = impl->WrapNode(node);
-  JSValue h =
-      JS_GetPropertyStr(ctx, wrapper, kElementEventHandlers[static_cast<std::size_t>(magic)]);
-  JS_FreeValue(ctx, wrapper);
-  if (JS_IsUndefined(h)) {
-    JS_FreeValue(ctx, h);
+  const auto node_it = impl->event_handlers.find(node);
+  if (node_it == impl->event_handlers.end()) {
     return JS_NULL;
   }
-  return h;
+  const auto handler_it =
+      node_it->second.find(kElementEventHandlers[static_cast<std::size_t>(magic)]);
+  if (handler_it == node_it->second.end()) {
+    return JS_NULL;
+  }
+  return JS_DupValue(ctx, handler_it->second);
 }
 
 JSValue ElementSetEventHandler(JSContext* ctx, JSValueConst this_val, JSValueConst value, int magic)
@@ -4334,15 +4423,13 @@ JSValue ElementSetEventHandler(JSContext* ctx, JSValueConst this_val, JSValueCon
       magic >= static_cast<int>(kElementEventHandlers.size())) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
-  JSValue wrapper = impl->WrapNode(node);
-  // Define an own property (not JS_SetPropertyStr, which would re-enter the
-  // prototype's accessor and recurse).
-  JS_DefinePropertyValueStr(ctx,
-                            wrapper,
-                            kElementEventHandlers[static_cast<std::size_t>(magic)],
-                            JS_DupValue(ctx, value),
-                            JS_PROP_C_W_E);
-  JS_FreeValue(ctx, wrapper);
+  const std::string name = kElementEventHandlers[static_cast<std::size_t>(magic)];
+  auto& handlers = impl->event_handlers[node];
+  const auto existing = handlers.find(name);
+  if (existing != handlers.end()) {
+    JS_FreeValue(ctx, existing->second);
+  }
+  handlers[name] = JS_DupValue(ctx, value);
   return JS_UNDEFINED;
 }
 
@@ -4754,6 +4841,20 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
                  "href",
                  MakeGetter(ctx, "href", ElementGetHref),
                  MakeSetter(ctx, "href", ElementSetHref));
+  for (const auto& [name, part] :
+       std::array<std::pair<const char*, AnchorUrlPart>, 7>{{{"protocol", AnchorUrlPart::kProtocol},
+                                                               {"host", AnchorUrlPart::kHost},
+                                                               {"hostname", AnchorUrlPart::kHostname},
+                                                               {"port", AnchorUrlPart::kPort},
+                                                               {"pathname", AnchorUrlPart::kPathname},
+                                                               {"search", AnchorUrlPart::kSearch},
+                                                               {"hash", AnchorUrlPart::kHash}}}) {
+    DefineAccessor(ctx,
+                   impl.element_proto,
+                   name,
+                   MakeGetterMagic(ctx, name, ElementGetAnchorUrlPart, static_cast<int>(part)),
+                   JS_UNDEFINED);
+  }
   DefineAccessor(ctx,
                  impl.element_proto,
                  "target",
@@ -4848,6 +4949,11 @@ void DefineDocumentPrototype(JSContext* ctx, Impl& impl)
                  MakeGetter(ctx, "title", DocGetTitle),
                  MakeSetter(ctx, "title", DocSetTitle));
   DefineGetter(ctx, impl.document_proto, "URL", MakeGetter(ctx, "URL", DocGetURL));
+  DefineAccessor(ctx,
+                 impl.document_proto,
+                 "cookie",
+                 MakeGetter(ctx, "cookie", DocGetCookie),
+                 MakeSetter(ctx, "cookie", DocSetCookie));
   DefineGetter(ctx, impl.document_proto, "baseURI", MakeGetter(ctx, "baseURI", DocGetBaseURI));
   DefineGetter(
       ctx, impl.document_proto, "documentURI", MakeGetter(ctx, "documentURI", DocGetDocumentURI));
@@ -7263,6 +7369,13 @@ Impl::~Impl()
   }
   listeners.clear();
 
+  for (auto& node_entry : event_handlers) {
+    for (auto& handler_entry : node_entry.second) {
+      JS_FreeValue(ctx, handler_entry.second);
+    }
+  }
+  event_handlers.clear();
+
   // Free timer callbacks.
   for (Timer& timer : timers) {
     JS_FreeValue(ctx, timer.callback);
@@ -7761,12 +7874,17 @@ void Impl::FireEventHandler(dom::Node* node, EventWrapper* w, JSValue event, int
     handler = compiled;
   } else {
     // IDL handler assigned from JS (element.onclick = fn).
-    handler = JS_GetPropertyStr(ctx, wrapper, name);
-    if (!JS_IsFunction(ctx, handler)) {
-      JS_FreeValue(ctx, handler);
+    const auto node_it = event_handlers.find(node);
+    if (node_it == event_handlers.end()) {
       JS_FreeValue(ctx, wrapper);
       return;
     }
+    const auto handler_it = node_it->second.find(name);
+    if (handler_it == node_it->second.end() || !JS_IsFunction(ctx, handler_it->second)) {
+      JS_FreeValue(ctx, wrapper);
+      return;
+    }
+    handler = JS_DupValue(ctx, handler_it->second);
   }
   // Expose currentTarget/eventPhase to the handler, then call it with
   // this = the element and the event as the single argument.

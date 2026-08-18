@@ -20,7 +20,7 @@ target_include_directories(neko_javascript PUBLIC
 )
 # DOM bindings (Phase 8 M2) make the module depend on the DOM/HTML/CSS
 # layers; none of those depend back on javascript, so there is no cycle.
-target_link_libraries(neko_javascript PUBLIC neko::base neko::dom neko::css neko::html PRIVATE qjs)
+target_link_libraries(neko_javascript PUBLIC neko::base neko::url neko::dom neko::css neko::html PRIVATE qjs)
 # QuickJS is a third-party dependency; mark its headers SYSTEM so our strict
 # warnings (-Wold-style-cast / -Wdouble-promotion) don't fire inside quickjs.h.
 target_include_directories(neko_javascript SYSTEM PRIVATE ${quickjs_SOURCE_DIR})

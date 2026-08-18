@@ -74,6 +74,11 @@ struct PageApis
   // result rejects the returned promise (network error).
   std::function<base::Result<FetchResponse>(const std::string&)> fetch;
 
+  // document.cookie for the current document. The setter receives one
+  // Set-Cookie-style assignment and returns no value.
+  std::function<std::string()> cookie_get;
+  std::function<void(std::string_view)> cookie_set;
+
   // window.location.  |location_href| returns the current document URL (used
   // for the read-only parts of location and for resolving relative targets);
   // |navigate| requests navigation to an absolute URL (location.href

@@ -91,6 +91,18 @@ TEST_F(DomBinderTest, GlobalDocumentAndWindow)
   EXPECT_EQ(EvalString("document.body.tagName"), "BODY");
 }
 
+TEST_F(DomBinderTest, DocumentCookieCallbacks)
+{
+  std::string cookie = "session=abc";
+  PageApis apis;
+  apis.cookie_get = [&cookie] { return cookie; };
+  apis.cookie_set = [&cookie](std::string_view value) { cookie = std::string(value); };
+  DomBinder binder(*document_, apis);
+  EXPECT_EQ(binder.Evaluate("document.cookie").value().ToString().value(), "session=abc");
+  ASSERT_TRUE(binder.Evaluate("document.cookie = 'theme=dark; Path=/';").has_value());
+  EXPECT_EQ(cookie, "theme=dark; Path=/");
+}
+
 TEST_F(DomBinderTest, DocumentHead)
 {
   EXPECT_EQ(EvalString("document.head.tagName"), "HEAD");
@@ -360,6 +372,10 @@ TEST_F(DomBinderTest, Attributes)
   EXPECT_TRUE(EvalBool("(function(){ var e = document.getElementById('main'); e.className = 'x y'; "
                        "return e.getAttribute('class') === 'x y'; })()"));
   EXPECT_EQ(EvalNumber("document.getElementById('first').attributes.length"), 2.0);
+  EXPECT_TRUE(EvalBool("(function(){ var e = document.getElementById('first'); "
+                       "e.style.color = 'red'; var a = e.attributes; "
+                       "return a.style !== undefined && a.style.name === 'style' "
+                       "&& a.style.value.indexOf('color: red') !== -1; })()"));
 }
 
 TEST_F(DomBinderTest, StyleDeclaration)
@@ -798,6 +814,23 @@ TEST_F(DomBinderTest, LinkHrefAndImageSrc)
                        "    && img.complete === true && img.naturalWidth === 0 "
                        "    && img.getAttribute('src') === 'pic.png'; "
                        "return ok; })()"));
+}
+
+TEST_F(DomBinderTest, AnchorReflectsResolvedUrlComponents)
+{
+  PageApis apis;
+  apis.resolve_url = [](const std::string& raw) {
+    return raw == "/path?x=1#part" ? "https://example.com:8443/path?x=1#part" : raw;
+  };
+  DomBinder binder(*document_, apis);
+  EXPECT_TRUE(binder.Evaluate(
+      "var a = document.createElement('a'); a.href = '/path?x=1#part';").has_value());
+  const auto result = binder.Evaluate(
+      "a.protocol === 'https:' && a.host === 'example.com:8443' && "
+      "a.hostname === 'example.com' && a.port === '8443' && "
+      "a.pathname === '/path' && a.search === '?x=1' && a.hash === '#part';");
+  ASSERT_TRUE(result.has_value());
+  EXPECT_TRUE(result.value().ToBoolean().value());
 }
 
 // ---------------------------------------------------------------------------

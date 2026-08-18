@@ -1370,6 +1370,25 @@ TEST(BrowserControllerTest, ExtractsCookiesAndSendsThemNextRequest)
   EXPECT_NE(cookie.find("theme=dark"), std::string::npos);
 }
 
+TEST(BrowserControllerTest, PageScriptCannotCreateHttpOnlyCookie)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<script>document.cookie='visible=yes; Path=/';"
+                               "document.cookie='secret=no; HttpOnly; Path=/';</script>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  const auto cookies = controller.cookies().All();
+  ASSERT_EQ(cookies.size(), 1u);
+  EXPECT_EQ(cookies[0].name, "visible");
+  EXPECT_FALSE(cookies[0].http_only);
+}
+
 #ifndef _WIN32
 TEST(BrowserControllerTest, DoesNotSendSourceCookieToRedirectTarget)
 {

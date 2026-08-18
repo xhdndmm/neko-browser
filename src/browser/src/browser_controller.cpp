@@ -1021,6 +1021,7 @@ void BrowserController::LoadBytes(Tab& tab,
     browser::PageScriptServices services;
     services.local_storage = &local_storage_;
     services.indexed_db = &indexed_db_;
+    services.cookies = &cookies_;
     services.origin = origin;
     const auto fetch_subresource = [this](const url::Url& resource_url,
                                           std::string_view) {

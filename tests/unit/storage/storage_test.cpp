@@ -289,6 +289,19 @@ TEST(CookieStoreTest, SecureCookiesNotSentOverHttp)
   EXPECT_THAT(store.CookieHeaderFor(MakeUrl("http://example.com/"), now), Eq(""));
 }
 
+TEST(CookieStoreTest, DocumentCookieExcludesHttpOnlyCookies)
+{
+  TempProfile profile;
+  CookieStore store(profile.path());
+  const auto url = url::Url::Parse("https://example.com/path");
+  ASSERT_TRUE(url.has_value());
+  ASSERT_TRUE(store.SetCookieFromHeader(url.value(), "visible=yes; Path=/", 100));
+  ASSERT_TRUE(store.SetCookieFromHeader(url.value(), "secret=no; HttpOnly; Path=/", 100));
+
+  EXPECT_EQ(store.DocumentCookieFor(url.value(), 101), "visible=yes");
+  EXPECT_NE(store.CookieHeaderFor(url.value(), 101).find("secret=no"), std::string::npos);
+}
+
 TEST(CookieStoreTest, ExpiredCookiesAreNotSent)
 {
   TempProfile tp;
