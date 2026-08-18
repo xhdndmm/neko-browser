@@ -100,6 +100,14 @@ TEST_F(DomBinderTest, BlobAndObjectUrl)
                        "url.indexOf('blob:') === 0; })()"));
 }
 
+TEST_F(DomBinderTest, NodeListCollectionSemantics)
+{
+  EXPECT_TRUE(EvalBool("typeof NodeList === 'function'"));
+  EXPECT_TRUE(EvalBool("(function(){ var list = document.querySelectorAll('p'); return list instanceof NodeList; })()"));
+  EXPECT_TRUE(EvalBool("(function(){ var list = document.querySelectorAll('p'); return typeof list.item === 'function'; })()"));
+  EXPECT_TRUE(EvalBool("(function(){ var list = document.querySelectorAll('p'); return list.length > 0; })()"));
+}
+
 TEST_F(DomBinderTest, DocumentCookieCallbacks)
 {
   std::string cookie = "session=abc";

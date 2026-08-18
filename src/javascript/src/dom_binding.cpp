@@ -620,6 +620,7 @@ struct Impl
   JSValue event_proto = JS_UNDEFINED;
   JSValue custom_event_proto = JS_UNDEFINED;
   JSValue class_list_proto = JS_UNDEFINED;
+  JSValue node_list_proto = JS_UNDEFINED;
   JSValue html_iframe_element_proto = JS_UNDEFINED;
   JSValue svg_element_proto = JS_UNDEFINED;
   JSValue window = JS_UNDEFINED;
@@ -5611,6 +5612,25 @@ JSValue UrlRevokeObjectUrl(JSContext* /*ctx*/, JSValueConst /*this_val*/, int /*
   return JS_UNDEFINED;
 }
 
+JSValue NodeListItem(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  if (argc < 1) {
+    return JS_NULL;
+  }
+  int32_t index = -1;
+  (void)JS_ToInt32(ctx, &index, argv[0]);
+  if (index < 0) {
+    return JS_NULL;
+  }
+  return JS_GetPropertyUint32(ctx, this_val, static_cast<uint32_t>(index));
+}
+
+JSValue NodeListLength(JSContext* ctx, JSValueConst this_val)
+{
+  JSValue value = JS_GetPropertyStr(ctx, this_val, "length");
+  return value;
+}
+
 // ---- fetch -----------------------------------------------------------------
 
 // Response.text(): a promise resolved with the body (func_data[0]).
@@ -7182,6 +7202,15 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   // Event); instances are created with this prototype by CustomEventConstructor.
   custom_event_proto = JS_NewObjectProto(ctx, event_proto);
   class_list_proto = JS_NewObject(ctx);
+  JSValue global_for_array = JS_GetGlobalObject(ctx);
+  JSValue array_ctor = JS_GetPropertyStr(ctx, global_for_array, "Array");
+  JSValue array_proto = JS_GetPropertyStr(ctx, array_ctor, "prototype");
+  node_list_proto = JS_NewObjectProto(ctx, array_proto);
+  JS_FreeValue(ctx, array_proto);
+  JS_FreeValue(ctx, array_ctor);
+  JS_FreeValue(ctx, global_for_array);
+  JS_SetPropertyStr(ctx, node_list_proto, "item", JS_NewCFunction(ctx, NodeListItem, "item", 1));
+  DefineGetter(ctx, node_list_proto, "length", MakeGetter(ctx, "length", NodeListLength));
   html_iframe_element_proto = JS_NewObjectProto(ctx, element_proto);
   svg_element_proto = JS_NewObjectProto(ctx, element_proto);
 
@@ -7379,6 +7408,7 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   DefineInterface(ctx, global, "HTMLElement", element_proto, /*set_constructor=*/false);
   DefineInterface(ctx, global, "HTMLIFrameElement", html_iframe_element_proto);
   DefineInterface(ctx, global, "SVGElement", svg_element_proto);
+  DefineInterface(ctx, global, "NodeList", node_list_proto);
   JS_SetPropertyStr(ctx,
                     global,
                     "MutationObserver",
@@ -7755,6 +7785,7 @@ Impl::~Impl()
   JS_FreeValue(ctx, event_proto);
   JS_FreeValue(ctx, custom_event_proto);
   JS_FreeValue(ctx, class_list_proto);
+  JS_FreeValue(ctx, node_list_proto);
   JS_FreeValue(ctx, html_iframe_element_proto);
   JS_FreeValue(ctx, svg_element_proto);
   for (MutationObserver& observer : mutation_observers) {
@@ -7853,6 +7884,7 @@ JSValue Impl::PrototypeFor(const dom::Node* node) const
 JSValue Impl::MakeNodeArray(const std::vector<dom::Node*>& nodes)
 {
   JSValue arr = JS_NewArray(ctx);
+  JS_SetPrototype(ctx, arr, node_list_proto);
   for (std::size_t i = 0; i < nodes.size(); ++i) {
     JSValue w = WrapNode(nodes[i]);
     JS_SetPropertyUint32(ctx, arr, static_cast<uint32_t>(i), w); // steals w
@@ -7863,6 +7895,7 @@ JSValue Impl::MakeNodeArray(const std::vector<dom::Node*>& nodes)
 JSValue Impl::MakeElementArray(const std::vector<dom::Element*>& elements)
 {
   JSValue arr = JS_NewArray(ctx);
+  JS_SetPrototype(ctx, arr, node_list_proto);
   for (std::size_t i = 0; i < elements.size(); ++i) {
     JSValue w = WrapNode(elements[i]);
     JS_SetPropertyUint32(ctx, arr, static_cast<uint32_t>(i), w); // steals w
