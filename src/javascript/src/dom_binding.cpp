@@ -5526,6 +5526,91 @@ LocationToString(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueCon
   return LocationHrefGetter(ctx, this_val);
 }
 
+JSValue BlobText(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  JSValue data = JS_GetPropertyStr(ctx, this_val, "_nekoData");
+  JSValue promise = ResolvePromise(ctx, data);
+  JS_FreeValue(ctx, data);
+  return promise;
+}
+
+JSValue BlobArrayBuffer(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  JSValue data = JS_GetPropertyStr(ctx, this_val, "_nekoData");
+  const char* text = JS_ToCString(ctx, data);
+  if (text == nullptr) {
+    JS_FreeValue(ctx, data);
+    return JS_EXCEPTION;
+  }
+  const std::size_t size = std::strlen(text);
+  JSValue buffer = JS_NewArrayBufferCopy(ctx, reinterpret_cast<const uint8_t*>(text), size);
+  JS_FreeCString(ctx, text);
+  JS_FreeValue(ctx, data);
+  return ResolvePromise(ctx, buffer);
+}
+
+JSValue BlobConstructor(JSContext* ctx, JSValueConst /*new_target*/, int argc, JSValueConst* argv)
+{
+  JSValue blob = JS_NewObject(ctx);
+  std::string data;
+  if (argc >= 1 && JS_IsArray(argv[0])) {
+    JSValue length = JS_GetPropertyStr(ctx, argv[0], "length");
+    int32_t count = 0;
+    (void)JS_ToInt32(ctx, &count, length);
+    JS_FreeValue(ctx, length);
+    for (int32_t i = 0; i < count; ++i) {
+      JSValue part = JS_GetPropertyUint32(ctx, argv[0], static_cast<uint32_t>(i));
+      const char* text = JS_ToCString(ctx, part);
+      if (text != nullptr) {
+        data += text;
+        JS_FreeCString(ctx, text);
+      } else {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+      }
+      JS_FreeValue(ctx, part);
+    }
+  } else if (argc >= 1) {
+    const char* text = JS_ToCString(ctx, argv[0]);
+    if (text != nullptr) {
+      data = text;
+      JS_FreeCString(ctx, text);
+    } else {
+      JS_FreeValue(ctx, JS_GetException(ctx));
+    }
+  }
+  JS_SetPropertyStr(ctx, blob, "_nekoData", JS_NewStringLen(ctx, data.data(), data.size()));
+  JS_SetPropertyStr(ctx, blob, "size", JS_NewInt64(ctx, static_cast<int64_t>(data.size())));
+  std::string type;
+  if (argc >= 2 && JS_IsObject(argv[1])) {
+    JSValue type_value = JS_GetPropertyStr(ctx, argv[1], "type");
+    const char* text = JS_ToCString(ctx, type_value);
+    if (text != nullptr) {
+      type = text;
+      JS_FreeCString(ctx, text);
+    }
+    JS_FreeValue(ctx, type_value);
+  }
+  JS_SetPropertyStr(ctx, blob, "type", JS_NewString(ctx, type.c_str()));
+  JS_SetPropertyStr(ctx, blob, "text", JS_NewCFunction(ctx, BlobText, "text", 0));
+  JS_SetPropertyStr(ctx, blob, "arrayBuffer", JS_NewCFunction(ctx, BlobArrayBuffer, "arrayBuffer", 0));
+  return blob;
+}
+
+JSValue UrlCreateObjectUrl(JSContext* ctx, JSValueConst /*this_val*/, int argc, JSValueConst* argv)
+{
+  if (argc < 1 || !JS_IsObject(argv[0])) {
+    return JS_ThrowTypeError(ctx, "createObjectURL requires an object");
+  }
+  static std::atomic<uint64_t> next_id{1};
+  const std::string value = "blob:neko/" + std::to_string(next_id.fetch_add(1));
+  return JS_NewString(ctx, value.c_str());
+}
+
+JSValue UrlRevokeObjectUrl(JSContext* /*ctx*/, JSValueConst /*this_val*/, int /*argc*/, JSValueConst* /*argv*/)
+{
+  return JS_UNDEFINED;
+}
+
 // ---- fetch -----------------------------------------------------------------
 
 // Response.text(): a promise resolved with the body (func_data[0]).
@@ -7474,7 +7559,9 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
     JSValue toString_fn = JS_NewCFunction(ctx, LocationToString, "toString", 0);
     JS_SetPropertyStr(ctx, location, "toString", toString_fn);              // steals toString_fn
     JS_SetPropertyStr(ctx, window, "location", JS_DupValue(ctx, location)); // steals dup
-    JS_SetPropertyStr(ctx, global, "location", location);                   // steals
+    JS_SetPropertyStr(ctx, global, "location", JS_DupValue(ctx, location)); // steals dup
+    JS_SetPropertyStr(ctx, document_proto, "location", JS_DupValue(ctx, location));
+    JS_FreeValue(ctx, location);
   }
 
   // Page Web APIs (Phase 8 M3 subset): window.localStorage and window.fetch
@@ -7500,6 +7587,14 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
     JS_SetPropertyStr(ctx, window, "fetch", JS_DupValue(ctx, fetch_fn)); // steals
     JS_SetPropertyStr(ctx, global, "fetch", fetch_fn);                   // steals
   }
+  JSValue blob_ctor = JS_NewCFunction2(ctx, BlobConstructor, "Blob", 2, JS_CFUNC_constructor, 0);
+  JS_SetPropertyStr(ctx, window, "Blob", JS_DupValue(ctx, blob_ctor));
+  JS_SetPropertyStr(ctx, global, "Blob", blob_ctor);
+  JSValue url_object = JS_NewObject(ctx);
+  JS_SetPropertyStr(ctx, url_object, "createObjectURL", JS_NewCFunction(ctx, UrlCreateObjectUrl, "createObjectURL", 1));
+  JS_SetPropertyStr(ctx, url_object, "revokeObjectURL", JS_NewCFunction(ctx, UrlRevokeObjectUrl, "revokeObjectURL", 1));
+  JS_SetPropertyStr(ctx, window, "URL", JS_DupValue(ctx, url_object));
+  JS_SetPropertyStr(ctx, global, "URL", url_object);
   if (apis.idb_current_version) {
     JSValue idb = JS_NewObject(ctx);
     JSValue open_fn = JS_NewCFunction(ctx, IdbOpen, "open", 1);

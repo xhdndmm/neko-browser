@@ -89,6 +89,15 @@ TEST_F(DomBinderTest, GlobalDocumentAndWindow)
   EXPECT_TRUE(EvalBool("window.document === document"));
   EXPECT_EQ(EvalString("document.documentElement.tagName"), "HTML");
   EXPECT_EQ(EvalString("document.body.tagName"), "BODY");
+  EXPECT_TRUE(EvalBool("document.location === window.location"));
+}
+
+TEST_F(DomBinderTest, BlobAndObjectUrl)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var blob = new Blob(['hello', ' world'], {type:'text/plain'}); "
+                       "var url = URL.createObjectURL(blob); return blob.size === 11 && "
+                       "blob.type === 'text/plain' && typeof url === 'string' && "
+                       "url.indexOf('blob:') === 0; })()"));
 }
 
 TEST_F(DomBinderTest, DocumentCookieCallbacks)
