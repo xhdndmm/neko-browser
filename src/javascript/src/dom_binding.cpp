@@ -891,6 +891,9 @@ JSValue NodeAppendChild(JSContext* ctx, JSValueConst this_val, int argc, JSValue
     return ThrowDomException(
         ctx, "HierarchyRequestError", "appendChild: cannot append an ancestor");
   }
+  if (parent->WouldExceedMaximumTreeDepth(*child)) {
+    return ThrowDomException(ctx, "HierarchyRequestError", "appendChild: maximum tree depth exceeded");
+  }
   if (child->parent() != nullptr) {
     std::unique_ptr<dom::Node> removed = child->parent()->RemoveChild(child);
     impl->TakeOwnership(child, std::move(removed));
@@ -976,6 +979,9 @@ JSValue NodeInsertBefore(JSContext* ctx, JSValueConst this_val, int argc, JSValu
   }
   if (child == parent || child->node_type() == dom::NodeType::kDocument) {
     return ThrowDomException(ctx, "HierarchyRequestError", "insertBefore: invalid node");
+  }
+  if (parent->WouldExceedMaximumTreeDepth(*child)) {
+    return ThrowDomException(ctx, "HierarchyRequestError", "insertBefore: maximum tree depth exceeded");
   }
   if (child->parent() != nullptr) {
     std::unique_ptr<dom::Node> removed = child->parent()->RemoveChild(child);

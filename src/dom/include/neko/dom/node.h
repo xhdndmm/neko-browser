@@ -110,6 +110,20 @@ public:
     return ChildList(children_);
   }
 
+  // The maximum number of parent links from a node to the document root.
+  // Keeping this bound at the DOM mutation boundary protects recursive DOM,
+  // style, layout, and paint traversals from script-created deep trees.
+  static constexpr std::size_t kMaximumTreeDepth = 512;
+
+  // Returns whether |child|'s subtree would exceed the tree-depth budget when
+  // inserted here. This does not require |child| to be detached, so callers
+  // can validate a move before releasing its current owner.
+  bool WouldExceedMaximumTreeDepth(const Node& child) const;
+
+  // Returns whether a detached |child| can be inserted without violating this
+  // tree's ownership, cycle, or depth invariants.
+  bool CanAcceptChild(const Node& child) const;
+
   // Tree mutation. The parent takes ownership of the inserted node. Returns
   // false without modifying this tree for null, already-attached, or cyclic
   // nodes; InsertBefore also rejects a non-null reference outside this parent.
@@ -140,8 +154,6 @@ protected:
   }
 
  private:
-  bool CanInsert(const Node& child) const;
-
   NodeType node_type_;
   Node* parent_ = nullptr;
   std::vector<std::unique_ptr<Node>> children_;

@@ -301,6 +301,15 @@ TEST_F(DomBinderTest, TreeMutationThrowsDomException)
                        "return true; })()"));
 }
 
+TEST_F(DomBinderTest, ScriptCannotCreateOverdeepTree)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var root=document.createElement('div'); var node=root; "
+                       "for (var i=0; i<512; ++i) { var child=document.createElement('div'); "
+                       "node.appendChild(child); node=child; } "
+                       "try { node.appendChild(document.createElement('div')); return false; } "
+                       "catch (e) { return e.name === 'HierarchyRequestError'; } })()"));
+}
+
 TEST_F(DomBinderTest, CreateElementAppendAndInsert)
 {
   EXPECT_TRUE(EvalBool("(function(){ var d = document; "

@@ -73,24 +73,46 @@ Node* Node::child_at(std::size_t index) const
   return index < children_.size() ? children_[index].get() : nullptr;
 }
 
-bool Node::CanInsert(const Node& child) const
+bool Node::CanAcceptChild(const Node& child) const
 {
   if (&child == this || child.parent() != nullptr) {
     return false;
   }
-  for (const Node* ancestor = parent_; ancestor != nullptr; ancestor = ancestor->parent_) {
+  for (const Node* ancestor = this; ancestor != nullptr; ancestor = ancestor->parent_) {
     if (ancestor == &child) {
       return false;
     }
   }
-  return true;
+  return !WouldExceedMaximumTreeDepth(child);
+}
+
+bool Node::WouldExceedMaximumTreeDepth(const Node& child) const
+{
+  std::size_t insertion_depth = 0;
+  for (const Node* ancestor = this; ancestor != nullptr; ancestor = ancestor->parent_) {
+    ++insertion_depth;
+  }
+
+  std::vector<std::pair<const Node*, std::size_t>> pending;
+  pending.push_back({&child, insertion_depth});
+  while (!pending.empty()) {
+    const auto [node, depth] = pending.back();
+    pending.pop_back();
+    if (depth > kMaximumTreeDepth) {
+      return true;
+    }
+    for (const std::unique_ptr<Node>& descendant : node->children_) {
+      pending.push_back({descendant.get(), depth + 1});
+    }
+  }
+  return false;
 }
 
 bool Node::AppendChild(std::unique_ptr<Node> child)
 {
   // The DOM "insert" algorithm (dom.spec.whatwg.org §4.2.3): inserting a
   // DocumentFragment inserts its children instead of the fragment itself.
-  if (child == nullptr || !CanInsert(*child)) {
+  if (child == nullptr || !CanAcceptChild(*child)) {
     return false;
   }
   if (child->node_type() == NodeType::kDocumentFragment) {
@@ -110,7 +132,7 @@ bool Node::AppendChild(std::unique_ptr<Node> child)
 
 bool Node::InsertBefore(std::unique_ptr<Node> child, Node* reference)
 {
-  if (child == nullptr || !CanInsert(*child)) {
+  if (child == nullptr || !CanAcceptChild(*child)) {
     return false;
   }
   if (child->node_type() == NodeType::kDocumentFragment) {

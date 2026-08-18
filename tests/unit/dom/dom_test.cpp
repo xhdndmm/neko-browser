@@ -99,6 +99,21 @@ TEST(DomTest, RejectsInvalidInsertionsWithoutMutatingTree)
   EXPECT_EQ(parent->child_count(), 1u);
 }
 
+TEST(DomTest, RejectsInsertionsBeyondMaximumTreeDepth)
+{
+  auto root = std::make_unique<Element>("root");
+  Node* current = root.get();
+  for (std::size_t depth = 1; depth <= Node::kMaximumTreeDepth; ++depth) {
+    auto child = std::make_unique<Element>("child");
+    Node* raw_child = child.get();
+    ASSERT_TRUE(current->AppendChild(std::move(child)));
+    current = raw_child;
+  }
+
+  EXPECT_FALSE(current->AppendChild(std::make_unique<Element>("too-deep")));
+  EXPECT_EQ(current->child_count(), 0u);
+}
+
 TEST(DomTest, Attributes)
 {
   auto element = std::make_unique<Element>("div");
