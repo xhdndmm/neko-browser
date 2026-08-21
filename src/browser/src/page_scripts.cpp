@@ -17,6 +17,7 @@
 
 #include <ctime>
 #include <map>
+#include <set>
 #include <memory>
 #include <optional>
 #include <string>
@@ -127,6 +128,17 @@ void CollectScripts(const dom::Node& root, std::vector<dom::Element*>& out)
     }
     CollectScripts(*element, out);
   }
+}
+
+// True for <script type="module"> (type matching is ASCII case-insensitive
+// with surrounding whitespace ignored, per the HTML script-element rules).
+bool IsModuleScript(const dom::Element& script)
+{
+  const std::optional<std::string_view> type = script.GetAttribute("type");
+  if (!type.has_value()) {
+    return false;
+  }
+  return base::AsciiEqualsIgnoreCase(base::Trim(type.value()), "module");
 }
 
 } // namespace
@@ -354,21 +366,23 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
   auto binder = std::make_shared<javascript::DomBinder>(*document, apis);
   binder->SetConsoleSink(std::move(sink));
 
-  // Runs one script body (inline text or fetched external file); failures are
-  // logged and do not stop the remaining scripts.  |script| identifies the
-  // executing element for document.currentScript (WHATWG HTML §4.12.1): set
-  // while the body runs and cleared right after, so the getter is only
-  // non-null during the script's synchronous execution.
+  // Runs one classic script body (inline text or fetched external file);
+  // failures are logged and do not stop the remaining scripts.  |script|
+  // identifies the executing element for document.currentScript (WHATWG HTML
+  // §4.12.1): set while the body runs and cleared right after, so the getter
+  // is only non-null during the script's synchronous execution.
+  auto report_error = [&](const std::string& message) {
+    NEKO_LOG_WARNING("page script error: " + message);
+    if (error_sink) {
+      error_sink("error", message);
+    }
+  };
   auto run_source = [&](dom::Element* script, std::string_view source, std::string_view filename) {
     binder->SetCurrentScript(script);
     const auto result = binder->Evaluate(source, filename);
     binder->SetCurrentScript(nullptr);
     if (!result.has_value()) {
-      const std::string message = "Uncaught " + result.error().message();
-      NEKO_LOG_WARNING("page script error: " + message);
-      if (error_sink) {
-        error_sink("error", message);
-      }
+      report_error("Uncaught " + result.error().message());
     }
   };
 
@@ -403,9 +417,53 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     return source.empty() ? std::nullopt : std::optional<std::string>(source);
   };
 
-  // Pass 1: classic scripts (no async, no defer) in document order.
+  // Module scripts (<script type="module">).  The module is evaluated under
+  // its absolute URL so relative import specifiers resolve correctly:
+  // inline modules use the document URL, external modules their own src.
+  // document.currentScript stays null during module evaluation (spec).
+  // Entry-module dedup: two elements with the same src evaluate once (the
+  // module map caches it; a second JS_Eval under the same name would be a
+  // recompile, not the spec's single evaluation).
+  std::set<std::string> loaded_module_urls;
+  auto run_module_source = [&](std::string_view source, const std::string& url) {
+    const auto result = binder->EvaluateModule(source, url);
+    if (!result.has_value()) {
+      report_error("Uncaught " + result.error().message());
+    }
+  };
+  auto run_module_script = [&](dom::Element* script) {
+    if (script->HasAttribute("src")) {
+      const std::optional<std::string_view> src = script->GetAttribute("src");
+      const base::Result<url::Url> target =
+          base.has_value() ? url::Url::Parse(*src, base.value()) : url::Url::Parse(*src);
+      if (!target.has_value()) {
+        report_error("module script: cannot resolve src \"" + std::string(*src) + "\"");
+        return;
+      }
+      const std::string module_url = target.value().Serialize();
+      if (!loaded_module_urls.insert(module_url).second) {
+        return; // same-URL entry already evaluated
+      }
+      const auto response = fetch(target.value());
+      if (!response.has_value()) {
+        report_error("module script: fetch failed for " + module_url + ": " +
+                     response.error().message());
+        return;
+      }
+      run_module_source(response.value().body, module_url);
+      return;
+    }
+    const std::string source = script->TextContent();
+    if (!source.empty()) {
+      run_module_source(source, base_url);
+    }
+  };
+
+  // Pass 1: classic scripts (no async, no defer) in document order.  Module
+  // scripts never run here — they are deferred by default (see passes 2/3).
   for (dom::Element* script : scripts) {
-    if (script->HasAttribute("async") || script->HasAttribute("defer")) {
+    if (script->HasAttribute("async") || script->HasAttribute("defer") ||
+        IsModuleScript(*script)) {
       continue;
     }
     const std::optional<std::string> source = script_source(script);
@@ -413,27 +471,39 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
       run_source(script, source.value(), "inline-script");
     }
   }
-  // Pass 2: defer scripts in document order (they run after parsing, which
-  // has already completed — same observable phase as classic here, but after
-  // every classic script regardless of source position).
+  // Pass 2: defer scripts and non-async module scripts in document order
+  // (they run after parsing, which has already completed — same observable
+  // phase as classic here, but after every classic script regardless of
+  // source position).
   for (dom::Element* script : scripts) {
-    if (!script->HasAttribute("defer") || script->HasAttribute("async")) {
+    const bool deferred_classic =
+        script->HasAttribute("defer") && !script->HasAttribute("async") && !IsModuleScript(*script);
+    const bool module_deferred = IsModuleScript(*script) && !script->HasAttribute("async");
+    if (!deferred_classic && !module_deferred) {
       continue;
     }
-    const std::optional<std::string> source = script_source(script);
-    if (source.has_value()) {
-      run_source(script, source.value(), "deferred-script");
+    if (IsModuleScript(*script)) {
+      run_module_script(script);
+    } else {
+      const std::optional<std::string> source = script_source(script);
+      if (source.has_value()) {
+        run_source(script, source.value(), "deferred-script");
+      }
     }
   }
-  // Pass 3: async scripts in document order (approximation of the spec's
-  // run-when-ready model).
+  // Pass 3: async scripts (classic and module) in document order
+  // (approximation of the spec's run-when-ready model).
   for (dom::Element* script : scripts) {
     if (!script->HasAttribute("async")) {
       continue;
     }
-    const std::optional<std::string> source = script_source(script);
-    if (source.has_value()) {
-      run_source(script, source.value(), "async-script");
+    if (IsModuleScript(*script)) {
+      run_module_script(script);
+    } else {
+      const std::optional<std::string> source = script_source(script);
+      if (source.has_value()) {
+        run_source(script, source.value(), "async-script");
+      }
     }
   }
 

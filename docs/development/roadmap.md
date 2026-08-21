@@ -149,10 +149,15 @@ graph LR
       抓取；classic 按文档序阻塞执行、defer 在全部 classic 之后按序执行、
       async 在 classic+defer 之后按序执行（同步引擎对 async 的文档化近似）
 - [x] **最小事件循环**：定时器同步泵（`RunPendingTimers`）+ 同步事件派发
+- [x] **`<script type="module">`（Phase 8 M4）**：inline/外部模块按 ESM 求值（自有
+      作用域、严格模式）、defer/async 相位、静态 import 经 `ScriptEngine`
+      模块加载器走页面网络路径（带 Cookie）、相对 specifier 解析、
+      import.meta.url、同 URL 去重、循环依赖 —— **PARTIAL**（无动态
+      import()/import maps，见兼容性矩阵）
 - [ ] 完整 Web IDL / binding 层（navigator/location/history/fetch/storage/events
       完整化、活 NodeList、事件冒泡/捕获）—— **后续**
 - [ ] microtask/Promise 与浏览器事件循环完整对接 —— **后续**
-- [ ] module 脚本与动态 import —— **后续**
+- [ ] 动态 import() 与 import maps —— **后续**
 - [ ] LocalStorage 已就绪（`storage::LocalStorage`），等待 Web IDL 绑定
 
 ## Phase 8 附注 — 多线程基础设施（已扩展）

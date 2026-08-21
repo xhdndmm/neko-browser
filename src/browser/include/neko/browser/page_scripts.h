@@ -57,7 +57,12 @@ struct ScriptRequestedNavigation
 //     in document order — a documented approximation: in a synchronous engine
 //     they never preempt the pipeline, so they cannot run before a later
 //     classic script that is ready earlier.
-// module scripts and dynamic import are not supported (documented limitation).
+// module scripts (`<script type="module">`) run in the defer phase (or the
+// async phase with the async attribute), evaluated as ES modules under their
+// absolute URL: inline modules use the document URL, external modules their
+// resolved src.  Static imports resolve through the runtime's module loader
+// (same network path, with cookies).  Bare import specifiers and dynamic
+// import() are not supported yet (documented limitations).
 //
 // A failing script (parse/runtime/fetch) logs an error through |sink| (when
 // provided) and does not stop the remaining scripts.

@@ -10,10 +10,12 @@
 #include "neko/javascript/script_engine.h"
 
 #include "neko/javascript/script_engine_internal.h"
+#include "neko/url/url.h"
 
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <quickjs.h>
 #include <string>
 #include <utility>
@@ -34,6 +36,13 @@ int InterruptHandler(JSRuntime* rt, void* opaque);
 void PromiseRejectionTracker(
     JSContext* ctx, JSValueConst promise, JSValueConst reason, bool is_handled, void* opaque);
 
+// ES module support (see SetModuleFetcher / EvaluateModule): QuickJS calls
+// ModuleNormalize to resolve an import specifier against the importing
+// module's name, then ModuleLoader to obtain the JSModuleDef for the
+// normalized URL.
+char* ModuleNormalize(JSContext* ctx, const char* base_name, const char* name, void* opaque);
+JSModuleDef* ModuleLoader(JSContext* ctx, const char* module_name, void* opaque);
+
 // Owns the JSRuntime + JSContext.  One per ScriptEngine; shared with the
 // ScriptValues it produces so a value keeps the runtime alive.
 struct RuntimeCore
@@ -41,6 +50,8 @@ struct RuntimeCore
   JSRuntime* rt = nullptr;
   JSContext* ctx = nullptr;
   ScriptEngine::ConsoleSink console_sink;
+  // Remote module source provider (ES modules); unset until SetModuleFetcher.
+  ScriptEngine::ModuleFetcher module_fetcher;
   std::chrono::steady_clock::time_point deadline{};
   bool interrupted = false;
   // Promises whose rejections are currently unreported: (promise, reason),
@@ -61,6 +72,10 @@ struct RuntimeCore
     JS_SetContextOpaque(ctx, this);
     JS_SetInterruptHandler(rt, &InterruptHandler, this);
     JS_SetHostPromiseRejectionTracker(rt, &PromiseRejectionTracker, this);
+    // The loader is registered unconditionally; without a fetcher it throws
+    // "module loading is not enabled", so importing fails loudly instead of
+    // silently falling back to file access (which must never happen here).
+    JS_SetModuleLoaderFunc(rt, &ModuleNormalize, &ModuleLoader, this);
   }
 
   ~RuntimeCore()
@@ -107,6 +122,109 @@ void PromiseRejectionTracker(
     return;
   }
   core->pending_rejections.emplace_back(JS_DupValue(ctx, promise), JS_DupValue(ctx, reason));
+}
+
+// ---------------------------------------------------------------------------
+// ES module loading.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Copies |name| into a js_malloc'd C string (the ownership contract of
+// JSModuleNormalizeFunc).
+char* AllocModuleName(JSContext* ctx, std::string_view name)
+{
+  char* out = static_cast<char*>(js_malloc(ctx, name.size() + 1));
+  if (out == nullptr) {
+    JS_ThrowOutOfMemory(ctx);
+    return nullptr;
+  }
+  std::memcpy(out, name.data(), name.size());
+  out[name.size()] = '\0';
+  return out;
+}
+
+// Sets import.meta.url = |url| on the module carried by |func_val| (a
+// JS_EVAL_FLAG_COMPILE_ONLY result).  QuickJS creates the meta object empty;
+// without this, import.meta.url would be undefined for every module.
+void SetModuleMetaUrl(JSContext* ctx, JSValueConst func_val, const char* url)
+{
+  if (JS_VALUE_GET_TAG(func_val) != JS_TAG_MODULE) {
+    return;
+  }
+  auto* m = static_cast<JSModuleDef*>(JS_VALUE_GET_PTR(func_val));
+  JSValue meta = JS_GetImportMeta(ctx, m);
+  if (JS_IsException(meta)) {
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return;
+  }
+  JS_SetPropertyStr(ctx, meta, "url", JS_NewString(ctx, url)); // steals the string
+  JS_FreeValue(ctx, meta);
+}
+
+} // namespace
+
+char* ModuleNormalize(JSContext* ctx, const char* base_name, const char* name, void* /*opaque*/)
+{
+  const std::string_view specifier(name);
+  // Absolute URL (has a scheme): use as-is.  Module names in this engine are
+  // always URLs, so "://" unambiguously marks an absolute specifier.
+  if (specifier.find("://") != std::string_view::npos) {
+    return AllocModuleName(ctx, specifier);
+  }
+  // WHATWG modules: only "./", "../" and "/"-rooted specifiers resolve
+  // against the importing module; bare specifiers ("react") require an
+  // import map (not implemented — documented limitation).
+  const bool relative =
+      specifier.starts_with("./") || specifier.starts_with("../") || specifier.starts_with("/");
+  if (!relative) {
+    JS_ThrowReferenceError(
+        ctx, "cannot resolve module specifier \"%s\" without an import map", name);
+    return nullptr;
+  }
+  const base::Result<url::Url> base = url::Url::Parse(base_name);
+  if (!base.has_value()) {
+    JS_ThrowReferenceError(
+        ctx, "cannot resolve module specifier \"%s\": base \"%s\" is not a URL", name, base_name);
+    return nullptr;
+  }
+  const base::Result<url::Url> resolved = url::Url::Parse(name, base.value());
+  if (!resolved.has_value()) {
+    JS_ThrowReferenceError(ctx, "could not resolve module specifier \"%s\"", name);
+    return nullptr;
+  }
+  return AllocModuleName(ctx, resolved.value().Serialize());
+}
+
+JSModuleDef* ModuleLoader(JSContext* ctx, const char* module_name, void* opaque)
+{
+  auto* core = static_cast<RuntimeCore*>(opaque);
+  if (core == nullptr || !core->module_fetcher) {
+    JS_ThrowReferenceError(
+        ctx, "could not load module '%s': module loading is not enabled", module_name);
+    return nullptr;
+  }
+  const base::Result<std::string> source = core->module_fetcher(module_name);
+  if (!source.has_value()) {
+    JS_ThrowReferenceError(
+        ctx, "could not load module '%s': %s", module_name, source.error().message().c_str());
+    return nullptr;
+  }
+  // Compile (not run) the fetched source as a module under its URL.  The
+  // importer already references the returned def, so free our handle and
+  // return the raw pointer (same pattern as quickjs-libc's js_module_load).
+  JSValue func = JS_Eval(core->ctx,
+                         source.value().data(),
+                         source.value().size(),
+                         module_name,
+                         JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+  if (JS_IsException(func)) {
+    return nullptr;
+  }
+  SetModuleMetaUrl(ctx, func, module_name);
+  auto* m = static_cast<JSModuleDef*>(JS_VALUE_GET_PTR(func));
+  JS_FreeValue(ctx, func);
+  return m;
 }
 
 namespace {
@@ -418,6 +536,11 @@ void ScriptEngine::SetConsoleSink(ConsoleSink sink)
   core_->console_sink = std::move(sink);
 }
 
+void ScriptEngine::SetModuleFetcher(ModuleFetcher fetcher)
+{
+  core_->module_fetcher = std::move(fetcher);
+}
+
 void ScriptEngine::SetExecutionLimit(std::chrono::milliseconds limit)
 {
   execution_limit_ = limit;
@@ -450,6 +573,41 @@ base::Result<ScriptValue> ScriptEngine::Evaluate(std::string_view source, std::s
   }
   // Drain the job queue so async functions started by the script progress
   // (e.g. an `async function` invoked at top level with an `await` chain).
+  RunPendingJobs();
+  return ScriptValue(core_, new JSValue(result));
+}
+
+base::Result<ScriptValue> ScriptEngine::EvaluateModule(std::string_view source,
+                                                       std::string_view url)
+{
+  if (core_->ctx == nullptr) {
+    return base::Err(base::Error::Javascript("script runtime failed to initialize"));
+  }
+  const std::string name(url.empty() ? "module" : url);
+  core_->deadline = std::chrono::steady_clock::now() + execution_limit_;
+  core_->interrupted = false;
+  // Compile the entry module first so import.meta.url can be populated, then
+  // run it: instantiation resolves static imports synchronously through
+  // ModuleLoader, evaluation runs the module bodies in post-order.
+  JSValue func = JS_Eval(core_->ctx,
+                         source.data(),
+                         source.size(),
+                         name.c_str(),
+                         JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+  if (JS_IsException(func)) {
+    const base::Error err = MakeErrorFromException(core_->ctx, core_->interrupted);
+    RunPendingJobs();
+    return base::Err(std::move(err));
+  }
+  SetModuleMetaUrl(core_->ctx, func, name.c_str());
+  JSValue result = JS_EvalFunction(core_->ctx, func); // consumes |func|
+  if (JS_IsException(result)) {
+    const base::Error err = MakeErrorFromException(core_->ctx, core_->interrupted);
+    // Async work scheduled by the failing module still runs before the error
+    // is reported.
+    RunPendingJobs();
+    return base::Err(std::move(err));
+  }
   RunPendingJobs();
   return ScriptValue(core_, new JSValue(result));
 }

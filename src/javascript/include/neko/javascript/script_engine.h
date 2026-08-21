@@ -93,6 +93,18 @@ public:
   // Redirects console.log/info/warn/error output.  Default: dropped.
   void SetConsoleSink(ConsoleSink sink);
 
+  // Synchronously loads the source text of the ES module at |url| (already
+  // normalized to an absolute URL by the engine).  Wired by the embedder to
+  // its network stack; when unset, importing a module throws a
+  // ReferenceError ("module loading is not enabled").
+  using ModuleFetcher = std::function<base::Result<std::string>(const std::string& url)>;
+
+  // Enables ES module loading with |fetcher| as the remote-source provider.
+  // The fetcher must be thread-compatible with the engine (called on the
+  // engine's thread) and may be invoked re-entrantly while a module
+  // instantiates (one call per distinct imported URL).
+  void SetModuleFetcher(ModuleFetcher fetcher);
+
   // Scripts running longer than |limit| are aborted with an "interrupted"
   // error (checked from the QuickJS interrupt handler).  Default: 10 s.
   void SetExecutionLimit(std::chrono::milliseconds limit);
@@ -107,6 +119,14 @@ public:
   // reactions / microtasks) is drained, so async functions started by the
   // script progress to completion (or until the execution limit).
   base::Result<ScriptValue> Evaluate(std::string_view source, std::string_view filename = "eval");
+
+  // Evaluates |source| as an ES module (import/export allowed, strict mode,
+  // its own top-level scope) named |url|.  |url| should be the absolute URL
+  // of the module: it anchors relative import specifiers and becomes
+  // import.meta.url.  Static imports instantiate synchronously through the
+  // module loader (SetModuleFetcher); after evaluation the job queue is
+  // drained like Evaluate().
+  base::Result<ScriptValue> EvaluateModule(std::string_view source, std::string_view url);
 
   base::Result<ScriptValue> CallGlobal(const std::string& name,
                                        const std::vector<ScriptValue>& args = {});

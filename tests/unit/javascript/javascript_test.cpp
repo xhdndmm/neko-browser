@@ -4,6 +4,7 @@
 #include "neko/javascript/script_engine.h"
 
 #include <chrono>
+#include <map>
 #include <gtest/gtest.h>
 #include <string>
 #include <vector>
@@ -361,6 +362,186 @@ TEST_F(ScriptEngineTest, JsonStringifyFailureOnCycle)
   auto json = result.value().JsonStringify();
   ASSERT_FALSE(json.has_value());
   EXPECT_EQ(json.error().category(), base::ErrorCategory::kJavascript);
+}
+
+// ---------------------------------------------------------------------------
+// ES modules (<script type="module"> support, Phase 8 M4).
+// ---------------------------------------------------------------------------
+
+// Installs a fetcher answering module sources from |routes| (URL -> source)
+// and records every requested URL.
+class ModuleFetcher
+{
+public:
+  explicit ModuleFetcher(ScriptEngine& engine)
+  {
+    engine.SetModuleFetcher([this](const std::string& url) -> base::Result<std::string> {
+      requests_.push_back(url);
+      const auto it = routes_.find(url);
+      if (it == routes_.end()) {
+        return base::Err(base::Error::Javascript("HTTP 404"));
+      }
+      return it->second;
+    });
+  }
+  void Add(const std::string& url, std::string source)
+  {
+    routes_[url] = std::move(source);
+  }
+  const std::vector<std::string>& requests() const
+  {
+    return requests_;
+  }
+
+private:
+  std::map<std::string, std::string> routes_;
+  std::vector<std::string> requests_;
+};
+
+// A static import resolves "./lib.js" against the entry module's URL and the
+// imported binding is visible to the importer.
+TEST_F(ScriptEngineTest, ModuleImportResolvesRelativeSpecifier)
+{
+  ModuleFetcher fetcher(*engine_);
+  fetcher.Add("http://test/lib.js", "export const value = 41 + 1;");
+  auto result = engine_->EvaluateModule(
+      "import { value } from './lib.js'; globalThis.out = value;", "http://test/page.html");
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  auto out = engine_->Evaluate("globalThis.out");
+  ASSERT_TRUE(out.has_value());
+  auto num = out.value().ToNumber();
+  ASSERT_TRUE(num.has_value());
+  EXPECT_DOUBLE_EQ(num.value(), 42.0);
+  ASSERT_EQ(fetcher.requests().size(), 1u);
+  EXPECT_EQ(fetcher.requests()[0], "http://test/lib.js");
+}
+
+// "../" specifiers climb relative to the importing module's directory.
+TEST_F(ScriptEngineTest, ModuleImportResolvesParentSpecifier)
+{
+  ModuleFetcher fetcher(*engine_);
+  fetcher.Add("http://test/a/dep.js", "export const who = 'a-dep';");
+  fetcher.Add("http://test/entry/main.js",
+              "import { who } from '../a/dep.js'; globalThis.who = who;");
+  auto result =
+      engine_->EvaluateModule("import './main.js';", "http://test/entry/index.html");
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  auto who = engine_->Evaluate("globalThis.who");
+  ASSERT_TRUE(who.has_value());
+  auto s = who.value().ToString();
+  ASSERT_TRUE(s.has_value());
+  EXPECT_EQ(s.value(), "a-dep");
+}
+
+// import.meta.url is the absolute URL of the module (entry and imported).
+TEST_F(ScriptEngineTest, ModuleImportMetaUrl)
+{
+  ModuleFetcher fetcher(*engine_);
+  fetcher.Add("http://test/app/lib.js",
+              "globalThis.lib_url = import.meta.url;");
+  auto result = engine_->EvaluateModule(
+      "import './lib.js'; globalThis.entry_url = import.meta.url;",
+      "http://test/app/entry.mjs");
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  for (const char* name : {"entry_url", "lib_url"}) {
+    auto v = engine_->Evaluate(std::string("globalThis.") + name);
+    ASSERT_TRUE(v.has_value());
+    auto s = v.value().ToString();
+    ASSERT_TRUE(s.has_value());
+    EXPECT_FALSE(s.value().empty()) << name;
+  }
+  auto entry = engine_->Evaluate("globalThis.entry_url");
+  ASSERT_TRUE(entry.has_value());
+  auto es = entry.value().ToString();
+  ASSERT_TRUE(es.has_value());
+  EXPECT_EQ(es.value(), "http://test/app/entry.mjs");
+}
+
+// Bare specifiers ("react") cannot resolve without an import map: importing
+// one fails with an error mentioning the specifier.
+TEST_F(ScriptEngineTest, ModuleBareSpecifierRejected)
+{
+  ModuleFetcher fetcher(*engine_);
+  auto result = engine_->EvaluateModule(
+      "import react from 'react';", "http://test/page.html");
+  ASSERT_FALSE(result.has_value());
+  EXPECT_NE(result.error().message().find("react"), std::string::npos);
+  EXPECT_TRUE(fetcher.requests().empty()); // never fetched anything
+}
+
+// Without a fetcher wired, importing any module fails loudly instead of
+// touching the filesystem.
+TEST_F(ScriptEngineTest, ModuleLoadingDisabledWithoutFetcher)
+{
+  ScriptEngine bare;
+  auto result = bare.EvaluateModule("import './x.js';", "http://test/page.html");
+  ASSERT_FALSE(result.has_value());
+  EXPECT_NE(result.error().message().find("not enabled"), std::string::npos);
+}
+
+// Circular imports settle with hoisted functions visible in both directions.
+TEST_F(ScriptEngineTest, ModuleCircularImports)
+{
+  ModuleFetcher fetcher(*engine_);
+  fetcher.Add("http://test/a.js",
+              "import { b } from './b.js';\n"
+              "export function a() { return 'a' + b(); }\n"
+              "globalThis.ra = a();");
+  fetcher.Add("http://test/b.js",
+              "import { a } from './a.js';\n"
+              "export function b() { return 'b'; }\n"
+              "globalThis.rb = b();");
+  auto result = engine_->EvaluateModule("import './a.js';", "http://test/main.html");
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  auto ra = engine_->Evaluate("globalThis.ra");
+  ASSERT_TRUE(ra.has_value());
+  auto s = ra.value().ToString();
+  ASSERT_TRUE(s.has_value());
+  EXPECT_EQ(s.value(), "ab");
+}
+
+// Modules have their own top-level scope (no global leakage) and run in
+// strict mode (implicit globals throw).
+TEST_F(ScriptEngineTest, ModuleOwnScopeAndStrictMode)
+{
+  ModuleFetcher fetcher(*engine_);
+  auto result = engine_->EvaluateModule(
+      "var leaked = true;"
+      "try { undeclared_global = 1; } catch (e) { globalThis.strict_error = e.name; }",
+      "http://test/page.html");
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  auto leaked = engine_->Evaluate("typeof leaked");
+  ASSERT_TRUE(leaked.has_value());
+  auto ls = leaked.value().ToString();
+  ASSERT_TRUE(ls.has_value());
+  EXPECT_EQ(ls.value(), "undefined"); // did not leak to the global scope
+  auto strict = engine_->Evaluate("globalThis.strict_error");
+  ASSERT_TRUE(strict.has_value());
+  auto ss = strict.value().ToString();
+  ASSERT_TRUE(ss.has_value());
+  EXPECT_EQ(ss.value(), "ReferenceError"); // strict-mode implicit global threw
+}
+
+// The same URL is fetched once even when imported by two different modules
+// (QuickJS caches compiled modules by name).
+TEST_F(ScriptEngineTest, ModuleFetchedOncePerUrl)
+{
+  ModuleFetcher fetcher(*engine_);
+  fetcher.Add("http://test/shared.js", "export const k = 1;");
+  fetcher.Add("http://test/x.js",
+              "import { k } from './shared.js'; globalThis.xk = k;");
+  fetcher.Add("http://test/y.js",
+              "import { k } from './shared.js'; globalThis.yk = k;");
+  auto result = engine_->EvaluateModule(
+      "import './x.js'; import './y.js';", "http://test/main.html");
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  int shared_requests = 0;
+  for (const std::string& r : fetcher.requests()) {
+    if (r == "http://test/shared.js") {
+      ++shared_requests;
+    }
+  }
+  EXPECT_EQ(shared_requests, 1);
 }
 
 } // namespace

@@ -42,6 +42,13 @@ base::Result<ScriptValue> DomBinder::Evaluate(std::string_view source, std::stri
   return result;
 }
 
+base::Result<ScriptValue> DomBinder::EvaluateModule(std::string_view source, std::string_view url)
+{
+  const base::Result<ScriptValue> result = impl_->engine.EvaluateModule(source, url);
+  impl_->DeliverMutationObservers();
+  return result;
+}
+
 void DomBinder::SetCurrentScript(dom::Element* element)
 {
   impl_->SetCurrentScript(element);

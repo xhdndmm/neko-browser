@@ -293,6 +293,26 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
     return;
   }
 
+  // ES module loading (<script type="module">): remote module sources come
+  // through the same PageApis::fetch path as window.fetch (network stack
+  // with cookies).  HTTP error statuses reject the load — a 404 HTML body
+  // would only surface as a confusing SyntaxError otherwise.  QuickJS caches
+  // compiled modules by URL, so repeated imports of the same specifier hit
+  // the network once.
+  if (apis.fetch) {
+    engine.SetModuleFetcher([this](const std::string& url) -> base::Result<std::string> {
+      const base::Result<FetchResponse> response = this->apis.fetch(url);
+      if (!response.has_value()) {
+        return base::Err(response.error());
+      }
+      if (response.value().status >= 400) {
+        return base::Err(base::Error::Javascript("HTTP " + std::to_string(response.value().status) +
+                                                 " " + response.value().status_text));
+      }
+      return base::Ok(std::move(response.value().body));
+    });
+  }
+
   JSRuntime* rt = JS_GetRuntime(ctx);
   EnsureNodeClassRegistered(rt);
   EnsureEventClassRegistered(rt);

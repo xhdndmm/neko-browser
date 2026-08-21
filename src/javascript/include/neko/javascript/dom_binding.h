@@ -260,6 +260,13 @@ public:
   // Error::Javascript.
   base::Result<ScriptValue> Evaluate(std::string_view source, std::string_view filename = "script");
 
+  // Evaluates |source| as an ES module named |url| (<script type="module">).
+  // |url| anchors relative import specifiers and becomes import.meta.url;
+  // static imports load through the page's network path.  Module code runs
+  // in its own top-level scope (not the global object) and document.
+  // currentScript is null while it executes.
+  base::Result<ScriptValue> EvaluateModule(std::string_view source, std::string_view url);
+
   // Redirects console output from page scripts.  Default: dropped.
   void SetConsoleSink(ScriptEngine::ConsoleSink sink);
 

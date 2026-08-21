@@ -868,6 +868,93 @@ TEST(BrowserControllerTest, LifecycleEventsFireAfterScripts)
   EXPECT_DOUBLE_EQ(bare.value().ToNumber().value(), 0.0);
 }
 
+// Inline <script type="module"> runs in the defer phase: after every classic
+// script, as an ES module (own scope, strict mode).
+TEST(BrowserControllerTest, InlineModuleScriptRunsAfterClassic)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>before</title></head><body>"
+                               "<script>window.phase = 'classic';</script>"
+                               "<script type=\"module\">"
+                               "document.title = window.phase + '-module';"
+                               "</script>"
+                               "</body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  EXPECT_EQ(controller.ActiveTab()->title, "classic-module");
+}
+
+// External <script type="module" src> is fetched, its relative static import
+// resolves against the module's own URL, and the same entry URL evaluates
+// once even when two elements reference it.
+TEST(BrowserControllerTest, ExternalModuleResolvesImportAndDeduplicates)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>before</title></head><body>"
+                               "<script type=\"module\" src=\"/main.js\"></script>"
+                               "<script type=\"module\" src=\"/main.js\"></script>"
+                               "</body></html>"});
+  fetch.Add("http://example.com/main.js",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/javascript"}},
+                               "import { tag } from './dep.js';"
+                               "document.title = tag;"});
+  fetch.Add("http://example.com/dep.js",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/javascript"}},
+                               "window.dep_runs = (window.dep_runs ?? 0) + 1;"
+                               "export const tag = 'module-' + window.dep_runs;"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  // page + main.js (once — dedup) + dep.js (once — module map cache).
+  EXPECT_EQ(fetch.requests_.size(), 3u);
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  EXPECT_EQ(tab->title, "module-1");
+  ASSERT_NE(tab->script_runtime, nullptr);
+  auto runs = tab->script_runtime->Evaluate("window.dep_runs");
+  ASSERT_TRUE(runs.has_value());
+  auto num = runs.value().ToNumber();
+  ASSERT_TRUE(num.has_value());
+  EXPECT_DOUBLE_EQ(num.value(), 1.0);
+}
+
+// A module script that fails to load (404) logs an error and does not stop
+// the remaining scripts.
+TEST(BrowserControllerTest, ModuleFetchFailureDoesNotStopScripts)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>before</title></head><body>"
+                               "<script type=\"module\" src=\"/missing.js\"></script>"
+                               "<script>document.title = 'still-ran';</script>"
+                               "</body></html>"});
+  // No route for /missing.js -> 404 from the fake.
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  EXPECT_EQ(controller.ActiveTab()->title, "still-ran");
+}
+
 // The page's scripts can use window.localStorage (scoped to the page origin),
 // persisting across navigations to the same origin.
 TEST(BrowserControllerTest, PageScriptLocalStoragePersists)
