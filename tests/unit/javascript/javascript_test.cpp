@@ -544,5 +544,47 @@ TEST_F(ScriptEngineTest, ModuleFetchedOncePerUrl)
   EXPECT_EQ(shared_requests, 1);
 }
 
+// Dynamic import() works in CLASSIC scripts too: the promise resolves with
+// the module namespace on the next job pump, and the specifier resolves
+// against the filename the script was evaluated under.
+TEST_F(ScriptEngineTest, DynamicImportInClassicScript)
+{
+  ModuleFetcher fetcher(*engine_);
+  fetcher.Add("http://test/lib.js", "export const tag = 'dyn';");
+  auto result = engine_->Evaluate(
+      "globalThis.done = false;"
+      "import('./lib.js').then(m => { globalThis.tag = m.tag; globalThis.done = true; });",
+      "http://test/page.html");
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  // Evaluate() drains the job queue, so the import job already settled.
+  auto done = engine_->Evaluate("globalThis.done");
+  ASSERT_TRUE(done.has_value());
+  auto db = done.value().ToBoolean();
+  ASSERT_TRUE(db.has_value());
+  EXPECT_TRUE(db.value());
+  auto tag = engine_->Evaluate("globalThis.tag");
+  ASSERT_TRUE(tag.has_value());
+  auto ts = tag.value().ToString();
+  ASSERT_TRUE(ts.has_value());
+  EXPECT_EQ(ts.value(), "dyn");
+}
+
+// A failed dynamic import rejects the promise; .catch observes it and no
+// uncaught-rejection noise remains.
+TEST_F(ScriptEngineTest, DynamicImportFailureRejects)
+{
+  ModuleFetcher fetcher(*engine_); // no routes: every fetch 404s
+  auto result = engine_->Evaluate(
+      "globalThis.err = '';"
+      "import('./missing.js').catch(e => { globalThis.err = '' + e; });",
+      "http://test/page.html");
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  auto err = engine_->Evaluate("globalThis.err");
+  ASSERT_TRUE(err.has_value());
+  auto es = err.value().ToString();
+  ASSERT_TRUE(es.has_value());
+  EXPECT_NE(es.value().find("missing.js"), std::string::npos);
+}
+
 } // namespace
 } // namespace neko::javascript

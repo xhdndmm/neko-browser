@@ -17,9 +17,9 @@
 
 #include <ctime>
 #include <map>
-#include <set>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -370,7 +370,9 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
   // failures are logged and do not stop the remaining scripts.  |script|
   // identifies the executing element for document.currentScript (WHATWG HTML
   // §4.12.1): set while the body runs and cleared right after, so the getter
-  // is only non-null during the script's synchronous execution.
+  // is only non-null during the script's synchronous execution.  Classic
+  // bodies evaluate under the document URL: dynamic import() inside them
+  // resolves relative specifiers against the page, like a browser.
   auto report_error = [&](const std::string& message) {
     NEKO_LOG_WARNING("page script error: " + message);
     if (error_sink) {
@@ -462,13 +464,12 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
   // Pass 1: classic scripts (no async, no defer) in document order.  Module
   // scripts never run here — they are deferred by default (see passes 2/3).
   for (dom::Element* script : scripts) {
-    if (script->HasAttribute("async") || script->HasAttribute("defer") ||
-        IsModuleScript(*script)) {
+    if (script->HasAttribute("async") || script->HasAttribute("defer") || IsModuleScript(*script)) {
       continue;
     }
     const std::optional<std::string> source = script_source(script);
     if (source.has_value()) {
-      run_source(script, source.value(), "inline-script");
+      run_source(script, source.value(), base_url);
     }
   }
   // Pass 2: defer scripts and non-async module scripts in document order
@@ -487,7 +488,7 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     } else {
       const std::optional<std::string> source = script_source(script);
       if (source.has_value()) {
-        run_source(script, source.value(), "deferred-script");
+        run_source(script, source.value(), base_url);
       }
     }
   }
@@ -502,7 +503,7 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     } else {
       const std::optional<std::string> source = script_source(script);
       if (source.has_value()) {
-        run_source(script, source.value(), "async-script");
+        run_source(script, source.value(), base_url);
       }
     }
   }

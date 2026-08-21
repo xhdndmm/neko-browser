@@ -71,8 +71,8 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
 - **JavaScript**：QuickJS（quickjs-ng）runtime 封装 —— 核心语言 + console
   + 执行时限/内存上限 + **DOM 绑定与页内脚本执行**（`window === globalThis`、
   事件/CustomEvent、setTimeout 事件循环、fetch/localStorage/indexedDB、matchMedia、
-  **`<script type="module">` ES 模块执行**（静态 import 走网络栈、相对解析、
-  import.meta.url；无动态 import()/import maps）、innerText 等子集，
+  **`<script type="module">` ES 模块执行 + 动态 `import()`**（静态/动态导入走
+  网络栈、相对解析、import.meta.url、共享模块缓存；无 import maps）、innerText 等子集，
   详见[兼容性矩阵](docs/compatibility/compatibility-matrix.md)）
 - **GUI（Qt6）**：标签页、地址栏、后退/前进/刷新/新标签/书签/下载、DevTools
   （DOM 树/网络日志/**JS Console REPL**）、历史/书签/下载/设置面板
@@ -92,7 +92,7 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
 > 支持子集（播放/暂停/seek/duration，无 controls/音轨/缓冲）
 > （见[兼容性矩阵](docs/compatibility/compatibility-matrix.md)）。
 > JavaScript 为 QuickJS runtime + 常用 DOM 绑定子集（无完整 Web IDL、WebSocket/XHR 等；
-> ES 模块已支持静态 import，动态 import()/import maps 未实现）；
+> ES 模块已支持静态与动态 import()，import maps 未实现）；
 > IndexedDB 为子集（无游标/索引；值走 JSON 克隆，无 Date/BinaryData）；
 > PDF 渲染为子集（矢量路径填充/描边、变换、文本；无图像 XObject/裁剪/pattern/CMap）；
 > flexbox 已支持 order/min-max/auto 外边距；

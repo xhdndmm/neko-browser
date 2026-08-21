@@ -955,6 +955,64 @@ TEST(BrowserControllerTest, ModuleFetchFailureDoesNotStopScripts)
   EXPECT_EQ(controller.ActiveTab()->title, "still-ran");
 }
 
+// Dynamic import() in a CLASSIC script resolves against the document URL,
+// loads through the network path, and the promise continuation runs before
+// the load completes (Evaluate drains the job queue).
+TEST(BrowserControllerTest, ClassicScriptDynamicImport)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>before</title></head><body>"
+                               "<script>"
+                               "import('./lib.js').then(m => { document.title = m.tag; });"
+                               "</script>"
+                               "</body></html>"});
+  fetch.Add("http://example.com/lib.js",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/javascript"}},
+                               "export const tag = 'dynamic-ok';"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  EXPECT_EQ(fetch.requests_.size(), 2u); // page + dynamically imported lib
+  EXPECT_EQ(controller.ActiveTab()->title, "dynamic-ok");
+}
+
+// A module that both statically and dynamically imports the same URL fetches
+// it once; the dynamic namespace exposes the same exports.
+TEST(BrowserControllerTest, ModuleDynamicImportSharesCacheWithStaticImport)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>before</title></head><body>"
+                               "<script type=\"module\">"
+                               "import { tag } from './shared.js';"
+                               "const dyn = await import('./shared.js');" // top-level await
+                               "document.title = tag === dyn.tag ? 'same:' + tag : 'diff';"
+                               "</script>"
+                               "</body></html>"});
+  fetch.Add("http://example.com/shared.js",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/javascript"}},
+                               "window.shared_fetches = (window.shared_fetches ?? 0) + 1;"
+                               "export const tag = 'shared-' + window.shared_fetches;"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  EXPECT_EQ(fetch.requests_.size(), 2u); // page + shared.js exactly once
+  EXPECT_EQ(controller.ActiveTab()->title, "same:shared-1");
+}
+
 // The page's scripts can use window.localStorage (scoped to the page origin),
 // persisting across navigations to the same origin.
 TEST(BrowserControllerTest, PageScriptLocalStoragePersists)

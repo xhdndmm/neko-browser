@@ -61,8 +61,11 @@ struct ScriptRequestedNavigation
 // async phase with the async attribute), evaluated as ES modules under their
 // absolute URL: inline modules use the document URL, external modules their
 // resolved src.  Static imports resolve through the runtime's module loader
-// (same network path, with cookies).  Bare import specifiers and dynamic
-// import() are not supported yet (documented limitations).
+// (same network path, with cookies).  Dynamic import() works in both classic
+// and module scripts — classic bodies evaluate under the document URL so
+// relative specifiers resolve against the page; the returned promise settles
+// on the next microtask pump.  Bare import specifiers and import maps are
+// not supported yet (documented limitations).
 //
 // A failing script (parse/runtime/fetch) logs an error through |sink| (when
 // provided) and does not stop the remaining scripts.
