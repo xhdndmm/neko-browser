@@ -10,6 +10,8 @@
 
 #include "neko/browser/page_scripts.h"
 
+#include "neko/javascript/import_map.h"
+
 #include "neko/base/logging.h"
 #include "neko/base/string_util.h"
 #include "neko/style/computed_style.h"
@@ -139,6 +141,17 @@ bool IsModuleScript(const dom::Element& script)
     return false;
   }
   return base::AsciiEqualsIgnoreCase(base::Trim(type.value()), "module");
+}
+
+// True for <script type="importmap">: configuration consumed before any
+// script runs, never executed as code.
+bool IsImportMapScript(const dom::Element& script)
+{
+  const std::optional<std::string_view> type = script.GetAttribute("type");
+  if (!type.has_value()) {
+    return false;
+  }
+  return base::AsciiEqualsIgnoreCase(base::Trim(type.value()), "importmap");
 }
 
 } // namespace
@@ -366,6 +379,7 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
   auto binder = std::make_shared<javascript::DomBinder>(*document, apis);
   binder->SetConsoleSink(std::move(sink));
 
+
   // Runs one classic script body (inline text or fetched external file);
   // failures are logged and do not stop the remaining scripts.  |script|
   // identifies the executing element for document.currentScript (WHATWG HTML
@@ -379,6 +393,43 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
       error_sink("error", message);
     }
   };
+
+  // Import maps (HTML §4.12.11): the first <script type="importmap"> in
+  // document order applies; later ones are ignored with a warning (the spec
+  // treats more than one as an error).  Malformed maps are reported and
+  // skipped — bare specifiers then fail at import time, which is easier to
+  // diagnose than silently remapping.  The map is captured by value; values
+  // resolve against the document URL inside ResolveImportMap.
+  bool import_map_installed = false;
+  for (dom::Element* script : scripts) {
+    if (!IsImportMapScript(*script)) {
+      continue;
+    }
+    if (import_map_installed) {
+      NEKO_LOG_WARNING("page_scripts: ignoring second <script type=\"importmap\">");
+      continue;
+    }
+    const base::Result<javascript::ImportMap> parsed =
+        javascript::ParseImportMap(script->TextContent());
+    if (!parsed.has_value()) {
+      report_error("import map: " + parsed.error().message());
+      continue;
+    }
+    import_map_installed = true;
+    const javascript::ImportMap map = parsed.value();
+    const std::string document_base = base_url;
+    binder->SetModuleSpecifierResolver(
+        [map, document_base](const std::string& importer, const std::string& specifier)
+            -> std::optional<std::string> {
+          return javascript::ResolveImportMap(map, importer, document_base, specifier);
+        });
+  }
+  // Import map declarations are configuration, not executable code: drop
+  // them before the execution passes.
+  scripts.erase(std::remove_if(scripts.begin(),
+                               scripts.end(),
+                               [](dom::Element* script) { return IsImportMapScript(*script); }),
+                scripts.end());
   auto run_source = [&](dom::Element* script, std::string_view source, std::string_view filename) {
     binder->SetCurrentScript(script);
     const auto result = binder->Evaluate(source, filename);

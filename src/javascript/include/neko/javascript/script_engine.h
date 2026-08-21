@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -104,6 +105,15 @@ public:
   // engine's thread) and may be invoked re-entrantly while a module
   // instantiates (one call per distinct imported URL).
   void SetModuleFetcher(ModuleFetcher fetcher);
+
+  // Optional first-stage specifier resolver (import maps).  Called by the
+  // module normalizer before the built-in rules: returning a value uses it
+  // as the resolved absolute module URL; returning nullopt falls through to
+  // absolute-URL / relative-specifier handling.
+  using SpecifierResolver =
+      std::function<std::optional<std::string>(const std::string& base_name,
+                                               const std::string& specifier)>;
+  void SetModuleSpecifierResolver(SpecifierResolver resolver);
 
   // Scripts running longer than |limit| are aborted with an "interrupted"
   // error (checked from the QuickJS interrupt handler).  Default: 10 s.

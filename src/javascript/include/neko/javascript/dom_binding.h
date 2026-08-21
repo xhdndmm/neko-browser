@@ -270,6 +270,10 @@ public:
   // Redirects console output from page scripts.  Default: dropped.
   void SetConsoleSink(ScriptEngine::ConsoleSink sink);
 
+  // Installs an import-map specifier resolver (first stage of module
+  // specifier normalization).  See ScriptEngine::SetModuleSpecifierResolver.
+  void SetModuleSpecifierResolver(ScriptEngine::SpecifierResolver resolver);
+
   // ---- Event loop ---------------------------------------------------------
   // Runs every timer whose deadline has passed (setTimeout/setInterval).
   // Returns the number of timers executed.

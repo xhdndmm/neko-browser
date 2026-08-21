@@ -244,6 +244,7 @@ add_executable(neko_javascript_tests
   javascript/javascript_test.cpp
   javascript/dom_binding_test.cpp
   javascript/event_test.cpp
+  javascript/import_map_test.cpp
 )
 target_link_libraries(neko_javascript_tests PRIVATE neko::javascript neko::storage gtest_main)
 apply_compiler_warnings(neko_javascript_tests)

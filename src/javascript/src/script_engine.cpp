@@ -52,6 +52,9 @@ struct RuntimeCore
   ScriptEngine::ConsoleSink console_sink;
   // Remote module source provider (ES modules); unset until SetModuleFetcher.
   ScriptEngine::ModuleFetcher module_fetcher;
+  // Optional import-map resolver consulted before the built-in specifier
+  // rules (see SetModuleSpecifierResolver).
+  ScriptEngine::SpecifierResolver module_specifier_resolver;
   std::chrono::steady_clock::time_point deadline{};
   bool interrupted = false;
   // Promises whose rejections are currently unreported: (promise, reason),
@@ -164,9 +167,18 @@ void SetModuleMetaUrl(JSContext* ctx, JSValueConst func_val, const char* url)
 
 } // namespace
 
-char* ModuleNormalize(JSContext* ctx, const char* base_name, const char* name, void* /*opaque*/)
+char* ModuleNormalize(JSContext* ctx, const char* base_name, const char* name, void* opaque)
 {
+  auto* core = static_cast<RuntimeCore*>(opaque);
   const std::string_view specifier(name);
+  // Import-map resolution (when a resolver is installed) runs first: an
+  // exact/prefix mapping wins over the built-in rules.
+  if (core != nullptr && core->module_specifier_resolver) {
+    std::optional<std::string> mapped = core->module_specifier_resolver(base_name, name);
+    if (mapped.has_value()) {
+      return AllocModuleName(ctx, mapped.value());
+    }
+  }
   // Absolute URL (has a scheme): use as-is.  Module names in this engine are
   // always URLs, so "://" unambiguously marks an absolute specifier.
   if (specifier.find("://") != std::string_view::npos) {
@@ -539,6 +551,11 @@ void ScriptEngine::SetConsoleSink(ConsoleSink sink)
 void ScriptEngine::SetModuleFetcher(ModuleFetcher fetcher)
 {
   core_->module_fetcher = std::move(fetcher);
+}
+
+void ScriptEngine::SetModuleSpecifierResolver(SpecifierResolver resolver)
+{
+  core_->module_specifier_resolver = std::move(resolver);
 }
 
 void ScriptEngine::SetExecutionLimit(std::chrono::milliseconds limit)

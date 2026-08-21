@@ -59,6 +59,11 @@ void DomBinder::SetConsoleSink(ScriptEngine::ConsoleSink sink)
   impl_->engine.SetConsoleSink(std::move(sink));
 }
 
+void DomBinder::SetModuleSpecifierResolver(ScriptEngine::SpecifierResolver resolver)
+{
+  impl_->engine.SetModuleSpecifierResolver(std::move(resolver));
+}
+
 int DomBinder::RunPendingTimers()
 {
   return impl_->RunPendingTimers();

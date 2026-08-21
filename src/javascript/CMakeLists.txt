@@ -12,6 +12,7 @@ add_library(neko_javascript
   src/script_engine.cpp
   src/dom_binding.cpp
   src/binding/impl.cpp
+  src/import_map.cpp
   src/binding/node_binding.cpp
   src/binding/element_binding.cpp
   src/binding/document_binding.cpp

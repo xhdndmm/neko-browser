@@ -156,10 +156,12 @@ graph LR
 - [x] **动态 `import()`（Phase 8 M4）**：classic（以文档 URL 求值解析相对
       specifier）与模块代码均可用，返回真 Promise；与静态 import 共享缓存；
       top-level await 实测可用 —— **PARTIAL**（无 import maps）
+- [x] **Import maps（Phase 8 M4）**：`<script type="importmap">` 的 imports/
+      scopes 子集，精确 + 前缀键映射、最长 scope 匹配、值对文档 base 解析；
+      仅首张生效，声明不执行 —— **PARTIAL**（无多 map 合并/完整 key 校验）
 - [ ] 完整 Web IDL / binding 层（navigator/location/history/fetch/storage/events
       完整化、活 NodeList、事件冒泡/捕获）—— **后续**
 - [ ] microtask/Promise 与浏览器事件循环完整对接 —— **后续**
-- [ ] import maps —— **后续**
 - [ ] LocalStorage 已就绪（`storage::LocalStorage`），等待 Web IDL 绑定
 
 ## Phase 8 附注 — 多线程基础设施（已扩展）

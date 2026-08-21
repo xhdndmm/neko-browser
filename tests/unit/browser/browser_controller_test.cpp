@@ -1013,6 +1013,76 @@ TEST(BrowserControllerTest, ModuleDynamicImportSharesCacheWithStaticImport)
   EXPECT_EQ(controller.ActiveTab()->title, "same:shared-1");
 }
 
+// An import map remaps a bare specifier to a vendored file; the mapped
+// module loads through the normal network path.
+TEST(BrowserControllerTest, ImportMapRemapsBareSpecifier)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>before</title></head><body>"
+                               "<script type=\"importmap\">"
+                               "{\"imports\": {\"app-state\": \"./vendor/state.js\"}}"
+                               "</script>"
+                               "<script type=\"module\">"
+                               "import { name } from 'app-state';"
+                               "document.title = name;"
+                               "</script>"
+                               "</body></html>"});
+  fetch.Add("http://example.com/vendor/state.js",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/javascript"}},
+                               "export const name = 'mapped-ok';"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  EXPECT_EQ(fetch.requests_.size(), 2u); // page + mapped vendor module
+  EXPECT_EQ(controller.ActiveTab()->title, "mapped-ok");
+}
+
+// Only the first <script type="importmap"> applies (spec: more than one is
+// an error); later ones are ignored, and their JSON is never executed.
+TEST(BrowserControllerTest, ImportMapFirstDeclarationWins)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>before</title></head><body>"
+                               "<script type=\"importmap\">"
+                               "{\"imports\": {\"tag\": \"./first.js\"}}"
+                               "</script>"
+                               "<script type=\"importmap\">"
+                               "{\"imports\": {\"tag\": \"./second.js\"}}"
+                               "</script>"
+                               "<script type=\"module\">"
+                               "import { t } from 'tag';"
+                               "document.title = t;"
+                               "</script>"
+                               "</body></html>"});
+  fetch.Add("http://example.com/first.js",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/javascript"}},
+                               "export const t = 'first';"});
+  fetch.Add("http://example.com/second.js",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/javascript"}},
+                               "export const t = 'second';"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  // page + first.js only: the second map never applied.
+  EXPECT_EQ(fetch.requests_.size(), 2u);
+  EXPECT_EQ(controller.ActiveTab()->title, "first");
+}
+
 // The page's scripts can use window.localStorage (scoped to the page origin),
 // persisting across navigations to the same origin.
 TEST(BrowserControllerTest, PageScriptLocalStoragePersists)
