@@ -11,6 +11,15 @@
 add_library(neko_javascript
   src/script_engine.cpp
   src/dom_binding.cpp
+  src/binding/impl.cpp
+  src/binding/node_binding.cpp
+  src/binding/element_binding.cpp
+  src/binding/document_binding.cpp
+  src/binding/style_binding.cpp
+  src/binding/event_binding.cpp
+  src/binding/storage_binding.cpp
+  src/binding/global_binding.cpp
+  src/binding/ui_binding.cpp
 )
 add_library(neko::javascript ALIAS neko_javascript)
 
