@@ -15,11 +15,14 @@
 #include "neko/url/url.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cstdint>
 #include <ctime>
 #include <future>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace neko::browser {
@@ -1023,8 +1026,7 @@ void BrowserController::LoadBytes(Tab& tab,
     services.indexed_db = &indexed_db_;
     services.cookies = &cookies_;
     services.origin = origin;
-    const auto fetch_subresource = [this](const url::Url& resource_url,
-                                          std::string_view) {
+    const auto fetch_subresource = [this](const url::Url& resource_url, std::string_view) {
       return fetch_(resource_url, CookieHeader(resource_url, NowUnix()));
     };
     // Fetch and apply the page's external <link rel=stylesheet> sheets before
@@ -1421,6 +1423,72 @@ void FetchExternalStylesheets(renderer::Page& page,
   }
 }
 
+// ---------------------------------------------------------------------------
+// data: URL support for image subresources (`<img src="data:image/png;base64,...">`).
+// Only base64 payloads are decoded; percent-encoded text payloads are rare
+// for images and are rejected.
+// ---------------------------------------------------------------------------
+
+std::optional<std::string> DecodeBase64(std::string_view input)
+{
+  // -2 = whitespace (skip), -1 = invalid.
+  static const std::array<std::int8_t, 256> kReverse = [] {
+    std::array<std::int8_t, 256> table{};
+    table.fill(-1);
+    table[static_cast<unsigned char>('\t')] = -2;
+    table[static_cast<unsigned char>('\n')] = -2;
+    table[static_cast<unsigned char>('\r')] = -2;
+    table[static_cast<unsigned char>(' ')] = -2;
+    constexpr char kAlphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    for (int i = 0; i < 64; ++i) {
+      table[static_cast<unsigned char>(kAlphabet[i])] = static_cast<std::int8_t>(i);
+    }
+    return table;
+  }();
+  std::string out;
+  out.reserve(input.size() / 4 * 3);
+  std::uint32_t buffer = 0;
+  int bits = 0;
+  for (const char raw : input) {
+    if (raw == '=') {
+      break; // padding: everything after is ignored
+    }
+    const auto code = kReverse[static_cast<unsigned char>(raw)];
+    if (code == -2) {
+      continue; // whitespace
+    }
+    if (code < 0) {
+      return std::nullopt; // invalid character
+    }
+    buffer = (buffer << 6) | static_cast<std::uint32_t>(code);
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out.push_back(static_cast<char>((buffer >> bits) & 0xFF));
+    }
+  }
+  return out;
+}
+
+bool IsDataUrl(const std::string& url)
+{
+  return url.rfind("data:", 0) == 0;
+}
+
+// Decodes the payload of |url| ("data:[mediatype][;base64],<data>").
+std::optional<std::string> DecodeDataUrlBody(const std::string& url)
+{
+  const std::size_t comma = url.find(',');
+  if (comma == std::string::npos) {
+    return std::nullopt;
+  }
+  const std::string_view header(url.data() + 5, comma - 5);
+  if (header.find("base64") == std::string_view::npos) {
+    return std::nullopt; // percent-encoded text payloads unsupported
+  }
+  return DecodeBase64(std::string_view(url).substr(comma + 1));
+}
+
 void FetchPageImages(renderer::Page& page,
                      const std::string& base_url,
                      const BrowserController::FetchFn& fetch,
@@ -1491,18 +1559,8 @@ void FetchPageImages(renderer::Page& page,
     image::Image image;
     std::shared_ptr<image::GifAnimation> animation;
   };
-  auto fetch_and_decode = [&fetch](const std::string& url) -> base::Result<DecodedImage> {
-    const base::Result<url::Url> parsed = url::Url::Parse(url);
-    if (!parsed.has_value()) {
-      return base::Err(base::Error::InvalidArgument("invalid image URL"));
-    }
-    // Images are fetched without a cookie header (the fetch hook receives
-    // the same header set as the page's other subresources today).
-    const auto response = fetch(parsed.value(), {});
-    if (!response) {
-      return base::Err(response.error());
-    }
-    const std::string& body = response.value().body;
+  // Decodes an image from raw bytes (shared by the network and data: paths).
+  auto decode_bytes = [](const std::string& body) -> base::Result<DecodedImage> {
     DecodedImage out;
     if (image::IsGif(body)) {
       // Animated GIF: decode every frame; keep them for playback when the
@@ -1526,6 +1584,27 @@ void FetchPageImages(renderer::Page& page,
     }
     out.image = std::move(decoded.value());
     return out;
+  };
+  auto fetch_and_decode = [&fetch,
+                           &decode_bytes](const std::string& url) -> base::Result<DecodedImage> {
+    if (IsDataUrl(url)) {
+      const std::optional<std::string> body = DecodeDataUrlBody(url);
+      if (!body.has_value()) {
+        return base::Err(base::Error::InvalidArgument("unsupported data URL payload"));
+      }
+      return decode_bytes(body.value());
+    }
+    const base::Result<url::Url> parsed = url::Url::Parse(url);
+    if (!parsed.has_value()) {
+      return base::Err(base::Error::InvalidArgument("invalid image URL"));
+    }
+    // Images are fetched without a cookie header (the fetch hook receives
+    // the same header set as the page's other subresources today).
+    const auto response = fetch(parsed.value(), {});
+    if (!response) {
+      return base::Err(response.error());
+    }
+    return decode_bytes(response.value().body);
   };
 
   if (pending.size() == 1) {

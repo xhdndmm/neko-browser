@@ -751,6 +751,10 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   JSValue blob_ctor = JS_NewCFunction2(ctx, BlobConstructor, "Blob", 2, JS_CFUNC_constructor, 0);
   JS_SetPropertyStr(ctx, window, "Blob", JS_DupValue(ctx, blob_ctor));
   JS_SetPropertyStr(ctx, global, "Blob", blob_ctor);
+  JSValue image_ctor =
+      JS_NewCFunction2(ctx, ImageConstructor, "Image", 2, JS_CFUNC_constructor, 0);
+  JS_SetPropertyStr(ctx, window, "Image", JS_DupValue(ctx, image_ctor)); // steals
+  JS_SetPropertyStr(ctx, global, "Image", image_ctor);                   // steals
   JSValue url_object = JS_NewObject(ctx);
   JS_SetPropertyStr(ctx,
                     url_object,
@@ -1641,6 +1645,34 @@ bool Impl::DispatchCancelableToNode(dom::Node* node, std::string_view type)
 void Impl::DispatchDocumentEvent(std::string_view type)
 {
   DispatchToNode(&document, type);
+}
+
+// ---------------------------------------------------------------------------
+// Global constructors installed by the constructor (see Impl::Impl).
+// ---------------------------------------------------------------------------
+
+JSValue ImageConstructor(JSContext* ctx, JSValueConst /*new_target*/, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, JS_UNDEFINED);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  // new Image([width[, height]]): a detached <img> element, owned by the
+  // binder until script inserts it into the document.
+  auto element = std::make_unique<dom::Element>("img");
+  dom::Element* raw = element.get();
+  for (int i = 0; i < 2; ++i) {
+    if (argc > i && !JS_IsUndefined(argv[i]) && !JS_IsNull(argv[i])) {
+      int32_t dimension = 0;
+      if (JS_ToInt32(ctx, &dimension, argv[i]) == 0 && dimension > 0) {
+        element->SetAttribute(i == 0 ? "width" : "height", std::to_string(dimension));
+      } else {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+      }
+    }
+  }
+  impl->created[raw] = std::move(element);
+  return impl->WrapNode(raw);
 }
 
 } // namespace neko::javascript

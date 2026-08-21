@@ -10,10 +10,9 @@
 
 #include "neko/browser/page_scripts.h"
 
-#include "neko/javascript/import_map.h"
-
 #include "neko/base/logging.h"
 #include "neko/base/string_util.h"
+#include "neko/javascript/import_map.h"
 #include "neko/style/computed_style.h"
 #include "neko/url/url.h"
 
@@ -154,6 +153,39 @@ bool IsImportMapScript(const dom::Element& script)
   return base::AsciiEqualsIgnoreCase(base::Trim(type.value()), "importmap");
 }
 
+// WHATWG HTML §4.12.1: a script element with a type attribute whose value is
+// not a JavaScript MIME type is a data block (e.g. application/json) and
+// must never execute.  Real pages ship JSON/template islands this way; the
+// engine used to parse them as classic scripts and log SyntaxErrors.
+bool IsExecutableScriptType(const dom::Element& script)
+{
+  const std::optional<std::string_view> type = script.GetAttribute("type");
+  if (!type.has_value()) {
+    return true; // no type attribute: classic JavaScript
+  }
+  const std::string_view t = base::Trim(type.value());
+  if (t.empty() || base::AsciiEqualsIgnoreCase(t, "module") ||
+      base::AsciiEqualsIgnoreCase(t, "importmap")) {
+    return true; // handled by the module/import-map paths
+  }
+  static constexpr std::string_view kJsTypes[] = {
+      "text/javascript",
+      "application/javascript",
+      "application/x-javascript",
+      "application/ecmascript",
+      "text/ecmascript",
+      "text/jscript",
+      "text/livescript",
+      "text/javascript1.x",
+  };
+  for (std::string_view js : kJsTypes) {
+    if (base::AsciiEqualsIgnoreCase(t, js)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 } // namespace
 
 std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
@@ -169,6 +201,13 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
   }
   std::vector<dom::Element*> scripts;
   CollectScripts(*document, scripts);
+  // Data blocks (<script type="application/json"> and friends) are
+  // configuration, not code: drop them before any pass sees them.
+  scripts.erase(
+      std::remove_if(scripts.begin(),
+                     scripts.end(),
+                     [](dom::Element* script) { return !IsExecutableScriptType(*script); }),
+      scripts.end());
   if (scripts.empty()) {
     return nullptr;
   }
@@ -379,7 +418,6 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
   auto binder = std::make_shared<javascript::DomBinder>(*document, apis);
   binder->SetConsoleSink(std::move(sink));
 
-
   // Runs one classic script body (inline text or fetched external file);
   // failures are logged and do not stop the remaining scripts.  |script|
   // identifies the executing element for document.currentScript (WHATWG HTML
@@ -419,8 +457,8 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     const javascript::ImportMap map = parsed.value();
     const std::string document_base = base_url;
     binder->SetModuleSpecifierResolver(
-        [map, document_base](const std::string& importer, const std::string& specifier)
-            -> std::optional<std::string> {
+        [map, document_base](const std::string& importer,
+                             const std::string& specifier) -> std::optional<std::string> {
           return javascript::ResolveImportMap(map, importer, document_base, specifier);
         });
   }

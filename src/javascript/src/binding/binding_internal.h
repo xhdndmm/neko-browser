@@ -408,6 +408,9 @@ JSValue UrlRevokeObjectUrl(JSContext* ctx, JSValueConst this_val, int argc, JSVa
 JSValue IdbOpen(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue IdbDeleteDatabase(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 
+// impl.cpp — new Image([width[, height]]) creates a detached <img> element.
+JSValue ImageConstructor(JSContext* ctx, JSValueConst new_target, int argc, JSValueConst* argv);
+
 // ---------------------------------------------------------------------------
 // Impl — the binder's per-document state (was file-local to dom_binding.cpp).
 // ---------------------------------------------------------------------------

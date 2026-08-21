@@ -1427,6 +1427,118 @@ TEST(BrowserControllerTest, InjectsMultiplePageImages)
   }
 }
 
+// <script type="application/json"> is a data block (HTML §4.12.1): never
+// executed as code, and it does not stop the executable scripts around it.
+TEST(BrowserControllerTest, NonJsScriptTypesAreNotExecuted)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>before</title></head><body>"
+                               "<script type=\"application/json\">"
+                               "{\"key\": \"value\", \"list\": [1, 2, 3]}"
+                               "</script>"
+                               "<script>document.title = 'classic-ran';</script>"
+                               "<SCRIPT TYPE=\"TEXT/JSON\">{broken as js}</SCRIPT>"
+                               "</body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  // The classic script ran; the JSON islands produced no errors and no
+  // navigation away from the page.
+  EXPECT_EQ(controller.ActiveTab()->title, "classic-ran");
+}
+
+// new Image([width[, height]]) creates a detached <img> element that script
+// can insert into the document.
+TEST(BrowserControllerTest, ImageConstructorCreatesImgElement)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>t</title></head><body>"
+                               "<script>"
+                               "const img = new Image(100, 50);"
+                               "img.src = '/x.png';"
+                               "document.body.appendChild(img);"
+                               "window.tag = img.tagName;"
+                               "</script>"
+                               "</body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  ASSERT_NE(tab->script_runtime, nullptr);
+  auto tag = tab->script_runtime->Evaluate("window.tag");
+  ASSERT_TRUE(tag.has_value());
+  auto ts = tag.value().ToString();
+  ASSERT_TRUE(ts.has_value());
+  EXPECT_EQ(ts.value(), "IMG");
+  const std::vector<dom::Element*> imgs = dom::QuerySelectorAll(*tab->page->document(), "img");
+  ASSERT_EQ(imgs.size(), 1u);
+  const dom::Element* img = imgs[0];
+  std::optional<std::string_view> width = img->GetAttribute("width");
+  ASSERT_TRUE(width.has_value());
+  EXPECT_EQ(width.value(), "100");
+  std::optional<std::string_view> height = img->GetAttribute("height");
+  ASSERT_TRUE(height.has_value());
+  EXPECT_EQ(height.value(), "50");
+}
+
+// <img src="data:image/png;base64,..."> decodes without a network request.
+TEST(BrowserControllerTest, DataUrlImageIsDecodedWithoutNetwork)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  // Base64 of MakePng()'s bytes (computed in-test to stay in sync).
+  const std::string png = MakePng();
+  static constexpr char kAlphabet[] =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string b64;
+  b64.reserve((png.size() + 2) / 3 * 4);
+  for (std::size_t i = 0; i < png.size(); i += 3) {
+    const unsigned n = static_cast<unsigned>(static_cast<unsigned char>(png[i])) << 16 |
+                       static_cast<unsigned>(i + 1 < png.size()
+                                                 ? static_cast<unsigned char>(png[i + 1])
+                                                 : 0)
+                           << 8 |
+                       (i + 2 < png.size() ? static_cast<unsigned char>(png[i + 2]) : 0);
+    b64 += kAlphabet[(n >> 18) & 63];
+    b64 += kAlphabet[(n >> 12) & 63];
+    b64 += i + 1 < png.size() ? kAlphabet[(n >> 6) & 63] : '=';
+    b64 += i + 2 < png.size() ? kAlphabet[n & 63] : '=';
+  }
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body><img src=\"data:image/png;base64," + b64 +
+                                   "\"></body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  // Only the page itself was fetched — the data URL needed no request.
+  EXPECT_EQ(fetch.requests_.size(), 1u);
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  const std::vector<dom::Element*> imgs = dom::QuerySelectorAll(*tab->page->document(), "img");
+  ASSERT_EQ(imgs.size(), 1u);
+  const image::Image* decoded = tab->page->Find(*imgs[0]);
+  ASSERT_NE(decoded, nullptr);
+  EXPECT_EQ(decoded->width, 2);
+  EXPECT_EQ(decoded->height, 2);
+}
+
 // External <link rel=stylesheet> sheets are fetched, parsed and applied before
 // the page is published (real pages put most of their CSS in external files).
 TEST(BrowserControllerTest, FetchesAndAppliesExternalStylesheets)
