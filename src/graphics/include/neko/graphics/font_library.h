@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace neko::graphics {
 
@@ -24,6 +26,11 @@ public:
   // unusable or the file does not parse.  Const-safe: the face cache is a
   // mutable memo.
   const FontFace* LoadFace(const std::string& path) const;
+
+  // Loads (or returns the cached) face from in-memory font bytes (TTF/OTF/
+  // WOFF/WOFF2 per FreeType support).  |key| identifies the face (e.g. a
+  // URL); the face owns the bytes.  nullptr when the data does not parse.
+  const FontFace* LoadFaceFromMemory(const std::string& key, std::vector<uint8_t> data) const;
 
 private:
   struct Impl;

@@ -28,6 +28,9 @@ bool SetPixelSize(FT_Face face, float px_size)
 struct FontFace::Impl
 {
   FT_Face face = nullptr;
+  // Owned font bytes for memory-loaded faces (FreeType reads lazily, so the
+  // buffer must outlive the FT_Face).
+  std::vector<uint8_t> owned_data;
   // Serializes FreeType access on this face.  The face stores mutable state
   // (current pixel size, glyph slot), so concurrent users must be serialized;
   // this also keeps the font caches' rasterization atomic per face.
@@ -41,6 +44,23 @@ FontFace::FontFace(std::string path) : impl_(new Impl), path_(std::move(path))
     return;
   }
   if (FT_New_Face(library, path_.c_str(), 0, &impl_->face) != 0) {
+    impl_->face = nullptr;
+  }
+}
+
+FontFace::FontFace(std::string key, std::vector<uint8_t> data)
+    : impl_(new Impl), path_(std::move(key))
+{
+  FT_Library library = SharedFreeTypeLibrary();
+  if (library == nullptr) {
+    return;
+  }
+  impl_->owned_data = std::move(data);
+  if (FT_New_Memory_Face(library,
+                         reinterpret_cast<const FT_Byte*>(impl_->owned_data.data()),
+                         static_cast<FT_Long>(impl_->owned_data.size()),
+                         0,
+                         &impl_->face) != 0) {
     impl_->face = nullptr;
   }
 }

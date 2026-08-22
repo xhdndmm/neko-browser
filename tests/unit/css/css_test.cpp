@@ -387,6 +387,40 @@ TEST(CssParserTest, FontFaceBodyDoesNotHang)
   EXPECT_EQ(sheet.rules[0].declarations[0].value, "blue");
 }
 
+// @font-face rules are extracted with their family, best-format URL and
+// weight/style descriptors.
+TEST(CssParserTest, FontFaceRuleExtracted)
+{
+  const StyleSheet sheet =
+      ParseStyleSheet("@font-face {"
+                      "  font-family: \"cos-icon\";"
+                      "  font-weight: 400;"
+                      "  src: url('//cdn.example/eot.eot');"
+                      "  src: url('//cdn.example/icon.woff2') format('woff2'),"
+                      "       url('//cdn.example/icon.woff') format('woff'),"
+                      "       url('//cdn.example/icon.ttf') format('truetype');"
+                      "}"
+                      "body { font-family: sans-serif; }");
+  ASSERT_EQ(sheet.font_faces.size(), 1u);
+  const css::FontFaceRule& face = sheet.font_faces[0];
+  EXPECT_EQ(face.family, "cos-icon");
+  // TTF is preferred over woff/woff2 (always parseable by the bundled
+  // FreeType even without brotli).
+  EXPECT_EQ(face.src_url, "//cdn.example/icon.ttf");
+  EXPECT_EQ(face.weight, 400);
+  EXPECT_FALSE(face.italic);
+}
+
+// An @font-face without a usable family or src is skipped rather than
+// registered.
+TEST(CssParserTest, FontFaceWithoutSrcSkipped)
+{
+  const StyleSheet sheet =
+      ParseStyleSheet("@font-face { font-family: broken; } .a { color: red; }");
+  EXPECT_TRUE(sheet.font_faces.empty());
+  ASSERT_EQ(sheet.rules.size(), 1u); // parsing continues past it
+}
+
 TEST(CssParserTest, UnmatchedCloseBraceDoesNotHang)
 {
   const StyleSheet sheet = ParseStyleSheet("} .a { color: red; }");

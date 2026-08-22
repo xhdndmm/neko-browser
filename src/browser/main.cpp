@@ -116,6 +116,8 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
           url.Serialize(),
           [](const neko::url::Url& u, std::string_view) { return neko::network::HttpGet(u); },
           pool);
+      // Fetch and register @font-face web fonts so layout/paint see them.
+      neko::browser::FetchWebFonts(page, url.Serialize(), FetchAny, pool);
       // Phase 8 M2: execute the page's scripts (inline + external src=,
       // async/defer); scripts may mutate the DOM and RunPageScripts
       // re-applies styles inside.
@@ -150,6 +152,8 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
           url.Serialize(),
           [](const neko::url::Url& u, std::string_view) { return neko::network::HttpGet(u); },
           pool);
+      // Fonts declared by script-injected sheets load here too.
+      neko::browser::FetchWebFonts(page, url.Serialize(), FetchAny, pool);
       // Fetch and decode the page's <img>/<video> subresources (headless path).
       neko::browser::FetchPageImages(
           page,
@@ -192,6 +196,7 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
       // file:// base so local pages behave like served ones.
       neko::base::ThreadPool pool;
       neko::browser::FetchExternalStylesheets(page, url.Serialize(), FetchAny, pool);
+      neko::browser::FetchWebFonts(page, url.Serialize(), FetchAny, pool);
       neko::browser::FetchPageImages(page, url.Serialize(), FetchAny, pool);
       neko::browser::FetchPageVideos(page, url.Serialize(), FetchAny, pool);
       return neko::base::Ok();

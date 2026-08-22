@@ -1032,6 +1032,8 @@ void BrowserController::LoadBytes(Tab& tab,
     // Fetch and apply the page's external <link rel=stylesheet> sheets before
     // scripts run, so scripts see the fully styled cascade.
     FetchExternalStylesheets(*new_page, final_url, fetch_subresource, *pool_);
+    // Fetch and register @font-face web fonts so layout/paint see them.
+    FetchWebFonts(*new_page, final_url, fetch_subresource, *pool_);
     browser::ScriptRequestedNavigation requested;
     tab.script_runtime = RunPageScripts(
         *new_page,
@@ -1420,6 +1422,100 @@ void FetchExternalStylesheets(renderer::Page& page,
   if (!sheets.empty()) {
     NEKO_LOG_INFO("css: applied " + std::to_string(sheets.size()) + " external stylesheet(s)");
     page.SetExternalStylesheets(std::move(sheets));
+  }
+}
+
+// Fetches and registers @font-face web fonts declared by the page's
+// stylesheets.  Runs after external stylesheets are applied so their
+// declarations are visible; fonts load in parallel and each registration
+// invalidates the layout caches (a final ReapplyStyles rebuilds text).
+void FetchWebFonts(renderer::Page& page,
+                   const std::string& base_url,
+                   const BrowserController::FetchFn& fetch,
+                   base::ThreadPool& pool)
+{
+  const std::vector<css::FontFaceRule> faces = page.styles().FontFaces();
+  if (faces.empty()) {
+    return;
+  }
+  const base::Result<url::Url> base = url::Url::Parse(base_url);
+
+  struct PendingFont
+  {
+    css::FontFaceRule rule;
+    std::string absolute_url;
+    bool seen = false; // duplicate src within this page
+  };
+  std::vector<PendingFont> pending;
+  for (const css::FontFaceRule& face : faces) {
+    if (face.src_url.empty() || face.family.empty()) {
+      continue;
+    }
+    const base::Result<url::Url> target = base.has_value()
+                                              ? url::Url::Parse(face.src_url, base.value())
+                                              : url::Url::Parse(face.src_url);
+    if (!target.has_value()) {
+      continue;
+    }
+    const std::string absolute = target.value().Serialize();
+    bool dup = false;
+    for (PendingFont& p : pending) {
+      if (p.absolute_url == absolute) {
+        dup = true;
+        break;
+      }
+    }
+    if (!dup) {
+      pending.push_back(PendingFont{face, absolute, false});
+    }
+  }
+  if (pending.empty()) {
+    return;
+  }
+
+  auto fetch_bytes = [&fetch](const std::string& url) -> base::Result<std::vector<uint8_t>> {
+    const base::Result<url::Url> parsed = url::Url::Parse(url);
+    if (!parsed.has_value()) {
+      return base::Err(base::Error::InvalidArgument("invalid font URL"));
+    }
+    const auto response = fetch(parsed.value(), {});
+    if (!response.has_value()) {
+      return base::Err(response.error());
+    }
+    if (response.value().status_code >= 400) {
+      return base::Err(
+          base::Error::InvalidArgument("HTTP " + std::to_string(response.value().status_code)));
+    }
+    std::vector<uint8_t> bytes(response.value().body.begin(), response.value().body.end());
+    return base::Ok(std::move(bytes));
+  };
+
+  std::vector<std::future<base::Result<std::vector<uint8_t>>>> futures;
+  futures.reserve(pending.size());
+  for (const PendingFont& item : pending) {
+    futures.push_back(
+        pool.Submit([&fetch_bytes, url = item.absolute_url]() { return fetch_bytes(url); }));
+  }
+  bool loaded_any = false;
+  for (std::size_t i = 0; i < pending.size(); ++i) {
+    auto bytes = futures[i].get();
+    if (!bytes.has_value()) {
+      NEKO_LOG_WARNING("font: fetch failed for " + pending[i].absolute_url + ": " +
+                       bytes.error().message());
+      continue;
+    }
+    if (page.LoadWebFont(pending[i].rule.family,
+                         pending[i].rule.weight,
+                         pending[i].rule.italic,
+                         pending[i].absolute_url,
+                         std::move(bytes.value()))) {
+      loaded_any = true;
+      NEKO_LOG_INFO("font: registered '" + pending[i].rule.family + "' <- " +
+                    pending[i].absolute_url);
+    }
+  }
+  if (loaded_any) {
+    page.ReapplyStyles();
   }
 }
 

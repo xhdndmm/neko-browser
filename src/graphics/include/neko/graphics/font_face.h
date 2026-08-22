@@ -44,6 +44,10 @@ class FontFace
 public:
   // Opens |path|; valid() reports whether the file parsed successfully.
   explicit FontFace(std::string path);
+  // Loads |data| (TTF/OTF/WOFF/WOFF2 per FreeType support) from memory; the
+  // face owns the bytes because FreeType requires the buffer to outlive it.
+  // |key| identifies the face for caches (e.g. a URL or registry key).
+  FontFace(std::string key, std::vector<uint8_t> data);
   ~FontFace();
 
   FontFace(const FontFace&) = delete;

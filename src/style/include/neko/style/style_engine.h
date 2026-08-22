@@ -53,6 +53,10 @@ public:
   // fresh document.
   void ApplyStyles(dom::Document& document);
 
+  // All @font-face rules collected from <style> elements and externally
+  // loaded stylesheets, in application order.
+  std::vector<css::FontFaceRule> FontFaces() const;
+
   // Registers author stylesheets loaded from external <link rel=stylesheet>
   // resources.  They are applied after the document's <style> elements and
   // persist across ApplyStyles/ReapplyStyles calls.  The browser layer fetches

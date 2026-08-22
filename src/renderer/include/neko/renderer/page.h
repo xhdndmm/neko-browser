@@ -94,6 +94,15 @@ public:
   // cascade so layout reflects them.
   void SetExternalStylesheets(std::vector<css::StyleSheet> sheets);
 
+  // Registers an @font-face web font (bytes already fetched).  Thread-safe;
+  // invalidates the layout/paint caches so the next pass uses the face.
+  // Returns false when the font data does not parse.
+  bool LoadWebFont(const std::string& family,
+                   int weight,
+                   bool italic,
+                   const std::string& key,
+                   std::vector<uint8_t> data);
+
   // Reads a UTF-8 file and loads it as HTML (encoding sniffing still applies).
   base::Result<void> LoadFile(std::string_view path);
 

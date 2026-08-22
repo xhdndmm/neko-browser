@@ -52,9 +52,17 @@ std::string Unquote(std::string_view s)
 FontSelector::FontSelector(const FontLibrary& library,
                            std::string_view family,
                            int weight,
-                           bool italic)
+                           bool italic,
+                           const std::vector<const FontFace*>& preseed_faces)
     : library_(library), weight_(weight), italic_(italic)
 {
+  // Web fonts (@font-face) take priority over system resolution.
+  for (const FontFace* face : preseed_faces) {
+    if (face != nullptr && face->valid()) {
+      faces_.push_back(face);
+    }
+  }
+
   // Split the CSS family list on commas.
   std::size_t start = 0;
   while (start <= family.size()) {

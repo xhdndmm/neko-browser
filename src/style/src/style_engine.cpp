@@ -1167,6 +1167,22 @@ void StyleEngine::ApplyStyles(dom::Document& document)
   ComputeElement(*root, root_style, root_style.font_size);
 }
 
+std::vector<css::FontFaceRule> StyleEngine::FontFaces() const
+{
+  std::vector<css::FontFaceRule> out;
+  for (const auto& sheet : external_sheets_) {
+    for (const auto& face : sheet.font_faces) {
+      out.push_back(face);
+    }
+  }
+  for (const auto& sheet : author_sheets_) {
+    for (const auto& face : sheet.font_faces) {
+      out.push_back(face);
+    }
+  }
+  return out;
+}
+
 void StyleEngine::SetExternalStylesheets(std::vector<css::StyleSheet> sheets)
 {
   external_sheets_ = std::move(sheets);

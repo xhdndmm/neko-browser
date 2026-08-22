@@ -40,6 +40,7 @@
 | position absolute | Partial | Layout 套件 | 包含块判定（最近 positioning 祖先 padding box）、top/left/right/bottom、shrink-to-fit 与 left+right 约束方程；fixed 暂按 absolute 处理，无 z-index/百分比 offset |
 | 文本（位图字体回退） | Tested | Paint 套件 | 无系统字体时的 8x8 ASCII 回退 |
 | 文本（FreeType） | Partial | Graphics + Paint 套件 | 系统字体、抗锯齿、任意字号、UTF-8、glyph 缓存、布局真实 advance、font-family 匹配、逐字符回退 + CJK 回退链（中文可显示）、粗体/斜体变体匹配；**glyph/字体选择器/字形缓存均线程安全（互斥锁，支持并行栅格化）**、**TextWidth 记忆化**（同 (text,px) 命中缓存）；无 HarfBuzz 整形 |
+| @font-face 网络字体 | Partial | 2 CSS 解析测试 + 1 浏览器集成测试 + 百度实测 | `<style>` 与外部样式表中的 @font-face 提取（family/src/weight/style）；src 格式偏好 truetype/opentype > woff > woff2（FreeType 内存加载，WOFF/WOFF2 由 FreeType ≥2.13 支持）；相对与协议相对 URL 对页面解析；同 URL 去重、HTTP≥400 拒绝；注册后失效布局/绘制缓存并 ReapplyStyles。无 local()、unicode-range 子集、font-display |
 | 字符编码（HTML/文本） | Tested | 21 编码单元测试（含全 GBK 文档往返） | **WHATWG Encoding 标准**：UTF-8（含截断序列边界）、UTF-16BE/LE、gb18030/GBK（2 字节 + 4 字节码点范围）、Big5、Shift_JIS（含 EUDC 私有区）、EUC-JP、EUC-KR、ISO-2022-JP、windows-125x/iso-8859-x/koi8-r/koi8-u/macintosh/ibm866/x-mac-cyrillic 等 28 种单字节表、x-user-defined、replacement；**HTML 字符集预扫描**（meta charset/http-equiv、UTF-16 签名、`<?xml`、注释）、**BOM 嗅探覆盖一切**、HTTP `Content-Type` 提示优先级高于预扫描；编码表由 `tools/gen_encoding_tables.py` 从 WHATWG 官方索引生成（离线提交，构建无需网络）；页面加载后统一转码为 UTF-8 再进解析器 |
 | 图像解码 PNG | Tested | 16 图像单元测试 | 自研解码器（chunk/CRC/滤波/Adam7/全部颜色类型） |
 | 图像解码 JPEG | Tested | 16 图像单元测试 | 封装 libjpeg，接口统一为 neko::image |

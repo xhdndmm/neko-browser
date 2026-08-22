@@ -378,6 +378,15 @@ void FetchExternalStylesheets(renderer::Page& page,
                               const BrowserController::FetchFn& fetch,
                               base::ThreadPool& pool);
 
+// Fetches and registers the page's @font-face web fonts (declared in <style>
+// elements and external stylesheets): each font URL is fetched once, decoded
+// by FreeType and registered on |page| under its family name; a final
+// ReapplyStyles rebuilds text with the new faces.
+void FetchWebFonts(renderer::Page& page,
+                   const std::string& base_url,
+                   const BrowserController::FetchFn& fetch,
+                   base::ThreadPool& pool);
+
 // Fetches and decodes the videos referenced by <video src> elements in |page|
 // and attaches them via Page::SetElementVideo (first frame + budgeted frame
 // strip; autoplay/loop attributes carry over).  |base_url| resolves relative

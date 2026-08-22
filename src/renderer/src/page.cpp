@@ -323,8 +323,8 @@ void Page::LayoutLocked(float viewport_width, float viewport_height)
     }
   }
   layout::LayoutEngine engine(styles_, &fonts_, this);
-  root_ = engine.BuildLayoutTree(
-      *document_, viewport_width / page_zoom_, viewport_height / page_zoom_);
+  root_ =
+      engine.BuildLayoutTree(*document_, viewport_width / page_zoom_, viewport_height / page_zoom_);
   display_list_.reset();
   BumpVersion();
 }
@@ -344,6 +344,24 @@ void Page::SetElementImage(const dom::Element& element,
   root_.reset();                 // the replaced box's intrinsic size may have changed
   display_list_.reset();
   BumpVersion();
+}
+
+bool Page::LoadWebFont(const std::string& family,
+                       int weight,
+                       bool italic,
+                       const std::string& key,
+                       std::vector<uint8_t> data)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  const graphics::FontFace* face =
+      fonts_.RegisterWebFont(family, weight, italic, key, std::move(data));
+  if (face == nullptr) {
+    return false;
+  }
+  root_.reset(); // text metrics may change everywhere
+  display_list_.reset();
+  BumpVersion();
+  return true;
 }
 
 void Page::SetElementVideo(const dom::Element& element,
@@ -702,8 +720,7 @@ std::optional<ElementGeometry> Page::ElementBoxGeometry(const dom::Element& elem
     g.height = box->height * page_zoom_;
     g.border_top = box->border_top * page_zoom_;
     g.border_left = box->border_left * page_zoom_;
-    g.client_width =
-        std::max(0.0f, box->width - box->border_left - box->border_right) * page_zoom_;
+    g.client_width = std::max(0.0f, box->width - box->border_left - box->border_right) * page_zoom_;
     g.client_height =
         std::max(0.0f, box->height - box->border_top - box->border_bottom) * page_zoom_;
     return g;

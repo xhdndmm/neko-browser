@@ -5,6 +5,7 @@
 #include "neko/browser/browser_controller.h"
 #include "neko/browser/download_manager.h"
 #include "neko/dom/query.h"
+#include "neko/graphics/system_fonts.h"
 #include "neko/image/image.h"
 #include "neko/layout/layout_tree.h"
 #include "neko/network/http.h"
@@ -215,11 +216,12 @@ private:
       }
       if (request_number == 0) {
         const std::string location = "http://localhost:" + std::to_string(port_) + "/target";
-        SendAll(fd, "HTTP/1.1 302 Found\r\nLocation: " + location +
-                    "\r\nContent-Length: 0\r\n\r\n");
+        SendAll(fd,
+                "HTTP/1.1 302 Found\r\nLocation: " + location + "\r\nContent-Length: 0\r\n\r\n");
       } else {
         const std::string body = "<html><body>target</body></html>";
-        SendAll(fd, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: " +
+        SendAll(fd,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: " +
                     std::to_string(body.size()) + "\r\n\r\n" + body);
       }
       ::shutdown(fd, SHUT_RDWR);
@@ -971,9 +973,8 @@ TEST(BrowserControllerTest, ClassicScriptDynamicImport)
                                "</script>"
                                "</body></html>"});
   fetch.Add("http://example.com/lib.js",
-            FakeFetcher::Route{200,
-                               {{"content-type", "text/javascript"}},
-                               "export const tag = 'dynamic-ok';"});
+            FakeFetcher::Route{
+                200, {{"content-type", "text/javascript"}}, "export const tag = 'dynamic-ok';"});
 
   BrowserController controller(tp.path(), std::ref(fetch));
   controller.NewTab();
@@ -1032,9 +1033,8 @@ TEST(BrowserControllerTest, ImportMapRemapsBareSpecifier)
                                "</script>"
                                "</body></html>"});
   fetch.Add("http://example.com/vendor/state.js",
-            FakeFetcher::Route{200,
-                               {{"content-type", "text/javascript"}},
-                               "export const name = 'mapped-ok';"});
+            FakeFetcher::Route{
+                200, {{"content-type", "text/javascript"}}, "export const name = 'mapped-ok';"});
 
   BrowserController controller(tp.path(), std::ref(fetch));
   controller.NewTab();
@@ -1065,14 +1065,12 @@ TEST(BrowserControllerTest, ImportMapFirstDeclarationWins)
                                "document.title = t;"
                                "</script>"
                                "</body></html>"});
-  fetch.Add("http://example.com/first.js",
-            FakeFetcher::Route{200,
-                               {{"content-type", "text/javascript"}},
-                               "export const t = 'first';"});
-  fetch.Add("http://example.com/second.js",
-            FakeFetcher::Route{200,
-                               {{"content-type", "text/javascript"}},
-                               "export const t = 'second';"});
+  fetch.Add(
+      "http://example.com/first.js",
+      FakeFetcher::Route{200, {{"content-type", "text/javascript"}}, "export const t = 'first';"});
+  fetch.Add(
+      "http://example.com/second.js",
+      FakeFetcher::Route{200, {{"content-type", "text/javascript"}}, "export const t = 'second';"});
 
   BrowserController controller(tp.path(), std::ref(fetch));
   controller.NewTab();
@@ -1135,9 +1133,7 @@ TEST(BrowserControllerTest, XhrHttpErrorStatusSurfaced)
                                "</script>"
                                "</body></html>"});
   fetch.Add("http://example.com/missing",
-            FakeFetcher::Route{404,
-                               {{"content-type", "text/plain"}},
-                               "not found"});
+            FakeFetcher::Route{404, {{"content-type", "text/plain"}}, "not found"});
 
   BrowserController controller(tp.path(), std::ref(fetch));
   controller.NewTab();
@@ -1152,19 +1148,20 @@ TEST(BrowserControllerTest, XhrTransportErrorFiresOnError)
   TempProfile tp;
   FakeFetcher fetch;
   fetch.Add("http://example.com/",
-            FakeFetcher::Route{200,
-                               {{"content-type", "text/html"}},
-                               "<html><head><title>before</title></head><body>"
-                               "<script>"
-                               "const xhr = new XMLHttpRequest();"
-                               "xhr.open('GET', '/down');"
-                               "xhr.onload = function() { document.title = 'load'; };"
-                               "xhr.onerror = function() {"
-                               "  document.title = 'error-state-' + xhr.readyState + '-status-' + xhr.status;"
-                               "};"
-                               "xhr.send();"
-                               "</script>"
-                               "</body></html>"});
+            FakeFetcher::Route{
+                200,
+                {{"content-type", "text/html"}},
+                "<html><head><title>before</title></head><body>"
+                "<script>"
+                "const xhr = new XMLHttpRequest();"
+                "xhr.open('GET', '/down');"
+                "xhr.onload = function() { document.title = 'load'; };"
+                "xhr.onerror = function() {"
+                "  document.title = 'error-state-' + xhr.readyState + '-status-' + xhr.status;"
+                "};"
+                "xhr.send();"
+                "</script>"
+                "</body></html>"});
   // No route for /down -> transport error from the fake.
 
   BrowserController controller(tp.path(), std::ref(fetch));
@@ -1172,6 +1169,45 @@ TEST(BrowserControllerTest, XhrTransportErrorFiresOnError)
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
 
   EXPECT_EQ(controller.ActiveTab()->title, "error-state-4-status-0");
+}
+
+// @font-face: the font URL is fetched and registered under its family; a
+// second declaration of the same src is fetched once.  The fixture serves
+// real font bytes (the first system sans face) so FreeType accepts it.
+TEST(BrowserControllerTest, FontFaceFetchedAndRegistered)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  // Real TTF bytes from the system so LoadWebFont parses them.
+  std::vector<uint8_t> font_bytes;
+  for (const std::string& path : graphics::FindSystemFonts(graphics::GenericFamily::kSansSerif)) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+      continue;
+    }
+    font_bytes = std::vector<uint8_t>((std::istreambuf_iterator<char>(file)),
+                                      std::istreambuf_iterator<char>());
+    if (!font_bytes.empty()) {
+      break;
+    }
+  }
+  ASSERT_FALSE(font_bytes.empty()) << "no system font available for the fixture";
+  const std::string body(font_bytes.begin(), font_bytes.end());
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><style>"
+                               "@font-face { font-family: 'myicon';"
+                               "  src: url('//cdn.example/icon.ttf') format('truetype'); }"
+                               "</style></head><body><p>x</p></body></html>"});
+  fetch.Add("http://cdn.example/icon.ttf",
+            FakeFetcher::Route{200, {{"content-type", "font/ttf"}}, body});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  EXPECT_EQ(fetch.requests_.size(), 2u); // page + font
 }
 
 // The page's scripts can use window.localStorage (scoped to the page origin),
@@ -1597,12 +1633,11 @@ TEST(BrowserControllerTest, DataUrlImageIsDecodedWithoutNetwork)
   std::string b64;
   b64.reserve((png.size() + 2) / 3 * 4);
   for (std::size_t i = 0; i < png.size(); i += 3) {
-    const unsigned n = static_cast<unsigned>(static_cast<unsigned char>(png[i])) << 16 |
-                       static_cast<unsigned>(i + 1 < png.size()
-                                                 ? static_cast<unsigned char>(png[i + 1])
-                                                 : 0)
-                           << 8 |
-                       (i + 2 < png.size() ? static_cast<unsigned char>(png[i + 2]) : 0);
+    const unsigned n =
+        static_cast<unsigned>(static_cast<unsigned char>(png[i])) << 16 |
+        static_cast<unsigned>(i + 1 < png.size() ? static_cast<unsigned char>(png[i + 1]) : 0)
+            << 8 |
+        (i + 2 < png.size() ? static_cast<unsigned char>(png[i + 2]) : 0);
     b64 += kAlphabet[(n >> 18) & 63];
     b64 += kAlphabet[(n >> 12) & 63];
     b64 += i + 1 < png.size() ? kAlphabet[(n >> 6) & 63] : '=';
@@ -1818,7 +1853,8 @@ TEST(BrowserControllerTest, DoesNotSendSourceCookieToRedirectTarget)
   ASSERT_TRUE(source_url.has_value());
 
   BrowserController controller(tp.path());
-  ASSERT_TRUE(controller.cookies().SetCookieFromHeader(source_url.value(), "session=secret; Path=/", 1));
+  ASSERT_TRUE(
+      controller.cookies().SetCookieFromHeader(source_url.value(), "session=secret; Path=/", 1));
   controller.NewTab();
   ASSERT_TRUE(controller.NavigateActive(source).has_value());
 

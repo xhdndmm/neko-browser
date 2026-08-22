@@ -96,6 +96,8 @@ graph LR
 - [x] 文本：内嵌公有领域 8x8 位图字体（ASCII）
 - [ ] FreeType/HarfBuzz 文本整形与 Unicode 回退 —— 后续
 - [x] 图像解码（PNG/JPEG/GIF/WebP/AVIF/SVG）
+- [x] **@font-face 网络字体（Phase 6 扩展）**：解析/抓取/FreeType 注册/
+      family 匹配优先于系统字体 —— **PARTIAL**（无 unicode-range/local()）
 - [x] 软件合成器抽象（ADR 0015，`neko::compositor`，GUI 已接线）
 - [ ] GPU 后端 —— 后续
 

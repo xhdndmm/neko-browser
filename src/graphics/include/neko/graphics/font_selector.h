@@ -34,11 +34,13 @@ public:
   // |family| is a CSS font-family value (comma-separated, quoted names ok).
   // |weight| >= 600 requests a bold variant; |italic| an italic variant
   // (falling back to the regular face when the variant file is missing).
-  // |library| must outlive this selector.
+  // |library| must outlive this selector.  |preseed_faces| are put ahead of
+  // every system face (web fonts registered via @font-face).
   FontSelector(const FontLibrary& library,
                std::string_view family,
                int weight = 400,
-               bool italic = false);
+               bool italic = false,
+               const std::vector<const FontFace*>& preseed_faces = {});
 
   // First face in the stack that has a glyph for |code_point|, or nullptr.
   const FontFace* FaceForCodePoint(uint32_t code_point) const;

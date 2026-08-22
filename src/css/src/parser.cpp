@@ -2,6 +2,7 @@
 
 #include "neko/css/tokenizer.h"
 
+#include <cctype>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -226,6 +227,122 @@ bool IsDeclarationBlockAtRule(std::string_view name)
          name == "font-feature-values" || name == "property";
 }
 
+// Parses an @font-face declaration block (token-text form: declarations
+// separated by ';', values with quotes already unquoted by the tokenizer).
+// Extracts font-family, src (first url() preferring woff2 > woff > ttf/otf),
+// font-weight and font-style descriptors.  Returns false without a usable
+// family + URL.
+bool ParseFontFaceBlock(std::string_view block, FontFaceRule* out)
+{
+  const std::vector<Declaration> decls = ParseDeclarationBlock(block);
+  for (const Declaration& d : decls) {
+    if (d.property == "font-family") {
+      // Value may be a quoted name or bare ident; take the whole value.
+      std::string family = d.value;
+      while (!family.empty() && (family.front() == ' ' || family.front() == '\t')) {
+        family.erase(family.begin());
+      }
+      while (!family.empty() && (family.back() == ' ' || family.back() == '\t')) {
+        family.pop_back();
+      }
+      if (!family.empty() && family.front() != '"' && family.front() != '\'') {
+        // Bare ident: keep as-is.
+      } else if (family.size() >= 2) {
+        family = family.substr(1, family.size() - 2); // strip quotes
+      }
+      out->family = family;
+    } else if (d.property == "src") {
+      // Collect url(...) occurrences with their format(...) hint.
+      struct Candidate
+      {
+        std::string url;
+        std::string format; // lowercased
+      };
+      std::vector<Candidate> candidates;
+      std::string_view v = d.value;
+      std::size_t pos = 0;
+      std::string pending_url;
+      while (pos < v.size()) {
+        const std::size_t url_pos = v.find("url(", pos);
+        if (url_pos == std::string_view::npos) {
+          break;
+        }
+        const std::size_t open = url_pos + 4;
+        const std::size_t close = v.find(')', open);
+        if (close == std::string_view::npos) {
+          break;
+        }
+        std::string url(v.substr(open, close - open));
+        while (!url.empty() && (url.front() == '\'' || url.front() == '"')) {
+          url.erase(url.begin());
+        }
+        while (!url.empty() && (url.back() == '\'' || url.back() == '"')) {
+          url.pop_back();
+        }
+        std::string format;
+        const std::size_t fmt_pos = v.find("format(", close);
+        if (fmt_pos != std::string_view::npos && fmt_pos < close + 40 && fmt_pos - close < 40) {
+          const std::size_t fo = fmt_pos + 7;
+          const std::size_t fc = v.find(')', fo);
+          if (fc != std::string_view::npos) {
+            format = std::string(v.substr(fo, fc - fo));
+            for (char& ch : format) {
+              ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            }
+            while (!format.empty() && (format.front() == '\'' || format.front() == '"')) {
+              format.erase(format.begin());
+            }
+            while (!format.empty() && (format.back() == '\'' || format.back() == '"')) {
+              format.pop_back();
+            }
+          }
+        }
+        candidates.push_back({url, format});
+        pos = close + 1;
+      }
+      // Preference: ttf/otf/truetype/opentype (always parseable), then woff,
+      // then woff2 (FreeType >= 2.13), then anything.
+      static constexpr const char* kPrefs[] = {"truetype", "opentype", "woff", "woff2"};
+      const Candidate* best = nullptr;
+      for (const char* pref : kPrefs) {
+        for (const Candidate& cand : candidates) {
+          if (cand.format == pref ||
+              (cand.format.empty() &&
+               (cand.url.size() > 4 &&
+                cand.url.substr(cand.url.size() - 4) == std::string(".") + pref))) {
+            best = &cand;
+            break;
+          }
+        }
+        if (best != nullptr)
+          break;
+      }
+      if (best == nullptr && !candidates.empty()) {
+        best = &candidates[0];
+      }
+      if (best != nullptr) {
+        out->src_url = best->url;
+      }
+    } else if (d.property == "font-weight") {
+      if (d.value == "bold") {
+        out->weight = 700;
+      } else if (d.value == "normal") {
+        out->weight = 400;
+      } else {
+        try {
+          out->weight = std::stoi(d.value);
+        } catch (...) {
+          out->weight = 400;
+        }
+      }
+    } else if (d.property == "font-style") {
+      out->italic = d.value.find("italic") != std::string::npos ||
+                    d.value.find("oblique") != std::string::npos;
+    }
+  }
+  return !out->family.empty() && !out->src_url.empty();
+}
+
 AtRule ParseAtRule(TokenStream& stream)
 {
   AtRule at_rule;
@@ -244,11 +361,58 @@ AtRule ParseAtRule(TokenStream& stream)
     // stray ";" inside (every @font-face has many) cannot stall or corrupt
     // the following rules.
     if (IsDeclarationBlockAtRule(at_rule.name)) {
+      // Reassemble the raw block from its tokens: punctuation tokens carry
+      // empty |text|, so map each type back to its literal (the block is
+      // re-tokenized when the @font-face descriptors are parsed).
+      std::string block_text;
+      const auto append = [&block_text](const CssToken& tok) {
+        switch (tok.type) {
+        case CssTokenType::kWhitespace:
+          block_text += ' ';
+          return;
+        case CssTokenType::kColon:
+          block_text += ':';
+          return;
+        case CssTokenType::kSemicolon:
+          block_text += ';';
+          return;
+        case CssTokenType::kComma:
+          block_text += ',';
+          return;
+        case CssTokenType::kOpenParen:
+          block_text += '(';
+          return;
+        case CssTokenType::kCloseParen:
+          block_text += ')';
+          return;
+        case CssTokenType::kOpenBracket:
+          block_text += '[';
+          return;
+        case CssTokenType::kCloseBracket:
+          block_text += ']';
+          return;
+        case CssTokenType::kString:
+          block_text += '"' + tok.text + '"';
+          return;
+        case CssTokenType::kHash:
+          block_text += '#' + tok.text;
+          return;
+        default:
+          block_text += tok.text;
+        }
+      };
       while (!stream.AtEnd() && stream.Peek().type != CssTokenType::kCloseBrace) {
-        stream.Next();
+        append(stream.Next());
       }
+      at_rule.block = block_text;
       if (!stream.AtEnd() && stream.Peek().type == CssTokenType::kCloseBrace) {
         stream.Next();
+      }
+      if (at_rule.name == "font-face") {
+        FontFaceRule rule;
+        if (ParseFontFaceBlock(at_rule.block, &rule)) {
+          at_rule.font_face = rule;
+        }
       }
       return at_rule;
     }
@@ -289,7 +453,11 @@ StyleSheet ParseStyleSheet(std::string_view text)
       break;
     }
     if (stream.Peek().type == CssTokenType::kAtKeyword) {
-      sheet.at_rules.push_back(ParseAtRule(stream));
+      AtRule at_rule = ParseAtRule(stream);
+      if (at_rule.font_face.has_value()) {
+        sheet.font_faces.push_back(*at_rule.font_face);
+      }
+      sheet.at_rules.push_back(std::move(at_rule));
     } else if (stream.Peek().type == CssTokenType::kSemicolon ||
                stream.Peek().type == CssTokenType::kCloseBrace) {
       // A stray ";" or unmatched "}" at the top level (CSS syntax error):
