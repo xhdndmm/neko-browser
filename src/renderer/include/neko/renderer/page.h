@@ -13,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -102,6 +103,10 @@ public:
                    bool italic,
                    const std::string& key,
                    std::vector<uint8_t> data);
+
+  // True when |key| was already registered via LoadWebFont (callers can
+  // skip refetching across reload passes).
+  bool HasWebFont(const std::string& key) const;
 
   // Reads a UTF-8 file and loads it as HTML (encoding sniffing still applies).
   base::Result<void> LoadFile(std::string_view path);
@@ -239,6 +244,8 @@ private:
 
   graphics::FontRegistry fonts_;
   std::unordered_map<const dom::Element*, image::Image> images_;
+  // Keys of web fonts already registered (dedup across reload passes).
+  std::set<std::string> loaded_webfont_keys_;
 
   // Playback state for one animated image (per element).  The frame pixels
   // are kept in |images_| and overwritten in place on each advance so the

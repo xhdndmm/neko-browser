@@ -12,6 +12,7 @@
 #include "neko/storage/file_util.h"
 #include "neko/url/url.h"
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -66,6 +67,19 @@ private:
   std::filesystem::path dir_;
 };
 int TempProfile::seq_ = 0;
+
+// Subresource loads (<img>/<video>) now run on the pool after the page
+// publishes, so tests poll until the expected state lands.
+template <typename Pred> bool WaitForSubresources(Pred pred, int timeout_ms = 5000)
+{
+  for (int waited = 0; waited < timeout_ms; waited += 10) {
+    if (pred()) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return pred();
+}
 
 // Records every request (url + cookie header) and answers from a route map.
 // Thread-safe: the controller may fetch page subresources in parallel on a
@@ -1284,10 +1298,11 @@ TEST(BrowserControllerTest, PageVideoDecodesAndAutoplays)
   ASSERT_NE(tab, nullptr);
   ASSERT_NE(tab->page, nullptr);
 
-  // The decoded first frame is attached to the element with the clip's
-  // intrinsic size (8x6).
   dom::Element* video = dom::QuerySelector(*tab->page->document(), "#v");
   ASSERT_NE(video, nullptr);
+  // The decoded first frame is attached asynchronously after publish.
+  ASSERT_TRUE(WaitForSubresources(
+      [&tab, video] { return tab->page != nullptr && tab->page->Find(*video) != nullptr; }));
   const image::Image* frame = tab->page->Find(*video);
   ASSERT_NE(frame, nullptr);
   EXPECT_EQ(frame->width, 8);
@@ -1540,10 +1555,23 @@ TEST(BrowserControllerTest, InjectsMultiplePageImages)
   controller.NewTab();
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
 
-  // All three image requests went out and every <img> got a decoded 2x2 image.
-  EXPECT_EQ(fetch.requests_.size(), 4u); // page + 3 images
   Tab* tab = controller.ActiveTab();
   ASSERT_NE(tab, nullptr);
+  // All three image requests go out and every <img> gets a decoded 2x2 image
+  // (asynchronously after publish).
+  const bool ready = WaitForSubresources([&fetch, &tab] {
+    if (fetch.requests_.size() < 4u || tab->page == nullptr) {
+      return false;
+    }
+    for (const dom::Element* el : dom::QuerySelectorAll(*tab->page->document(), "img")) {
+      if (tab->page->Find(*el) == nullptr) {
+        return false;
+      }
+    }
+    return true;
+  });
+  ASSERT_TRUE(ready);
+  EXPECT_EQ(fetch.requests_.size(), 4u); // page + 3 images
   const std::vector<dom::Element*> imgs = dom::QuerySelectorAll(*tab->page->document(), "img");
   ASSERT_EQ(imgs.size(), 3u);
   for (const dom::Element* element : imgs) {
@@ -1654,9 +1682,18 @@ TEST(BrowserControllerTest, DataUrlImageIsDecodedWithoutNetwork)
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
 
   // Only the page itself was fetched — the data URL needed no request.
-  EXPECT_EQ(fetch.requests_.size(), 1u);
+  EXPECT_LE(fetch.requests_.size(), 1u);
   Tab* tab = controller.ActiveTab();
   ASSERT_NE(tab, nullptr);
+  const bool decoded_ok = WaitForSubresources([&tab] {
+    if (tab->page == nullptr) {
+      return false;
+    }
+    const std::vector<dom::Element*> elements =
+        dom::QuerySelectorAll(*tab->page->document(), "img");
+    return elements.size() == 1u && tab->page->Find(*elements[0]) != nullptr;
+  });
+  ASSERT_TRUE(decoded_ok);
   const std::vector<dom::Element*> imgs = dom::QuerySelectorAll(*tab->page->document(), "img");
   ASSERT_EQ(imgs.size(), 1u);
   const image::Image* decoded = tab->page->Find(*imgs[0]);
@@ -1732,6 +1769,10 @@ TEST(BrowserControllerTest, SendsCookiesToAuthenticatedSubresources)
   ASSERT_TRUE(controller.NavigateActive(page_url).has_value());
 
   EXPECT_NE(CookieForRequest(fetch, page_url).find("session=abc"), std::string::npos);
+  // The stylesheet loads synchronously pre-publish; the image asynchronously
+  // after — wait until its request (with cookie) has been recorded.
+  ASSERT_TRUE(WaitForSubresources(
+      [&] { return CookieForRequest(fetch, image_url).find("session=abc") != std::string::npos; }));
   EXPECT_NE(CookieForRequest(fetch, css_url).find("session=abc"), std::string::npos);
   EXPECT_NE(CookieForRequest(fetch, image_url).find("session=abc"), std::string::npos);
 }

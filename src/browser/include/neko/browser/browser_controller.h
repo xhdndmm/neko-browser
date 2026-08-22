@@ -337,7 +337,6 @@ private:
 
   std::string profile_dir_;
   FetchFn fetch_;
-  std::unique_ptr<base::ThreadPool> pool_;
 
   // Guards every member the GUI can observe through the Snapshot* accessors:
   // tabs_/active_tab_/next_tab_id_, network_log_/console_log_ and the store
@@ -358,6 +357,11 @@ private:
 
   std::vector<NetworkLogEntry> network_log_;
   std::vector<ConsoleEntry> console_log_;
+
+  // Declared LAST so it is destroyed FIRST: ~ThreadPool drains pending tasks
+  // while every store/registry above is still alive (background subresource
+  // tasks capture |this|-bound fetch hooks).
+  std::unique_ptr<base::ThreadPool> pool_;
 };
 
 // Fetches and decodes the images referenced by <img> elements in |page| and

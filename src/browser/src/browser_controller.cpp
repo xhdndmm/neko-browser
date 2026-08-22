@@ -1058,20 +1058,37 @@ void BrowserController::LoadBytes(Tab& tab,
       return;
     }
 
-    // Fetch and decode the page's <img>/<video> subresources before
-    // publishing.
-    FetchPageImages(*new_page, final_url, fetch_subresource, *pool_);
-    FetchPageVideos(*new_page, final_url, fetch_subresource, *pool_);
+    // Publish first so the UI paints text immediately; <img>/<video>
+    // subresources load on the pool afterwards and pop in through the
+    // page-version invalidation + periodic refresh (a single failing CDN
+    // request used to block first paint for its whole connect timeout).
     std::string title = new_page->document()->Title();
     if (title.empty())
       title = final_url;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       tab.content_type = ContentType::kHtml;
-      tab.page = std::move(new_page);
+      tab.page = new_page; // shared: the background task keeps it alive
       tab.title = std::move(title);
     }
     RecordVisit(final_url, tab.title);
+
+    // Worker-thread actions run serially, so no navigation can replace
+    // tab.page behind our back while this task runs.
+    if (pool_->thread_count() >= 2) {
+      pool_->Post([page = std::shared_ptr(new_page),
+                   final_url,
+                   fetch_subresource,
+                   &pool = *pool_]() mutable {
+        FetchPageImages(*page, final_url, fetch_subresource, pool);
+        FetchPageVideos(*page, final_url, fetch_subresource, pool);
+      });
+    } else {
+      // Single-worker pool: decoding inside a pool task would deadlock on
+      // its own futures — keep the old inline path.
+      FetchPageImages(*new_page, final_url, fetch_subresource, *pool_);
+      FetchPageVideos(*new_page, final_url, fetch_subresource, *pool_);
+    }
     return;
   }
 
@@ -1458,6 +1475,9 @@ void FetchWebFonts(renderer::Page& page,
       continue;
     }
     const std::string absolute = target.value().Serialize();
+    if (page.HasWebFont(absolute)) {
+      continue; // registered by an earlier load pass — skip refetch
+    }
     bool dup = false;
     for (PendingFont& p : pending) {
       if (p.absolute_url == absolute) {

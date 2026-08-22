@@ -346,6 +346,12 @@ void Page::SetElementImage(const dom::Element& element,
   BumpVersion();
 }
 
+bool Page::HasWebFont(const std::string& key) const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  return loaded_webfont_keys_.count(key) != 0;
+}
+
 bool Page::LoadWebFont(const std::string& family,
                        int weight,
                        bool italic,
@@ -353,9 +359,16 @@ bool Page::LoadWebFont(const std::string& family,
                        std::vector<uint8_t> data)
 {
   std::lock_guard<std::mutex> lock(mutex_);
+  // Dedup: the post-script stylesheet pass re-runs FetchWebFonts with the
+  // same declarations; re-registering would clear the font selector cache
+  // and force a full re-layout for nothing.
+  if (!loaded_webfont_keys_.insert(key).second) {
+    return true;
+  }
   const graphics::FontFace* face =
       fonts_.RegisterWebFont(family, weight, italic, key, std::move(data));
   if (face == nullptr) {
+    loaded_webfont_keys_.erase(key);
     return false;
   }
   root_.reset(); // text metrics may change everywhere
