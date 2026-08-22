@@ -1963,6 +1963,20 @@ void StyleEngine::ComputeElement(dom::Element& element,
     }
   }
 
+  // clear (CSS 2.2 §9.5.2): none / left / right / both.
+  if (const css::Declaration* d = find("clear")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kKeyword) {
+      if (v.text == "left") {
+        out.clear = Clear::kLeft;
+      } else if (v.text == "right") {
+        out.clear = Clear::kRight;
+      } else if (v.text == "both") {
+        out.clear = Clear::kBoth;
+      }
+    }
+  }
+
   // appearance (CSS-UI-4 §7.2): none / auto / button.  Other compat values
   // (checkbox, radio, textfield, ...) are not implemented; the declaration
   // is ignored and the computed value stays at the initial value (none).

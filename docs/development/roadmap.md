@@ -83,6 +83,8 @@ graph LR
       flex-wrap、flex-grow/shrink/basis、justify-content（6 值）、
       align-items（stretch/flex-start/flex-end/center/baseline）、
       align-content（确定 cross 尺寸）、gap；14 个布局单元测试
+- [x] **float 完善（Phase 5 扩展）**：同侧多 float 并排避让 + clear 属性
+      （百度热搜列表端到端修复）
 - [ ] grid —— **未实现**
 - [ ] flexbox 后续：auto 外边距、min/max-width、order、align-self、
       百分比高度精确解析 —— 后续

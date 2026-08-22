@@ -65,6 +65,16 @@ enum class Float
   kRight
 };
 
+// clear (CSS 2.2 §9.5.2): pushes the box below earlier floated boxes on the
+// given side(s) of the same block formatting context.
+enum class Clear
+{
+  kNone,
+  kLeft,
+  kRight,
+  kBoth
+};
+
 enum class TextAlign
 {
   kLeft,
@@ -279,6 +289,7 @@ struct ComputedStyle
   Display display = Display::kInline; // CSS initial value
   Position position = Position::kStatic;
   Float floating = Float::kNone; // float: left/right/none
+  Clear clear = Clear::kNone;    // clear: none/left/right/both
 
   std::optional<SizeSpec> width;
   std::optional<SizeSpec> height;

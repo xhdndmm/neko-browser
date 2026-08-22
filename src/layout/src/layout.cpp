@@ -1271,9 +1271,15 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
     // the given vertical position |float_y| within the containing block |
     // |containing_width| wide.  Width is the explicit value, else shrink-to-fit
     // (CSS2.2 10.3.5).  A left float hugs the left edge; a right float the
-    // right edge.  Line boxes later wrap around it.
-    std::unique_ptr<LayoutBox>
-    BuildFloat(dom::Element& element, float containing_width, float left_edge, float float_y)
+    // right edge — beside earlier floats of the same side (CSS2.2 9.5.1:
+    // "the outer left edge may not be to the left of the outer left edge of
+    // any earlier left float"), dropping below them when there is no room.
+    // |style.clear| pushes the float below matching earlier floats.
+    std::unique_ptr<LayoutBox> BuildFloat(dom::Element& element,
+                                          float containing_width,
+                                          float left_edge,
+                                          float float_y,
+                                          const std::vector<const LayoutBox*>& earlier_floats = {})
     {
       auto box = std::make_unique<LayoutBox>();
       box->element = &element;
@@ -1294,17 +1300,37 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       }
       box->width = content_width + border_padding_w;
 
-      // Horizontal placement: left float at the containing block's left edge,
-      // right float at the right edge (aligned so its right margin box meets
-      // the right edge).  The border box origin sits at the margin edge (the
-      // same convention as in-flow blocks); border/padding extend right/down
-      // from there, so they are not subtracted.
-      if (box->style.floating == style::Float::kLeft) {
-        box->x = left_edge + box->margin_left;
-      } else {
-        box->x = left_edge + containing_width - box->margin_right - box->width;
+      const bool left_side = box->style.floating == style::Float::kLeft;
+
+      // True when |f|'s vertical band overlaps [top, bottom).
+      const auto overlaps_band = [](const LayoutBox* f, float top, float bottom) {
+        return f->y < bottom && f->y + f->height > top;
+      };
+
+      // clear (CSS2.2 9.5.2): start below the bottom edge of every earlier
+      // float on the cleared side(s).
+      float place_y = float_y;
+      if (box->style.clear != style::Clear::kNone) {
+        for (const LayoutBox* f : earlier_floats) {
+          const bool relevant = box->style.clear == style::Clear::kBoth ||
+                                (box->style.clear == style::Clear::kLeft &&
+                                 f->style.floating == style::Float::kLeft) ||
+                                (box->style.clear == style::Clear::kRight &&
+                                 f->style.floating == style::Float::kRight);
+          if (relevant) {
+            place_y = std::max(place_y, f->y + f->height);
+          }
+        }
       }
-      box->y = float_y + box->margin_top;
+
+      // Provisional placement at the classic position (edge-hugging): content
+      // is laid out here first because the avoidance pass below needs the
+      // real box height for its band tests.
+      const float provisional_x =
+          left_side ? left_edge + box->margin_left
+                    : left_edge + containing_width - box->margin_right - box->width;
+      box->x = provisional_x;
+      box->y = place_y + box->margin_top;
 
       const float avail_width = box->width - box->border_left - box->border_right -
                                 box->padding_left - box->padding_right;
@@ -1327,6 +1353,55 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         content_height = content_width / box->style.aspect_ratio.value();
       }
       box->height = content_height + border_padding_h;
+
+      // Avoidance pass (CSS2.2 §9.5.1), now with the real height: sit as high
+      // and far toward the floated side as possible; when the band beside the
+      // earlier floats is full, drop below the blockers and retry.
+      // Terminates: each non-fitting pass advances |place_y| past at least
+      // one earlier float's bottom edge.
+      float final_x = provisional_x;
+      for (;;) {
+        float candidate_x = left_side
+                                ? left_edge + box->margin_left
+                                : left_edge + containing_width - box->margin_right - box->width;
+        for (const LayoutBox* f : earlier_floats) {
+          if (!overlaps_band(f, place_y, place_y + box->height)) {
+            continue;
+          }
+          if (left_side && f->style.floating == style::Float::kLeft) {
+            candidate_x = std::max(candidate_x, f->x + f->width + box->margin_left);
+          } else if (!left_side && f->style.floating == style::Float::kRight) {
+            candidate_x = std::min(candidate_x, f->x - box->margin_right - box->width);
+          }
+        }
+        const bool fits = left_side
+                              ? candidate_x + box->width <= left_edge + containing_width + 0.5f
+                              : candidate_x >= left_edge - 0.5f;
+        final_x = candidate_x;
+        if (fits) {
+          break;
+        }
+        float next_y = place_y;
+        for (const LayoutBox* f : earlier_floats) {
+          if (overlaps_band(f, place_y, place_y + box->height)) {
+            next_y = std::max(next_y, f->y + f->height);
+          }
+        }
+        // Defensive: nothing advanced (float wider than its container) —
+        // keep the computed position rather than looping forever.
+        if (next_y <= place_y) {
+          break;
+        }
+        place_y = next_y;
+      }
+
+      // Shift the laid-out subtree to the final position (children keep their
+      // relative offsets).
+      const float dx = final_x - box->x;
+      const float dy = place_y + box->margin_top - box->y;
+      if (dx != 0 || dy != 0) {
+        TranslateBox(*box, dx, dy);
+      }
       return box;
     }
 
@@ -1509,7 +1584,13 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
           // float: left/right -- out of flow, placed at the block's side at
           // its source vertical position; line boxes wrap around it.
           float f_y = box.content_y() + cursor_y;
-          box.floats.push_back(BuildFloat(child_element, avail_width, box.content_x(), f_y));
+          std::vector<const LayoutBox*> placed;
+          placed.reserve(box.floats.size());
+          for (const auto& f : box.floats) {
+            placed.push_back(f.get());
+          }
+          box.floats.push_back(
+              BuildFloat(child_element, avail_width, box.content_x(), f_y, placed));
           continue;
         }
         if (child_style.display == style::Display::kBlock ||
@@ -1548,6 +1629,24 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         std::vector<const LayoutBox*> cur = parent_floats;
         for (const auto& f : box.floats) {
           cur.push_back(f.get());
+        }
+        // clear (CSS2.2 9.5.2): a block with clear:left/right/both starts
+        // below the bottom edge of the matching earlier floats.
+        if (bc.style.clear != style::Clear::kNone) {
+          for (const LayoutBox* f : cur) {
+            const bool relevant = bc.style.clear == style::Clear::kBoth ||
+                                  (bc.style.clear == style::Clear::kLeft &&
+                                   f->style.floating == style::Float::kLeft) ||
+                                  (bc.style.clear == style::Clear::kRight &&
+                                   f->style.floating == style::Float::kRight);
+            if (relevant) {
+              const float bottom_in_block =
+                  (f->y + f->height + f->margin_bottom) - (box.content_y() + cursor_y);
+              if (bottom_in_block > 0) {
+                cursor_y += bottom_in_block;
+              }
+            }
+          }
         }
         std::unique_ptr<LayoutBox> child_box;
         if (bc.table) {

@@ -1195,6 +1195,101 @@ TEST(LayoutTest, FloatLeftHugsContainingBlockLeftEdge)
   EXPECT_FLOAT_EQ(f->height, 60.0f);
 }
 
+// Two left floats sit side by side when they fit in the containing block.
+TEST(LayoutTest, ConsecutiveLeftFloatsPlaceBeside)
+{
+  auto doc = html::Parser("<body><div style=\"width:400px\">"
+                          "<span style=\"float:left;width:100px;height:30px\">1</span>"
+                          "<span style=\"float:left;width:100px;height:30px\">2</span>"
+                          "</div></body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+  const LayoutBox* div = FindBox(*root, "div", *doc);
+  ASSERT_NE(div, nullptr);
+  ASSERT_EQ(div->floats.size(), 2u);
+  const LayoutBox* f1 = div->floats[0].get();
+  const LayoutBox* f2 = div->floats[1].get();
+  // Same band: side by side at the top.
+  EXPECT_FLOAT_EQ(f2->y, f1->y);
+  EXPECT_FLOAT_EQ(f2->x, f1->x + f1->width);
+}
+
+// Three floats of 150px each in a 400px container: the third wraps below.
+TEST(LayoutTest, LeftFloatDropsBelowWhenBandIsFull)
+{
+  auto doc = html::Parser("<body><div style=\"width:400px\">"
+                          "<span style=\"float:left;width:150px;height:30px\">a</span>"
+                          "<span style=\"float:left;width:150px;height:30px\">b</span>"
+                          "<span style=\"float:left;width:150px;height:30px\">c</span>"
+                          "</div></body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+  const LayoutBox* div = FindBox(*root, "div", *doc);
+  ASSERT_NE(div, nullptr);
+  ASSERT_EQ(div->floats.size(), 3u);
+  const LayoutBox* f1 = div->floats[0].get();
+  const LayoutBox* f2 = div->floats[1].get();
+  const LayoutBox* f3 = div->floats[2].get();
+  // Two fit side by side (300 <= 400).
+  EXPECT_FLOAT_EQ(f2->x, f1->x + f1->width);
+  // The third (450 total) cannot: it starts at the left edge BELOW the band.
+  EXPECT_GT(f3->y, f1->y + f1->height - 0.5f);
+  EXPECT_FLOAT_EQ(f3->x, div->content_x());
+}
+
+// clear:both pushes a floated item below all earlier floats even when space
+// remains beside them (the baidu hot-search list pattern).
+TEST(LayoutTest, ClearBothPushesFloatBelowEarlierFloats)
+{
+  auto doc = html::Parser("<body><div style=\"width:600px\">"
+                          "<span style=\"float:left;width:100px;height:36px\">1</span>"
+                          "<span style=\"float:left;width:100px;height:36px;clear:both\">2</span>"
+                          "</div></body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+  const LayoutBox* div = FindBox(*root, "div", *doc);
+  ASSERT_NE(div, nullptr);
+  ASSERT_EQ(div->floats.size(), 2u);
+  const LayoutBox* f1 = div->floats[0].get();
+  const LayoutBox* f2 = div->floats[1].get();
+  // Room exists beside (200 <= 600), but clear:both forces the second float
+  // to start below the first one's bottom edge.
+  EXPECT_GE(f2->y, f1->y + f1->height);
+  EXPECT_FLOAT_EQ(f2->x, div->content_x());
+}
+
+// A block-level box with clear:both moves below earlier floats instead of
+// sliding up behind them.
+TEST(LayoutTest, ClearBothMovesBlockBelowFloats)
+{
+  auto doc = html::Parser("<body><div style=\"width:500px\">"
+                          "<span style=\"float:left;width:120px;height:40px\">F</span>"
+                          "<p style=\"clear:both;margin:0\">after</p>"
+                          "</div></body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+  const LayoutBox* div = FindBox(*root, "div", *doc);
+  ASSERT_NE(div, nullptr);
+  ASSERT_EQ(div->floats.size(), 1u);
+  const LayoutBox* float_box = div->floats[0].get();
+  const LayoutBox* p = FindBox(*root, "p", *doc);
+  ASSERT_NE(p, nullptr);
+  // The paragraph's border-box top sits at or below the float's bottom edge.
+  EXPECT_GE(p->y, float_box->y + float_box->height - 0.5f);
+}
+
 TEST(LayoutTest, FloatRightHugsContainingBlockRightEdge)
 {
   auto doc = html::Parser("<body><div style=\"width:400px\">"
