@@ -1083,6 +1083,97 @@ TEST(BrowserControllerTest, ImportMapFirstDeclarationWins)
   EXPECT_EQ(controller.ActiveTab()->title, "first");
 }
 
+// XMLHttpRequest loads through the same network path as other subresources;
+// the AMD-loader pattern (handlers before send) observes the full lifecycle.
+TEST(BrowserControllerTest, XhrFetchesAndDeliversResponse)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>before</title></head><body>"
+                               "<script>"
+                               "const xhr = new XMLHttpRequest();"
+                               "xhr.open('GET', '/api/data');"
+                               "xhr.onload = function() {"
+                               "  if (xhr.status === 200) { document.title = xhr.responseText; }"
+                               "};"
+                               "xhr.onerror = function() { document.title = 'xhr-error'; };"
+                               "xhr.send();"
+                               "</script>"
+                               "</body></html>"});
+  fetch.Add("http://example.com/api/data",
+            FakeFetcher::Route{200, {{"content-type", "text/plain"}}, "payload-42"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  EXPECT_EQ(fetch.requests_.size(), 2u); // page + XHR request
+  EXPECT_EQ(controller.ActiveTab()->title, "payload-42");
+}
+
+// An HTTP error status (404) is NOT a transport error: the load handler runs
+// and surfaces the status, like browsers.
+TEST(BrowserControllerTest, XhrHttpErrorStatusSurfaced)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>before</title></head><body>"
+                               "<script>"
+                               "const xhr = new XMLHttpRequest();"
+                               "xhr.open('GET', '/missing');"
+                               "xhr.onload = function() {"
+                               "  document.title = 'load-status-' + xhr.status;"
+                               "};"
+                               "xhr.onerror = function() { document.title = 'onerror'; };"
+                               "xhr.send();"
+                               "</script>"
+                               "</body></html>"});
+  fetch.Add("http://example.com/missing",
+            FakeFetcher::Route{404,
+                               {{"content-type", "text/plain"}},
+                               "not found"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  EXPECT_EQ(controller.ActiveTab()->title, "load-status-404");
+}
+
+// A transport-level failure (connection refused) fires onerror with status 0.
+TEST(BrowserControllerTest, XhrTransportErrorFiresOnError)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>before</title></head><body>"
+                               "<script>"
+                               "const xhr = new XMLHttpRequest();"
+                               "xhr.open('GET', '/down');"
+                               "xhr.onload = function() { document.title = 'load'; };"
+                               "xhr.onerror = function() {"
+                               "  document.title = 'error-state-' + xhr.readyState + '-status-' + xhr.status;"
+                               "};"
+                               "xhr.send();"
+                               "</script>"
+                               "</body></html>"});
+  // No route for /down -> transport error from the fake.
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  EXPECT_EQ(controller.ActiveTab()->title, "error-state-4-status-0");
+}
+
 // The page's scripts can use window.localStorage (scoped to the page origin),
 // persisting across navigations to the same origin.
 TEST(BrowserControllerTest, PageScriptLocalStoragePersists)

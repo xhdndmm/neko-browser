@@ -131,6 +131,7 @@ std::string NodeNameOf(const dom::Node& node);
 std::string ArgString(JSContext* ctx, JSValueConst value, bool* ok);
 
 std::string ToLower(std::string s);
+std::string ToUpper(std::string s);
 
 bool IsAncestorOf(const dom::Node* ancestor, const dom::Node* node);
 
@@ -412,6 +413,39 @@ JSValue IdbDeleteDatabase(JSContext* ctx, JSValueConst this_val, int argc, JSVal
 JSValue ImageConstructor(JSContext* ctx, JSValueConst new_target, int argc, JSValueConst* argv);
 
 // ---------------------------------------------------------------------------
+// XMLHttpRequest (xhr_binding.cpp).
+//
+// State lives in the wrapper attached to each JS object; the wrapper owns
+// the handler/listener JSValues and frees them in its finalizer.
+// ---------------------------------------------------------------------------
+
+struct XhrWrapper
+{
+  Impl* impl = nullptr;
+  std::string method;   // uppercased by open()
+  std::string url;      // absolute after open() resolution
+  bool async_requested = true;
+  std::vector<std::pair<std::string, std::string>> request_headers;
+  int ready_state = 0; // UNSENT .. DONE (DOM Standard §5.1)
+  int status = 0;
+  std::string status_text;
+  std::string response_text;
+  std::string response_url;
+  std::vector<std::pair<std::string, std::string>> response_headers;
+  JSValue on_ready_state_change = JS_UNDEFINED;
+  JSValue on_load = JS_UNDEFINED;
+  JSValue on_error = JS_UNDEFINED;
+  JSValue on_abort = JS_UNDEFINED;
+  // addEventListener("load"|"error"|"readystatechange"|"abort", fn) entries.
+  std::vector<std::pair<std::string, JSValue>> listeners;
+};
+
+void EnsureXhrClassRegistered(JSRuntime* rt);
+XhrWrapper* UnwrapXhr(JSValueConst value);
+
+void InstallXhrGlobal(JSContext* ctx, Impl& impl);
+
+// ---------------------------------------------------------------------------
 // Impl — the binder's per-document state (was file-local to dom_binding.cpp).
 // ---------------------------------------------------------------------------
 
@@ -435,6 +469,7 @@ struct Impl
   JSValue node_list_proto = JS_UNDEFINED;
   JSValue html_iframe_element_proto = JS_UNDEFINED;
   JSValue svg_element_proto = JS_UNDEFINED;
+  JSValue xhr_proto = JS_UNDEFINED;
   JSValue window = JS_UNDEFINED;
 
   // Wrapper registry: node -> kept-alive wrapper (JS_DupValue'd).  Wrappers

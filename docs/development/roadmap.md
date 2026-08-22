@@ -159,6 +159,9 @@ graph LR
 - [x] **Import maps（Phase 8 M4）**：`<script type="importmap">` 的 imports/
       scopes 子集，精确 + 前缀键映射、最长 scope 匹配、值对文档 base 解析；
       仅首张生效，声明不执行 —— **PARTIAL**（无多 map 合并/完整 key 校验）
+- [x] **XMLHttpRequest（Phase 9 子集）**：AMD loader 级 API 面（open/send/
+      headers/事件/头部查询），经页面网络栈带 Cookie；同步传输近似 ——
+      **PARTIAL**（仅 GET、无 CORS）
 - [ ] 完整 Web IDL / binding 层（navigator/location/history/fetch/storage/events
       完整化、活 NodeList、事件冒泡/捕获）—— **后续**
 - [ ] microtask/Promise 与浏览器事件循环完整对接 —— **后续**

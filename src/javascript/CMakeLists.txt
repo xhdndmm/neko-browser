@@ -21,6 +21,7 @@ add_library(neko_javascript
   src/binding/storage_binding.cpp
   src/binding/global_binding.cpp
   src/binding/ui_binding.cpp
+  src/binding/xhr_binding.cpp
 )
 add_library(neko::javascript ALIAS neko_javascript)
 

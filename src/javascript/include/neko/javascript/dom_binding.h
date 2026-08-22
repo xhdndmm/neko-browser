@@ -74,6 +74,18 @@ struct PageApis
   // result rejects the returned promise (network error).
   std::function<base::Result<FetchResponse>(const std::string&)> fetch;
 
+  // XMLHttpRequest transport: performs |method| against the absolute |url|
+  // sending |request_headers| and |body|.  Network failures return Err;
+  // HTTP error statuses come back as a normal FetchResponse for the caller
+  // to expose via .status.  Wired by the browser layer from its network
+  // stack (same cookie path as other subresources).
+  std::function<base::Result<FetchResponse>(
+      const std::string& url,
+      const std::string& method,
+      const std::vector<std::pair<std::string, std::string>>& request_headers,
+      const std::string& body)>
+      xhr_request;
+
   // document.cookie for the current document. The setter receives one
   // Set-Cookie-style assignment and returns no value.
   std::function<std::string()> cookie_get;

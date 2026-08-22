@@ -336,6 +336,40 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
         base.has_value() ? url::Url::Parse(raw, base.value()) : url::Url::Parse(raw);
     return parsed.has_value() ? parsed.value().Serialize() : std::string();
   };
+  // XMLHttpRequest transport: same network path as external scripts (GET
+  // through the page fetcher, cookies included).  Non-GET methods are
+  // rejected until the transport grows method/body support.
+  if (fetch != nullptr) {
+    apis.xhr_request =
+        [fetch](const std::string& url,
+                const std::string& method,
+                const std::vector<std::pair<std::string, std::string>>& request_headers,
+                const std::string& body) -> base::Result<javascript::FetchResponse> {
+      (void)request_headers; // forwarded once the transport grows method/body support
+      if (method != "GET" || !body.empty()) {
+        return base::Err(base::Error::InvalidArgument(
+            "XMLHttpRequest: only GET is supported by the current transport"));
+      }
+      const base::Result<url::Url> parsed = url::Url::Parse(url);
+      if (!parsed.has_value()) {
+        return base::Err(base::Error::InvalidArgument("invalid URL"));
+      }
+      const base::Result<network::HttpResponse> response = fetch(parsed.value());
+      if (!response.has_value()) {
+        return base::Err(response.error());
+      }
+      javascript::FetchResponse out;
+      out.status = response.value().status_code;
+      out.status_text = response.value().reason;
+      out.final_url = response.value().final_url;
+      out.headers.reserve(response.value().headers.size());
+      for (const network::HttpHeader& header : response.value().headers) {
+        out.headers.emplace_back(header.name, header.value);
+      }
+      out.body = response.value().body;
+      return base::Ok(std::move(out));
+    };
+  }
   if (fetch != nullptr) {
     // Fetch through the same network path used for external scripts.
     apis.fetch = [fetch](const std::string& url) -> base::Result<javascript::FetchResponse> {

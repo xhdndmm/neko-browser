@@ -155,6 +155,14 @@ std::string ToLower(std::string s)
   return s;
 }
 
+std::string ToUpper(std::string s)
+{
+  std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+    return static_cast<char>(std::toupper(c));
+  });
+  return s;
+}
+
 bool IsAncestorOf(const dom::Node* ancestor, const dom::Node* node)
 {
   for (const dom::Node* p = node->parent(); p != nullptr; p = p->parent()) {
@@ -317,6 +325,7 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   EnsureNodeClassRegistered(rt);
   EnsureEventClassRegistered(rt);
   EnsureDatasetClassRegistered(rt);
+  EnsureXhrClassRegistered(rt);
   {
     std::lock_guard<std::mutex> lock(g_ctx_mutex);
     g_ctx_to_impl[ctx] = this;
@@ -748,6 +757,9 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
     JS_SetPropertyStr(ctx, window, "fetch", JS_DupValue(ctx, fetch_fn)); // steals
     JS_SetPropertyStr(ctx, global, "fetch", fetch_fn);                   // steals
   }
+  if (apis.xhr_request) {
+    InstallXhrGlobal(ctx, *this);
+  }
   JSValue blob_ctor = JS_NewCFunction2(ctx, BlobConstructor, "Blob", 2, JS_CFUNC_constructor, 0);
   JS_SetPropertyStr(ctx, window, "Blob", JS_DupValue(ctx, blob_ctor));
   JS_SetPropertyStr(ctx, global, "Blob", blob_ctor);
@@ -929,6 +941,7 @@ Impl::~Impl()
   JS_FreeValue(ctx, node_list_proto);
   JS_FreeValue(ctx, html_iframe_element_proto);
   JS_FreeValue(ctx, svg_element_proto);
+  JS_FreeValue(ctx, xhr_proto);
   for (MutationObserver& observer : mutation_observers) {
     JS_FreeValue(ctx, observer.callback);
     JS_FreeValue(ctx, observer.self);

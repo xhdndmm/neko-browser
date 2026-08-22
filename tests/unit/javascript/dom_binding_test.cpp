@@ -1984,5 +1984,98 @@ TEST_F(DomBinderTest, VideoMediaControls)
   EXPECT_FALSE(r.has_value());
 }
 
+// ---------------------------------------------------------------------------
+// XMLHttpRequest (wired through PageApis::xhr_request).
+// ---------------------------------------------------------------------------
+
+TEST(DomBinderXhrTest, XhrLifecycleAndEvents)
+{
+  dom::Document doc;
+  PageApis apis;
+  apis.resolve_url = [](const std::string& raw) {
+    return raw.rfind("http://", 0) == 0 ? raw : "http://test.local/" + raw;
+  };
+  apis.xhr_request = [](const std::string& url,
+                        const std::string& method,
+                        const std::vector<std::pair<std::string, std::string>>& headers,
+                        const std::string& body) -> base::Result<FetchResponse> {
+    EXPECT_EQ(url, "http://test.local/api/data");
+    EXPECT_EQ(method, "GET");
+    EXPECT_TRUE(body.empty());
+    // The caller forwarded the request header set via setRequestHeader.
+    bool saw_header = false;
+    for (const auto& header : headers) {
+      if (header.first == "X-Test" && header.second == "yes") {
+        saw_header = true;
+      }
+    }
+    EXPECT_TRUE(saw_header);
+    FetchResponse out;
+    out.status = 200;
+    out.status_text = "OK";
+    out.final_url = url;
+    out.headers.emplace_back("Content-Type", "application/json");
+    out.body = R"({"ok": true})";
+    return base::Ok(std::move(out));
+  };
+  DomBinder binder(doc, apis);
+
+  const char* script = R"(
+    globalThis.log = '';
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', 'api/data');
+    xhr.setRequestHeader('X-Test', 'yes');
+    xhr.onreadystatechange = function() {
+      if (xhr.readyState === 4) {
+        globalThis.log += ':rsc4-' + xhr.status + '-' + xhr.responseText +
+                          '-ct:' + xhr.getResponseHeader('content-type');
+      }
+    };
+    xhr.onload = function() { globalThis.log += ':loaded-' + xhr.statusText; };
+    let listener_fired = false;
+    xhr.addEventListener('load', function() { listener_fired = true; });
+    xhr.send();
+    globalThis.listener_fired = listener_fired;
+  )";
+  const auto run = binder.Evaluate(script);
+  ASSERT_TRUE(run.has_value()) << "eval error: " << (run.has_value() ? "" : run.error().message());
+  auto log = binder.Evaluate("globalThis.log");
+  ASSERT_TRUE(log.has_value());
+  auto text = log.value().ToString();
+  ASSERT_TRUE(text.has_value());
+  EXPECT_EQ(text.value(), ":rsc4-200-{\"ok\": true}-ct:application/json:loaded-OK");
+  auto fired = binder.Evaluate("globalThis.listener_fired");
+  ASSERT_TRUE(fired.has_value());
+  EXPECT_TRUE(fired.value().ToBoolean().value_or(false));
+}
+
+TEST(DomBinderXhrTest, XhrNetworkErrorFiresOnError)
+{
+  dom::Document doc;
+  PageApis apis;
+  apis.xhr_request = [](const std::string&, const std::string&,
+                        const std::vector<std::pair<std::string, std::string>>&,
+                        const std::string&) -> base::Result<FetchResponse> {
+    return base::Err(base::Error::Network("connection refused"));
+  };
+  DomBinder binder(doc, apis);
+  const char* script = R"(
+    globalThis.out = '';
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', '/down');
+    xhr.onerror = function() { globalThis.out += 'error'; };
+    xhr.onload = function() { globalThis.out += 'load'; };
+    xhr.send();
+    globalThis.out += '-state' + xhr.readyState + '-status' + xhr.status;
+  )";
+  const auto run2 = binder.Evaluate(script);
+  ASSERT_TRUE(run2.has_value()) << "eval error: " << (run2.has_value() ? "" : run2.error().message());
+  auto out = binder.Evaluate("globalThis.out");
+  ASSERT_TRUE(out.has_value());
+  auto text = out.value().ToString();
+  ASSERT_TRUE(text.has_value());
+  EXPECT_EQ(text.value(), "error-state4-status0");
+}
+
 } // namespace
 } // namespace neko::javascript
