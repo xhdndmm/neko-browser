@@ -435,7 +435,40 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     const auto result = binder->Evaluate(source, filename);
     binder->SetCurrentScript(nullptr);
     if (!result.has_value()) {
-      report_error("Uncaught " + result.error().message());
+      const std::string message = result.error().message();
+      report_error("Uncaught " + message);
+
+      const std::string marker = "(" + std::string(filename) + ":";
+      const std::size_t marker_start = message.rfind(marker);
+      if (marker_start != std::string::npos) {
+        const std::size_t line_start = marker_start + marker.size();
+        const std::size_t line_end = message.find(':', line_start);
+        if (line_end != std::string::npos) {
+          try {
+            const std::size_t line_number =
+                std::stoul(message.substr(line_start, line_end - line_start));
+            std::size_t current_line = 1;
+            std::size_t source_start = 0;
+            while (current_line < line_number && source_start < source.size()) {
+              const std::size_t newline = source.find('\n', source_start);
+              if (newline == std::string_view::npos)
+                break;
+              source_start = newline + 1;
+              ++current_line;
+            }
+            if (current_line == line_number) {
+              const std::size_t source_end = source.find('\n', source_start);
+              const std::string source_line(source.substr(
+                  source_start, source_end == std::string_view::npos
+                                   ? source.size() - source_start
+                                   : source_end - source_start));
+              NEKO_LOG_WARNING("page script source [" + std::string(filename) + ":" +
+                               std::to_string(line_number) + "]: " + source_line);
+            }
+          } catch (const std::exception&) {
+          }
+        }
+      }
     }
   };
 
@@ -468,6 +501,19 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     }
     const std::string source = script->TextContent();
     return source.empty() ? std::nullopt : std::optional<std::string>(source);
+  };
+
+  auto script_filename = [&](dom::Element* script) {
+    if (!script->HasAttribute("src")) {
+      return base_url;
+    }
+    const std::optional<std::string_view> src = script->GetAttribute("src");
+    if (!src.has_value()) {
+      return base_url;
+    }
+    const base::Result<url::Url> target =
+        base.has_value() ? url::Url::Parse(*src, base.value()) : url::Url::Parse(*src);
+    return target.has_value() ? target.value().Serialize() : base_url;
   };
 
   // Module scripts (<script type="module">).  The module is evaluated under
@@ -520,7 +566,7 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     }
     const std::optional<std::string> source = script_source(script);
     if (source.has_value()) {
-      run_source(script, source.value(), base_url);
+      run_source(script, source.value(), script_filename(script));
     }
   }
   // Pass 2: defer scripts and non-async module scripts in document order
@@ -539,7 +585,7 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     } else {
       const std::optional<std::string> source = script_source(script);
       if (source.has_value()) {
-        run_source(script, source.value(), base_url);
+        run_source(script, source.value(), script_filename(script));
       }
     }
   }
@@ -554,7 +600,7 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     } else {
       const std::optional<std::string> source = script_source(script);
       if (source.has_value()) {
-        run_source(script, source.value(), base_url);
+        run_source(script, source.value(), script_filename(script));
       }
     }
   }

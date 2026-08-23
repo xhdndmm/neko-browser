@@ -614,12 +614,30 @@ JSValue DocGetLinks(JSContext* ctx, JSValueConst this_val)
   return impl->MakeElementArray(out);
 }
 
+JSValue DocWrite(JSContext* ctx,
+                 JSValueConst /*this_val*/,
+                 int argc,
+                 JSValueConst* argv)
+{
+  // Scripts run after parsing, so document.write cannot replace the input
+  // stream here.  Keep the legacy entry point callable until parser-time
+  // document rewriting is implemented.
+  for (int i = 0; i < argc; ++i) {
+    bool ok = false;
+    (void)ArgString(ctx, argv[i], &ok);
+    if (!ok) {
+      return JS_EXCEPTION;
+    }
+  }
+  return JS_UNDEFINED;
+}
+
 // ---------------------------------------------------------------------------
 // CSSStyleDeclaration methods and accessors.
 
 void DefineDocumentPrototype(JSContext* ctx, Impl& impl)
 {
-  static const std::array<JSCFunctionListEntry, 10> kMethods = {{
+  static const std::array<JSCFunctionListEntry, 11> kMethods = {{
       JS_CFUNC_DEF("getElementById", 1, DocGetElementById),
       JS_CFUNC_DEF("createElement", 1, DocCreateElement),
       JS_CFUNC_DEF("createElementNS", 2, DocCreateElementNS),
@@ -630,6 +648,7 @@ void DefineDocumentPrototype(JSContext* ctx, Impl& impl)
       JS_CFUNC_DEF("querySelectorAll", 1, DocQuerySelectorAll),
       JS_CFUNC_DEF("getElementsByTagName", 1, DocGetElementsByTagName),
       JS_CFUNC_DEF("getElementsByClassName", 1, DocGetElementsByClassName),
+        JS_CFUNC_DEF("write", 1, DocWrite),
   }};
   JS_SetPropertyFunctionList(
       ctx, impl.document_proto, kMethods.data(), static_cast<int>(kMethods.size()));
