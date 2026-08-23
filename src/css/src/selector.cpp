@@ -56,11 +56,25 @@ std::vector<std::string_view> SplitOnCommas(std::string_view text)
   return parts;
 }
 
+bool ParseCompound(std::string_view text, CompoundSelector& out);
+bool CompoundMatches(const dom::Element& element,
+                     const CompoundSelector& compound,
+                     const MatchState* state);
+
 // Parses a compound selector (no combinators).
 bool ParseCompound(std::string_view text, CompoundSelector& out)
 {
   std::size_t i = 0;
+  while (i < text.size() && IsWhitespace(text[i])) {
+    ++i;
+  }
   while (i < text.size()) {
+    while (i < text.size() && IsWhitespace(text[i])) {
+      ++i;
+    }
+    if (i >= text.size()) {
+      break;
+    }
     const char c = text[i];
     if (c == '*') {
       ++i;
@@ -488,6 +502,16 @@ bool PseudoClassMatches(const dom::Element& element,
   if (pseudo == "active") {
     return state != nullptr && state->active != nullptr &&
            IsSelfOrAncestor(&element, state->active);
+  }
+  if (pseudo.rfind("not(", 0) == 0 && pseudo.size() >= 5 && pseudo.back() == ')') {
+    // :not(simple-selector) subset: type, #id, .class, [attr].  Nested
+    // :not() / combinators are out of scope.
+    const std::string_view inner = pseudo.substr(4, pseudo.size() - 5);
+    CompoundSelector negated;
+    if (!ParseCompound(inner, negated)) {
+      return false;
+    }
+    return !CompoundMatches(element, negated, state);
   }
   return false;
 }

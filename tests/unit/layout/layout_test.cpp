@@ -2356,5 +2356,82 @@ TEST(LayoutTest, PercentageHeightAgainstAutoContainingBlockIsAuto)
   EXPECT_LT(box->height, 100.0f);
 }
 
+TEST(LayoutTest, AbsoluteLeftPercentageCentersAgainstContainingBlock)
+{
+  // Baidu's homepage logo: position:absolute; left:50%; margin-left:-135px.
+  auto doc =
+      html::Parser("<body><div id=\"host\" style=\"position:relative;width:400px;height:200px\">"
+                   "<img id=\"logo\" style=\"position:absolute;left:50%;margin-left:-50px;"
+                   "width:100px;height:40px\">"
+                   "</div></body>")
+          .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800, 600);
+
+  const LayoutBox* host = FindBox(*root, "#host", *doc);
+  ASSERT_NE(host, nullptr);
+  ASSERT_EQ(host->positioned_children.size(), 1u);
+  const LayoutBox* logo = host->positioned_children[0].get();
+  // left:50% of 400 = 200, plus margin-left:-50 → border-box x = host.x + 150.
+  EXPECT_NEAR(logo->x, host->x + 150.0f, 0.5f);
+}
+
+TEST(LayoutTest, BlockTextareaShowsDataPlaceholder)
+{
+  // Baidu's `#chat-textarea { display:block }` with a data-* placeholder.
+  Page page = Build("<body><textarea id=\"chat\" style=\"display:block;width:200px\" "
+                    "data-ai-placeholder=\"搜一下\"></textarea></body>");
+  const LayoutBox* box = FindBox(*page.root, "#chat", *page.doc);
+  ASSERT_NE(box, nullptr);
+  ASSERT_FALSE(box->lines.empty());
+  ASSERT_FALSE(box->lines.front().runs.empty());
+  EXPECT_EQ(box->lines.front().runs.front().text, "搜一下");
+}
+
+TEST(LayoutTest, HiddenInputDoesNotProduceABox)
+{
+  Page page = Build("<body><input type=\"hidden\" name=\"ie\" value=\"utf-8\">"
+                    "<input id=\"kw\" type=\"text\"></body>");
+  EXPECT_EQ(FindBox(*page.root, "input", *page.doc), nullptr);
+  const InlineBox* holder = nullptr;
+  const LayoutBox* kw = FindInlineBlock(*page.root, dom::QuerySelector(*page.doc, "#kw"), holder);
+  EXPECT_NE(kw, nullptr);
+}
+
+TEST(LayoutTest, AbsoluteReplacedUsesPresentationalSize)
+{
+  // Baidu's logo: <img width=270 height=129 style="position:absolute;left:50%">
+  // with no CSS width/height.  The HTML attributes are the used size.
+  auto doc =
+      html::Parser("<body><div id=\"host\" style=\"position:relative;width:400px;height:200px\">"
+                   "<img id=\"logo\" width=\"270\" height=\"129\" "
+                   "style=\"position:absolute;left:50%;margin-left:-135px\">"
+                   "</div></body>")
+          .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800, 600);
+  const LayoutBox* host = FindBox(*root, "#host", *doc);
+  ASSERT_NE(host, nullptr);
+  ASSERT_EQ(host->positioned_children.size(), 1u);
+  const LayoutBox* logo = host->positioned_children[0].get();
+  EXPECT_NEAR(logo->width, 270.0f, 0.5f);
+  EXPECT_NEAR(logo->height, 129.0f, 0.5f);
+  EXPECT_NEAR(logo->x, host->x + 65.0f, 0.5f); // 50% of 400 - 135
+}
+
+TEST(LayoutTest, BlockMinHeightIsHonored)
+{
+  // #head { min-height:768px } must stretch the box even when its in-flow
+  // content is shorter (Baidu's homepage chrome).
+  Page page = Build("<body><div id=\"head\" style=\"min-height:200px\">x</div></body>");
+  const LayoutBox* head = FindBox(*page.root, "#head", *page.doc);
+  ASSERT_NE(head, nullptr);
+  EXPECT_GE(head->height, 200.0f);
+}
+
 } // namespace
 } // namespace neko::layout

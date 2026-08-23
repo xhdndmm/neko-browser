@@ -1096,5 +1096,48 @@ TEST(StyleTest, HoverPseudoClassChangesColor)
   engine.ApplyStyles(*doc);
   EXPECT_EQ(engine.StyleFor(*a).color, red);
 }
+
+TEST(StyleTest, HiddenInputIsDisplayNone)
+{
+  auto doc = MakeDoc("<body><input type=\"hidden\" name=\"ie\" value=\"utf-8\">"
+                     "<input id=\"kw\" type=\"text\"></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const std::vector<dom::Element*> inputs = dom::QuerySelectorAll(*doc, "input");
+  ASSERT_EQ(inputs.size(), 2u);
+  EXPECT_EQ(engine.StyleFor(*inputs[0]).display, Display::kNone);
+  EXPECT_EQ(engine.StyleFor(*inputs[1]).display, Display::kInline);
+}
+
+TEST(StyleTest, NotPseudoClassAppliesMinHeight)
+{
+  auto doc = MakeDoc("<body><style>body:not(.home-index-middle) #box { min-height: 28px; }</style>"
+                     "<div id=\"box\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, "#box");
+  ASSERT_TRUE(s.min_height.has_value());
+  EXPECT_FALSE(s.min_height->percent);
+  EXPECT_FLOAT_EQ(s.min_height->value, 28.0f);
+}
+
+TEST(StyleTest, PercentageOffsetsArePreserved)
+{
+  // left/top/right/bottom percentages must not be dropped at compute time;
+  // layout resolves them against the containing block (Baidu's logo uses
+  // position:absolute; left:50%; margin-left:-135px).
+  auto doc = MakeDoc("<body><div style=\"position:absolute;left:50%;bottom:10px\"></div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, "div");
+  EXPECT_FALSE(s.left_auto);
+  EXPECT_TRUE(s.left.percent);
+  EXPECT_FLOAT_EQ(s.left.value, 50.0f);
+  EXPECT_FALSE(s.bottom_auto);
+  EXPECT_FALSE(s.bottom.percent);
+  EXPECT_FLOAT_EQ(s.bottom.value, 10.0f);
+  EXPECT_TRUE(s.top_auto);
+  EXPECT_TRUE(s.right_auto);
+}
 } // namespace
 } // namespace neko::style

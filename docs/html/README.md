@@ -38,8 +38,10 @@
 ## 未实现
 
 - CDATA section 状态、processing instruction 状态（依赖 foreign content）
-- in template / in frameset / in head noscript 模式（依赖 template/frameset
-  支持）
+- in template / in frameset 模式（依赖 template/frameset 支持）
+- in head noscript 的完整插入模式（脚本启用时的 RAWTEXT；当前按脚本禁用
+  处理：`<noscript>` 作为 head 内普通元素，避免提前弹出 head 并丢掉
+  后续真实 `<body>` 属性 —— 百度首页回归）
 - quirks mode 尚未接线到 CSS/布局（force-quirks 标志已由 tokenizer 计算，
   但 Document 的渲染模式仍为 no-quirks）
 

@@ -279,6 +279,23 @@ TEST(CssSelectorTest, NthChildWithPlusParses)
   EXPECT_FALSE(MatchesSelector(*p2, ParseSelectorList("p:nth-child(2n+1)")[0]));
 }
 
+TEST(CssSelectorTest, NotPseudoClass)
+{
+  // :not(.class) / :not(#id) — used by Baidu's homepage
+  // (`body:not(.home-index-middle) #chat-textarea { min-height: 28px }`).
+  auto doc = MakeTree();
+  const std::vector<dom::Element*> ps = dom::QuerySelectorAll(*doc, "p");
+  ASSERT_EQ(ps.size(), 2u);
+  ASSERT_EQ(ParseSelectorList("p:not(.note)").size(), 1u);
+  EXPECT_FALSE(MatchesSelector(*ps[0], ParseSelectorList("p:not(.note)")[0]));
+  EXPECT_TRUE(MatchesSelector(*ps[1], ParseSelectorList("p:not(.note)")[0]));
+  EXPECT_TRUE(MatchesSelector(*ps[0], ParseSelectorList("p:not(.missing)")[0]));
+  dom::Element* main = ById(*doc, "main");
+  ASSERT_NE(main, nullptr);
+  EXPECT_FALSE(MatchesSelector(*main, ParseSelectorList("div:not(#main)")[0]));
+  EXPECT_TRUE(MatchesSelector(*main, ParseSelectorList("div:not(#other)")[0]));
+}
+
 TEST(CssSelectorTest, Specificity)
 {
   auto doc = MakeTree();

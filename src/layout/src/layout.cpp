@@ -1204,17 +1204,34 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       const float border_padding_w =
           box->border_left + box->border_right + box->padding_left + box->padding_right;
       float content_width = 0;
-      if (box->style.width.has_value() && !box->style.width.value().percent &&
-          !box->style.width.value().is_calc && !box->style.width.value().is_extremum) {
-        content_width = box->style.width.value().value;
+      if (box->style.width.has_value()) {
+        content_width = SpecToContent(
+            box->style.width.value(), containing_width, border_padding_w, box->style.box_sizing);
       } else {
         content_width = 170.0f; // default text-field width
       }
       box->width = content_width + border_padding_w;
 
       const float line_h = std::max(1.0f, box->style.font_size * 1.2f);
-      box->height =
-          line_h + box->padding_top + box->padding_bottom + box->border_top + box->border_bottom;
+      float content_height = line_h;
+      const float border_padding_h =
+          box->border_top + box->border_bottom + box->padding_top + box->padding_bottom;
+      if (box->style.height.has_value() && !box->style.height.value().percent) {
+        content_height = std::max(content_height,
+                                  SpecToContent(box->style.height.value(),
+                                                containing_width,
+                                                border_padding_h,
+                                                box->style.box_sizing));
+      }
+      if (box->style.min_height.has_value()) {
+        const style::SizeSpec& spec = box->style.min_height.value();
+        if (!spec.percent) {
+          content_height = std::max(
+              content_height,
+              SpecToContent(spec, containing_width, border_padding_h, box->style.box_sizing));
+        }
+      }
+      box->height = content_height + border_padding_h;
       box->x = box->margin_left;
       box->y = box->margin_top;
 
@@ -1242,6 +1259,13 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       const bool is_placeholder = text.empty();
       if (is_placeholder) {
         text = std::string(element.GetAttribute("placeholder").value_or(""));
+        if (text.empty()) {
+          // Baidu's homepage search box uses a data-* placeholder.
+          text = std::string(element.GetAttribute("data-ai-placeholder").value_or(""));
+        }
+        if (text.empty()) {
+          text = std::string(element.GetAttribute("data-normal-placeholder").value_or(""));
+        }
       }
       if (!text.empty()) {
         TextRun run;
@@ -1558,6 +1582,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         dom::Element* element;
         style::ComputedStyle style;
         bool table = false;
+        bool form_control = false;
       };
       std::vector<BlockChild> block_children;
       for (dom::Node* child : element.ChildNodes()) {
@@ -1593,10 +1618,18 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
               BuildFloat(child_element, avail_width, box.content_x(), f_y, placed));
           continue;
         }
-        if (child_style.display == style::Display::kBlock ||
-            child_style.display == style::Display::kListItem ||
-            child_style.display == style::Display::kFlex ||
-            child_style.display == style::Display::kGrid) {
+        if ((child_element.tag_name() == "input" || child_element.tag_name() == "textarea" ||
+             child_element.tag_name() == "select") &&
+            (child_style.display == style::Display::kBlock ||
+             child_style.display == style::Display::kFlex ||
+             child_style.display == style::Display::kGrid)) {
+          // A block-level form control still paints as a replaced widget.
+          block_children.push_back(
+              BlockChild{&child_element, child_style, /*table=*/false, /*form_control=*/true});
+        } else if (child_style.display == style::Display::kBlock ||
+                   child_style.display == style::Display::kListItem ||
+                   child_style.display == style::Display::kFlex ||
+                   child_style.display == style::Display::kGrid) {
           block_children.push_back(BlockChild{&child_element, child_style, /*table=*/false});
         } else if (child_style.display == style::Display::kTable) {
           block_children.push_back(BlockChild{&child_element, child_style, /*table=*/true});
@@ -1649,7 +1682,16 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
           }
         }
         std::unique_ptr<LayoutBox> child_box;
-        if (bc.table) {
+        if (bc.form_control) {
+          child_box = BuildFormControl(*bc.element, avail_width);
+          child_box->x = box.content_x() + child_box->margin_left;
+          child_box->y = box.content_y() + cursor_y + child_box->margin_top;
+          if (!child_box->lines.empty() && !child_box->lines.front().runs.empty()) {
+            TextRun& run = child_box->lines.front().runs.front();
+            run.x = child_box->x + child_box->border_left + child_box->padding_left;
+            run.y = child_box->y + child_box->border_top + child_box->padding_top;
+          }
+        } else if (bc.table) {
           child_box = BuildTable(*bc.element,
                                  avail_width,
                                  box.content_x(),
@@ -1794,8 +1836,16 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       float rel_x = 0;
       float rel_y = 0;
       if (box->style.position == style::Position::kRelative) {
-        rel_x = box->style.left;
-        rel_y = box->style.top;
+        if (!box->style.left_auto) {
+          rel_x = ResolveSize(box->style.left, containing_width);
+        } else if (!box->style.right_auto) {
+          rel_x = -ResolveSize(box->style.right, containing_width);
+        }
+        if (!box->style.top_auto) {
+          rel_y = ResolveSize(box->style.top, percent_base_h);
+        } else if (!box->style.bottom_auto) {
+          rel_y = -ResolveSize(box->style.bottom, percent_base_h);
+        }
       }
       box->x = origin_x + box->margin_left + rel_x;
       box->y = origin_y + box->margin_top + rel_y;
@@ -1869,6 +1919,21 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         }
       } else if (box->style.aspect_ratio.has_value() && box->style.width.has_value()) {
         content_height = content_width / box->style.aspect_ratio.value();
+      }
+      auto clamp_height = [&](const style::SizeSpec& spec, bool as_min) {
+        if (spec.percent && percent_base_h <= 0) {
+          return; // percentage min/max-height against auto CB is none.
+        }
+        const float base = spec.percent ? percent_base_h : containing_width;
+        const float resolved = SpecToContent(spec, base, border_padding_h, box->style.box_sizing);
+        content_height =
+            as_min ? std::max(content_height, resolved) : std::min(content_height, resolved);
+      };
+      if (box->style.min_height.has_value()) {
+        clamp_height(box->style.min_height.value(), /*as_min=*/true);
+      }
+      if (box->style.max_height.has_value()) {
+        clamp_height(box->style.max_height.value(), /*as_min=*/false);
       }
       box->height = content_height + border_padding_h;
 
@@ -3262,12 +3327,17 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       // Available width for shrink-to-fit is found by solving the constraint
       // equation with the unspecified inset set to 0, i.e. it excludes any
       // specified left/right inset (CSS2.2 §10.3.7).
+      const float left_inset = box->style.left_auto ? 0.0f : ResolveSize(box->style.left, cb_w);
+      const float right_inset = box->style.right_auto ? 0.0f : ResolveSize(box->style.right, cb_w);
+      const float top_inset = box->style.top_auto ? 0.0f : ResolveSize(box->style.top, cb_h);
+      const float bottom_inset =
+          box->style.bottom_auto ? 0.0f : ResolveSize(box->style.bottom, cb_h);
       float inset_x = 0;
       if (!box->style.left_auto) {
-        inset_x += box->style.left;
+        inset_x += left_inset;
       }
       if (!box->style.right_auto) {
-        inset_x += box->style.right;
+        inset_x += right_inset;
       }
       const float available = std::max(0.0f, cb_w - inset_x - extras);
 
@@ -3275,9 +3345,18 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       if (box->style.width.has_value()) {
         content_width =
             SpecToContent(box->style.width.value(), cb_w, border_padding_w, box->style.box_sizing);
+      } else if (element.tag_name() == "img" || element.tag_name() == "video") {
+        // Replaced absolute boxes honor CSS size, else the presentational
+        // width/height attributes, else the decoded intrinsic size.
+        const image::Image* img = images != nullptr ? images->Find(element) : nullptr;
+        float replaced_w = 0;
+        float replaced_h = 0;
+        ComputeReplacedSize(box->style, element, img, cb_w, replaced_w, replaced_h);
+        content_width = replaced_w;
+        box->image = img;
       } else if (!box->style.left_auto && !box->style.right_auto) {
         // Constraint equation: left + width + right = containing block width.
-        content_width = cb_w - box->style.left - box->style.right - extras;
+        content_width = cb_w - left_inset - right_inset - extras;
         if (content_width < 0) {
           content_width = 0;
         }
@@ -3290,23 +3369,33 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       const float avail_width = box->width - box->border_left - box->border_right -
                                 box->padding_left - box->padding_right;
 
-      std::vector<dom::Element*> absolute_children;
-      float content_height = LayoutBlockContent(*box,
-                                                element,
-                                                avail_width,
-                                                box->border_left,
-                                                box->border_top,
-                                                avail_width,
-                                                /*cb_h*/ 0.0f,
-                                                parent_floats,
-                                                absolute_children);
       const float border_padding_h =
           box->border_top + box->border_bottom + box->padding_top + box->padding_bottom;
-      if (box->style.height.has_value() && !box->style.height.value().percent) {
-        content_height =
-            std::max(content_height,
-                     SpecToContent(
-                         box->style.height.value(), cb_w, border_padding_h, box->style.box_sizing));
+      std::vector<dom::Element*> absolute_children;
+      float content_height = 0;
+      if (element.tag_name() == "img" || element.tag_name() == "video") {
+        const image::Image* img = images != nullptr ? images->Find(element) : nullptr;
+        float replaced_w = 0;
+        float replaced_h = 0;
+        ComputeReplacedSize(box->style, element, img, cb_w, replaced_w, replaced_h);
+        content_height = replaced_h;
+        box->image = img;
+      } else {
+        content_height = LayoutBlockContent(*box,
+                                            element,
+                                            avail_width,
+                                            box->border_left,
+                                            box->border_top,
+                                            avail_width,
+                                            /*cb_h*/ 0.0f,
+                                            parent_floats,
+                                            absolute_children);
+        if (box->style.height.has_value() && !box->style.height.value().percent) {
+          content_height = std::max(
+              content_height,
+              SpecToContent(
+                  box->style.height.value(), cb_w, border_padding_h, box->style.box_sizing));
+        }
       }
       box->height = content_height + border_padding_h;
 
@@ -3317,17 +3406,19 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
             *child, box->border_left, box->border_top, avail_width, child_cb_h, parent_floats));
       }
 
-      float x = cb_x;
+      // Insets position the margin edge (CSS2.2 §10.3.7 / §10.6.4); the
+      // border-box origin is then inset by the used margin.
+      float x = cb_x + box->margin_left;
       if (!box->style.left_auto) {
-        x = cb_x + box->style.left;
+        x = cb_x + left_inset + box->margin_left;
       } else if (!box->style.right_auto) {
-        x = cb_x + cb_w - box->style.right - box->width;
+        x = cb_x + cb_w - right_inset - box->margin_right - box->width;
       }
-      float y = cb_y;
+      float y = cb_y + box->margin_top;
       if (!box->style.top_auto) {
-        y = cb_y + box->style.top;
+        y = cb_y + top_inset + box->margin_top;
       } else if (!box->style.bottom_auto) {
-        y = cb_y + cb_h - box->style.bottom - box->height;
+        y = cb_y + cb_h - bottom_inset - box->margin_bottom - box->height;
       }
       TranslateBox(*box, x, y); // content was laid out at the local (0,0)
       return box;

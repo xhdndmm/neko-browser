@@ -39,6 +39,8 @@ tr { display: table-row; }
 td, th { display: table-cell; }
 a, span, em, strong, b, i, u, s, small, sub, sup, code, label,
 select, textarea, input, q, cite, mark, time { display: inline; }
+input[type="hidden"] { display: none; }
+noscript { display: none; }
 button { display: inline-block; appearance: auto; text-align: center;
          padding: 1px 6px; border: 2px solid; }
 p { margin-top: 1em; margin-bottom: 1em; }
@@ -2303,14 +2305,17 @@ void StyleEngine::ComputeElement(dom::Element& element,
     }
   }
 
-  // offsets.
-  auto set_offset = [&](const char* name, float& target, bool& auto_flag) {
+  // offsets.  Percentages / calc / min/max/clamp are kept as SizeSpec and
+  // resolved against the containing block at layout time.
+  auto set_offset = [&](const char* name, SizeSpec& target, bool& auto_flag) {
     if (const css::Declaration* d = find(name)) {
-      if (const std::optional<SizeSpec> spec = ParseSize(d->value, size_ctx)) {
-        if (!spec.value().percent && !spec.value().is_calc && !spec.value().is_extremum) {
-          target = spec.value().value;
-          auto_flag = false;
-        }
+      const css::CssValue v = css::ParseCssValue(d->value);
+      if (v.type == css::CssValue::Type::kKeyword && v.text == "auto") {
+        target = SizeSpec{};
+        auto_flag = true;
+      } else if (const std::optional<SizeSpec> spec = ParseSize(d->value, size_ctx)) {
+        target = spec.value();
+        auto_flag = false;
       }
     }
   };

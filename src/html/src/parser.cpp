@@ -1158,6 +1158,14 @@ void Parser::ProcessStartTag(Token token)
       mode_ = Mode::kText;
       return;
     }
+    if (token.name == "noscript" || token.name == "noframes" || token.name == "template") {
+      // WHATWG 13.2.6.4.4: with scripting disabled, <noscript> is a normal
+      // element in head (Baidu puts <noscript><meta refresh> here).  Treating
+      // it as "anything else" would pop head and invent a body, discarding
+      // the subsequent real <body> attributes.
+      InsertElement(CreateElement(token).release());
+      return;
+    }
     if (token.name == "head") {
       return;
     }
@@ -1207,8 +1215,22 @@ void Parser::ProcessStartTag(Token token)
     if (tag == "html") {
       return; // attributes of the document element are already set
     }
-    if (tag == "head" || tag == "body") {
+    if (tag == "head") {
       return; // parse error; ignored
+    }
+    if (tag == "body") {
+      // WHATWG 13.2.6.4.7: a second <body> start tag is a parse error; its
+      // attributes are copied onto the existing body if they are not already
+      // present.  Needed when an earlier in-head "anything else" token
+      // implied a body (and for sites that emit two body tags).
+      if (dom::Element* body = FindInStack("body")) {
+        for (const Attribute& attr : token.attributes) {
+          if (!body->HasAttribute(attr.name)) {
+            body->SetAttribute(attr.name, attr.value);
+          }
+        }
+      }
+      return;
     }
     if (tag == "image") {
       // "image" is a parse error; treat as "img" (13.2.6.4.7).
@@ -1527,6 +1549,12 @@ void Parser::ProcessEndTag(Token token)
     if (token.name == "head") {
       PopElement();
       mode_ = Mode::kAfterHead;
+      return;
+    }
+    if (token.name == "noscript" || token.name == "noframes" || token.name == "template") {
+      if (CurrentNode() != nullptr && CurrentNode()->tag_name() == token.name) {
+        PopElement();
+      }
       return;
     }
     if (token.name == "html" || token.name == "body") {

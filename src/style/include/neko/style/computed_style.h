@@ -379,11 +379,13 @@ struct ComputedStyle
 
   // Offsets (used by position: relative / absolute).  *_auto records whether
   // the offset was left at its initial value (auto), which absolute
-  // positioning must distinguish from an explicit 0.
-  float left = 0;
-  float top = 0;
-  float right = 0;
-  float bottom = 0;
+  // positioning must distinguish from an explicit 0.  Percentage/calc values
+  // are stored as SizeSpec and resolved against the containing block at
+  // layout time (Baidu's logo: left:50%).
+  SizeSpec left;
+  SizeSpec top;
+  SizeSpec right;
+  SizeSpec bottom;
   bool left_auto = true;
   bool top_auto = true;
   bool right_auto = true;

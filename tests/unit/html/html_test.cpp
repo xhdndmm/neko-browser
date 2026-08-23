@@ -837,6 +837,28 @@ TEST(HtmlTest, DoctypeQuirksConsumedWithoutBreakingParse)
   EXPECT_EQ(p->TextContent(), "z");
 }
 
+// WHATWG 13.2.6.4.4 "in head": a <noscript> start tag (scripting disabled)
+// is inserted as a normal element; it must not pop <head> and create an
+// implied <body>.  Baidu (and many other sites) put <noscript><meta
+// http-equiv=refresh></noscript> in <head>; treating it as "anything else"
+// discarded the subsequent real <body class=...> attributes and broke
+// class-driven homepage CSS.
+TEST(HtmlTest, NoscriptInHeadDoesNotCreateImpliedBody)
+{
+  auto doc =
+      ParseDoc("<!DOCTYPE html><html><head><title>t</title>"
+               "<noscript><meta http-equiv=\"refresh\" content=\"0;url=/\"></noscript>"
+               "</head><body class=\"pc-home-index\"><div id=\"form\">x</div></body></html>");
+  dom::Element* body = Body(*doc);
+  ASSERT_NE(body, nullptr);
+  EXPECT_EQ(body->GetAttribute("class").value_or(""), "pc-home-index");
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "body").size(), 1u);
+  dom::Element* noscript = dom::QuerySelector(*doc, "noscript");
+  ASSERT_NE(noscript, nullptr);
+  EXPECT_EQ(static_cast<dom::Element*>(noscript->parent())->tag_name(), "head");
+  EXPECT_NE(dom::QuerySelector(*doc, "#form"), nullptr);
+}
+
 TEST(HtmlTest, UnclosedFormattingInCellDoesNotLeakPastTable)
 {
   // Regression: an unclosed <b> inside a table cell must be closed when the

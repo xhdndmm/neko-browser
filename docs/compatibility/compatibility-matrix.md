@@ -2,9 +2,8 @@
 
 > 本文档诚实记录每个特性的支持状态。**禁止**把"接口存在"写成"已实现"。
 > 状态取值：Not Started / Planned / In Progress / Partial / Implemented / Tested。
-> 最后更新：2026-08（WHATWG 字符编码、并行带栅格化、显示列表缓存、滚动 blit 视口缓存、
-> 字体缓存线程安全、`<style>` 解析缓存、多字节编码中文站点解码、GIF 动画、
-> Grid minmax()/命名线/命名区域/auto-flow/inline-grid）。
+> 最后更新：2026-08（百度首页：in-head noscript、百分比 inset、:not()、
+> 绝对定位 img 的 HTML 尺寸、hidden input、块级 textarea placeholder）。
 
 | 特性 | 状态 | 测试证据 | 备注 |
 | --- | --- | --- | --- |
@@ -13,10 +12,10 @@
 | HTTPS / TLS | Tested | 5 单元测试（本地 TLS 服务器 + 自签名 CA） | OpenSSL 封装（ADR 0010），证书+主机名校验、SNI、TLS≥1.2；gzip/deflate 协商；**兼容 CDN 无 close_notify 关闭**（sohu/bing 实测，完整性由 HTTP 层 Content-Length 校验兜底） |
 | gzip/deflate | Tested | 12 单元测试（含链式编码、raw deflate、服务器往返） | RFC 7231 内容编码解码，64 MiB 输出上限 |
 | HTML tokenizer | Tested | HTML 套件 | 完整 WHATWG 命名字符引用表（2125 项，含双码点，生成代码）+ RAWTEXT(style/xmp/iframe/noembed)/RCDATA(title/textarea)/PLAINTEXT/script data；CRLF 归一化、EOF-in-tag 丢弃、属性上下文实体 `=`/alnum 字面规则、DOCTYPE public/system identifier 状态机 |
-| HTML parser | Tested | HTML 套件 | 插入模式：initial/before html/before head/in head/after head/in body/text/**in table/in table text/in caption/in column group/in table body/in row/in cell**；**表格容错（foster parenting）**、活动格式化元素 marker、hr/center 关闭 p、dd/dt 互闭、after head 元素进 head；隐含 p 闭合按 button 作用域判定 |
+| HTML parser | Tested | HTML 套件 | 插入模式：initial/before html/before head/in head/after head/in body/text/**in table/in table text/in caption/in column group/in table body/in row/in cell**；**表格容错（foster parenting）**、活动格式化元素 marker、hr/center 关闭 p、dd/dt 互闭、after head 元素进 head；隐含 p 闭合按 button 作用域判定；**in-head `<noscript>`**（脚本禁用：作为 head 内普通元素，不提前弹出 head）；二次 `<body>` 属性合并到已有 body |
 | DOM | Tested | DOM 套件 | 树操作、querySelector 子集；CharacterData `data`/`nodeValue` getter/setter、Comment.textContent 返回数据、DocumentFragment 插入搬移子节点、树变更抛 **DOMException**（HierarchyRequestError/NotFoundError） |
 | CSS tokenizer/parser | Tested | CSS 套件 + 解析器健壮性回归 | 规则、声明、!important、@media；**分号/花括号/`@font-face` 等声明块不再导致死循环**（曾致 15 GB 内存暴涨）；外部 `<link rel=stylesheet>` 抓取+解析+应用（并行） |
-| 选择器匹配 | Tested | CSS 套件 | 属性/伪类(:first-child/:last-child/:nth-child/:root)/组合器子集 |
+| 选择器匹配 | Tested | CSS 套件 | 属性/伪类(:first-child/:last-child/:nth-child/:root/**:not(simple)**)/组合器子集 |
 | 级联 / 计算样式 | Tested | Style 套件 | 特异性、继承、内联样式；**规则按最右复合选择器分桶**（id/class/tag/universal），实测 6004 元素页面级联 0.688s→0.144s（约 5×） |
 | CSS 自定义属性 | Partial | 4 Style 单元测试 | `--name` 定义 + `var()` 引用（含 fallback）、默认继承、var() 无法解析时声明无效；无嵌套 var()/同元素链式引用 |
 | 逻辑属性 | Partial | 3 Style 单元测试 | inline/block-size、margin/padding-inline/block（1–2 值）、-start/end 长手属性、border-block-start/end、place-items→align-items；无 inline 轴 justify |
@@ -36,8 +35,8 @@
 | Grid | Partial | 19 布局单元测试 + 14 样式解析测试 | display:grid/**inline-grid**、grid-template-columns/rows（px/%/fr/auto/min-content/max-content + **repeat()** + **minmax(min,max)**）、**命名线** `[name] ...`（含 repeat 内）、**grid-template-areas**（含隐式 `name-start`/`name-end` 线）与 **grid-area** 简写、grid-column/row 行/span/**命名线/命名区域**放置（**负数行**从尾计数）、**grid-auto-flow row/column × sparse/dense**、column/row gap；无 grid-template/grid 简写、auto-fill/auto-fit、fit-content()、spanning 项跨轨分配（按起始轨简化）、justify/align-self |
 | float | Partial | Layout + Style 套件 + 端到端（百度热搜列表实测） | 行外锚定 block 一侧（left/right）、行盒环绕让位、shrink-to-fit/显式宽高、**同侧 float 依次并排**（CSS2.2 §9.5.1，放不下时下沉到阻塞者之下）、**clear: left/right/both**（float 与 block 子元素均支持）；无跨 BFC float 传播、float 自身高百分比高度 |
 | `appearance` / `<button>` 原生外观 | Partial | Style + Paint + Renderer 套件 | appearance none/auto/button（CSS-UI-4 §7.2）：button UA 默认 inline-block + 文本居中 + buttonface 背景与 outset 边框（作者 background/border 优先，与浏览器一致），button 可强制任意元素；无 hover/active/disabled 状态、box-sizing:border-box、min 尺寸、内容垂直居中 |
-| 表单控件（`<input>`/`<textarea>`/`<select>`） | Partial | 3 Browser 集成 + 2 UI 端到端 + Layout/Paint 验证 | 原子行内盒渲染（默认 1px 边框 + 白底 + value/placeholder 文本 run，text/textarea/select 内容、默认 170px 宽与行高）；点击聚焦（元素级焦点，后续键盘输入可达）；键盘输入默认行为：可打印字符追加、Backspace 删除、Enter 隐含提交表单；GUI 点击窃取键盘焦点（Qt setFocus）；聚焦文本控件绘制**闪烁文本光标（caret）**（500ms QTimer，置于 value 文本末尾，焦点离开/导航即消失，UI 测试逐帧抓图验证闪烁）；无 focus outline、textarea/select 就地编辑、IME、剪贴板、maxlength |
-| position absolute | Partial | Layout 套件 | 包含块判定（最近 positioning 祖先 padding box）、top/left/right/bottom、shrink-to-fit 与 left+right 约束方程；fixed 暂按 absolute 处理，无 z-index/百分比 offset |
+| 表单控件（`<input>`/`<textarea>`/`<select>`） | Partial | 3 Browser 集成 + 2 UI 端到端 + Layout/Paint 验证 | 原子行内盒 + **块级控件**渲染（默认 1px 边框 + 白底 + value/placeholder 文本 run，含 `data-ai-placeholder`）；`input[type=hidden]` UA `display:none`；点击聚焦；键盘输入默认行为；GUI caret；无 focus outline、textarea/select 就地编辑、IME、剪贴板、maxlength |
+| position absolute | Partial | Layout 套件 | 包含块判定（最近 positioning 祖先 padding box）、top/left/right/bottom（**含百分比**，相对包含块解析）、margin 加在 inset 之后、replaced `<img>` 用 HTML width/height 属性；shrink-to-fit 与 left+right 约束方程；fixed 暂按 absolute 处理，无 z-index |
 | 文本（位图字体回退） | Tested | Paint 套件 | 无系统字体时的 8x8 ASCII 回退 |
 | 文本（FreeType） | Partial | Graphics + Paint 套件 | 系统字体、抗锯齿、任意字号、UTF-8、glyph 缓存、布局真实 advance、font-family 匹配、逐字符回退 + CJK 回退链（中文可显示）、粗体/斜体变体匹配；**glyph/字体选择器/字形缓存均线程安全（互斥锁，支持并行栅格化）**、**TextWidth 记忆化**（同 (text,px) 命中缓存）；无 HarfBuzz 整形 |
 | @font-face 网络字体 | Partial | 2 CSS 解析测试 + 1 浏览器集成测试 + 百度实测 | `<style>` 与外部样式表中的 @font-face 提取（family/src/weight/style）；src 格式偏好 truetype/opentype > woff > woff2（FreeType 内存加载，WOFF/WOFF2 由 FreeType ≥2.13 支持）；相对与协议相对 URL 对页面解析；同 URL 去重、HTTP≥400 拒绝；注册后失效布局/绘制缓存并 ReapplyStyles。无 local()、unicode-range 子集、font-display |

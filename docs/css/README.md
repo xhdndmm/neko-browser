@@ -7,7 +7,7 @@
 - tokenizer（ident/at-keyword/hash/数字/尺寸/百分比/字符串/标点/注释）
 - parser：样式表（限定规则 + @media 嵌套）、声明块、!important
 - 选择器：type/id/class/属性（全部操作符）/伪类(:first-child/:last-child/
-  :nth-child/:root) + 组合器（后代/子/相邻/后续兄弟），特异性计算
+  :nth-child/:root/:not(simple-selector)) + 组合器（后代/子/相邻/后续兄弟），特异性计算
 - 颜色（#hex、rgb()/rgba()、~150 命名色）与类型化值解析
 - **CSS 自定义属性**（CSS Custom Properties Level 1）：`:root` 上定义
   `--name`，任意属性用 `var(--name[, fallback])` 引用；自定义属性默认继承；

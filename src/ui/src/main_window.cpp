@@ -788,8 +788,8 @@ void MainWindow::PopulateComputedStyle(QTreeWidget* tree, QTreeWidgetItem* item)
     add_row(tr("flex-direction"), FromUtf8(style::ToString(style.flex_direction)));
   }
   if (style.position == style::Position::kAbsolute || style.position == style::Position::kFixed) {
-    add_row(tr("left"), QString::number(static_cast<double>(style.left)));
-    add_row(tr("top"), QString::number(static_cast<double>(style.top)));
+    add_row(tr("left"), FromUtf8(style::ToString(style.left)));
+    add_row(tr("top"), FromUtf8(style::ToString(style.top)));
   }
   add_row(tr("order"), QString::number(style.order));
   if (!style.custom_properties.empty()) {
