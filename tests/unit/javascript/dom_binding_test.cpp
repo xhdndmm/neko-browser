@@ -87,6 +87,10 @@ TEST_F(DomBinderTest, GlobalDocumentAndWindow)
   EXPECT_EQ(EvalString("document.nodeName"), "#document");
   EXPECT_EQ(EvalString("document.title"), "Test Page");
   EXPECT_TRUE(EvalBool("window.document === document"));
+  EXPECT_TRUE(EvalBool("document.defaultView === window"));
+  EXPECT_EQ(EvalNumber("document.defaultView.pageYOffset"), 0.0);
+  EXPECT_EQ(EvalNumber("window.pageYOffset"), 0.0);
+  EXPECT_EQ(EvalNumber("window.scrollY"), 0.0);
   EXPECT_EQ(EvalString("document.documentElement.tagName"), "HTML");
   EXPECT_EQ(EvalString("document.body.tagName"), "BODY");
   EXPECT_TRUE(EvalBool("document.location === window.location"));
@@ -130,6 +134,12 @@ TEST_F(DomBinderTest, DocumentHead)
                        "return d.head.children[d.head.children.length - 1] === meta; })()"));
 }
 
+TEST_F(DomBinderTest, LegacyDocumentWriteIsCallable)
+{
+  ASSERT_TRUE(EvalBool("typeof document.write === 'function'"));
+  EXPECT_TRUE(EvalBool("document.write('<link rel=stylesheet href=\\\"style.css\\\">'); true"));
+}
+
 TEST_F(DomBinderTest, DocumentReadyState)
 {
   // Scripts run after parsing, so the document is always "complete".
@@ -163,6 +173,19 @@ TEST_F(DomBinderTest, LegacyBootstrapCompatibilityGlobals)
   EXPECT_TRUE(EvalBool("typeof Feedback === 'object' && Feedback && typeof Feedback.Bootstrap === 'object'"));
   EXPECT_TRUE(EvalBool("BM && typeof BM.trigger === 'function'"));
   EXPECT_TRUE(EvalBool("Log && typeof Log.Log === 'function'"));
+}
+
+TEST_F(DomBinderTest, PerformanceObserverMethodsAreCallable)
+{
+  EXPECT_TRUE(EvalBool(
+      "(function() {"
+      "  var observer = new PerformanceObserver(function() {});"
+      "  return typeof observer.observe === 'function' &&"
+      "         typeof observer.disconnect === 'function' &&"
+      "         typeof observer.takeRecords === 'function' &&"
+      "         observer.observe({entryTypes: []}) === undefined &&"
+      "         Array.isArray(observer.takeRecords());"
+      "})()"));
 }
 
 TEST_F(DomBinderTest, InterfaceGlobalsAndInstanceof)
@@ -281,6 +304,7 @@ TEST_F(DomBinderTest, QuerySelectorAndAll)
   EXPECT_EQ(EvalNumber("document.querySelectorAll('.para').length"), 2.0);
   EXPECT_EQ(EvalString("document.querySelector('span').getAttribute('data-x')"), "1");
   EXPECT_EQ(EvalNumber("document.querySelectorAll('p').length"), 2.0);
+  EXPECT_EQ(EvalNumber("document.querySelectorAll('[id^=\"firs\"]').length"), 1.0);
   // Scoped query from an element.
   EXPECT_EQ(EvalString("document.getElementById('main').querySelector('span').tagName"), "SPAN");
 }
@@ -1467,6 +1491,13 @@ TEST_F(DomBinderTest, PerformanceTimingNavigationStart)
   EXPECT_TRUE(EvalBool("typeof performance.timing.navigationStart === 'number'"));
   EXPECT_TRUE(EvalNumber("performance.timing.navigationStart") > 1000000000000.0);
   EXPECT_EQ(EvalString("performance.timing.navigationStart"), EvalString("performance.timeOrigin"));
+}
+
+TEST_F(DomBinderTest, NavigatorAppVersionIsAString)
+{
+  EXPECT_TRUE(EvalBool("typeof navigator.appVersion === 'string'"));
+  EXPECT_EQ(EvalString("navigator.appVersion"), EvalString("navigator.userAgent"));
+  EXPECT_TRUE(EvalBool("navigator.appVersion.split(';').length >= 1"));
 }
 
 // Element layout geometry getters map the browser layer's element_geometry

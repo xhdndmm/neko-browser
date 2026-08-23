@@ -375,6 +375,7 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   JSValue global = JS_GetGlobalObject(ctx);
   JSValue doc_wrap = WrapNode(&document);
   JS_SetPropertyStr(ctx, doc_wrap, "visibilityState", JS_NewString(ctx, "visible"));
+  JS_SetPropertyStr(ctx, doc_wrap, "defaultView", JS_DupValue(ctx, global));
   JS_SetPropertyStr(ctx, global, "document", doc_wrap); // steals doc_wrap
   window = JS_DupValue(ctx, global);
 
@@ -578,8 +579,9 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   // the rest are documented defaults (the browser UI language is not wired
   // yet).  Exposed on both the global scope and the window.
   JSValue navigator = JS_NewObject(ctx);
-  JS_SetPropertyStr(
-      ctx, navigator, "userAgent", JS_NewString(ctx, std::string(base::GetUserAgent()).c_str()));
+  const std::string user_agent = std::string(base::GetUserAgent());
+  JS_SetPropertyStr(ctx, navigator, "userAgent", JS_NewString(ctx, user_agent.c_str()));
+  JS_SetPropertyStr(ctx, navigator, "appVersion", JS_NewString(ctx, user_agent.c_str()));
   JS_SetPropertyStr(ctx, navigator, "platform", JS_NewString(ctx, NavigatorPlatform()));
   JS_SetPropertyStr(ctx, navigator, "language", JS_NewString(ctx, "en-US"));
   JSValue languages = JS_NewArray(ctx);
@@ -616,20 +618,41 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   };
 
   JSValue perf_observer_proto = JS_NewObject(ctx);
-  static const std::array<JSCFunctionListEntry, 3> kPerformanceObserver = {{
-      JS_CFUNC_DEF("observe", 0, nullptr),
-      JS_CFUNC_DEF("disconnect", 0, nullptr),
-      JS_CFUNC_DEF("takeRecords", 0, nullptr),
-  }};
+  auto performance_observer_noop = [](JSContext* /*inner_ctx*/, JSValueConst /*this_val*/, int /*argc*/, JSValueConst* /*argv*/) -> JSValue {
+    return JS_UNDEFINED;
+  };
+  auto performance_observer_take_records = [](JSContext* inner_ctx,
+                                               JSValueConst /*this_val*/,
+                                               int /*argc*/,
+                                               JSValueConst* /*argv*/) -> JSValue {
+    return JS_NewArray(inner_ctx);
+  };
+  JS_SetPropertyStr(ctx,
+                   perf_observer_proto,
+                   "observe",
+                   JS_NewCFunction(ctx, performance_observer_noop, "observe", 1));
+  JS_SetPropertyStr(ctx,
+                   perf_observer_proto,
+                   "disconnect",
+                   JS_NewCFunction(ctx, performance_observer_noop, "disconnect", 0));
+  JS_SetPropertyStr(ctx,
+                   perf_observer_proto,
+                   "takeRecords",
+                   JS_NewCFunction(ctx, performance_observer_take_records, "takeRecords", 0));
   JS_SetPropertyFunctionList(ctx,
                              perf_observer_proto,
-                             kPerformanceObserver.data(),
-                             static_cast<int>(kPerformanceObserver.size()));
+                             nullptr,
+                             0);
   JSValue performance_observer_ctor = JS_NewCFunction2(
       ctx,
-      [](JSContext* inner_ctx, JSValueConst /*this_val*/, int /*argc*/, JSValueConst* /*argv*/)
+      [](JSContext* inner_ctx, JSValueConst new_target, int /*argc*/, JSValueConst* /*argv*/)
           -> JSValue {
-        JSValue observer = JS_NewObject(inner_ctx);
+        JSValue proto = JS_GetPropertyStr(inner_ctx, new_target, "prototype");
+        if (JS_IsException(proto)) {
+          return proto;
+        }
+        JSValue observer = JS_NewObjectProto(inner_ctx, proto);
+        JS_FreeValue(inner_ctx, proto);
         return observer;
       },
       "PerformanceObserver",
@@ -687,6 +710,10 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   JS_SetPropertyStr(ctx, window, "innerWidth", JS_NewInt32(ctx, 800));
   JS_SetPropertyStr(ctx, window, "innerHeight", JS_NewInt32(ctx, 600));
   JS_SetPropertyStr(ctx, window, "devicePixelRatio", JS_NewInt32(ctx, 1));
+  JS_SetPropertyStr(ctx, window, "pageXOffset", JS_NewInt32(ctx, 0));
+  JS_SetPropertyStr(ctx, window, "pageYOffset", JS_NewInt32(ctx, 0));
+  JS_SetPropertyStr(ctx, window, "scrollX", JS_NewInt32(ctx, 0));
+  JS_SetPropertyStr(ctx, window, "scrollY", JS_NewInt32(ctx, 0));
 
   // window.self/parent/top/frames: the engine has no frame tree, so each is a
   // self-reference (top-level browsing context semantics).  Because window IS

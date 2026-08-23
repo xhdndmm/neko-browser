@@ -38,6 +38,7 @@ struct Compound
 {
   std::optional<std::string> tag; // lowercased
   std::optional<std::string> id;
+  std::optional<std::string> id_prefix;
   std::vector<std::string> classes;
 };
 
@@ -59,7 +60,26 @@ bool ParseCompound(std::string_view text, Compound& out)
   std::size_t i = 0;
   while (i < text.size()) {
     const char c = text[i];
-    if (c == '#') {
+    if (c == '[') {
+      constexpr std::string_view prefix = "[id^=";
+      if (out.id_prefix.has_value() || text.substr(i, prefix.size()) != prefix) {
+        return false;
+      }
+      i += prefix.size();
+      if (i >= text.size() || (text[i] != '\'' && text[i] != '"')) {
+        return false;
+      }
+      const char quote = text[i++];
+      const std::size_t value_start = i;
+      while (i < text.size() && text[i] != quote) {
+        ++i;
+      }
+      if (i >= text.size() || i == value_start || i + 1 >= text.size() || text[i + 1] != ']') {
+        return false;
+      }
+      out.id_prefix = std::string(text.substr(value_start, i - value_start));
+      i += 2;
+    } else if (c == '#') {
       std::size_t j = i + 1;
       while (j < text.size() && IsNameChar(text[j])) {
         ++j;
@@ -143,6 +163,12 @@ bool CompoundMatches(const Element& element, const Compound& compound)
   if (compound.id.has_value()) {
     const std::optional<std::string_view> id = element.Id();
     if (!id.has_value() || *id != *compound.id) {
+      return false;
+    }
+  }
+  if (compound.id_prefix.has_value()) {
+    const std::optional<std::string_view> id = element.Id();
+    if (!id.has_value() || id->substr(0, compound.id_prefix->size()) != *compound.id_prefix) {
       return false;
     }
   }
