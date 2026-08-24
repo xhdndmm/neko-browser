@@ -4,8 +4,8 @@
 #include "neko/dom/element.h"
 #include "neko/javascript/script_engine.h"
 
-#include <chrono>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -128,12 +128,8 @@ struct PageApis
 
   // HTMLCanvasElement 2D backing store. The JavaScript layer owns the 2D
   // context state; the renderer owns and paints the actual RGBA pixels.
-  std::function<void(const dom::Element&,
-                     double,
-                     double,
-                     double,
-                     double,
-                     std::array<std::uint8_t, 4>)>
+  std::function<void(
+      const dom::Element&, double, double, double, double, std::array<std::uint8_t, 4>)>
       canvas_fill_rect;
 
   // window.indexedDB (per-origin; the caller scopes everything by origin).

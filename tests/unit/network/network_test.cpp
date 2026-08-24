@@ -525,8 +525,14 @@ public:
     }
   }
 
-  bool IsValid() const { return listen_fd_ >= 0; }
-  uint16_t port() const { return port_; }
+  bool IsValid() const
+  {
+    return listen_fd_ >= 0;
+  }
+  uint16_t port() const
+  {
+    return port_;
+  }
 
   std::string Request()
   {
@@ -546,8 +552,8 @@ private:
       }
       std::size_t sent = 0;
       while (sent < static_cast<std::size_t>(received)) {
-        const ssize_t count = ::send(to, buffer + sent,
-                                     static_cast<std::size_t>(received) - sent, 0);
+        const ssize_t count =
+            ::send(to, buffer + sent, static_cast<std::size_t>(received) - sent, 0);
         if (count <= 0) {
           return;
         }
@@ -560,8 +566,7 @@ private:
   {
     sockaddr_in client{};
     socklen_t client_len = sizeof(client);
-    const int client_fd =
-        ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&client), &client_len);
+    const int client_fd = ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&client), &client_len);
     if (client_fd < 0) {
       return;
     }
@@ -590,8 +595,7 @@ private:
       ::close(client_fd);
       return;
     }
-    static constexpr std::string_view response =
-        "HTTP/1.1 200 Connection Established\r\n\r\n";
+    static constexpr std::string_view response = "HTTP/1.1 200 Connection Established\r\n\r\n";
     ::send(client_fd, response.data(), response.size(), 0);
     std::thread upstream([&target, client_fd] { Relay(client_fd, target.value().fd()); });
     Relay(target.value().fd(), client_fd);
@@ -751,35 +755,35 @@ TEST(TlsTest, GetThroughHttpConnectProxy)
   const auto result = HttpGet(url.value(), 5, {}, options);
   ASSERT_TRUE(result.has_value()) << result.error().message();
   EXPECT_EQ(result.value().body, "<h1>Hello TLS</h1>");
-  EXPECT_NE(proxy.Request().find("CONNECT localhost:" + std::to_string(server.port()) +
-                                 " HTTP/1.1\r\n"),
-            std::string::npos);
+  EXPECT_NE(
+      proxy.Request().find("CONNECT localhost:" + std::to_string(server.port()) + " HTTP/1.1\r\n"),
+      std::string::npos);
 }
 
-      TEST(TlsTest, UsesHttpsProxyEnvironmentVariable)
-      {
-        TestTlsServer server;
-        TestConnectProxy proxy;
-        ASSERT_TRUE(server.IsValid());
-        ASSERT_TRUE(proxy.IsValid());
-        ScopedEnvironmentVariable lower_proxy(
-          "https_proxy", "http://127.0.0.1:" + std::to_string(proxy.port()));
-        ScopedEnvironmentVariable upper_proxy(
-          "HTTPS_PROXY", "http://127.0.0.1:" + std::to_string(proxy.port()));
-        ScopedEnvironmentVariable no_proxy("NO_PROXY", "");
-        ScopedEnvironmentVariable lower_no_proxy("no_proxy", "");
-        TlsOptions options;
-        options.extra_ca_cert_pem = server.cert_pem();
-        const std::string host = "https://localhost:" + std::to_string(server.port()) + "/";
-        const auto url = url::Url::Parse(host);
-        ASSERT_TRUE(url.has_value());
-        const auto result = HttpGet(url.value(), 5, {}, options);
-        ASSERT_TRUE(result.has_value()) << result.error().message();
-        EXPECT_EQ(result.value().body, "<h1>Hello TLS</h1>");
-        EXPECT_NE(proxy.Request().find("CONNECT localhost:" + std::to_string(server.port()) +
-                       " HTTP/1.1\r\n"),
-            std::string::npos);
-      }
+TEST(TlsTest, UsesHttpsProxyEnvironmentVariable)
+{
+  TestTlsServer server;
+  TestConnectProxy proxy;
+  ASSERT_TRUE(server.IsValid());
+  ASSERT_TRUE(proxy.IsValid());
+  ScopedEnvironmentVariable lower_proxy("https_proxy",
+                                        "http://127.0.0.1:" + std::to_string(proxy.port()));
+  ScopedEnvironmentVariable upper_proxy("HTTPS_PROXY",
+                                        "http://127.0.0.1:" + std::to_string(proxy.port()));
+  ScopedEnvironmentVariable no_proxy("NO_PROXY", "");
+  ScopedEnvironmentVariable lower_no_proxy("no_proxy", "");
+  TlsOptions options;
+  options.extra_ca_cert_pem = server.cert_pem();
+  const std::string host = "https://localhost:" + std::to_string(server.port()) + "/";
+  const auto url = url::Url::Parse(host);
+  ASSERT_TRUE(url.has_value());
+  const auto result = HttpGet(url.value(), 5, {}, options);
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  EXPECT_EQ(result.value().body, "<h1>Hello TLS</h1>");
+  EXPECT_NE(
+      proxy.Request().find("CONNECT localhost:" + std::to_string(server.port()) + " HTTP/1.1\r\n"),
+      std::string::npos);
+}
 
 TEST(TlsTest, NoProxyBypassesHttpsProxyForMatchingHost)
 {
@@ -849,8 +853,8 @@ TEST(HttpTest, RejectsOversizedUnframedBody)
   // still enforce the aggregate response body limit.
   TestHttpServer server;
   ASSERT_TRUE(server.IsValid());
-  const std::string host = "http://127.0.0.1:" + std::to_string(server.port()) +
-                           "/unframed-oversized";
+  const std::string host =
+      "http://127.0.0.1:" + std::to_string(server.port()) + "/unframed-oversized";
   const auto url = url::Url::Parse(host);
   ASSERT_TRUE(url.has_value());
   const auto result = HttpGet(url.value());

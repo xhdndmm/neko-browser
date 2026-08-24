@@ -81,13 +81,13 @@ JSValue LocalStorageGetItem(JSContext* ctx, JSValueConst this_val, int argc, JSV
   if (!ok) {
     return JS_EXCEPTION;
   }
-    const bool is_session_storage = IsSessionStorage(ctx, this_val);
-    const auto session_value = impl->session_storage.find(key);
-    const std::optional<std::string> value = is_session_storage
-                    ? (session_value == impl->session_storage.end()
-                      ? std::nullopt
-                      : std::optional<std::string>(session_value->second))
-                    : impl->apis.storage_get(key);
+  const bool is_session_storage = IsSessionStorage(ctx, this_val);
+  const auto session_value = impl->session_storage.find(key);
+  const std::optional<std::string> value =
+      is_session_storage ? (session_value == impl->session_storage.end()
+                                ? std::nullopt
+                                : std::optional<std::string>(session_value->second))
+                         : impl->apis.storage_get(key);
   return value.has_value() ? JS_NewString(ctx, value->c_str()) : JS_NULL;
 }
 
@@ -182,7 +182,7 @@ JSValue LocalStorageLength(JSContext* ctx, JSValueConst this_val)
     return JS_NewInt32(ctx, 0);
   }
   const std::size_t size = IsSessionStorage(ctx, this_val) ? impl->session_storage.size()
-                                                            : impl->apis.storage_keys().size();
+                                                           : impl->apis.storage_keys().size();
   return JS_NewInt32(ctx, static_cast<int32_t>(size));
 }
 
@@ -335,7 +335,8 @@ JSValue MakeResponseWithBody(JSContext* ctx,
       ctx, response, "statusText", JS_NewStringLen(ctx, status_text.data(), status_text.size()));
   JS_SetPropertyStr(ctx, response, "url", JS_NewStringLen(ctx, url.data(), url.size()));
   JS_SetPropertyStr(ctx, response, "headers", MakeHeaders(ctx, headers));
-  JS_SetPropertyStr(ctx, response, "__nekoResponseBody", JS_NewStringLen(ctx, body.data(), body.size()));
+  JS_SetPropertyStr(
+      ctx, response, "__nekoResponseBody", JS_NewStringLen(ctx, body.data(), body.size()));
   return response;
 }
 
@@ -425,13 +426,8 @@ JSValue MakeResponse(JSContext* ctx, const FetchResponse& response, std::string_
 {
   JSValue prototype = ResponsePrototype(ctx);
   const std::string_view url = response.final_url.empty() ? request_url : response.final_url;
-  JSValue result = MakeResponseWithBody(ctx,
-                                        prototype,
-                                        response.body,
-                                        response.status,
-                                        response.status_text,
-                                        url,
-                                        response.headers);
+  JSValue result = MakeResponseWithBody(
+      ctx, prototype, response.body, response.status, response.status_text, url, response.headers);
   JS_FreeValue(ctx, prototype);
   return result;
 }

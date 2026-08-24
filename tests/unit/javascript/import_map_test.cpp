@@ -20,8 +20,8 @@ TEST(ImportMapTest, ParsesImports)
 
 TEST(ImportMapTest, ParsesScopes)
 {
-  auto map = ParseImportMap(
-      R"({"imports": {"a": "/a.js"}, "scopes": {"/admin/": {"a": "/admin-a.js"}}})");
+  auto map =
+      ParseImportMap(R"({"imports": {"a": "/a.js"}, "scopes": {"/admin/": {"a": "/admin-a.js"}}})");
   ASSERT_TRUE(map.has_value()) << map.error().message();
   ASSERT_EQ(map.value().imports.size(), 1u);
   ASSERT_EQ(map.value().scopes.size(), 1u);
@@ -87,7 +87,8 @@ TEST(ImportMapTest, LongestScopeWinsAndFallsBackToImports)
   // Inside /app/ but outside admin: no "dep" entry in that scope, so the
   // top-level imports apply.
   const ImportMap& m = map.value();
-  std::optional<std::string> app = ResolveImportMap(m, "http://test/app/user.js", "http://test/index.html", "dep");
+  std::optional<std::string> app =
+      ResolveImportMap(m, "http://test/app/user.js", "http://test/index.html", "dep");
   ASSERT_TRUE(app.has_value());
   EXPECT_EQ(app.value(), "http://test/shared/dep.js");
   // Outside every scope: top-level only.

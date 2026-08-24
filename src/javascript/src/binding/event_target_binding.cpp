@@ -22,8 +22,7 @@ std::unordered_set<JSRuntime*> g_event_target_class_registered;
 
 void EventTargetFinalizer(JSRuntime* rt, JSValue value)
 {
-  auto* wrapper =
-      static_cast<EventTargetWrapper*>(JS_GetOpaque(value, g_event_target_class_id));
+  auto* wrapper = static_cast<EventTargetWrapper*>(JS_GetOpaque(value, g_event_target_class_id));
   if (wrapper == nullptr) {
     return;
   }
@@ -38,8 +37,7 @@ void EventTargetFinalizer(JSRuntime* rt, JSValue value)
 
 void EventTargetGcMark(JSRuntime* rt, JSValueConst value, JS_MarkFunc* mark_func)
 {
-  auto* wrapper =
-      static_cast<EventTargetWrapper*>(JS_GetOpaque(value, g_event_target_class_id));
+  auto* wrapper = static_cast<EventTargetWrapper*>(JS_GetOpaque(value, g_event_target_class_id));
   if (wrapper == nullptr) {
     return;
   }
@@ -92,10 +90,8 @@ JSValue EventTargetConstructor(JSContext* ctx,
   return object;
 }
 
-JSValue EventTargetAddEventListener(JSContext* ctx,
-                                    JSValueConst this_val,
-                                    int argc,
-                                    JSValueConst* argv)
+JSValue
+EventTargetAddEventListener(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   EventTargetWrapper* wrapper = UnwrapEventTarget(this_val);
   if (wrapper == nullptr) {
@@ -119,10 +115,8 @@ JSValue EventTargetAddEventListener(JSContext* ctx,
   return JS_UNDEFINED;
 }
 
-JSValue EventTargetRemoveEventListener(JSContext* ctx,
-                                       JSValueConst this_val,
-                                       int argc,
-                                       JSValueConst* argv)
+JSValue
+EventTargetRemoveEventListener(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   EventTargetWrapper* wrapper = UnwrapEventTarget(this_val);
   if (wrapper == nullptr) {
@@ -151,10 +145,8 @@ JSValue EventTargetRemoveEventListener(JSContext* ctx,
   return JS_UNDEFINED;
 }
 
-JSValue EventTargetDispatchEvent(JSContext* ctx,
-                                 JSValueConst this_val,
-                                 int argc,
-                                 JSValueConst* argv)
+JSValue
+EventTargetDispatchEvent(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   EventTargetWrapper* wrapper = UnwrapEventTarget(this_val);
   if (wrapper == nullptr) {
@@ -222,10 +214,9 @@ void InstallEventTargetGlobal(JSContext* ctx, JSValue global, Impl& impl)
       JS_CFUNC_DEF("dispatchEvent", 1, EventTargetDispatchEvent),
   };
   JS_SetPropertyFunctionList(ctx, impl.event_target_proto, kMethods, 3);
-  JSValue constructor = JS_NewCFunction2(
-      ctx, EventTargetConstructor, "EventTarget", 0, JS_CFUNC_constructor, 0);
-  JS_SetPropertyStr(
-      ctx, constructor, "prototype", JS_DupValue(ctx, impl.event_target_proto));
+  JSValue constructor =
+      JS_NewCFunction2(ctx, EventTargetConstructor, "EventTarget", 0, JS_CFUNC_constructor, 0);
+  JS_SetPropertyStr(ctx, constructor, "prototype", JS_DupValue(ctx, impl.event_target_proto));
   JS_SetPropertyStr(ctx, impl.event_target_proto, "constructor", JS_DupValue(ctx, constructor));
   JS_SetPropertyStr(ctx, global, "EventTarget", constructor);
 }

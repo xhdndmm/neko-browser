@@ -37,7 +37,9 @@ protected:
   </div>
 </body></html>)")
                     .Parse();
-    binder_ = std::make_unique<DomBinder>(*document_);
+    PageApis apis;
+    apis.location_href = []() { return "https://www.example.com/"; };
+    binder_ = std::make_unique<DomBinder>(*document_, apis);
     binder_->SetConsoleSink([this](std::string_view level, std::string_view text) {
       console_.push_back(std::string(level) + ": " + std::string(text));
     });

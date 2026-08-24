@@ -5,13 +5,13 @@
 // requestAnimationFrame, location, history, performance, screen/navigator
 // helpers, matchMedia and getComputedStyle.
 
-#include "binding_internal.h"
-
 #include "neko/security/random.h"
 
+#include "binding_internal.h"
+
 #include <array>
-#include <span>
 #include <quickjs.h>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -40,8 +40,7 @@ bool IsValidCustomElementName(std::string_view name)
          name != "font-face-name" && name != "missing-glyph";
 }
 
-JSValue CustomElementsDefine(
-    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+JSValue CustomElementsDefine(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   if (argc < 2) {
     return JS_ThrowTypeError(ctx, "customElements.define requires a name and constructor");
@@ -147,14 +146,16 @@ CustomElementsWhenDefined(JSContext* ctx, JSValueConst this_val, int argc, JSVal
   return promise;
 }
 
-JSValue CustomElementsUpgrade(
-    JSContext* /*ctx*/, JSValueConst /*this_val*/, int /*argc*/, JSValueConst* /*argv*/)
+JSValue CustomElementsUpgrade(JSContext* /*ctx*/,
+                              JSValueConst /*this_val*/,
+                              int /*argc*/,
+                              JSValueConst* /*argv*/)
 {
   return JS_UNDEFINED;
 }
 
-JSValue CryptoGetRandomValues(
-    JSContext* ctx, JSValueConst /*this_val*/, int argc, JSValueConst* argv)
+JSValue
+CryptoGetRandomValues(JSContext* ctx, JSValueConst /*this_val*/, int argc, JSValueConst* argv)
 {
   if (argc < 1) {
     return JS_ThrowTypeError(ctx, "getRandomValues requires an integer TypedArray");
@@ -180,12 +181,13 @@ JSValue CryptoGetRandomValues(
 
   std::size_t buffer_size = 0;
   unsigned char* buffer_data = JS_GetArrayBuffer(ctx, &buffer_size, buffer);
-  if (buffer_data == nullptr || byte_offset > buffer_size || byte_length > buffer_size - byte_offset) {
+  if (buffer_data == nullptr || byte_offset > buffer_size ||
+      byte_length > buffer_size - byte_offset) {
     JS_FreeValue(ctx, buffer);
     return JS_ThrowTypeError(ctx, "getRandomValues requires a valid integer TypedArray");
   }
-  const bool filled = security::FillRandomBytes(
-      std::span<unsigned char>(buffer_data + byte_offset, byte_length));
+  const bool filled =
+      security::FillRandomBytes(std::span<unsigned char>(buffer_data + byte_offset, byte_length));
   JS_FreeValue(ctx, buffer);
   if (!filled) {
     return ThrowDomException(ctx, "OperationError", "secure random generation failed");
@@ -213,8 +215,10 @@ void InstallCustomElementRegistry(JSContext* ctx, JSValue global)
 void InstallCrypto(JSContext* ctx, JSValue global)
 {
   JSValue crypto = JS_NewObject(ctx);
-  JS_SetPropertyStr(
-      ctx, crypto, "getRandomValues", JS_NewCFunction(ctx, CryptoGetRandomValues, "getRandomValues", 1));
+  JS_SetPropertyStr(ctx,
+                    crypto,
+                    "getRandomValues",
+                    JS_NewCFunction(ctx, CryptoGetRandomValues, "getRandomValues", 1));
   JS_SetPropertyStr(ctx, global, "crypto", crypto);
 }
 
@@ -638,7 +642,8 @@ JSValue MakeNavigationPerformanceEntries(JSContext* ctx, Impl& impl)
 
 } // namespace
 
-JSValue PerformanceGetEntries(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+JSValue
+PerformanceGetEntries(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
   Impl* impl = ImplFor(ctx, this_val);
   if (impl == nullptr) {
@@ -647,8 +652,8 @@ JSValue PerformanceGetEntries(JSContext* ctx, JSValueConst this_val, int /*argc*
   return MakeNavigationPerformanceEntries(ctx, *impl);
 }
 
-JSValue PerformanceGetEntriesByType(
-    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+JSValue
+PerformanceGetEntriesByType(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
   if (impl == nullptr) {

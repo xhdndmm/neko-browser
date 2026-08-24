@@ -98,10 +98,10 @@ TlsSocket::Connect(std::string_view host, uint16_t port, const TlsOptions& optio
 
   // Plain TCP first; the TLS layer rides on top of this fd.
   const bool use_proxy = !options.proxy_host.empty();
-  base::Result<Socket> tcp = Socket::Connect(
-      use_proxy ? std::string_view(options.proxy_host) : host,
-      use_proxy ? options.proxy_port : port,
-      options.timeout_ms);
+  base::Result<Socket> tcp =
+      Socket::Connect(use_proxy ? std::string_view(options.proxy_host) : host,
+                      use_proxy ? options.proxy_port : port,
+                      options.timeout_ms);
   if (!tcp) {
     return base::Err(tcp.error());
   }
@@ -120,8 +120,7 @@ TlsSocket::Connect(std::string_view host, uint16_t port, const TlsOptions& optio
       if (response.size() >= 16384) {
         return base::Err(base::Error::Network("proxy CONNECT response headers too large"));
       }
-      const base::Result<std::string> chunk =
-          socket.impl_->tcp.Receive(1, options.timeout_ms);
+      const base::Result<std::string> chunk = socket.impl_->tcp.Receive(1, options.timeout_ms);
       if (!chunk) {
         return base::Err(chunk.error());
       }
@@ -131,11 +130,11 @@ TlsSocket::Connect(std::string_view host, uint16_t port, const TlsOptions& optio
       response += chunk.value();
     }
     const std::size_t status_start = response.find(' ') + 1;
-    if (response.rfind("HTTP/1.", 0) != 0 || status_start == 0 || status_start + 3 > response.size() ||
-        response[status_start] != '2') {
+    if (response.rfind("HTTP/1.", 0) != 0 || status_start == 0 ||
+        status_start + 3 > response.size() || response[status_start] != '2') {
       const std::size_t line_end = response.find("\r\n");
-      return base::Err(base::Error::Network(
-          "proxy CONNECT failed: " + response.substr(0, line_end)));
+      return base::Err(
+          base::Error::Network("proxy CONNECT failed: " + response.substr(0, line_end)));
     }
   }
 

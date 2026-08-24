@@ -20,7 +20,8 @@ struct Attribute
 class Element : public Node
 {
 public:
-  explicit Element(std::string tag_name, std::string namespace_uri = "http://www.w3.org/1999/xhtml");
+  explicit Element(std::string tag_name,
+                   std::string namespace_uri = "http://www.w3.org/1999/xhtml");
 
   std::string_view tag_name() const
   {

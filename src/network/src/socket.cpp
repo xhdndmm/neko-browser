@@ -81,12 +81,18 @@ base::Result<Socket> Socket::Connect(std::string_view host, uint16_t port, int t
   std::string failures;
   for (struct addrinfo* ai = results; ai != nullptr; ai = ai->ai_next) {
     char numeric_host[NI_MAXHOST] = {};
-    const int name_rc = ::getnameinfo(ai->ai_addr, static_cast<socklen_t>(ai->ai_addrlen),
-                                      numeric_host, sizeof(numeric_host), nullptr, 0, NI_NUMERICHOST);
+    const int name_rc = ::getnameinfo(ai->ai_addr,
+                                      static_cast<socklen_t>(ai->ai_addrlen),
+                                      numeric_host,
+                                      sizeof(numeric_host),
+                                      nullptr,
+                                      0,
+                                      NI_NUMERICHOST);
     const std::string address = name_rc == 0 ? numeric_host : "unknown address";
-    const std::string family = ai->ai_family == AF_INET    ? "IPv4"
-                               : ai->ai_family == AF_INET6 ? "IPv6"
-                                                          : "family " + std::to_string(ai->ai_family);
+    const std::string family = ai->ai_family == AF_INET ? "IPv4"
+                               : ai->ai_family == AF_INET6
+                                   ? "IPv6"
+                                   : "family " + std::to_string(ai->ai_family);
     const auto record_failure = [&failures, &family, &address](std::string reason) {
       if (!failures.empty()) {
         failures += "; ";

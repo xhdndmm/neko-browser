@@ -845,8 +845,7 @@ JSValue HTMLCollectionNamedItem(JSContext* ctx, JSValueConst this_val, int argc,
     if (element != nullptr) {
       const auto id = element->Id();
       const auto element_name = element->GetAttribute("name");
-      if ((id.has_value() && *id == name)
-          || (element_name.has_value() && *element_name == name)) {
+      if ((id.has_value() && *id == name) || (element_name.has_value() && *element_name == name)) {
         return value;
       }
     }

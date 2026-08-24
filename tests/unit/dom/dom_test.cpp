@@ -91,8 +91,8 @@ TEST(DomTest, RejectsInvalidInsertionsWithoutMutatingTree)
   EXPECT_FALSE(parent->AppendChild(nullptr));
   EXPECT_EQ(parent->child_count(), 0u);
 
-  EXPECT_FALSE(parent->InsertBefore(std::make_unique<Element>("child"),
-                                    foreign_parent->first_child()));
+  EXPECT_FALSE(
+      parent->InsertBefore(std::make_unique<Element>("child"), foreign_parent->first_child()));
   EXPECT_EQ(parent->child_count(), 0u);
 
   EXPECT_TRUE(parent->InsertBefore(std::make_unique<Element>("child"), nullptr));

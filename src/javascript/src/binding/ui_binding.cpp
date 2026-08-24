@@ -225,8 +225,7 @@ JSValue ElementGetValidity(JSContext* ctx, JSValueConst this_val)
   JSValue validity = JS_NewObjectProto(ctx, prototype);
   JS_FreeValue(ctx, prototype);
   JS_SetPropertyStr(ctx, validity, "__nekoValidityValid", JS_NewBool(ctx, !type_mismatch));
-  JS_SetPropertyStr(
-      ctx, validity, "__nekoValidityTypeMismatch", JS_NewBool(ctx, type_mismatch));
+  JS_SetPropertyStr(ctx, validity, "__nekoValidityTypeMismatch", JS_NewBool(ctx, type_mismatch));
   return validity;
 }
 
@@ -486,10 +485,8 @@ JSValue FormSubmit(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueC
   return JS_UNDEFINED;
 }
 
-JSValue FormRequestSubmit(JSContext* ctx,
-                          JSValueConst this_val,
-                          int /*argc*/,
-                          JSValueConst* /*argv*/)
+JSValue
+FormRequestSubmit(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
   Impl* impl = ImplFor(ctx, this_val);
   dom::Element* element = AsElement(UnwrapNode(this_val));

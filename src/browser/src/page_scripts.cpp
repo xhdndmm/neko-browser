@@ -539,10 +539,10 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
             }
             if (current_line == line_number) {
               const std::size_t source_end = source.find('\n', source_start);
-              const std::string source_line(source.substr(
-                  source_start, source_end == std::string_view::npos
-                                   ? source.size() - source_start
-                                   : source_end - source_start));
+              const std::string source_line(source.substr(source_start,
+                                                          source_end == std::string_view::npos
+                                                              ? source.size() - source_start
+                                                              : source_end - source_start));
               NEKO_LOG_WARNING("page script source [" + std::string(filename) + ":" +
                                std::to_string(line_number) + "]: " + source_line);
             }

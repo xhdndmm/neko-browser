@@ -7,7 +7,8 @@
 namespace neko::dom {
 
 Element::Element(std::string tag_name, std::string namespace_uri)
-    : Node(NodeType::kElement), tag_name_(std::move(tag_name)), namespace_uri_(std::move(namespace_uri))
+    : Node(NodeType::kElement), tag_name_(std::move(tag_name)),
+      namespace_uri_(std::move(namespace_uri))
 {}
 
 bool Element::HasAttribute(std::string_view name) const

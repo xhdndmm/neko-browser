@@ -50,7 +50,8 @@ bool ReadArgument(JSContext* ctx, JSValueConst value, std::string* output)
 void AppendEntry(HeadersWrapper& wrapper, std::string name, std::string value)
 {
   name = NormalizeName(std::move(name));
-  const auto found = std::find_if(wrapper.entries.begin(), wrapper.entries.end(),
+  const auto found = std::find_if(wrapper.entries.begin(),
+                                  wrapper.entries.end(),
                                   [&](const auto& entry) { return entry.first == name; });
   if (found == wrapper.entries.end()) {
     wrapper.entries.emplace_back(std::move(name), std::move(value));
@@ -134,7 +135,8 @@ JSValue Set(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
     return JS_EXCEPTION;
   }
   name = NormalizeName(std::move(name));
-  const auto found = std::find_if(wrapper->entries.begin(), wrapper->entries.end(),
+  const auto found = std::find_if(wrapper->entries.begin(),
+                                  wrapper->entries.end(),
                                   [&](const auto& entry) { return entry.first == name; });
   if (found == wrapper->entries.end()) {
     wrapper->entries.emplace_back(std::move(name), std::move(value));
@@ -155,7 +157,8 @@ JSValue Get(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
     return JS_EXCEPTION;
   }
   name = NormalizeName(std::move(name));
-  const auto found = std::find_if(wrapper->entries.begin(), wrapper->entries.end(),
+  const auto found = std::find_if(wrapper->entries.begin(),
+                                  wrapper->entries.end(),
                                   [&](const auto& entry) { return entry.first == name; });
   return found == wrapper->entries.end() ? JS_NULL : JS_NewString(ctx, found->second.c_str());
 }
@@ -171,8 +174,10 @@ JSValue Has(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
     return JS_EXCEPTION;
   }
   name = NormalizeName(std::move(name));
-  return JS_NewBool(ctx, std::any_of(wrapper->entries.begin(), wrapper->entries.end(),
-                                     [&](const auto& entry) { return entry.first == name; }));
+  return JS_NewBool(
+      ctx, std::any_of(wrapper->entries.begin(), wrapper->entries.end(), [&](const auto& entry) {
+        return entry.first == name;
+      }));
 }
 
 JSValue Delete(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
@@ -186,7 +191,8 @@ JSValue Delete(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* ar
     return JS_EXCEPTION;
   }
   name = NormalizeName(std::move(name));
-  wrapper->entries.erase(std::remove_if(wrapper->entries.begin(), wrapper->entries.end(),
+  wrapper->entries.erase(std::remove_if(wrapper->entries.begin(),
+                                        wrapper->entries.end(),
                                         [&](const auto& entry) { return entry.first == name; }),
                          wrapper->entries.end());
   return JS_UNDEFINED;
@@ -235,8 +241,7 @@ void InstallHeadersGlobal(JSContext* ctx, JSValue global)
       JS_CFUNC_DEF("delete", 1, Delete),
       JS_CFUNC_DEF("entries", 0, Entries),
   }};
-  JS_SetPropertyFunctionList(
-      ctx, prototype, kMethods.data(), static_cast<int>(kMethods.size()));
+  JS_SetPropertyFunctionList(ctx, prototype, kMethods.data(), static_cast<int>(kMethods.size()));
   JSValue entries = JS_GetPropertyStr(ctx, prototype, "entries");
   JSValue symbol = JS_GetPropertyStr(ctx, global, "Symbol");
   JSValue iterator_key = JS_GetPropertyStr(ctx, symbol, "iterator");
@@ -246,8 +251,7 @@ void InstallHeadersGlobal(JSContext* ctx, JSValue global)
   JS_FreeValue(ctx, iterator_key);
   JS_FreeValue(ctx, symbol);
 
-  JSValue constructor =
-      JS_NewCFunction2(ctx, Constructor, "Headers", 1, JS_CFUNC_constructor, 0);
+  JSValue constructor = JS_NewCFunction2(ctx, Constructor, "Headers", 1, JS_CFUNC_constructor, 0);
   JS_SetPropertyStr(ctx, constructor, "prototype", JS_DupValue(ctx, prototype));
   JS_SetPropertyStr(ctx, prototype, "constructor", JS_DupValue(ctx, constructor));
   JS_SetPropertyStr(ctx, global, "Headers", constructor);
@@ -260,8 +264,7 @@ void ForgetHeadersRuntime(JSRuntime* rt)
   g_headers_class_registered.erase(rt);
 }
 
-JSValue MakeHeaders(JSContext* ctx,
-                    const std::vector<std::pair<std::string, std::string>>& entries)
+JSValue MakeHeaders(JSContext* ctx, const std::vector<std::pair<std::string, std::string>>& entries)
 {
   auto* wrapper = new HeadersWrapper();
   for (const auto& [name, value] : entries) {

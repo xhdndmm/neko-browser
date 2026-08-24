@@ -354,8 +354,8 @@ void Page::FillCanvasRect(const dom::Element& element,
                           double height,
                           std::array<std::uint8_t, 4> color)
 {
-  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(width) ||
-      !std::isfinite(height) || width == 0 || height == 0) {
+  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(width) || !std::isfinite(height) ||
+      width == 0 || height == 0) {
     return;
   }
   if (width < 0) {
@@ -401,13 +401,11 @@ void Page::FillCanvasRect(const dom::Element& element,
           canvas.rgba[offset + channel] = 0;
           continue;
         }
-        const unsigned premultiplied =
-            static_cast<unsigned>(color[channel]) * source_alpha * 255U +
-            static_cast<unsigned>(canvas.rgba[offset + channel]) * destination_alpha *
-                (255U - source_alpha);
-        canvas.rgba[offset + channel] =
-            static_cast<std::uint8_t>((premultiplied + output_alpha * 127U) /
-                                      (output_alpha * 255U));
+        const unsigned premultiplied = static_cast<unsigned>(color[channel]) * source_alpha * 255U +
+                                       static_cast<unsigned>(canvas.rgba[offset + channel]) *
+                                           destination_alpha * (255U - source_alpha);
+        canvas.rgba[offset + channel] = static_cast<std::uint8_t>(
+            (premultiplied + output_alpha * 127U) / (output_alpha * 255U));
       }
       canvas.rgba[offset + 3] = static_cast<std::uint8_t>(output_alpha);
     }

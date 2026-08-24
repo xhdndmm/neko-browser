@@ -1,8 +1,8 @@
 // neko::javascript DOM bindings — minimal HTML Canvas 2D support.
 
-#include "binding_internal.h"
-
 #include "neko/css/color.h"
+
+#include "binding_internal.h"
 
 #include <array>
 #include <cmath>
@@ -33,8 +33,7 @@ CanvasContextWrapper* UnwrapCanvasContext(JSValueConst value)
   return static_cast<CanvasContextWrapper*>(JS_GetOpaque(value, g_canvas_class_id));
 }
 
-JSValue CanvasGetContext(
-    JSContext* ctx, JSValueConst this_value, int argc, JSValueConst* argv)
+JSValue CanvasGetContext(JSContext* ctx, JSValueConst this_value, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_value);
   dom::Element* canvas = AsElement(UnwrapNode(this_value));
@@ -95,10 +94,7 @@ JSValue CanvasSetFillStyle(JSContext* ctx, JSValueConst this_value, JSValueConst
   return JS_UNDEFINED;
 }
 
-JSValue CanvasFillRect(JSContext* ctx,
-                       JSValueConst this_value,
-                       int argc,
-                       JSValueConst* argv)
+JSValue CanvasFillRect(JSContext* ctx, JSValueConst this_value, int argc, JSValueConst* argv)
 {
   CanvasContextWrapper* wrapper = UnwrapCanvasContext(this_value);
   if (wrapper == nullptr || wrapper->impl == nullptr || wrapper->canvas == nullptr) {
@@ -155,10 +151,8 @@ void DefineCanvasPrototype(JSContext* ctx, Impl& impl)
                     impl.html_canvas_element_proto,
                     "getContext",
                     JS_NewCFunction(ctx, CanvasGetContext, "getContext", 1));
-  JS_SetPropertyStr(ctx,
-                    impl.canvas_2d_proto,
-                    "fillRect",
-                    JS_NewCFunction(ctx, CanvasFillRect, "fillRect", 4));
+  JS_SetPropertyStr(
+      ctx, impl.canvas_2d_proto, "fillRect", JS_NewCFunction(ctx, CanvasFillRect, "fillRect", 4));
   DefineAccessor(ctx,
                  impl.canvas_2d_proto,
                  "fillStyle",

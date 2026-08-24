@@ -80,8 +80,7 @@ TlsOptionsWithEnvironmentProxy(std::string_view host, uint16_t port, const TlsOp
   }
   const base::Result<url::Url> parsed = url::Url::Parse(proxy);
   if (!parsed || parsed.value().scheme() != "http" || parsed.value().host().empty()) {
-    return base::Err(base::Error::Network(
-        "HTTPS proxy must be an http:// URL with a host"));
+    return base::Err(base::Error::Network("HTTPS proxy must be an http:// URL with a host"));
   }
   TlsOptions configured = options;
   configured.proxy_host = parsed.value().host();
@@ -701,13 +700,13 @@ base::Result<HttpResponse> HttpGet(const url::Url& url,
   // for https) and parse the response.
   base::Result<HttpResponse> response = [&]() -> base::Result<HttpResponse> {
     if (url.scheme() == "https") {
-        const base::Result<TlsOptions> configured =
+      const base::Result<TlsOptions> configured =
           TlsOptionsWithEnvironmentProxy(url.host(), url.effective_port(), tls_options);
       if (!configured) {
         return base::Err(configured.error());
       }
-      base::Result<TlsSocket> tls = TlsSocket::Connect(
-          url.host(), url.effective_port(), configured.value());
+      base::Result<TlsSocket> tls =
+          TlsSocket::Connect(url.host(), url.effective_port(), configured.value());
       if (!tls) {
         return base::Err(tls.error());
       }

@@ -4,8 +4,8 @@
 #include "neko/javascript/script_engine.h"
 
 #include <chrono>
-#include <map>
 #include <gtest/gtest.h>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -404,8 +404,8 @@ TEST_F(ScriptEngineTest, ModuleImportResolvesRelativeSpecifier)
 {
   ModuleFetcher fetcher(*engine_);
   fetcher.Add("http://test/lib.js", "export const value = 41 + 1;");
-  auto result = engine_->EvaluateModule(
-      "import { value } from './lib.js'; globalThis.out = value;", "http://test/page.html");
+  auto result = engine_->EvaluateModule("import { value } from './lib.js'; globalThis.out = value;",
+                                        "http://test/page.html");
   ASSERT_TRUE(result.has_value()) << result.error().message();
   auto out = engine_->Evaluate("globalThis.out");
   ASSERT_TRUE(out.has_value());
@@ -423,8 +423,7 @@ TEST_F(ScriptEngineTest, ModuleImportResolvesParentSpecifier)
   fetcher.Add("http://test/a/dep.js", "export const who = 'a-dep';");
   fetcher.Add("http://test/entry/main.js",
               "import { who } from '../a/dep.js'; globalThis.who = who;");
-  auto result =
-      engine_->EvaluateModule("import './main.js';", "http://test/entry/index.html");
+  auto result = engine_->EvaluateModule("import './main.js';", "http://test/entry/index.html");
   ASSERT_TRUE(result.has_value()) << result.error().message();
   auto who = engine_->Evaluate("globalThis.who");
   ASSERT_TRUE(who.has_value());
@@ -437,11 +436,9 @@ TEST_F(ScriptEngineTest, ModuleImportResolvesParentSpecifier)
 TEST_F(ScriptEngineTest, ModuleImportMetaUrl)
 {
   ModuleFetcher fetcher(*engine_);
-  fetcher.Add("http://test/app/lib.js",
-              "globalThis.lib_url = import.meta.url;");
+  fetcher.Add("http://test/app/lib.js", "globalThis.lib_url = import.meta.url;");
   auto result = engine_->EvaluateModule(
-      "import './lib.js'; globalThis.entry_url = import.meta.url;",
-      "http://test/app/entry.mjs");
+      "import './lib.js'; globalThis.entry_url = import.meta.url;", "http://test/app/entry.mjs");
   ASSERT_TRUE(result.has_value()) << result.error().message();
   for (const char* name : {"entry_url", "lib_url"}) {
     auto v = engine_->Evaluate(std::string("globalThis.") + name);
@@ -462,8 +459,7 @@ TEST_F(ScriptEngineTest, ModuleImportMetaUrl)
 TEST_F(ScriptEngineTest, ModuleBareSpecifierRejected)
 {
   ModuleFetcher fetcher(*engine_);
-  auto result = engine_->EvaluateModule(
-      "import react from 'react';", "http://test/page.html");
+  auto result = engine_->EvaluateModule("import react from 'react';", "http://test/page.html");
   ASSERT_FALSE(result.has_value());
   EXPECT_NE(result.error().message().find("react"), std::string::npos);
   EXPECT_TRUE(fetcher.requests().empty()); // never fetched anything
@@ -528,12 +524,10 @@ TEST_F(ScriptEngineTest, ModuleFetchedOncePerUrl)
 {
   ModuleFetcher fetcher(*engine_);
   fetcher.Add("http://test/shared.js", "export const k = 1;");
-  fetcher.Add("http://test/x.js",
-              "import { k } from './shared.js'; globalThis.xk = k;");
-  fetcher.Add("http://test/y.js",
-              "import { k } from './shared.js'; globalThis.yk = k;");
-  auto result = engine_->EvaluateModule(
-      "import './x.js'; import './y.js';", "http://test/main.html");
+  fetcher.Add("http://test/x.js", "import { k } from './shared.js'; globalThis.xk = k;");
+  fetcher.Add("http://test/y.js", "import { k } from './shared.js'; globalThis.yk = k;");
+  auto result =
+      engine_->EvaluateModule("import './x.js'; import './y.js';", "http://test/main.html");
   ASSERT_TRUE(result.has_value()) << result.error().message();
   int shared_requests = 0;
   for (const std::string& r : fetcher.requests()) {
@@ -574,10 +568,10 @@ TEST_F(ScriptEngineTest, DynamicImportInClassicScript)
 TEST_F(ScriptEngineTest, DynamicImportFailureRejects)
 {
   ModuleFetcher fetcher(*engine_); // no routes: every fetch 404s
-  auto result = engine_->Evaluate(
-      "globalThis.err = '';"
-      "import('./missing.js').catch(e => { globalThis.err = '' + e; });",
-      "http://test/page.html");
+  auto result =
+      engine_->Evaluate("globalThis.err = '';"
+                        "import('./missing.js').catch(e => { globalThis.err = '' + e; });",
+                        "http://test/page.html");
   ASSERT_TRUE(result.has_value()) << result.error().message();
   auto err = engine_->Evaluate("globalThis.err");
   ASSERT_TRUE(err.has_value());
