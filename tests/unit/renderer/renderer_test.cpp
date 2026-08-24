@@ -60,6 +60,29 @@ TEST(PageTest, RasterizeProducesImage)
   EXPECT_EQ(image.pixels()[offset + 2], 0);
 }
 
+TEST(PageTest, FocusedCaretGeometryIsThreadSafeAndInputOnly)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body><input id=\"field\" value=\"hello\"><div id=\"box\">text</div></body>")
+                  .has_value());
+  dom::Element* input = dom::QuerySelector(*page.document(), "#field");
+  dom::Element* div = dom::QuerySelector(*page.document(), "#box");
+  ASSERT_NE(input, nullptr);
+  ASSERT_NE(div, nullptr);
+
+  EXPECT_FALSE(page.FocusedCaretGeometry().has_value());
+  page.SetFocusedElement(input);
+  EXPECT_FALSE(page.FocusedCaretGeometry().has_value());
+
+  page.Layout(400, 300);
+  const auto input_caret = page.FocusedCaretGeometry();
+  ASSERT_TRUE(input_caret.has_value());
+  EXPECT_GT(input_caret->height, 0);
+
+  page.SetFocusedElement(div);
+  EXPECT_FALSE(page.FocusedCaretGeometry().has_value());
+}
+
 TEST(PageTest, BodyZoomScalesLayoutAndPaint)
 {
   Page page;

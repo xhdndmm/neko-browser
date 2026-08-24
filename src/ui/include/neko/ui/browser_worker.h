@@ -56,12 +56,12 @@ public:
     return controller_.profile_dir();
   }
 
-  // The controller's shared worker pool (parallel subresource fetching and
-  // parallel band rasterization).  Thread-safe; safe to call from the GUI
-  // thread.
+  // A small pool reserved for GUI-triggered band rasterization. Resource
+  // fetching stays on the controller's pool so slow network work cannot
+  // occupy every worker needed by a visible frame.
   base::ThreadPool& pool()
   {
-    return controller_.pool();
+    return *raster_pool_;
   }
 
   // -------------------------------------------------------------------------
@@ -119,6 +119,7 @@ private:
   void Post(std::function<void()> fn);
 
   browser::BrowserController controller_;
+  std::unique_ptr<base::ThreadPool> raster_pool_;
   std::thread thread_;
   std::mutex mutex_;
   std::condition_variable cv_;

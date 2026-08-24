@@ -2,7 +2,6 @@
 
 #include "neko/browser/hyperlink.h"
 #include "neko/css/color.h"
-#include "neko/layout/layout_tree.h"
 #include "neko/paint/rasterizer.h"
 #include "neko/ui/browser_worker.h"
 
@@ -50,16 +49,15 @@ WebView::WebView(BrowserWorker* worker, int tab_id, QWidget* parent)
 void WebView::Refresh()
 {
   snapshot_ = worker_->SnapshotTab(tab_id_);
-  // A navigation replaces the page's document (pointer); only then must the
-  // hover/active pointers be dropped and the scroll reset to the top.  Using
-  // the document pointer (instead of a null layout root) keeps script-driven
-  // refreshes from clobbering hover state or the scroll position.
-  const dom::Document* doc =
+  // A navigation replaces the page's document; only then must the hover/active
+  // pointers be dropped and the scroll reset to the top. Script-driven refresh
+  // keeps the same document generation and preserves those states.
+  const std::uint64_t document_version =
       (snapshot_.content_type == browser::ContentType::kHtml && snapshot_.page != nullptr)
-          ? snapshot_.page->document()
-          : nullptr;
-  if (doc != cached_document_) {
-    cached_document_ = doc;
+          ? snapshot_.page->DocumentVersion()
+          : 0;
+  if (document_version != cached_document_version_) {
+    cached_document_version_ = document_version;
     hovered_element_ = nullptr;
     active_element_ = nullptr;
     verticalScrollBar()->setValue(0);
@@ -329,7 +327,7 @@ void WebView::EnsureLayout(int width)
   // rebuilding the whole layout tree on every repaint.
   const int viewport_height = std::max(1, viewport()->height());
   if (laid_out_width_ == width && laid_out_height_ == viewport_height &&
-      snapshot_.page->layout_root() != nullptr)
+      snapshot_.page->HasLayout())
     return;
   snapshot_.page->Layout(static_cast<float>(width), static_cast<float>(viewport_height));
   laid_out_width_ = width;
@@ -526,39 +524,6 @@ void WebView::PaintHtml(QPainter& painter)
   painter.drawImage(0, 0, image);
 }
 
-// Finds the caret point for |target|: the end of its first laid-out text run
-// (document coordinates, before scroll).
-bool FindCaretPosition(
-    const layout::LayoutBox& box, const dom::Element* target, float& x, float& y, float& h)
-{
-  for (const layout::Line& line : box.lines) {
-    for (const layout::TextRun& run : line.runs) {
-      if (run.element == target) {
-        x = run.x + run.width;
-        y = run.y;
-        h = line.height;
-        return true;
-      }
-    }
-    for (const layout::InlineBox& ib : line.boxes) {
-      if (ib.block_box != nullptr && FindCaretPosition(*ib.block_box, target, x, y, h)) {
-        return true;
-      }
-    }
-  }
-  for (const auto& child : box.children) {
-    if (FindCaretPosition(*child, target, x, y, h)) {
-      return true;
-    }
-  }
-  for (const auto& f : box.floats) {
-    if (FindCaretPosition(*f, target, x, y, h)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 bool WebView::UpdateCaretLayer()
 {
   if (compositor_ == nullptr) {
@@ -567,25 +532,19 @@ bool WebView::UpdateCaretLayer()
   // The caret overlay is layer 1: recompute its rect from the focused input
   // element and the current scroll, then sync the layer metadata.
   bool visible = caret_visible_ && snapshot_.content_type == browser::ContentType::kHtml &&
-                 snapshot_.page != nullptr && snapshot_.page->layout_root() != nullptr;
+                 snapshot_.page != nullptr;
   int new_x = -1;
   int new_y = -1;
   int new_h = 0;
   if (visible) {
-    const dom::Element* focused = snapshot_.page->FocusedElement();
-    visible = focused != nullptr && focused->tag_name() == "input";
+    const auto geometry = snapshot_.page->FocusedCaretGeometry();
+    visible = geometry.has_value();
     if (visible) {
-      float x = 0;
-      float y = 0;
-      float h = 0;
-      visible = FindCaretPosition(*snapshot_.page->layout_root(), focused, x, y, h);
-      if (visible) {
-        const int scroll = verticalScrollBar()->value();
-        new_x = static_cast<int>(x);
-        new_y = static_cast<int>(y - static_cast<float>(scroll));
-        new_h = std::max(1, static_cast<int>(h));
-        visible = new_y + new_h > 0 && new_y < compositor_->Output().height();
-      }
+      const int scroll = verticalScrollBar()->value();
+      new_x = static_cast<int>(geometry->x);
+      new_y = static_cast<int>(geometry->y - static_cast<float>(scroll));
+      new_h = std::max(1, static_cast<int>(geometry->height));
+      visible = new_y + new_h > 0 && new_y < compositor_->Output().height();
     }
   }
 

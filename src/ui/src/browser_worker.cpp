@@ -1,6 +1,7 @@
 #include "neko/ui/browser_worker.h"
 
 #include "neko/base/logging.h"
+#include "neko/base/thread_pool.h"
 
 #include <QUrl>
 #include <utility>
@@ -10,6 +11,7 @@ namespace neko::ui {
 BrowserWorker::BrowserWorker(QString profile_dir, QObject* parent)
     : QObject(parent), controller_(profile_dir.toStdString())
 {
+  raster_pool_ = std::make_unique<base::ThreadPool>(2);
   // Load persisted profile data on the caller (GUI) thread at startup.
   auto loaded = controller_.Load();
   if (!loaded) {

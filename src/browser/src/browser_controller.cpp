@@ -23,6 +23,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace neko::browser {
@@ -1381,10 +1383,10 @@ void FetchExternalStylesheets(renderer::Page& page,
   }
 
   // Resolve hrefs (document order preserved).
-
-  // Resolve hrefs (document order preserved).
   std::vector<std::string> urls;
+  std::unordered_set<std::string> seen_urls;
   urls.reserve(links.size());
+  seen_urls.reserve(links.size());
   for (dom::Element* element : links) {
     const std::optional<std::string_view> href = element->GetAttribute("href");
     base::Result<url::Url> target = url::Url::Parse(*href);
@@ -1395,7 +1397,10 @@ void FetchExternalStylesheets(renderer::Page& page,
         (target.value().scheme() != "http" && target.value().scheme() != "https")) {
       continue;
     }
-    urls.push_back(target.value().Serialize());
+    const std::string serialized = target.value().Serialize();
+    if (seen_urls.insert(serialized).second) {
+      urls.push_back(serialized);
+    }
   }
   if (urls.empty()) {
     return;
@@ -1623,6 +1628,11 @@ void FetchPageImages(renderer::Page& page,
     dom::Element* element = nullptr;
     std::string url;
   };
+  struct ImageGroup
+  {
+    std::string url;
+    std::vector<dom::Element*> elements;
+  };
   std::vector<PendingImage> pending;
   std::vector<dom::Node*> stack;
   for (dom::Node* child : doc->ChildNodes()) {
@@ -1665,6 +1675,20 @@ void FetchPageImages(renderer::Page& page,
   }
   if (pending.empty()) {
     return;
+  }
+
+  // A page commonly reuses the same image in several cards or as both an
+  // element image and a background. Fetch and decode each URL once, while
+  // retaining every element that needs the decoded result.
+  std::vector<ImageGroup> groups;
+  std::unordered_map<std::string, std::size_t> group_by_url;
+  groups.reserve(pending.size());
+  for (const PendingImage& item : pending) {
+    const auto [it, inserted] = group_by_url.emplace(item.url, groups.size());
+    if (inserted) {
+      groups.push_back(ImageGroup{item.url, {}});
+    }
+    groups[it->second].elements.push_back(item.element);
   }
 
   // A decoded image plus, for animated GIFs, the full frame set (the Image
@@ -1722,38 +1746,38 @@ void FetchPageImages(renderer::Page& page,
     return decode_bytes(response.value().body);
   };
 
-  if (pending.size() == 1) {
+  if (groups.size() == 1) {
     // A single image: do it inline (no thread-pool overhead).
-    auto decoded = fetch_and_decode(pending[0].url);
+    auto decoded = fetch_and_decode(groups[0].url);
     if (!decoded) {
-      NEKO_LOG_WARNING("img: fetch/decode failed for " + pending[0].url);
+      NEKO_LOG_WARNING("img: fetch/decode failed for " + groups[0].url);
       return;
     }
-    page.SetElementImage(*pending[0].element,
-                         std::move(decoded.value().image),
-                         std::move(decoded.value().animation));
-    NEKO_LOG_INFO("img: injected " + pending[0].url + " -> <" +
-                  std::string(pending[0].element->tag_name()) + ">");
+    for (dom::Element* element : groups[0].elements) {
+      page.SetElementImage(*element, decoded.value().image, decoded.value().animation);
+      NEKO_LOG_INFO("img: injected " + groups[0].url + " -> <" +
+                    std::string(element->tag_name()) + ">");
+    }
     return;
   }
 
   std::vector<std::future<base::Result<DecodedImage>>> futures;
-  futures.reserve(pending.size());
-  for (const PendingImage& item : pending) {
+  futures.reserve(groups.size());
+  for (const ImageGroup& group : groups) {
     futures.push_back(
-        pool.Submit([&fetch_and_decode, url = item.url]() { return fetch_and_decode(url); }));
+        pool.Submit([&fetch_and_decode, url = group.url]() { return fetch_and_decode(url); }));
   }
-  for (std::size_t i = 0; i < pending.size(); ++i) {
+  for (std::size_t i = 0; i < groups.size(); ++i) {
     auto decoded = futures[i].get();
     if (!decoded) {
-      NEKO_LOG_WARNING("img: fetch/decode failed for " + pending[i].url);
+      NEKO_LOG_WARNING("img: fetch/decode failed for " + groups[i].url);
       continue;
     }
-    page.SetElementImage(*pending[i].element,
-                         std::move(decoded.value().image),
-                         std::move(decoded.value().animation));
-    NEKO_LOG_INFO("img: injected " + pending[i].url + " -> <" +
-                  std::string(pending[i].element->tag_name()) + ">");
+    for (dom::Element* element : groups[i].elements) {
+      page.SetElementImage(*element, decoded.value().image, decoded.value().animation);
+      NEKO_LOG_INFO("img: injected " + groups[i].url + " -> <" +
+                    std::string(element->tag_name()) + ">");
+    }
   }
 }
 

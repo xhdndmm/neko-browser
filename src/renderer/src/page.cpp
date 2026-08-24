@@ -124,6 +124,46 @@ bool CollectFragmentRect(const layout::LayoutBox& box,
   return found;
 }
 
+bool FindCaretGeometry(const layout::LayoutBox& box,
+                       const dom::Element* target,
+                       float& x,
+                       float& y,
+                       float& height)
+{
+  for (const layout::Line& line : box.lines) {
+    for (const layout::TextRun& run : line.runs) {
+      if (run.element == target) {
+        x = run.x + run.width;
+        y = run.y;
+        height = line.height;
+        return true;
+      }
+    }
+    for (const layout::InlineBox& inline_box : line.boxes) {
+      if (inline_box.block_box != nullptr &&
+          FindCaretGeometry(*inline_box.block_box, target, x, y, height)) {
+        return true;
+      }
+    }
+  }
+  for (const auto& child : box.children) {
+    if (FindCaretGeometry(*child, target, x, y, height)) {
+      return true;
+    }
+  }
+  for (const auto& child : box.positioned_children) {
+    if (FindCaretGeometry(*child, target, x, y, height)) {
+      return true;
+    }
+  }
+  for (const auto& floating : box.floats) {
+    if (FindCaretGeometry(*floating, target, x, y, height)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Depth-first hit-test over the layout tree.  Returns the innermost element
 // whose content contains (x, y): block children and inline runs are searched
 // before the box's own border box so deeper content wins.
@@ -187,6 +227,7 @@ void Page::LoadHtmlImpl(std::string_view bytes, base::encoding::Charset charset)
   // the BOM, if present, overrides the label) before parsing.
   const std::string utf8 = base::encoding::DecodeToUtf8(bytes, charset);
   document_ = html::Parser(utf8).Parse();
+  ++document_version_;
   // The old document is gone: stale hover/active pointers must not survive
   // into the next cascade pass (they would dangle and be dereferenced while
   // matching :hover/:active).
@@ -258,6 +299,23 @@ const dom::Element* Page::FocusedElement() const
 {
   std::lock_guard<std::mutex> lock(mutex_);
   return focused_element_;
+}
+
+std::optional<CaretGeometry> Page::FocusedCaretGeometry() const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (focused_element_ == nullptr || focused_element_->tag_name() != "input" ||
+      root_ == nullptr) {
+    return std::nullopt;
+  }
+  CaretGeometry geometry;
+  if (!FindCaretGeometry(*root_, focused_element_, geometry.x, geometry.y, geometry.height)) {
+    return std::nullopt;
+  }
+  geometry.x *= page_zoom_;
+  geometry.y *= page_zoom_;
+  geometry.height *= page_zoom_;
+  return geometry;
 }
 
 void Page::ReapplyStylesLocked()
@@ -729,6 +787,18 @@ std::uint64_t Page::layout_version() const
 {
   std::lock_guard<std::mutex> lock(mutex_);
   return version_;
+}
+
+std::uint64_t Page::DocumentVersion() const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  return document_version_;
+}
+
+bool Page::HasLayout() const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  return root_ != nullptr;
 }
 
 css::Color Page::CanvasBackgroundColor() const

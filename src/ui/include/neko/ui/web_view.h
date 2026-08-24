@@ -82,9 +82,9 @@ private:
   // document is replaced by a navigation so the state re-resolves from scratch.
   const dom::Element* hovered_element_ = nullptr;
   const dom::Element* active_element_ = nullptr;
-  // Document the hover/active state was resolved against; a change signals a
-  // navigation (the document pointer is replaced), requiring a scroll reset.
-  const dom::Document* cached_document_ = nullptr;
+  // Document generation the hover/active state was resolved against; a change
+  // signals a navigation, requiring a scroll reset.
+  std::uint64_t cached_document_version_ = 0;
 
   // Blinking caret for the focused element (GUI thread).  The blink timer
   // flips visibility only while a control holds focus, so an idle page never

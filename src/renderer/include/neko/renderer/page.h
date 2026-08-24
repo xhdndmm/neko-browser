@@ -41,6 +41,13 @@ struct ElementGeometry
   float border_left = 0;
 };
 
+struct CaretGeometry
+{
+  float x = 0;
+  float y = 0;
+  float height = 0;
+};
+
 // The minimal page pipeline: HTML -> DOM -> style -> layout -> paint.
 //
 // Lifecycle: LoadHtml() -> Layout(viewport) -> Rasterize(w, h).
@@ -91,6 +98,10 @@ public:
   // Returns the currently focused element (or null).  Thread-safe.
   const dom::Element* FocusedElement() const;
 
+  // Returns the focused text caret geometry in document coordinates.
+  // Thread-safe; the layout tree is traversed while the page mutex is held.
+  std::optional<CaretGeometry> FocusedCaretGeometry() const;
+
   // Registers parsed external stylesheets (<link rel=stylesheet> content
   // fetched and parsed by the browser application layer) and re-runs the
   // cascade so layout reflects them.
@@ -137,6 +148,13 @@ public:
   // Monotonic counter bumped whenever the document/style/layout/image content
   // changes.  The UI compares it against its cached rasterization.
   std::uint64_t layout_version() const;
+
+  // Monotonic identity of the currently loaded document.  Unlike document(),
+  // this can be read safely while the page is being updated.
+  std::uint64_t DocumentVersion() const;
+
+  // Returns whether a layout tree has been built. Thread-safe.
+  bool HasLayout() const;
 
   // Total content height in px after Layout(); 0 before Layout().
   float ContentHeight() const;
@@ -293,6 +311,7 @@ private:
 
   // Bumped on every content mutation (load, style, layout, image).
   std::uint64_t version_ = 0;
+  std::uint64_t document_version_ = 0;
 
   // Element with keyboard focus; the UI paints the caret at the end of its
   // text.  Guards: mutex_ (written by the worker, read by the UI).

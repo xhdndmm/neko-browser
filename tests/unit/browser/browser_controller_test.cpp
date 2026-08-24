@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <algorithm>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <iterator>
@@ -428,6 +429,7 @@ TEST(BrowserControllerTest, RunsInlineScriptsOnHtmlLoad)
                                {{"content-type", "text/html"}},
                                "<html><head><title>Before</title>"
                                "<script>document.title = 'After';"
+                               "<link rel=\"stylesheet\" href=\"http://example.com/style.css\">"
                                "var d = document.createElement('div'); d.id = 'made';"
                                "d.textContent = 'from script';"
                                "document.body.appendChild(d);</script>"
@@ -1582,6 +1584,40 @@ TEST(BrowserControllerTest, InjectsMultiplePageImages)
   }
 }
 
+TEST(BrowserControllerTest, ReusesOneFetchForDuplicatePageImageUrls)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  const std::string png = MakePng();
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<img src=\"/shared.png\"><img src=\"/shared.png\">"
+                               "<div style=\"background-image:url(/shared.png)\"></div>"
+                               "</body></html>"});
+  fetch.Add("http://example.com/shared.png",
+            FakeFetcher::Route{200, {{"content-type", "image/png"}}, png});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  const bool ready = WaitForSubresources([&fetch, &tab] {
+    const auto images = dom::QuerySelectorAll(*tab->page->document(), "img");
+    return images.size() == 2 && tab->page->Find(*images[0]) != nullptr &&
+           tab->page->Find(*images[1]) != nullptr && fetch.requests_.size() >= 2u;
+  });
+  ASSERT_TRUE(ready);
+
+  EXPECT_EQ(std::count(fetch.requests_.begin(),
+                       fetch.requests_.end(),
+                       "http://example.com/shared.png"),
+            1);
+}
+
 // <script type="application/json"> is a data block (HTML §4.12.1): never
 // executed as code, and it does not stop the executable scripts around it.
 TEST(BrowserControllerTest, NonJsScriptTypesAreNotExecuted)
@@ -1765,6 +1801,9 @@ TEST(BrowserControllerTest, FetchesAndAppliesExternalStylesheets)
   EXPECT_NE(
       std::find(fetch.requests_.begin(), fetch.requests_.end(), "http://example.com/style.css"),
       fetch.requests_.end());
+  EXPECT_EQ(std::count(fetch.requests_.begin(), fetch.requests_.end(),
+                       "http://example.com/style.css"),
+            1);
   EXPECT_EQ(
       std::find(fetch.requests_.begin(), fetch.requests_.end(), "http://example.com/favicon.ico"),
       fetch.requests_.end());
