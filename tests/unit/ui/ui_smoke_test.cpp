@@ -567,6 +567,59 @@ TEST(UiSmokeTest, ClickInputAndTypeUpdatesValue)
   }));
 }
 
+TEST(UiSmokeTest, TextInputPreservesPrintableUnicodeCharacters)
+{
+  TempProfile tp;
+  const std::string html = "<html><body style=\"margin:0\">"
+                           "<input id=\"q\" value=\"x\" style=\"margin:10px\">"
+                           "</body></html>";
+  const std::string html_file = tp.path() + "/unicode-input.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(html_file, html).has_value());
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.resize(800, 600);
+  window.show();
+  worker.NavigateActive(QString::fromStdString(html_file));
+  window.AddressBar()->clearFocus();
+
+  ASSERT_TRUE(WaitFor([&] {
+    const auto snap = worker.SnapshotActiveTab();
+    return snap.page != nullptr && snap.page->layout_root() != nullptr &&
+           snap.page->document() != nullptr &&
+           neko::dom::QuerySelector(*snap.page->document(), "#q") != nullptr;
+  }));
+
+  auto* view = window.findChild<neko::ui::WebView*>();
+  ASSERT_NE(view, nullptr);
+  view->Refresh();
+  const auto snap = worker.SnapshotActiveTab();
+  auto* input = neko::dom::QuerySelector(*snap.page->document(), "#q");
+  ASSERT_NE(input, nullptr);
+  float x = 0;
+  float y = 0;
+  ASSERT_TRUE(FindElementRunPoint(*snap.page->layout_root(), input, x, y));
+  QTest::mouseClick(view->viewport(),
+                    Qt::LeftButton,
+                    Qt::NoModifier,
+                    QPoint(static_cast<int>(x), static_cast<int>(y)));
+
+  QKeyEvent at_down(QEvent::KeyPress, Qt::Key_At, Qt::ShiftModifier, "@");
+  QApplication::sendEvent(view, &at_down);
+  QKeyEvent unicode_down(QEvent::KeyPress, 0, Qt::NoModifier, QString::fromUtf8("中"));
+  QApplication::sendEvent(view, &unicode_down);
+
+  ASSERT_TRUE(WaitFor([&] {
+    const auto current = worker.SnapshotActiveTab();
+    if (current.page == nullptr || current.page->document() == nullptr) {
+      return false;
+    }
+    auto* current_input = neko::dom::QuerySelector(*current.page->document(), "#q");
+    return current_input != nullptr &&
+          current_input->GetAttribute("value").value_or("") == "x@中";
+  }));
+}
+
 // Returns the caret point of |target|: the end of its first text run
 // (document coordinates, before scroll).
 bool FindCaretPoint(const neko::layout::LayoutBox& box,

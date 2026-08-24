@@ -684,6 +684,25 @@ TEST(StyleTest, MediaQueryPrintSkipped)
   EXPECT_FALSE(Style(engine, *doc, "p").color.has_value());
 }
 
+TEST(StyleTest, MediaQueryUsesViewportWidthAndOrientation)
+{
+  auto doc = MakeDoc(
+      "<style>"
+      "@media (min-width: 900px) { p { color: red; } }"
+      "@media (max-width: 899px) and (orientation: portrait) { p { color: blue; } }"
+      "</style><body><p>x</p></body>");
+  StyleEngine engine;
+  engine.SetViewport(1024, 600);
+  engine.ApplyStyles(*doc);
+  ASSERT_TRUE(Style(engine, *doc, "p").color.has_value());
+  EXPECT_EQ(Style(engine, *doc, "p").color.value(), (css::Color{255, 0, 0, 255}));
+
+  engine.SetViewport(600, 800);
+  engine.ApplyStyles(*doc);
+  ASSERT_TRUE(Style(engine, *doc, "p").color.has_value());
+  EXPECT_EQ(Style(engine, *doc, "p").color.value(), (css::Color{0, 0, 255, 255}));
+}
+
 TEST(StyleTest, ButtonUaDefaultAppearance)
 {
   // WHATWG rendering §15.5.4: <button> is an inline-block with a native

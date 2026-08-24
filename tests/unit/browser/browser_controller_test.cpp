@@ -1223,7 +1223,53 @@ TEST(BrowserControllerTest, FontFaceFetchedAndRegistered)
   controller.NewTab();
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
 
+  ASSERT_TRUE(WaitForSubresources([&fetch] { return fetch.requests_.size() == 2u; }));
   EXPECT_EQ(fetch.requests_.size(), 2u); // page + font
+}
+
+TEST(BrowserControllerTest, WebFontDoesNotBlockPagePublication)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><style>"
+                               "@font-face { font-family: slowfont; src: url('/slow.ttf'); }"
+                               "</style></head><body><p>First paint</p></body></html>"});
+  fetch.Add("http://example.com/slow.ttf",
+            FakeFetcher::Route{200, {{"content-type", "font/ttf"}}, "not-a-font"});
+
+  std::atomic<bool> font_requested = false;
+  std::atomic<bool> release_font = false;
+  BrowserController controller(tp.path(),
+                               [&](const url::Url& request_url, std::string_view cookie) {
+                                 if (request_url.Serialize() == "http://example.com/slow.ttf") {
+                                   font_requested.store(true);
+                                   while (!release_font.load()) {
+                                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                                   }
+                                 }
+                                 return fetch(request_url, cookie);
+                               });
+  struct ReleaseFontOnExit
+  {
+    std::atomic<bool>& release;
+    ~ReleaseFontOnExit()
+    {
+      release.store(true);
+    }
+  } release_on_exit{release_font};
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  ASSERT_NE(tab->page, nullptr);
+  ASSERT_TRUE(WaitForSubresources([&font_requested] { return font_requested.load(); }));
+
+  release_font.store(true);
+  ASSERT_TRUE(WaitForSubresources([&fetch] { return fetch.requests_.size() == 2u; }));
 }
 
 // The page's scripts can use window.localStorage (scoped to the page origin),
@@ -2227,6 +2273,36 @@ TEST(BrowserControllerTest, EnterInFocusedInputSubmitsForm)
   // Enter in a text input submits its form.
   EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Enter", "Enter"));
   EXPECT_EQ(tab->url, "http://example.com/search?q=go");
+}
+
+TEST(BrowserControllerTest, FocusAndTypeIntoTextarea)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body><textarea id=\"q\">hi</textarea></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* textarea = dom::QuerySelector(*tab->page->document(), "#q");
+  ASSERT_NE(textarea, nullptr);
+  float x = 0;
+  float y = 0;
+  ASSERT_TRUE(FindElementRunPoint(*tab->page->layout_root(), textarea, x, y));
+
+  controller.DispatchPointerClick(tab->id, x, y);
+  EXPECT_EQ(tab->focused_element, textarea);
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "你", "KeyN"));
+  EXPECT_EQ(textarea->TextContent(), "hi你");
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Backspace", "Backspace"));
+  EXPECT_EQ(textarea->TextContent(), "hi");
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Enter", "Enter"));
+  EXPECT_EQ(textarea->TextContent(), "hi\n");
 }
 
 TEST(BrowserControllerTest, ElementGeometryApisReflectLayout)

@@ -1078,18 +1078,95 @@ GridAutoFlow ParseGridAutoFlow(const std::string& value)
   return dense ? GridAutoFlow::kRowDense : GridAutoFlow::kRow;
 }
 
-bool MediaQueryMatches(std::string_view prelude)
+bool MediaQueryMatches(std::string_view prelude, float viewport_width, float viewport_height)
 {
-  const std::string lower = neko::base::ToLower(prelude);
-  // A media query is treated as matching when it targets screen/all or the
-  // empty query (the common case).  print/speech queries do not match.
-  if (lower.find("print") != std::string::npos) {
-    return false;
+  auto trim = [](std::string_view value) { return neko::base::Trim(value); };
+  auto parse_px = [](std::string_view value) -> std::optional<float> {
+    const std::string text = std::string(neko::base::Trim(value));
+    std::size_t suffix = 0;
+    if (suffix < text.size() && (text[suffix] == '-' || text[suffix] == '+')) {
+      ++suffix;
+    }
+    while (suffix < text.size() &&
+           (std::isdigit(static_cast<unsigned char>(text[suffix])) || text[suffix] == '.')) {
+      ++suffix;
+    }
+    if (suffix == 0 || (suffix == 1 && (text[0] == '-' || text[0] == '+'))) {
+      return std::nullopt;
+    }
+    const std::string unit = neko::base::ToLower(text.substr(suffix));
+    if (unit != "px" && !unit.empty()) {
+      return std::nullopt;
+    }
+    try {
+      return std::stof(text.substr(0, suffix));
+    } catch (const std::exception&) {
+      return std::nullopt;
+    }
+  };
+  auto matches_branch = [&](std::string_view branch) {
+    const std::string lower = neko::base::ToLower(branch);
+    if (lower.find("print") != std::string::npos || lower.find("speech") != std::string::npos) {
+      return false;
+    }
+    std::size_t start = 0;
+    while (start < lower.size()) {
+      const std::size_t open = lower.find('(', start);
+      if (open == std::string::npos) {
+        break;
+      }
+      const std::size_t close = lower.find(')', open + 1);
+      if (close == std::string::npos) {
+        return false;
+      }
+      const std::string condition = std::string(trim(lower.substr(open + 1, close - open - 1)));
+      const std::size_t colon = condition.find(':');
+      if (colon == std::string::npos) {
+        return false;
+      }
+      const std::string feature = std::string(trim(condition.substr(0, colon)));
+      const std::string value = std::string(trim(condition.substr(colon + 1)));
+      if (feature == "min-width" || feature == "max-width" || feature == "width" ||
+          feature == "min-height" || feature == "max-height" || feature == "height") {
+        const auto threshold = parse_px(value);
+        if (!threshold.has_value()) {
+          return false;
+        }
+        const float actual = feature.find("height") != std::string::npos ? viewport_height
+                                                                          : viewport_width;
+        if ((feature.rfind("min-", 0) == 0 && actual < *threshold) ||
+            (feature.rfind("max-", 0) == 0 && actual > *threshold) ||
+            (feature == "width" && actual != *threshold) ||
+            (feature == "height" && actual != *threshold)) {
+          return false;
+        }
+      } else if (feature == "orientation") {
+        const bool portrait = viewport_height >= viewport_width;
+        if ((value == "portrait") != portrait) {
+          return false;
+        }
+      } else {
+        return false;
+      }
+      start = close + 1;
+    }
+    return true;
+  };
+
+  std::size_t start = 0;
+  while (start <= prelude.size()) {
+    const std::size_t comma = prelude.find(',', start);
+    if (matches_branch(prelude.substr(start, comma == std::string_view::npos
+                                              ? prelude.size() - start
+                                              : comma - start))) {
+      return true;
+    }
+    if (comma == std::string_view::npos) {
+      break;
+    }
+    start = comma + 1;
   }
-  if (lower.find("speech") != std::string::npos) {
-    return false;
-  }
-  return true;
+  return false;
 }
 
 } // namespace
@@ -1238,12 +1315,13 @@ void StyleEngine::BuildCascadeIndex(dom::Document& /*document*/)
     buckets->rules.push_back(std::move(indexed));
   };
 
-  auto add_sheet = [&add_rule](const css::StyleSheet& sheet) {
+  auto add_sheet = [&add_rule, this](const css::StyleSheet& sheet) {
     for (const css::StyleRule& rule : sheet.rules) {
       add_rule(rule);
     }
     for (const css::AtRule& at_rule : sheet.at_rules) {
-      if (at_rule.name == "media" && !MediaQueryMatches(at_rule.prelude)) {
+        if (at_rule.name == "media" &&
+          !MediaQueryMatches(at_rule.prelude, viewport_width_, viewport_height_)) {
         continue;
       }
       for (const css::StyleRule& rule : at_rule.rules) {
@@ -1261,6 +1339,12 @@ void StyleEngine::BuildCascadeIndex(dom::Document& /*document*/)
   }
 
   buckets_ = std::move(buckets);
+}
+
+void StyleEngine::SetViewport(float width, float height)
+{
+  viewport_width_ = width > 0 ? width : 800;
+  viewport_height_ = height > 0 ? height : 600;
 }
 
 const ComputedStyle& StyleEngine::StyleFor(const dom::Element& element) const

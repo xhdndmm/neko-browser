@@ -39,6 +39,22 @@ std::string_view Trim(std::string_view s)
   return s;
 }
 
+void RemoveLastUtf8CodePoint(std::string& value)
+{
+  if (value.empty()) {
+    return;
+  }
+  value.pop_back();
+  bool removed_continuation = false;
+  while (!value.empty() && (static_cast<unsigned char>(value.back()) & 0xc0U) == 0x80U) {
+    value.pop_back();
+    removed_continuation = true;
+  }
+  if (removed_continuation && !value.empty()) {
+    value.pop_back();
+  }
+}
+
 // Resolves a possibly-relative reference against a base page URL.  Handles
 // file:// / bare local path bases (which the URL parser rejects) by string
 // concatenation, mirroring HyperlinkTarget.
@@ -775,6 +791,7 @@ bool BrowserController::DispatchKeyboard(int tab_id,
   // Backspace deletes, Enter submits the enclosing form (implicit submission).
   dom::Element* control = tab->focused_element;
   const bool input_is_text = control != nullptr && control->tag_name() == "input";
+  const bool textarea_is_text = control != nullptr && control->tag_name() == "textarea";
   bool value_changed = false;
   if (input_is_text) {
     const std::string input_type = std::string(control->GetAttribute("type").value_or("text"));
@@ -784,15 +801,14 @@ bool BrowserController::DispatchKeyboard(int tab_id,
     if (text_like) {
       std::string value = std::string(control->GetAttribute("value").value_or(""));
       if (key == "Backspace") {
-        if (!value.empty()) {
-          value.pop_back();
-        }
+        RemoveLastUtf8CodePoint(value);
       } else if (key == "Enter") {
         if (dom::Element* form = FindEnclosingForm(control)) {
           SubmitForm(tab_id, form);
         }
         return not_canceled;
-      } else if (key.size() == 1 && key[0] >= ' ' && key[0] != '\t') {
+      } else if (!key.empty() &&
+                 static_cast<unsigned char>(key.front()) >= 0x20U) {
         value += key;
       } else {
         return not_canceled;
@@ -803,6 +819,25 @@ bool BrowserController::DispatchKeyboard(int tab_id,
       if (tab->script_runtime != nullptr) {
         tab->script_runtime->DispatchInputEvent(*control);
       }
+    }
+  } else if (textarea_is_text) {
+    std::string value = control->TextContent();
+    if (key == "Backspace") {
+      RemoveLastUtf8CodePoint(value);
+    } else if (key == "Enter") {
+      value.push_back('\n');
+    } else if (!key.empty() && static_cast<unsigned char>(key.front()) >= 0x20U) {
+      value += key;
+    } else {
+      return not_canceled;
+    }
+    while (control->first_child() != nullptr) {
+      control->RemoveChild(control->first_child());
+    }
+    control->AppendChild(std::make_unique<dom::Text>(std::move(value)));
+    value_changed = true;
+    if (tab->script_runtime != nullptr) {
+      tab->script_runtime->DispatchInputEvent(*control);
     }
   }
   // Reflect DOM changes from the keydown/input handlers or the value edit
@@ -1034,8 +1069,6 @@ void BrowserController::LoadBytes(Tab& tab,
     // Fetch and apply the page's external <link rel=stylesheet> sheets before
     // scripts run, so scripts see the fully styled cascade.
     FetchExternalStylesheets(*new_page, final_url, fetch_subresource, *pool_);
-    // Fetch and register @font-face web fonts so layout/paint see them.
-    FetchWebFonts(*new_page, final_url, fetch_subresource, *pool_);
     browser::ScriptRequestedNavigation requested;
     tab.script_runtime = RunPageScripts(
         *new_page,
@@ -1074,6 +1107,14 @@ void BrowserController::LoadBytes(Tab& tab,
       tab.title = std::move(title);
     }
     RecordVisit(final_url, tab.title);
+
+    // Web fonts are allowed to arrive after first paint. The page is shared
+    // with this task, and Page synchronizes font registration and layout
+    // invalidation for the UI thread.
+    pool_->Post(
+        [page = std::shared_ptr(new_page), final_url, fetch_subresource, &pool = *pool_]() mutable {
+          FetchWebFonts(*page, final_url, fetch_subresource, pool);
+        });
 
     // Worker-thread actions run serially, so no navigation can replace
     // tab.page behind our back while this task runs.
@@ -1515,28 +1556,37 @@ void FetchWebFonts(renderer::Page& page,
     return base::Ok(std::move(bytes));
   };
 
-  std::vector<std::future<base::Result<std::vector<uint8_t>>>> futures;
-  futures.reserve(pending.size());
-  for (const PendingFont& item : pending) {
-    futures.push_back(
-        pool.Submit([&fetch_bytes, url = item.absolute_url]() { return fetch_bytes(url); }));
-  }
   bool loaded_any = false;
-  for (std::size_t i = 0; i < pending.size(); ++i) {
-    auto bytes = futures[i].get();
+  auto load_font = [&page, &pending, &loaded_any](std::size_t index,
+                                                  base::Result<std::vector<uint8_t>> bytes) {
     if (!bytes.has_value()) {
-      NEKO_LOG_WARNING("font: fetch failed for " + pending[i].absolute_url + ": " +
+      NEKO_LOG_WARNING("font: fetch failed for " + pending[index].absolute_url + ": " +
                        bytes.error().message());
-      continue;
+      return;
     }
-    if (page.LoadWebFont(pending[i].rule.family,
-                         pending[i].rule.weight,
-                         pending[i].rule.italic,
-                         pending[i].absolute_url,
+    if (page.LoadWebFont(pending[index].rule.family,
+                         pending[index].rule.weight,
+                         pending[index].rule.italic,
+                         pending[index].absolute_url,
                          std::move(bytes.value()))) {
       loaded_any = true;
-      NEKO_LOG_INFO("font: registered '" + pending[i].rule.family + "' <- " +
-                    pending[i].absolute_url);
+      NEKO_LOG_INFO("font: registered '" + pending[index].rule.family + "' <- " +
+                    pending[index].absolute_url);
+    }
+  };
+  if (pending.size() == 1 || pool.thread_count() < 2) {
+    for (std::size_t i = 0; i < pending.size(); ++i) {
+      load_font(i, fetch_bytes(pending[i].absolute_url));
+    }
+  } else {
+    std::vector<std::future<base::Result<std::vector<uint8_t>>>> futures;
+    futures.reserve(pending.size());
+    for (const PendingFont& item : pending) {
+      futures.push_back(
+          pool.Submit([&fetch_bytes, url = item.absolute_url]() { return fetch_bytes(url); }));
+    }
+    for (std::size_t i = 0; i < pending.size(); ++i) {
+      load_font(i, futures[i].get());
     }
   }
   if (loaded_any) {

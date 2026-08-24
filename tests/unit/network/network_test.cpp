@@ -730,6 +730,8 @@ TEST(TlsTest, GetFromLocalTlsServer)
   ASSERT_TRUE(server.IsValid());
   TlsOptions options;
   options.extra_ca_cert_pem = server.cert_pem();
+  ScopedEnvironmentVariable lower_no_proxy("no_proxy", "localhost");
+  ScopedEnvironmentVariable upper_no_proxy("NO_PROXY", "localhost");
   const std::string host = "https://localhost:" + std::to_string(server.port()) + "/";
   const auto url = url::Url::Parse(host);
   ASSERT_TRUE(url.has_value());
@@ -815,6 +817,8 @@ TEST(TlsTest, AcceptsCompleteResponseAfterAbruptClose)
   ASSERT_TRUE(server.IsValid());
   TlsOptions options;
   options.extra_ca_cert_pem = server.cert_pem();
+  ScopedEnvironmentVariable lower_no_proxy("no_proxy", "localhost");
+  ScopedEnvironmentVariable upper_no_proxy("NO_PROXY", "localhost");
   const std::string host = "https://localhost:" + std::to_string(server.port()) + "/abrupt-close";
   const auto url = url::Url::Parse(host);
   ASSERT_TRUE(url.has_value());
@@ -870,6 +874,8 @@ TEST(TlsTest, HttpsToHttpRedirectIsRefused)
   ASSERT_TRUE(server.IsValid());
   TlsOptions options;
   options.extra_ca_cert_pem = server.cert_pem();
+  ScopedEnvironmentVariable lower_no_proxy("no_proxy", "localhost");
+  ScopedEnvironmentVariable upper_no_proxy("NO_PROXY", "localhost");
   const std::string host = "https://localhost:" + std::to_string(server.port()) + "/downgrade";
   const auto url = url::Url::Parse(host);
   ASSERT_TRUE(url.has_value());

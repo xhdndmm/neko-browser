@@ -270,12 +270,7 @@ void Page::SetHoveredElement(const dom::Element* element)
     return;
   }
   styles_.SetHoveredElement(element);
-  // Rebuild the layout immediately (rather than only invalidating root_) so
-  // the layout tree stays valid across a hover change.  Leaving root_ null
-  // would make the UI's Refresh() treat the page as freshly loaded and reset
-  // the scroll position to the top.
-  styles_.ApplyStyles(*document_);
-  LayoutLocked(viewport_width_, viewport_height_);
+  ReapplyStylesLocked();
 }
 
 void Page::SetActiveElement(const dom::Element* element)
@@ -285,8 +280,7 @@ void Page::SetActiveElement(const dom::Element* element)
     return;
   }
   styles_.SetActiveElement(element);
-  styles_.ApplyStyles(*document_);
-  LayoutLocked(viewport_width_, viewport_height_);
+  ReapplyStylesLocked();
 }
 
 void Page::SetFocusedElement(const dom::Element* element)
@@ -327,7 +321,7 @@ void Page::ReapplyStylesLocked()
   // Rebuild the layout tree right away so the document/root stays consistent
   // for hit-testing and geometry queries even before the UI repaints (which
   // would otherwise see a null root and defer everything to its own pass).
-  LayoutLocked(viewport_width_, viewport_height_);
+  LayoutLocked(viewport_width_, viewport_height_, false);
   display_list_.reset();
   BumpVersion();
 }
@@ -339,10 +333,7 @@ void Page::SetExternalStylesheets(std::vector<css::StyleSheet> sheets)
   if (document_ == nullptr) {
     return;
   }
-  styles_.ApplyStyles(*document_);
-  root_.reset();
-  display_list_.reset();
-  BumpVersion();
+  ReapplyStylesLocked();
 }
 
 base::Result<void> Page::LoadFile(std::string_view path)
@@ -361,13 +352,17 @@ void Page::Layout(float viewport_width, float viewport_height)
   LayoutLocked(viewport_width, viewport_height);
 }
 
-void Page::LayoutLocked(float viewport_width, float viewport_height)
+void Page::LayoutLocked(float viewport_width, float viewport_height, bool apply_styles)
 {
   if (document_ == nullptr) {
     return;
   }
   viewport_width_ = viewport_width;
   viewport_height_ = viewport_height;
+  styles_.SetViewport(viewport_width_, viewport_height_);
+  if (apply_styles) {
+    styles_.ApplyStyles(*document_);
+  }
   page_zoom_ = 1.0f;
   if (dom::Element* html = document_->document_element()) {
     for (dom::Node* child : html->ChildNodes()) {

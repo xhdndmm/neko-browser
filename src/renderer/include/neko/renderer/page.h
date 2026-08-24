@@ -258,7 +258,7 @@ private:
   // Re-runs the cascade and invalidates layout/paint; caller must hold mutex_.
   void ReapplyStylesLocked();
   // Rebuilds the layout tree; caller must hold mutex_.
-  void LayoutLocked(float viewport_width, float viewport_height);
+  void LayoutLocked(float viewport_width, float viewport_height, bool apply_styles = true);
   void BumpVersion()
   {
     ++version_;

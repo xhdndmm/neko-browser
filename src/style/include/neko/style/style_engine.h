@@ -53,6 +53,10 @@ public:
   // fresh document.
   void ApplyStyles(dom::Document& document);
 
+  // Sets the viewport used by @media queries.  The default is 800x600 so
+  // documents styled before their first layout retain the engine default.
+  void SetViewport(float width, float height);
+
   // All @font-face rules collected from <style> elements and externally
   // loaded stylesheets, in application order.
   std::vector<css::FontFaceRule> FontFaces() const;
@@ -93,6 +97,8 @@ private:
   // Dynamic interaction state for :hover / :active matching.
   const dom::Element* hovered_ = nullptr;
   const dom::Element* active_ = nullptr;
+  float viewport_width_ = 800;
+  float viewport_height_ = 600;
 
   // Parsed <style> element text, keyed by the element: re-parsing identical
   // <style> content on every ReapplyStyles pass (scripts mutate the DOM every

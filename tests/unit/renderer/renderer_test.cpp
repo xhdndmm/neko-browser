@@ -1,4 +1,5 @@
 #include "neko/base/thread_pool.h"
+#include "neko/css/parser.h"
 #include "neko/dom/query.h"
 #include "neko/html/parser.h"
 #include "neko/image/image.h"
@@ -81,6 +82,46 @@ TEST(PageTest, FocusedCaretGeometryIsThreadSafeAndInputOnly)
 
   page.SetFocusedElement(div);
   EXPECT_FALSE(page.FocusedCaretGeometry().has_value());
+}
+
+TEST(PageTest, HoverStyleInvalidatesCachedRaster)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body style=\"background-color:#ffffff\"><style>"
+                            "#target { background-color:#ff0000;width:100px;height:50px }"
+                            "#target:hover { background-color:#0000ff }"
+                            "#target:active { background-color:#00ff00 }</style>"
+                            "<div id=\"target\"></div></body>")
+                  .has_value());
+  page.Layout(400, 300);
+  dom::Element* target = dom::QuerySelector(*page.document(), "#target");
+  ASSERT_NE(target, nullptr);
+
+  const std::uint64_t before_hover = page.layout_version();
+  page.SetHoveredElement(target);
+  EXPECT_GT(page.layout_version(), before_hover);
+  paint::Rasterizer hovered = page.Rasterize(400, 300);
+  const std::size_t offset = (static_cast<std::size_t>(20) * 400 + 50) * 4;
+  EXPECT_EQ(hovered.pixels()[offset], 0);
+  EXPECT_EQ(hovered.pixels()[offset + 1], 0);
+  EXPECT_EQ(hovered.pixels()[offset + 2], 255);
+
+  const std::uint64_t before_active = page.layout_version();
+  page.SetActiveElement(target);
+  EXPECT_GT(page.layout_version(), before_active);
+  paint::Rasterizer active = page.Rasterize(400, 300);
+  EXPECT_EQ(active.pixels()[offset], 0);
+  EXPECT_EQ(active.pixels()[offset + 1], 255);
+  EXPECT_EQ(active.pixels()[offset + 2], 0);
+
+  page.SetActiveElement(nullptr);
+  const std::uint64_t before_clear = page.layout_version();
+  page.SetHoveredElement(nullptr);
+  EXPECT_GT(page.layout_version(), before_clear);
+  paint::Rasterizer unhovered = page.Rasterize(400, 300);
+  EXPECT_EQ(unhovered.pixels()[offset], 255);
+  EXPECT_EQ(unhovered.pixels()[offset + 1], 0);
+  EXPECT_EQ(unhovered.pixels()[offset + 2], 0);
 }
 
 TEST(PageTest, BodyZoomScalesLayoutAndPaint)
@@ -785,6 +826,24 @@ TEST(PageTest, LayoutVersionTracksContentMutations)
   const std::uint64_t v2 = page.layout_version();
   (void)page.Rasterize(400, 300);
   EXPECT_EQ(page.layout_version(), v2);
+}
+
+TEST(PageTest, ExternalStylesheetUpdateBuildsLayoutImmediately)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body><div id=\"target\">content</div></body>").has_value());
+  dom::Element* target = dom::QuerySelector(*page.document(), "#target");
+  ASSERT_NE(target, nullptr);
+  EXPECT_FALSE(page.HasLayout());
+
+  page.SetExternalStylesheets({css::ParseStyleSheet(
+      "#target { width: 240px; height: 30px; background-color: #ff0000; }")});
+
+  ASSERT_TRUE(page.HasLayout());
+  const auto geometry = page.ElementBoxGeometry(*target);
+  ASSERT_TRUE(geometry.has_value());
+  EXPECT_FLOAT_EQ(geometry->width, 240.0f);
+  EXPECT_FLOAT_EQ(geometry->height, 30.0f);
 }
 
 TEST(PageTest, ScrollBlitBandMatchesFullRasterization)

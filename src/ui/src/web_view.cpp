@@ -186,8 +186,15 @@ void WebView::keyPressEvent(QKeyEvent* event)
 {
   std::string key;
   std::string code;
-  if (snapshot_.content_type == browser::ContentType::kHtml &&
-      QtKeyToDomKey(event->key(), key, code)) {
+  bool dispatch = QtKeyToDomKey(event->key(), key, code);
+  if (!event->text().isEmpty() && !event->text().at(0).isNull()) {
+    key = event->text().toUtf8().toStdString();
+    if (code.empty()) {
+      code = "Unidentified";
+    }
+    dispatch = true;
+  }
+  if (snapshot_.content_type == browser::ContentType::kHtml && dispatch) {
     worker_->DispatchKeyboard(tab_id_,
                               QStringLiteral("keydown"),
                               QString::fromStdString(key),
