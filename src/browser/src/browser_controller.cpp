@@ -1540,9 +1540,7 @@ void FetchWebFonts(renderer::Page& page,
 }
 
 // ---------------------------------------------------------------------------
-// data: URL support for image subresources (`<img src="data:image/png;base64,...">`).
-// Only base64 payloads are decoded; percent-encoded text payloads are rare
-// for images and are rejected.
+// data: URL support for image subresources.
 // ---------------------------------------------------------------------------
 
 std::optional<std::string> DecodeBase64(std::string_view input)
@@ -1599,10 +1597,11 @@ std::optional<std::string> DecodeDataUrlBody(const std::string& url)
     return std::nullopt;
   }
   const std::string_view header(url.data() + 5, comma - 5);
+  const std::string_view payload = std::string_view(url).substr(comma + 1);
   if (header.find("base64") == std::string_view::npos) {
-    return std::nullopt; // percent-encoded text payloads unsupported
+    return url::PercentDecode(payload);
   }
-  return DecodeBase64(std::string_view(url).substr(comma + 1));
+  return DecodeBase64(payload);
 }
 
 void FetchPageImages(renderer::Page& page,

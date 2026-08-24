@@ -38,8 +38,14 @@ struct Compound
 {
   std::optional<std::string> tag; // lowercased
   std::optional<std::string> id;
-  std::optional<std::string> id_prefix;
   std::vector<std::string> classes;
+  struct Attribute
+  {
+    std::string name;
+    std::string op;
+    std::string value;
+  };
+  std::vector<Attribute> attributes;
 };
 
 enum class Combinator
@@ -61,24 +67,56 @@ bool ParseCompound(std::string_view text, Compound& out)
   while (i < text.size()) {
     const char c = text[i];
     if (c == '[') {
-      constexpr std::string_view prefix = "[id^=";
-      if (out.id_prefix.has_value() || text.substr(i, prefix.size()) != prefix) {
+      const std::size_t close = text.find(']', i + 1);
+      if (close == std::string_view::npos) {
         return false;
       }
-      i += prefix.size();
-      if (i >= text.size() || (text[i] != '\'' && text[i] != '"')) {
+      std::string_view inner = text.substr(i + 1, close - i - 1);
+      while (!inner.empty() && IsWhitespace(inner.front())) {
+        inner.remove_prefix(1);
+      }
+      while (!inner.empty() && IsWhitespace(inner.back())) {
+        inner.remove_suffix(1);
+      }
+      std::size_t name_end = 0;
+      while (name_end < inner.size() && IsNameChar(inner[name_end])) {
+        ++name_end;
+      }
+      if (name_end == 0) {
         return false;
       }
-      const char quote = text[i++];
-      const std::size_t value_start = i;
-      while (i < text.size() && text[i] != quote) {
-        ++i;
+      Compound::Attribute attribute;
+      attribute.name = ToLower(inner.substr(0, name_end));
+      inner.remove_prefix(name_end);
+      while (!inner.empty() && IsWhitespace(inner.front())) {
+        inner.remove_prefix(1);
       }
-      if (i >= text.size() || i == value_start || i + 1 >= text.size() || text[i + 1] != ']') {
-        return false;
+      if (!inner.empty()) {
+        constexpr std::string_view operators[] = {"~=", "|=", "^=", "$=", "*=", "="};
+        for (const std::string_view candidate : operators) {
+          if (inner.starts_with(candidate)) {
+            attribute.op = candidate;
+            inner.remove_prefix(candidate.size());
+            break;
+          }
+        }
+        if (attribute.op.empty()) {
+          return false;
+        }
+        while (!inner.empty() && IsWhitespace(inner.front())) {
+          inner.remove_prefix(1);
+        }
+        if (inner.size() >= 2 && (inner.front() == '\'' || inner.front() == '"')) {
+          if (inner.back() != inner.front()) {
+            return false;
+          }
+          inner.remove_prefix(1);
+          inner.remove_suffix(1);
+        }
+        attribute.value = std::string(inner);
       }
-      out.id_prefix = std::string(text.substr(value_start, i - value_start));
-      i += 2;
+      out.attributes.push_back(std::move(attribute));
+      i = close + 1;
     } else if (c == '#') {
       std::size_t j = i + 1;
       while (j < text.size() && IsNameChar(text[j])) {
@@ -166,10 +204,52 @@ bool CompoundMatches(const Element& element, const Compound& compound)
       return false;
     }
   }
-  if (compound.id_prefix.has_value()) {
-    const std::optional<std::string_view> id = element.Id();
-    if (!id.has_value() || id->substr(0, compound.id_prefix->size()) != *compound.id_prefix) {
+  for (const Compound::Attribute& attribute : compound.attributes) {
+    const std::optional<std::string_view> value = element.GetAttribute(attribute.name);
+    if (!value.has_value()) {
       return false;
+    }
+    if (attribute.op.empty()) {
+      continue;
+    }
+    if ((attribute.op == "^=" || attribute.op == "$=" || attribute.op == "*=" ||
+         attribute.op == "~=" || attribute.op == "|=") &&
+        attribute.value.empty()) {
+      return false;
+    }
+    if (attribute.op == "=" && *value != attribute.value) {
+      return false;
+    }
+    if (attribute.op == "^=" && !value->starts_with(attribute.value)) {
+      return false;
+    }
+    if (attribute.op == "$=" && !value->ends_with(attribute.value)) {
+      return false;
+    }
+    if (attribute.op == "*=" && value->find(attribute.value) == std::string_view::npos) {
+      return false;
+    }
+    if (attribute.op == "|=" && *value != attribute.value &&
+        !value->starts_with(attribute.value + "-")) {
+      return false;
+    }
+    if (attribute.op == "~=") {
+      bool found = false;
+      std::size_t start = 0;
+      while (start < value->size()) {
+        while (start < value->size() && IsWhitespace((*value)[start])) {
+          ++start;
+        }
+        std::size_t end = start;
+        while (end < value->size() && !IsWhitespace((*value)[end])) {
+          ++end;
+        }
+        found = found || value->substr(start, end - start) == attribute.value;
+        start = end;
+      }
+      if (!found) {
+        return false;
+      }
     }
   }
   if (!compound.classes.empty()) {

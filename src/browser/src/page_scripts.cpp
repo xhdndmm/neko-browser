@@ -16,6 +16,7 @@
 #include "neko/style/computed_style.h"
 #include "neko/url/url.h"
 
+#include <array>
 #include <ctime>
 #include <map>
 #include <memory>
@@ -448,6 +449,14 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
   apis.video_paused = [&page](const dom::Element& element) {
     return !page.IsVideoPlaying(element);
   };
+  apis.canvas_fill_rect = [&page](const dom::Element& element,
+                                  double x,
+                                  double y,
+                                  double width,
+                                  double height,
+                                  std::array<std::uint8_t, 4> color) {
+    page.FillCanvasRect(element, x, y, width, height, color);
+  };
 
   auto binder = std::make_shared<javascript::DomBinder>(*document, apis);
   binder->SetConsoleSink(std::move(sink));
@@ -508,7 +517,7 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     binder->SetCurrentScript(nullptr);
     if (!result.has_value()) {
       const std::string message = result.error().message();
-      report_error("Uncaught " + message);
+      report_error("Uncaught [" + std::string(filename) + "] " + message);
 
       const std::string marker = "(" + std::string(filename) + ":";
       const std::size_t marker_start = message.rfind(marker);
@@ -599,7 +608,7 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
   auto run_module_source = [&](std::string_view source, const std::string& url) {
     const auto result = binder->EvaluateModule(source, url);
     if (!result.has_value()) {
-      report_error("Uncaught " + result.error().message());
+      report_error("Uncaught [" + url + "] " + result.error().message());
     }
   };
   auto run_module_script = [&](dom::Element* script) {

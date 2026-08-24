@@ -42,6 +42,14 @@ TEST(UrlTest, ParsePort)
   EXPECT_EQ(u.Origin(), "https://example.com:8443");
 }
 
+TEST(UrlTest, EmptyPortIsNormalizedAway)
+{
+  const auto r = Url::Parse("https://example.com:/path");
+  ASSERT_TRUE(r.has_value());
+  EXPECT_FALSE(r.value().port().has_value());
+  EXPECT_EQ(r.value().Serialize(), "https://example.com/path");
+}
+
 TEST(UrlTest, ParseQueryAndFragment)
 {
   const auto r = Url::Parse("https://example.com/a/b?x=1#section");

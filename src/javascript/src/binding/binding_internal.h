@@ -51,6 +51,18 @@ struct NodeWrapper
 // Registers the "Node" wrapper class on |rt| when not yet registered.
 void EnsureNodeClassRegistered(JSRuntime* rt);
 
+struct AttrWrapper
+{
+  Impl* impl = nullptr;
+  dom::Element* element = nullptr;
+  std::string name;
+};
+
+extern JSClassID g_attr_class_id;
+extern std::mutex g_attr_class_mutex;
+extern std::unordered_set<JSRuntime*> g_attr_class_registered;
+void EnsureAttrClassRegistered(JSRuntime* rt);
+
 // Opaque state attached to every Event object (new Event(...) or the fresh
 // event created by a dispatch).  target/currentTarget are owned JSValues
 // (Dup'd node wrappers) stored here rather than as JS properties: the
@@ -270,6 +282,12 @@ void DefineElementEventHandlers(JSContext* ctx, Impl& impl);
 JSValue IllegalConstructor(JSContext* ctx, JSValueConst new_target, int argc, JSValueConst* argv);
 void DefineInterface(
     JSContext* ctx, JSValue global, const char* name, JSValue proto, bool set_constructor = true);
+JSValue
+MessageEventConstructor(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue SecurityPolicyViolationEventConstructor(JSContext* ctx,
+                                                JSValueConst this_val,
+                                                int argc,
+                                                JSValueConst* argv);
 
 // ---------------------------------------------------------------------------
 // Native callbacks referenced directly by Impl's constructor / methods.
@@ -281,6 +299,8 @@ JSValue CharacterDataGetData(JSContext* ctx, JSValueConst this_val);
 JSValue CharacterDataSetData(JSContext* ctx, JSValueConst this_val, JSValueConst value);
 JSValue NodeListItem(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue NodeListLength(JSContext* ctx, JSValueConst this_val);
+JSValue
+HTMLCollectionNamedItem(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 // Referenced from other binding files (innerText getter, window listener
 // forwarding, insertAdjacentHTML reference-node resolution).
 JSValue NodeGetTextContent(JSContext* ctx, JSValueConst this_val);
@@ -297,6 +317,22 @@ const char* OnHandlerForType(std::string_view type);
 // document_binding.cpp — first matching element by tag (used by
 // DocGetHead/DocGetTitle and the element file's head/title helpers).
 dom::Element* FindElementByTag(const dom::Node& root, std::string_view tag);
+JSValue DocCreateTreeWalker(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue TreeWalkerNextNode(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue DocCreateRange(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+
+// element_binding.cpp — ParentNode.children implementation shared by Element
+// and DocumentFragment prototypes.
+JSValue ElementGetChildren(JSContext* ctx, JSValueConst this_val);
+JSValue NamedNodeMapItem(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue
+NamedNodeMapGetNamedItem(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue AttrGetName(JSContext* ctx, JSValueConst this_val);
+JSValue AttrGetValue(JSContext* ctx, JSValueConst this_val);
+JSValue AttrSetValue(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+JSValue AttrGetNodeValue(JSContext* ctx, JSValueConst this_val);
+JSValue AttrSetNodeValue(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+JSValue AttrGetOwnerElement(JSContext* ctx, JSValueConst this_val);
 
 // ui_binding.cpp — referenced by DefineElementPrototype (element_binding.cpp).
 enum class AnchorUrlPart
@@ -322,6 +358,9 @@ JSValue ElementGetClientTop(JSContext* ctx, JSValueConst this_val, int argc, JSV
 JSValue ElementGetClientLeft(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue ElementGetValue(JSContext* ctx, JSValueConst this_val);
 JSValue ElementSetValue(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+JSValue ElementGetValidity(JSContext* ctx, JSValueConst this_val);
+JSValue ValidityStateGetValid(JSContext* ctx, JSValueConst this_val);
+JSValue ValidityStateGetTypeMismatch(JSContext* ctx, JSValueConst this_val);
 JSValue ElementGetChecked(JSContext* ctx, JSValueConst this_val);
 JSValue ElementSetChecked(JSContext* ctx, JSValueConst this_val, JSValueConst value);
 JSValue ElementGetType(JSContext* ctx, JSValueConst this_val);
@@ -332,8 +371,22 @@ JSValue ElementGetDisabled(JSContext* ctx, JSValueConst this_val);
 JSValue ElementSetDisabled(JSContext* ctx, JSValueConst this_val, JSValueConst value);
 JSValue ElementGetName(JSContext* ctx, JSValueConst this_val);
 JSValue ElementSetName(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+JSValue ElementGetFormAction(JSContext* ctx, JSValueConst this_val);
+JSValue ElementSetFormAction(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+JSValue FormGetAction(JSContext* ctx, JSValueConst this_val);
+JSValue FormSetAction(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+JSValue FormGetEnctype(JSContext* ctx, JSValueConst this_val);
+JSValue FormSetEnctype(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+JSValue FormGetMethod(JSContext* ctx, JSValueConst this_val);
+JSValue FormSetMethod(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+JSValue FormSubmit(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue FormRequestSubmit(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue ElementGetHref(JSContext* ctx, JSValueConst this_val);
 JSValue ElementSetHref(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+JSValue ElementGetDownload(JSContext* ctx, JSValueConst this_val);
+JSValue ElementSetDownload(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+JSValue ElementGetPing(JSContext* ctx, JSValueConst this_val);
+JSValue ElementSetPing(JSContext* ctx, JSValueConst this_val, JSValueConst value);
 JSValue ElementGetAnchorUrlPart(JSContext* ctx, JSValueConst this_val, int magic);
 JSValue ElementGetTarget(JSContext* ctx, JSValueConst this_val);
 JSValue ElementSetTarget(JSContext* ctx, JSValueConst this_val, JSValueConst value);
@@ -341,6 +394,12 @@ JSValue ElementGetRel(JSContext* ctx, JSValueConst this_val);
 JSValue ElementSetRel(JSContext* ctx, JSValueConst this_val, JSValueConst value);
 JSValue ElementGetSrc(JSContext* ctx, JSValueConst this_val);
 JSValue ElementSetSrc(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+JSValue ElementGetSrcSet(JSContext* ctx, JSValueConst this_val);
+JSValue ElementSetSrcSet(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+JSValue ElementGetSrcDoc(JSContext* ctx, JSValueConst this_val);
+JSValue ElementSetSrcDoc(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+JSValue ElementGetCredentialless(JSContext* ctx, JSValueConst this_val);
+JSValue ElementSetCredentialless(JSContext* ctx, JSValueConst this_val, JSValueConst value);
 JSValue ElementGetAlt(JSContext* ctx, JSValueConst this_val);
 JSValue ElementSetAlt(JSContext* ctx, JSValueConst this_val, JSValueConst value);
 JSValue ElementGetWidth(JSContext* ctx, JSValueConst this_val);
@@ -358,9 +417,32 @@ JSValue ElementGetVideoCurrentTime(JSContext* ctx, JSValueConst this_val);
 JSValue ElementSetVideoCurrentTime(JSContext* ctx, JSValueConst this_val, JSValueConst value);
 JSValue ElementGetVideoPaused(JSContext* ctx, JSValueConst this_val);
 
+// document_binding.cpp
+JSValue DOMParserConstructor(JSContext* ctx, JSValueConst new_target, int argc, JSValueConst* argv);
+JSValue
+DOMParserParseFromString(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue
+XMLSerializerConstructor(JSContext* ctx, JSValueConst new_target, int argc, JSValueConst* argv);
+JSValue
+XMLSerializerSerializeToString(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue DocumentImplementationHasFeature(JSContext* ctx,
+                                         JSValueConst this_val,
+                                         int argc,
+                                         JSValueConst* argv);
+JSValue DocumentImplementationCreateHTMLDocument(JSContext* ctx,
+                                                 JSValueConst this_val,
+                                                 int argc,
+                                                 JSValueConst* argv);
+
 // event_binding.cpp
 JSValue
 MutationObserverConstructor(JSContext* ctx, JSValueConst new_target, int argc, JSValueConst* argv);
+JSValue
+MutationObserverObserve(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue
+MutationObserverDisconnect(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue
+MutationObserverTakeRecords(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue EventConstructor(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue CustomEventConstructor(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 
@@ -380,6 +462,27 @@ JSValue WindowScrollTo(JSContext* ctx, JSValueConst this_val, int argc, JSValueC
 JSValue WindowScrollBy(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue WindowGetComputedStyle(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue WindowMatchMedia(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue WindowGetClosed(JSContext* ctx, JSValueConst this_val);
+void InstallCustomElementRegistry(JSContext* ctx, JSValue global);
+void InstallCrypto(JSContext* ctx, JSValue global);
+void EnsureUrlSearchParamsClassRegistered(JSRuntime* rt);
+void ForgetUrlSearchParamsRuntime(JSRuntime* rt);
+void InstallUrlSearchParamsGlobal(JSContext* ctx, JSValue global);
+void InstallUrlGlobal(JSContext* ctx, JSValue global);
+void ForgetFormDataRuntime(JSRuntime* rt);
+void InstallFormDataGlobal(JSContext* ctx, JSValue global);
+void InstallMessageChannelGlobals(JSContext* ctx, JSValue global, Impl& impl);
+void ForgetMessageChannelRuntime(JSRuntime* rt);
+void CloseMessagePorts(Impl& impl);
+int RunPendingMessagePortTasks(Impl& impl);
+void InstallEventTargetGlobal(JSContext* ctx, JSValue global, Impl& impl);
+void ForgetEventTargetRuntime(JSRuntime* rt);
+void InstallHeadersGlobal(JSContext* ctx, JSValue global);
+void ForgetHeadersRuntime(JSRuntime* rt);
+JSValue MakeHeaders(JSContext* ctx,
+                    const std::vector<std::pair<std::string, std::string>>& entries);
+void InstallResponseGlobal(JSContext* ctx, JSValue global);
+JSValue MakeResponse(JSContext* ctx, const FetchResponse& response, std::string_view request_url);
 JSValue HistoryBack(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue HistoryForward(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue HistoryGo(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
@@ -387,6 +490,10 @@ JSValue HistoryPushState(JSContext* ctx, JSValueConst this_val, int argc, JSValu
 JSValue HistoryReplaceState(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue HistoryGetLength(JSContext* ctx, JSValueConst this_val);
 JSValue PerformanceNow(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue PerformanceGetEntries(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue
+PerformanceGetEntriesByType(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue UIEventConstructor(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue LocationHrefGetter(JSContext* ctx, JSValueConst this_val);
 JSValue LocationHrefSetter(JSContext* ctx, JSValueConst this_val, JSValueConst value);
 JSValue LocationPropGetter(JSContext* ctx, JSValueConst this_val, int magic);
@@ -422,8 +529,8 @@ JSValue ImageConstructor(JSContext* ctx, JSValueConst new_target, int argc, JSVa
 struct XhrWrapper
 {
   Impl* impl = nullptr;
-  std::string method;   // uppercased by open()
-  std::string url;      // absolute after open() resolution
+  std::string method; // uppercased by open()
+  std::string url;    // absolute after open() resolution
   bool async_requested = true;
   std::vector<std::pair<std::string, std::string>> request_headers;
   int ready_state = 0; // UNSENT .. DONE (DOM Standard §5.1)
@@ -431,6 +538,7 @@ struct XhrWrapper
   std::string status_text;
   std::string response_text;
   std::string response_url;
+  std::string response_type;
   std::vector<std::pair<std::string, std::string>> response_headers;
   JSValue on_ready_state_change = JS_UNDEFINED;
   JSValue on_load = JS_UNDEFINED;
@@ -445,6 +553,12 @@ XhrWrapper* UnwrapXhr(JSValueConst value);
 
 void InstallXhrGlobal(JSContext* ctx, Impl& impl);
 
+// canvas_binding.cpp — minimal HTML Canvas 2D context.
+extern std::mutex g_canvas_class_mutex;
+extern std::unordered_set<JSRuntime*> g_canvas_class_registered;
+void EnsureCanvasClassRegistered(JSRuntime* rt);
+void DefineCanvasPrototype(JSContext* ctx, Impl& impl);
+
 // ---------------------------------------------------------------------------
 // Impl — the binder's per-document state (was file-local to dom_binding.cpp).
 // ---------------------------------------------------------------------------
@@ -458,6 +572,8 @@ struct Impl
   // Prototypes (own references, freed in the destructor).
   JSValue node_proto = JS_UNDEFINED;
   JSValue element_proto = JS_UNDEFINED;
+  JSValue character_data_proto = JS_UNDEFINED;
+  JSValue document_type_proto = JS_UNDEFINED;
   JSValue text_proto = JS_UNDEFINED;
   JSValue comment_proto = JS_UNDEFINED;
   JSValue document_proto = JS_UNDEFINED;
@@ -465,16 +581,49 @@ struct Impl
   JSValue style_proto = JS_UNDEFINED;
   JSValue event_proto = JS_UNDEFINED;
   JSValue custom_event_proto = JS_UNDEFINED;
+  JSValue message_event_proto = JS_UNDEFINED;
+  JSValue event_target_proto = JS_UNDEFINED;
   JSValue class_list_proto = JS_UNDEFINED;
   JSValue node_list_proto = JS_UNDEFINED;
+  JSValue html_collection_proto = JS_UNDEFINED;
+  JSValue named_node_map_proto = JS_UNDEFINED;
+  JSValue attr_proto = JS_UNDEFINED;
+  JSValue tree_walker_proto = JS_UNDEFINED;
+  JSValue range_proto = JS_UNDEFINED;
+  JSValue mutation_observer_proto = JS_UNDEFINED;
+  JSValue dom_parser_proto = JS_UNDEFINED;
+  JSValue xml_serializer_proto = JS_UNDEFINED;
+  JSValue dom_implementation_proto = JS_UNDEFINED;
+  JSValue html_base_element_proto = JS_UNDEFINED;
+  JSValue html_script_element_proto = JS_UNDEFINED;
+  JSValue html_anchor_element_proto = JS_UNDEFINED;
   JSValue html_iframe_element_proto = JS_UNDEFINED;
+  JSValue html_form_element_proto = JS_UNDEFINED;
+  JSValue html_button_element_proto = JS_UNDEFINED;
+  JSValue html_input_element_proto = JS_UNDEFINED;
+  JSValue html_image_element_proto = JS_UNDEFINED;
+  JSValue html_media_element_proto = JS_UNDEFINED;
+  JSValue html_video_element_proto = JS_UNDEFINED;
+  JSValue html_canvas_element_proto = JS_UNDEFINED;
+  JSValue canvas_2d_proto = JS_UNDEFINED;
   JSValue svg_element_proto = JS_UNDEFINED;
   JSValue xhr_proto = JS_UNDEFINED;
+  JSValue message_port_proto = JS_UNDEFINED;
   JSValue window = JS_UNDEFINED;
+
+  struct MessagePortTask
+  {
+    std::weak_ptr<void> endpoint;
+    std::vector<uint8_t> serialized_data;
+  };
+  std::vector<MessagePortTask> message_port_tasks;
+  std::vector<std::weak_ptr<void>> message_port_endpoints;
+  std::unordered_map<std::string, std::string> session_storage;
 
   // Wrapper registry: node -> kept-alive wrapper (JS_DupValue'd).  Wrappers
   // live for the binder's lifetime so a detached node can never dangle.
   std::unordered_map<const dom::Node*, JSValue> wrappers;
+  std::unordered_map<const dom::Element*, JSValue> canvas_contexts;
 
   // Nodes created via createElement/createTextNode/cloneNode and not yet in a
   // tree.  Owned here until appended into the document.
@@ -648,9 +797,11 @@ struct Impl
   Impl& operator=(const Impl&) = delete;
 
   JSValue WrapNode(dom::Node* node);
+  JSValue WrapAttribute(dom::Element* element, std::string_view name);
   JSValue PrototypeFor(const dom::Node* node) const;
   JSValue MakeNodeArray(const std::vector<dom::Node*>& nodes);
   JSValue MakeElementArray(const std::vector<dom::Element*>& elements);
+  JSValue MakeHtmlCollection(const std::vector<dom::Element*>& elements);
 
   // Creates an Event object (class wrapper + event_proto prototype).
   JSValue MakeEvent(std::string type, bool bubbles, bool cancelable);

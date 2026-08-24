@@ -78,14 +78,34 @@ base::Result<Socket> Socket::Connect(std::string_view host, uint16_t port, int t
   }
 
   int fd = -1;
+  std::string failures;
   for (struct addrinfo* ai = results; ai != nullptr; ai = ai->ai_next) {
+    char numeric_host[NI_MAXHOST] = {};
+    const int name_rc = ::getnameinfo(ai->ai_addr, static_cast<socklen_t>(ai->ai_addrlen),
+                                      numeric_host, sizeof(numeric_host), nullptr, 0, NI_NUMERICHOST);
+    const std::string address = name_rc == 0 ? numeric_host : "unknown address";
+    const std::string family = ai->ai_family == AF_INET    ? "IPv4"
+                               : ai->ai_family == AF_INET6 ? "IPv6"
+                                                          : "family " + std::to_string(ai->ai_family);
+    const auto record_failure = [&failures, &family, &address](std::string reason) {
+      if (!failures.empty()) {
+        failures += "; ";
+      }
+      failures += family + " " + address + ": " + std::move(reason);
+    };
     fd = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
     if (fd < 0) {
+      record_failure("socket: " + std::string(std::strerror(errno)));
       continue;
     }
     // Non-blocking connect so the caller's timeout applies.
     const int flags = ::fcntl(fd, F_GETFL, 0);
-    ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    if (flags < 0 || ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+      record_failure("fcntl: " + std::string(std::strerror(errno)));
+      ::close(fd);
+      fd = -1;
+      continue;
+    }
     bool connected = false;
     const int c = ::connect(fd, ai->ai_addr, static_cast<socklen_t>(ai->ai_addrlen));
     if (c == 0) {
@@ -96,9 +116,21 @@ base::Result<Socket> Socket::Connect(std::string_view host, uint16_t port, int t
       if (pr > 0) {
         int so_error = 0;
         socklen_t error_len = sizeof(so_error);
-        ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &error_len);
-        connected = (so_error == 0);
+        if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &error_len) == 0) {
+          connected = (so_error == 0);
+          if (!connected) {
+            record_failure("connect: " + std::string(std::strerror(so_error)));
+          }
+        } else {
+          record_failure("getsockopt: " + std::string(std::strerror(errno)));
+        }
+      } else if (pr == 0) {
+        record_failure("connect timed out");
+      } else {
+        record_failure("poll: " + std::string(std::strerror(errno)));
       }
+    } else {
+      record_failure("connect: " + std::string(std::strerror(errno)));
     }
     ::fcntl(fd, F_SETFL, flags); // restore blocking mode
     if (connected) {
@@ -109,7 +141,11 @@ base::Result<Socket> Socket::Connect(std::string_view host, uint16_t port, int t
   }
   ::freeaddrinfo(results);
   if (fd < 0) {
-    return base::Err(base::Error::Network("connect failed for " + host_str + ":" + service));
+    std::string message = "connect failed for " + host_str + ":" + service;
+    if (!failures.empty()) {
+      message += " (attempts: " + failures + ")";
+    }
+    return base::Err(base::Error::Network(std::move(message)));
   }
   return Socket(fd);
 #endif

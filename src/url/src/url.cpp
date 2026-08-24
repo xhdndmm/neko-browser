@@ -201,7 +201,8 @@ bool ParseAuthority(std::string_view authority, Url& url)
     url.host_ = ToLowerAscii(hostport);
   } else {
     url.host_ = ToLowerAscii(hostport.substr(0, colon));
-    if (!ParsePort(hostport.substr(colon + 1), url.port_)) {
+    const std::string_view port = hostport.substr(colon + 1);
+    if (!port.empty() && !ParsePort(port, url.port_)) {
       return false;
     }
   }

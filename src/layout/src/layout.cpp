@@ -658,7 +658,8 @@ IntrinsicWidths MeasureContent(const dom::Element& element,
 {
   const style::ComputedStyle& style = styles.StyleFor(element);
   const bool replaced = element.tag_name() == "img" || element.tag_name() == "video" ||
-                        element.tag_name() == "input" || element.tag_name() == "textarea" ||
+                        element.tag_name() == "canvas" || element.tag_name() == "input" ||
+                        element.tag_name() == "textarea" ||
                         element.tag_name() == "select";
   if (replaced) {
     IntrinsicWidths w;
@@ -838,7 +839,8 @@ void ComputeReplacedSize(const style::ComputedStyle& style,
   // frame falls back to the HTML-spec default 300x150 box.
   float intrinsic_w = img != nullptr ? static_cast<float>(img->width) : 0.0f;
   float intrinsic_h = img != nullptr ? static_cast<float>(img->height) : 0.0f;
-  if (img == nullptr && element.tag_name() == "video") {
+  if (img == nullptr &&
+      (element.tag_name() == "video" || element.tag_name() == "canvas")) {
     intrinsic_w = 300;
     intrinsic_h = 150;
   }
@@ -1452,12 +1454,13 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         items.push_back(InlineItem{{}, &child_style, &child_element, /*line_break=*/true});
         return;
       }
-      if (child_element.tag_name() == "img" || child_element.tag_name() == "video") {
+        if (child_element.tag_name() == "img" || child_element.tag_name() == "video" ||
+          child_element.tag_name() == "canvas") {
         const image::Image* img = images != nullptr ? images->Find(child_element) : nullptr;
         float w = 0;
         float h = 0;
         ComputeReplacedSize(child_style, child_element, img, containing_width, w, h);
-        // A replaced <img>/<video>'s baseline is its bottom edge.
+        // A replaced image/media/canvas element's baseline is its bottom edge.
         items.push_back(InlineItem{{},
                                    &child_style,
                                    &child_element,
@@ -3345,7 +3348,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       if (box->style.width.has_value()) {
         content_width =
             SpecToContent(box->style.width.value(), cb_w, border_padding_w, box->style.box_sizing);
-      } else if (element.tag_name() == "img" || element.tag_name() == "video") {
+      } else if (element.tag_name() == "img" || element.tag_name() == "video" ||
+             element.tag_name() == "canvas") {
         // Replaced absolute boxes honor CSS size, else the presentational
         // width/height attributes, else the decoded intrinsic size.
         const image::Image* img = images != nullptr ? images->Find(element) : nullptr;
@@ -3373,7 +3377,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
           box->border_top + box->border_bottom + box->padding_top + box->padding_bottom;
       std::vector<dom::Element*> absolute_children;
       float content_height = 0;
-      if (element.tag_name() == "img" || element.tag_name() == "video") {
+        if (element.tag_name() == "img" || element.tag_name() == "video" ||
+          element.tag_name() == "canvas") {
         const image::Image* img = images != nullptr ? images->Find(element) : nullptr;
         float replaced_w = 0;
         float replaced_h = 0;

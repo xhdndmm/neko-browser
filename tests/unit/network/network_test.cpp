@@ -5,6 +5,7 @@
 #include "neko/url/url.h"
 
 #include <atomic>
+#include <cstdlib>
 #include <gtest/gtest.h>
 #include <mutex>
 #include <openssl/err.h>
@@ -97,6 +98,32 @@ std::string RawDeflateCompress(std::string_view data)
 }
 
 #ifndef _WIN32
+class ScopedEnvironmentVariable
+{
+public:
+  ScopedEnvironmentVariable(const char* name, std::string value) : name_(name)
+  {
+    const char* previous = std::getenv(name);
+    if (previous != nullptr) {
+      previous_ = previous;
+    }
+    ::setenv(name, value.c_str(), 1);
+  }
+
+  ~ScopedEnvironmentVariable()
+  {
+    if (previous_.has_value()) {
+      ::setenv(name_.c_str(), previous_->c_str(), 1);
+    } else {
+      ::unsetenv(name_.c_str());
+    }
+  }
+
+private:
+  std::string name_;
+  std::optional<std::string> previous_;
+};
+
 // A tiny single-purpose HTTP server for tests (POSIX only).
 class TestHttpServer
 {
@@ -455,6 +482,129 @@ private:
   SSL_CTX* ctx_ = nullptr;
   TestCert cert_;
 };
+
+class TestConnectProxy
+{
+public:
+  TestConnectProxy()
+  {
+    listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (listen_fd_ < 0) {
+      return;
+    }
+    int yes = 1;
+    ::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+    if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 ||
+        ::listen(listen_fd_, 1) != 0) {
+      ::close(listen_fd_);
+      listen_fd_ = -1;
+      return;
+    }
+    socklen_t len = sizeof(addr);
+    if (::getsockname(listen_fd_, reinterpret_cast<sockaddr*>(&addr), &len) != 0) {
+      ::close(listen_fd_);
+      listen_fd_ = -1;
+      return;
+    }
+    port_ = ntohs(addr.sin_port);
+    thread_ = std::thread([this] { Run(); });
+  }
+
+  ~TestConnectProxy()
+  {
+    if (listen_fd_ >= 0) {
+      ::shutdown(listen_fd_, SHUT_RDWR);
+      ::close(listen_fd_);
+    }
+    if (thread_.joinable()) {
+      thread_.join();
+    }
+  }
+
+  bool IsValid() const { return listen_fd_ >= 0; }
+  uint16_t port() const { return port_; }
+
+  std::string Request()
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return request_;
+  }
+
+private:
+  static void Relay(int from, int to)
+  {
+    char buffer[4096];
+    for (;;) {
+      const ssize_t received = ::recv(from, buffer, sizeof(buffer), 0);
+      if (received <= 0) {
+        ::shutdown(to, SHUT_WR);
+        return;
+      }
+      std::size_t sent = 0;
+      while (sent < static_cast<std::size_t>(received)) {
+        const ssize_t count = ::send(to, buffer + sent,
+                                     static_cast<std::size_t>(received) - sent, 0);
+        if (count <= 0) {
+          return;
+        }
+        sent += static_cast<std::size_t>(count);
+      }
+    }
+  }
+
+  void Run()
+  {
+    sockaddr_in client{};
+    socklen_t client_len = sizeof(client);
+    const int client_fd =
+        ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&client), &client_len);
+    if (client_fd < 0) {
+      return;
+    }
+    std::string request;
+    char buffer[4096];
+    while (request.find("\r\n\r\n") == std::string::npos) {
+      const ssize_t received = ::recv(client_fd, buffer, sizeof(buffer), 0);
+      if (received <= 0) {
+        ::close(client_fd);
+        return;
+      }
+      request.append(buffer, static_cast<std::size_t>(received));
+    }
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      request_ = request;
+    }
+
+    const std::size_t authority_start = request.find(' ') + 1;
+    const std::size_t port_separator = request.find(':', authority_start);
+    const std::size_t authority_end = request.find(' ', port_separator);
+    const uint16_t target_port = static_cast<uint16_t>(
+        std::stoi(request.substr(port_separator + 1, authority_end - port_separator - 1)));
+    const auto target = Socket::Connect("127.0.0.1", target_port);
+    if (!target.has_value()) {
+      ::close(client_fd);
+      return;
+    }
+    static constexpr std::string_view response =
+        "HTTP/1.1 200 Connection Established\r\n\r\n";
+    ::send(client_fd, response.data(), response.size(), 0);
+    std::thread upstream([&target, client_fd] { Relay(client_fd, target.value().fd()); });
+    Relay(target.value().fd(), client_fd);
+    upstream.join();
+    ::close(client_fd);
+  }
+
+  int listen_fd_ = -1;
+  uint16_t port_ = 0;
+  std::thread thread_;
+  std::mutex mutex_;
+  std::string request_;
+};
 #endif
 
 TEST(HttpTest, ParseBasicResponse)
@@ -582,6 +732,70 @@ TEST(TlsTest, GetFromLocalTlsServer)
   const auto result = HttpGet(url.value(), 5, {}, options);
   ASSERT_TRUE(result.has_value()) << result.error().message();
   EXPECT_EQ(result.value().status_code, 200);
+  EXPECT_EQ(result.value().body, "<h1>Hello TLS</h1>");
+}
+
+TEST(TlsTest, GetThroughHttpConnectProxy)
+{
+  TestTlsServer server;
+  TestConnectProxy proxy;
+  ASSERT_TRUE(server.IsValid());
+  ASSERT_TRUE(proxy.IsValid());
+  TlsOptions options;
+  options.extra_ca_cert_pem = server.cert_pem();
+  options.proxy_host = "127.0.0.1";
+  options.proxy_port = proxy.port();
+  const std::string host = "https://localhost:" + std::to_string(server.port()) + "/";
+  const auto url = url::Url::Parse(host);
+  ASSERT_TRUE(url.has_value());
+  const auto result = HttpGet(url.value(), 5, {}, options);
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  EXPECT_EQ(result.value().body, "<h1>Hello TLS</h1>");
+  EXPECT_NE(proxy.Request().find("CONNECT localhost:" + std::to_string(server.port()) +
+                                 " HTTP/1.1\r\n"),
+            std::string::npos);
+}
+
+      TEST(TlsTest, UsesHttpsProxyEnvironmentVariable)
+      {
+        TestTlsServer server;
+        TestConnectProxy proxy;
+        ASSERT_TRUE(server.IsValid());
+        ASSERT_TRUE(proxy.IsValid());
+        ScopedEnvironmentVariable lower_proxy(
+          "https_proxy", "http://127.0.0.1:" + std::to_string(proxy.port()));
+        ScopedEnvironmentVariable upper_proxy(
+          "HTTPS_PROXY", "http://127.0.0.1:" + std::to_string(proxy.port()));
+        ScopedEnvironmentVariable no_proxy("NO_PROXY", "");
+        ScopedEnvironmentVariable lower_no_proxy("no_proxy", "");
+        TlsOptions options;
+        options.extra_ca_cert_pem = server.cert_pem();
+        const std::string host = "https://localhost:" + std::to_string(server.port()) + "/";
+        const auto url = url::Url::Parse(host);
+        ASSERT_TRUE(url.has_value());
+        const auto result = HttpGet(url.value(), 5, {}, options);
+        ASSERT_TRUE(result.has_value()) << result.error().message();
+        EXPECT_EQ(result.value().body, "<h1>Hello TLS</h1>");
+        EXPECT_NE(proxy.Request().find("CONNECT localhost:" + std::to_string(server.port()) +
+                       " HTTP/1.1\r\n"),
+            std::string::npos);
+      }
+
+TEST(TlsTest, NoProxyBypassesHttpsProxyForMatchingHost)
+{
+  TestTlsServer server;
+  ASSERT_TRUE(server.IsValid());
+  ScopedEnvironmentVariable lower_proxy("https_proxy", "http://127.0.0.1:1");
+  ScopedEnvironmentVariable upper_proxy("HTTPS_PROXY", "http://127.0.0.1:1");
+  ScopedEnvironmentVariable no_proxy("NO_PROXY", "localhost");
+  ScopedEnvironmentVariable lower_no_proxy("no_proxy", "localhost");
+  TlsOptions options;
+  options.extra_ca_cert_pem = server.cert_pem();
+  const std::string host = "https://localhost:" + std::to_string(server.port()) + "/";
+  const auto url = url::Url::Parse(host);
+  ASSERT_TRUE(url.has_value());
+  const auto result = HttpGet(url.value(), 5, {}, options);
+  ASSERT_TRUE(result.has_value()) << result.error().message();
   EXPECT_EQ(result.value().body, "<h1>Hello TLS</h1>");
 }
 
@@ -947,6 +1161,8 @@ TEST(SocketTest, ConnectRefused)
   // Find a port that is very likely closed by binding and releasing.
   const auto socket = Socket::Connect("127.0.0.1", 1, 500);
   EXPECT_FALSE(socket.has_value());
+  EXPECT_NE(socket.error().message().find("IPv4 127.0.0.1"), std::string::npos);
+  EXPECT_NE(socket.error().message().find("connect:"), std::string::npos);
 }
 #endif
 

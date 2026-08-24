@@ -18,10 +18,17 @@ add_library(neko_javascript
   src/binding/document_binding.cpp
   src/binding/style_binding.cpp
   src/binding/event_binding.cpp
+  src/binding/event_target_binding.cpp
+  src/binding/headers_binding.cpp
   src/binding/storage_binding.cpp
   src/binding/global_binding.cpp
   src/binding/ui_binding.cpp
   src/binding/xhr_binding.cpp
+  src/binding/canvas_binding.cpp
+  src/binding/url_binding.cpp
+  src/binding/url_search_params_binding.cpp
+  src/binding/form_data_binding.cpp
+  src/binding/message_channel_binding.cpp
 )
 add_library(neko::javascript ALIAS neko_javascript)
 
@@ -31,7 +38,7 @@ target_include_directories(neko_javascript PUBLIC
 )
 # DOM bindings (Phase 8 M2) make the module depend on the DOM/HTML/CSS
 # layers; none of those depend back on javascript, so there is no cycle.
-target_link_libraries(neko_javascript PUBLIC neko::base neko::url neko::dom neko::css neko::html PRIVATE qjs)
+target_link_libraries(neko_javascript PUBLIC neko::base neko::url neko::dom neko::css neko::html PRIVATE neko::security qjs)
 # QuickJS is a third-party dependency; mark its headers SYSTEM so our strict
 # warnings (-Wold-style-cast / -Wdouble-promotion) don't fire inside quickjs.h.
 target_include_directories(neko_javascript SYSTEM PRIVATE ${quickjs_SOURCE_DIR})

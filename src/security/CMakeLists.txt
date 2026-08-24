@@ -9,6 +9,7 @@
 
 add_library(neko_security
   src/origin.cpp
+  src/random.cpp
 )
 add_library(neko::security ALIAS neko_security)
 
@@ -16,5 +17,5 @@ target_compile_features(neko_security PUBLIC cxx_std_20)
 target_include_directories(neko_security PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
-target_link_libraries(neko_security PUBLIC neko::base neko::url)
+target_link_libraries(neko_security PUBLIC neko::base neko::url PRIVATE OpenSSL::Crypto)
 apply_compiler_warnings(neko_security)

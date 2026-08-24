@@ -324,6 +324,27 @@ JSValue XhrGetResponseUrl(JSContext* ctx, JSValueConst this_val)
   return JS_NewString(ctx, w != nullptr ? w->response_url.c_str() : "");
 }
 
+JSValue XhrGetResponseType(JSContext* ctx, JSValueConst this_val)
+{
+  auto* w = XhrOf(ctx, this_val);
+  return JS_NewString(ctx, w != nullptr ? w->response_type.c_str() : "");
+}
+
+JSValue XhrSetResponseType(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  auto* w = XhrOf(ctx, this_val);
+  if (w == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an XMLHttpRequest");
+  }
+  const char* text = JS_ToCString(ctx, value);
+  if (text == nullptr) {
+    return JS_EXCEPTION;
+  }
+  w->response_type = text;
+  JS_FreeCString(ctx, text);
+  return JS_UNDEFINED;
+}
+
 JSValue XhrGetWithCredentials(JSContext* ctx, JSValueConst this_val)
 {
   (void)XhrOf(ctx, this_val);
@@ -460,6 +481,11 @@ void InstallXhrGlobal(JSContext* ctx, Impl& impl)
   DefineGetter(ctx, proto, "responseText", MakeGetter(ctx, "responseText", XhrGetResponseText));
   DefineGetter(ctx, proto, "response", MakeGetter(ctx, "response", XhrGetResponseText));
   DefineGetter(ctx, proto, "responseURL", MakeGetter(ctx, "responseURL", XhrGetResponseUrl));
+  DefineAccessor(ctx,
+                 proto,
+                 "responseType",
+                 MakeGetter(ctx, "responseType", XhrGetResponseType),
+                 MakeSetter(ctx, "responseType", XhrSetResponseType));
   DefineGetter(
       ctx, proto, "withCredentials", MakeGetter(ctx, "withCredentials", XhrGetWithCredentials));
 

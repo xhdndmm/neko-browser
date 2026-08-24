@@ -62,10 +62,18 @@ JSValue RejectPromise(JSContext* ctx, const std::string& message)
 
 // ---- localStorage ----------------------------------------------------------
 
+bool IsSessionStorage(JSContext* ctx, JSValueConst this_val)
+{
+  JSValue marker = JS_GetPropertyStr(ctx, this_val, "__nekoSessionStorage");
+  const bool is_session_storage = JS_ToBool(ctx, marker) == 1;
+  JS_FreeValue(ctx, marker);
+  return is_session_storage;
+}
+
 JSValue LocalStorageGetItem(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  if (impl == nullptr || !impl->apis.storage_get) {
+  if (impl == nullptr || (!IsSessionStorage(ctx, this_val) && !impl->apis.storage_get)) {
     return JS_ThrowTypeError(ctx, "localStorage is not available");
   }
   bool ok = false;
@@ -73,14 +81,20 @@ JSValue LocalStorageGetItem(JSContext* ctx, JSValueConst this_val, int argc, JSV
   if (!ok) {
     return JS_EXCEPTION;
   }
-  const std::optional<std::string> value = impl->apis.storage_get(key);
+    const bool is_session_storage = IsSessionStorage(ctx, this_val);
+    const auto session_value = impl->session_storage.find(key);
+    const std::optional<std::string> value = is_session_storage
+                    ? (session_value == impl->session_storage.end()
+                      ? std::nullopt
+                      : std::optional<std::string>(session_value->second))
+                    : impl->apis.storage_get(key);
   return value.has_value() ? JS_NewString(ctx, value->c_str()) : JS_NULL;
 }
 
 JSValue LocalStorageSetItem(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  if (impl == nullptr || !impl->apis.storage_set) {
+  if (impl == nullptr || (!IsSessionStorage(ctx, this_val) && !impl->apis.storage_set)) {
     return JS_ThrowTypeError(ctx, "localStorage is not available");
   }
   bool ok = false;
@@ -92,14 +106,18 @@ JSValue LocalStorageSetItem(JSContext* ctx, JSValueConst this_val, int argc, JSV
   if (!ok) {
     return JS_EXCEPTION;
   }
-  impl->apis.storage_set(key, value);
+  if (IsSessionStorage(ctx, this_val)) {
+    impl->session_storage[key] = value;
+  } else {
+    impl->apis.storage_set(key, value);
+  }
   return JS_UNDEFINED;
 }
 
 JSValue LocalStorageRemoveItem(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  if (impl == nullptr || !impl->apis.storage_remove) {
+  if (impl == nullptr || (!IsSessionStorage(ctx, this_val) && !impl->apis.storage_remove)) {
     return JS_ThrowTypeError(ctx, "localStorage is not available");
   }
   bool ok = false;
@@ -107,7 +125,11 @@ JSValue LocalStorageRemoveItem(JSContext* ctx, JSValueConst this_val, int argc, 
   if (!ok) {
     return JS_EXCEPTION;
   }
-  impl->apis.storage_remove(key);
+  if (IsSessionStorage(ctx, this_val)) {
+    impl->session_storage.erase(key);
+  } else {
+    impl->apis.storage_remove(key);
+  }
   return JS_UNDEFINED;
 }
 
@@ -115,17 +137,21 @@ JSValue
 LocalStorageClear(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  if (impl == nullptr || !impl->apis.storage_clear) {
+  if (impl == nullptr || (!IsSessionStorage(ctx, this_val) && !impl->apis.storage_clear)) {
     return JS_ThrowTypeError(ctx, "localStorage is not available");
   }
-  impl->apis.storage_clear();
+  if (IsSessionStorage(ctx, this_val)) {
+    impl->session_storage.clear();
+  } else {
+    impl->apis.storage_clear();
+  }
   return JS_UNDEFINED;
 }
 
 JSValue LocalStorageKey(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  if (impl == nullptr || !impl->apis.storage_keys) {
+  if (impl == nullptr || (!IsSessionStorage(ctx, this_val) && !impl->apis.storage_keys)) {
     return JS_ThrowTypeError(ctx, "localStorage is not available");
   }
   int64_t index = 0;
@@ -133,7 +159,16 @@ JSValue LocalStorageKey(JSContext* ctx, JSValueConst this_val, int argc, JSValue
     JS_FreeValue(ctx, JS_GetException(ctx));
     return JS_NULL;
   }
-  const std::vector<std::string> keys = impl->apis.storage_keys();
+  std::vector<std::string> keys;
+  if (IsSessionStorage(ctx, this_val)) {
+    keys.reserve(impl->session_storage.size());
+    for (const auto& [key, value] : impl->session_storage) {
+      (void)value;
+      keys.push_back(key);
+    }
+  } else {
+    keys = impl->apis.storage_keys();
+  }
   if (index < 0 || static_cast<std::size_t>(index) >= keys.size()) {
     return JS_NULL;
   }
@@ -143,10 +178,12 @@ JSValue LocalStorageKey(JSContext* ctx, JSValueConst this_val, int argc, JSValue
 JSValue LocalStorageLength(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  if (impl == nullptr || !impl->apis.storage_keys) {
+  if (impl == nullptr || (!IsSessionStorage(ctx, this_val) && !impl->apis.storage_keys)) {
     return JS_NewInt32(ctx, 0);
   }
-  return JS_NewInt32(ctx, static_cast<int32_t>(impl->apis.storage_keys().size()));
+  const std::size_t size = IsSessionStorage(ctx, this_val) ? impl->session_storage.size()
+                                                            : impl->apis.storage_keys().size();
+  return JS_NewInt32(ctx, static_cast<int32_t>(size));
 }
 
 JSValue BlobText(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
@@ -273,30 +310,72 @@ JSValue FetchResponseJson(JSContext* ctx,
   return ResolvePromise(ctx, parsed);
 }
 
-// Headers.get(name): case-insensitive lookup over func_data[0], an object of
-// lowercased header names.
-JSValue FetchHeadersGet(JSContext* ctx,
-                        JSValueConst /*this_val*/,
-                        int argc,
-                        JSValueConst* argv,
-                        int /*magic*/,
-                        JSValueConst* func_data)
+JSValue ResponsePrototype(JSContext* ctx)
 {
-  bool ok = false;
-  const std::string name = ArgString(ctx, argc >= 1 ? argv[0] : JS_UNDEFINED, &ok);
-  if (!ok) {
-    return JS_EXCEPTION;
+  JSValue global = JS_GetGlobalObject(ctx);
+  JSValue constructor = JS_GetPropertyStr(ctx, global, "Response");
+  JSValue prototype = JS_GetPropertyStr(ctx, constructor, "prototype");
+  JS_FreeValue(ctx, constructor);
+  JS_FreeValue(ctx, global);
+  return prototype;
+}
+
+JSValue MakeResponseWithBody(JSContext* ctx,
+                             JSValueConst prototype,
+                             std::string_view body,
+                             int status,
+                             std::string_view status_text,
+                             std::string_view url,
+                             const std::vector<std::pair<std::string, std::string>>& headers)
+{
+  JSValue response = JS_NewObjectProto(ctx, prototype);
+  JS_SetPropertyStr(ctx, response, "status", JS_NewInt32(ctx, status));
+  JS_SetPropertyStr(ctx, response, "ok", JS_NewBool(ctx, status >= 200 && status < 300));
+  JS_SetPropertyStr(
+      ctx, response, "statusText", JS_NewStringLen(ctx, status_text.data(), status_text.size()));
+  JS_SetPropertyStr(ctx, response, "url", JS_NewStringLen(ctx, url.data(), url.size()));
+  JS_SetPropertyStr(ctx, response, "headers", MakeHeaders(ctx, headers));
+  JS_SetPropertyStr(ctx, response, "__nekoResponseBody", JS_NewStringLen(ctx, body.data(), body.size()));
+  return response;
+}
+
+JSValue ResponseText(JSContext* ctx, JSValueConst this_val, int, JSValueConst*)
+{
+  JSValue body = JS_GetPropertyStr(ctx, this_val, "__nekoResponseBody");
+  if (JS_IsUndefined(body)) {
+    JS_FreeValue(ctx, body);
+    return JS_ThrowTypeError(ctx, "not a Response");
   }
-  std::string lower;
-  for (const char c : name) {
-    lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+  return ResolvePromise(ctx, body);
+}
+
+JSValue ResponseJson(JSContext* ctx, JSValueConst this_val, int, JSValueConst*)
+{
+  JSValue body = JS_GetPropertyStr(ctx, this_val, "__nekoResponseBody");
+  if (JS_IsUndefined(body)) {
+    JS_FreeValue(ctx, body);
+    return JS_ThrowTypeError(ctx, "not a Response");
   }
-  JSValue value = JS_GetPropertyStr(ctx, func_data[0], lower.c_str());
-  if (JS_IsUndefined(value)) {
-    JS_FreeValue(ctx, value);
-    return JS_NULL;
+  JSValue arguments[] = {body};
+  JSValue result = FetchResponseJson(ctx, this_val, 1, arguments, 0, arguments);
+  JS_FreeValue(ctx, body);
+  return result;
+}
+
+JSValue ResponseConstructor(JSContext* ctx, JSValueConst new_target, int argc, JSValueConst* argv)
+{
+  std::string body;
+  if (argc > 0 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0])) {
+    bool ok = false;
+    body = ArgString(ctx, argv[0], &ok);
+    if (!ok) {
+      return JS_EXCEPTION;
+    }
   }
-  return value;
+  JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
+  JSValue response = MakeResponseWithBody(ctx, prototype, body, 200, "", "", {});
+  JS_FreeValue(ctx, prototype);
+  return response;
 }
 
 JSValue JsFetch(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
@@ -323,37 +402,38 @@ JSValue JsFetch(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* a
   }
   const FetchResponse& r = response.value();
 
-  JSValue resp = JS_NewObject(ctx);
-  JS_SetPropertyStr(ctx, resp, "status", JS_NewInt32(ctx, r.status));
-  JS_SetPropertyStr(ctx, resp, "ok", JS_NewBool(ctx, r.status >= 200 && r.status < 300));
-  JS_SetPropertyStr(ctx, resp, "statusText", JS_NewString(ctx, r.status_text.c_str()));
-  JS_SetPropertyStr(
-      ctx, resp, "url", JS_NewString(ctx, r.final_url.empty() ? url.c_str() : r.final_url.c_str()));
+  return ResolvePromise(ctx, MakeResponse(ctx, r, url));
+}
 
-  // headers: { get(name) } backed by an object of lowercased names.
-  JSValue headers_map = JS_NewObject(ctx);
-  for (const auto& header : r.headers) {
-    std::string lower;
-    for (const char c : header.first) {
-      lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-    }
-    JS_SetPropertyStr(ctx, headers_map, lower.c_str(), JS_NewString(ctx, header.second.c_str()));
-  }
-  JSValue headers = JS_NewObject(ctx);
-  JSValue headers_get = JS_NewCFunctionData(ctx, FetchHeadersGet, 1, 0, 1, &headers_map);
-  JS_SetPropertyStr(ctx, headers, "get", headers_get); // steals headers_get
-  JS_SetPropertyStr(ctx, resp, "headers", headers);    // steals headers
-  JS_FreeValue(ctx, headers_map);                      // the function dup'd it
+void InstallResponseGlobal(JSContext* ctx, JSValue global)
+{
+  JSValue prototype = JS_NewObject(ctx);
+  static const std::array<JSCFunctionListEntry, 2> kMethods = {{
+      JS_CFUNC_DEF("text", 0, ResponseText),
+      JS_CFUNC_DEF("json", 0, ResponseJson),
+  }};
+  JS_SetPropertyFunctionList(ctx, prototype, kMethods.data(), static_cast<int>(kMethods.size()));
+  JSValue constructor =
+      JS_NewCFunction2(ctx, ResponseConstructor, "Response", 0, JS_CFUNC_constructor, 0);
+  JS_SetPropertyStr(ctx, constructor, "prototype", JS_DupValue(ctx, prototype));
+  JS_SetPropertyStr(ctx, prototype, "constructor", JS_DupValue(ctx, constructor));
+  JS_SetPropertyStr(ctx, global, "Response", constructor);
+  JS_FreeValue(ctx, prototype);
+}
 
-  // text()/json(): closures over the body.
-  JSValue body = JS_NewString(ctx, r.body.c_str());
-  JSValue text_fn = JS_NewCFunctionData(ctx, FetchResponseText, 0, 0, 1, &body);
-  JS_SetPropertyStr(ctx, resp, "text", text_fn); // steals text_fn
-  JSValue json_fn = JS_NewCFunctionData(ctx, FetchResponseJson, 0, 0, 1, &body);
-  JS_SetPropertyStr(ctx, resp, "json", json_fn); // steals json_fn
-  JS_FreeValue(ctx, body);                       // the functions dup'd it
-
-  return ResolvePromise(ctx, resp);
+JSValue MakeResponse(JSContext* ctx, const FetchResponse& response, std::string_view request_url)
+{
+  JSValue prototype = ResponsePrototype(ctx);
+  const std::string_view url = response.final_url.empty() ? request_url : response.final_url;
+  JSValue result = MakeResponseWithBody(ctx,
+                                        prototype,
+                                        response.body,
+                                        response.status,
+                                        response.status_text,
+                                        url,
+                                        response.headers);
+  JS_FreeValue(ctx, prototype);
+  return result;
 }
 
 // ---------------------------------------------------------------------------

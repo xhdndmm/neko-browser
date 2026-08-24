@@ -7,6 +7,7 @@
 #include "neko/dom/element.h"
 #include "neko/dom/node.h"
 #include "neko/dom/query.h"
+#include "neko/html/parser.h"
 
 #include "binding_internal.h"
 
@@ -17,6 +18,72 @@
 
 namespace neko::javascript {
 
+JSValue
+DOMParserConstructor(JSContext* ctx, JSValueConst new_target, int /*argc*/, JSValueConst* /*argv*/)
+{
+  JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
+  if (JS_IsException(prototype)) {
+    return prototype;
+  }
+  JSValue parser = JS_NewObjectProto(ctx, prototype);
+  JS_FreeValue(ctx, prototype);
+  return parser;
+}
+
+JSValue
+DOMParserParseFromString(JSContext* ctx, JSValueConst /*this_val*/, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, JS_UNDEFINED);
+  if (impl == nullptr || argc < 2) {
+    return JS_ThrowTypeError(ctx, "parseFromString requires input and mimeType");
+  }
+  bool input_ok = false;
+  bool mime_ok = false;
+  const std::string input = ArgString(ctx, argv[0], &input_ok);
+  const std::string mime_type = ToLower(ArgString(ctx, argv[1], &mime_ok));
+  if (!input_ok || !mime_ok) {
+    return JS_EXCEPTION;
+  }
+  if (mime_type != "text/html") {
+    return ThrowDomException(
+        ctx, "NotSupportedError", "DOMParser currently supports only text/html");
+  }
+  std::unique_ptr<dom::Document> parsed = html::Parser(input).Parse();
+  dom::Document* document = parsed.get();
+  impl->TakeOwnership(document, std::move(parsed));
+  return impl->WrapNode(document);
+}
+
+JSValue XMLSerializerConstructor(JSContext* ctx,
+                                 JSValueConst new_target,
+                                 int /*argc*/,
+                                 JSValueConst* /*argv*/)
+{
+  JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
+  if (JS_IsException(prototype)) {
+    return prototype;
+  }
+  JSValue serializer = JS_NewObjectProto(ctx, prototype);
+  JS_FreeValue(ctx, prototype);
+  return serializer;
+}
+
+JSValue XMLSerializerSerializeToString(JSContext* ctx,
+                                       JSValueConst /*this_val*/,
+                                       int argc,
+                                       JSValueConst* argv)
+{
+  if (argc < 1) {
+    return JS_ThrowTypeError(ctx, "serializeToString requires a Node");
+  }
+  dom::Node* node = UnwrapNode(argv[0]);
+  if (node == nullptr) {
+    return JS_ThrowTypeError(ctx, "serializeToString argument is not a Node");
+  }
+  const std::string serialized = node->ToString();
+  return JS_NewStringLen(ctx, serialized.data(), serialized.size());
+}
+
 JSValue DocGetDocumentElement(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
@@ -25,6 +92,15 @@ JSValue DocGetDocumentElement(JSContext* ctx, JSValueConst this_val)
     return JS_ThrowTypeError(ctx, "not a document");
   }
   return impl->WrapNode(static_cast<dom::Document*>(node)->document_element());
+}
+
+JSValue DocGetDoctype(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Node* node = UnwrapNode(this_val);
+  if (node == nullptr || node->node_type() != dom::NodeType::kDocument) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  return JS_NULL;
 }
 
 JSValue DocGetBody(JSContext* ctx, JSValueConst this_val)
@@ -150,14 +226,7 @@ JSValue DocGetImplementation(JSContext* ctx, JSValueConst this_val)
     return JS_ThrowTypeError(ctx, "not a document");
   }
   if (JS_IsUndefined(impl->document_implementation)) {
-    JSValue doc_impl = JS_NewObject(ctx);
-    JSValue has_feature = JS_NewCFunction(ctx, DocumentImplementationHasFeature, "hasFeature", 2);
-    JS_SetPropertyStr(ctx, doc_impl, "hasFeature", has_feature); // steals
-    JSValue create_html =
-        JS_NewCFunction(ctx, DocumentImplementationCreateHTMLDocument, "createHTMLDocument", 1);
-    JS_SetPropertyStr(ctx, doc_impl, "createHTMLDocument", create_html); // steals
-    impl->document_implementation = JS_DupValue(ctx, doc_impl);
-    JS_FreeValue(ctx, doc_impl);
+    impl->document_implementation = JS_NewObjectProto(ctx, impl->dom_implementation_proto);
   }
   return JS_DupValue(ctx, impl->document_implementation);
 }
@@ -339,6 +408,169 @@ JSValue DocCreateDocumentFragment(JSContext* ctx,
   return impl->WrapNode(raw);
 }
 
+uint32_t NodeShowMask(dom::NodeType type)
+{
+  switch (type) {
+  case dom::NodeType::kElement:
+    return 0x1;
+  case dom::NodeType::kText:
+    return 0x4;
+  case dom::NodeType::kComment:
+    return 0x80;
+  case dom::NodeType::kDocument:
+    return 0x100;
+  case dom::NodeType::kDocumentFragment:
+    return 0x400;
+  }
+  return 0;
+}
+
+dom::Node* NextTreeNode(dom::Node* node, dom::Node* root)
+{
+  const auto children = node->ChildNodes();
+  if (children.begin() != children.end()) {
+    return *children.begin();
+  }
+  while (node != root) {
+    if (dom::Node* sibling = SiblingOf(node, +1)) {
+      return sibling;
+    }
+    node = node->parent();
+  }
+  return nullptr;
+}
+
+JSValue DocCreateTreeWalker(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* root = argc >= 1 ? UnwrapNode(argv[0]) : nullptr;
+  if (impl == nullptr || root == nullptr) {
+    return JS_ThrowTypeError(ctx, "createTreeWalker requires a root Node");
+  }
+  uint32_t what_to_show = 0xFFFFFFFFU;
+  if (argc >= 2 && !JS_IsUndefined(argv[1]) && JS_ToUint32(ctx, &what_to_show, argv[1]) < 0) {
+    return JS_EXCEPTION;
+  }
+  JSValue walker = JS_NewObjectProto(ctx, impl->tree_walker_proto);
+  JS_SetPropertyStr(ctx, walker, "root", impl->WrapNode(root));
+  JS_SetPropertyStr(ctx, walker, "currentNode", impl->WrapNode(root));
+  JS_SetPropertyStr(ctx, walker, "_whatToShow", JS_NewUint32(ctx, what_to_show));
+  return walker;
+}
+
+JSValue RangeGetBoundaryContainer(JSContext* ctx, JSValueConst this_val, const char* property)
+{
+  JSValue container = JS_GetPropertyStr(ctx, this_val, property);
+  if (JS_IsUndefined(container)) {
+    JS_FreeValue(ctx, container);
+    return JS_ThrowTypeError(ctx, "not a Range");
+  }
+  return container;
+}
+
+JSValue RangeGetStartContainer(JSContext* ctx, JSValueConst this_val)
+{
+  return RangeGetBoundaryContainer(ctx, this_val, "__nekoRangeStartContainer");
+}
+
+JSValue RangeGetEndContainer(JSContext* ctx, JSValueConst this_val)
+{
+  return RangeGetBoundaryContainer(ctx, this_val, "__nekoRangeEndContainer");
+}
+
+JSValue RangeGetBoundaryOffset(JSContext* ctx, JSValueConst this_val, const char* property)
+{
+  JSValue offset = JS_GetPropertyStr(ctx, this_val, property);
+  if (JS_IsUndefined(offset)) {
+    JS_FreeValue(ctx, offset);
+    return JS_ThrowTypeError(ctx, "not a Range");
+  }
+  return offset;
+}
+
+JSValue RangeGetStartOffset(JSContext* ctx, JSValueConst this_val)
+{
+  return RangeGetBoundaryOffset(ctx, this_val, "__nekoRangeStartOffset");
+}
+
+JSValue RangeGetEndOffset(JSContext* ctx, JSValueConst this_val)
+{
+  return RangeGetBoundaryOffset(ctx, this_val, "__nekoRangeEndOffset");
+}
+
+JSValue RangeGetCommonAncestorContainer(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  JSValue start_value = JS_GetPropertyStr(ctx, this_val, "__nekoRangeStartContainer");
+  JSValue end_value = JS_GetPropertyStr(ctx, this_val, "__nekoRangeEndContainer");
+  dom::Node* start = UnwrapNode(start_value);
+  dom::Node* end = UnwrapNode(end_value);
+  JS_FreeValue(ctx, start_value);
+  JS_FreeValue(ctx, end_value);
+  if (impl == nullptr || start == nullptr || end == nullptr) {
+    return JS_ThrowTypeError(ctx, "not a Range");
+  }
+
+  for (dom::Node* ancestor = start; ancestor != nullptr; ancestor = ancestor->parent()) {
+    for (dom::Node* candidate = end; candidate != nullptr; candidate = candidate->parent()) {
+      if (ancestor == candidate) {
+        return impl->WrapNode(ancestor);
+      }
+    }
+  }
+  return JS_ThrowTypeError(ctx, "Range boundary containers have no common ancestor");
+}
+
+JSValue DocCreateRange(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* document = UnwrapNode(this_val);
+  if (impl == nullptr || document == nullptr || document->node_type() != dom::NodeType::kDocument) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  JSValue range = JS_NewObjectProto(ctx, impl->range_proto);
+  JS_DefinePropertyValueStr(
+      ctx, range, "__nekoRangeStartContainer", JS_DupValue(ctx, this_val), JS_PROP_CONFIGURABLE);
+  JS_DefinePropertyValueStr(
+      ctx, range, "__nekoRangeEndContainer", JS_DupValue(ctx, this_val), JS_PROP_CONFIGURABLE);
+  JS_DefinePropertyValueStr(
+      ctx, range, "__nekoRangeStartOffset", JS_NewInt32(ctx, 0), JS_PROP_CONFIGURABLE);
+  JS_DefinePropertyValueStr(
+      ctx, range, "__nekoRangeEndOffset", JS_NewInt32(ctx, 0), JS_PROP_CONFIGURABLE);
+  return range;
+}
+
+JSValue
+TreeWalkerNextNode(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  JSValue root_value = JS_GetPropertyStr(ctx, this_val, "root");
+  JSValue current_value = JS_GetPropertyStr(ctx, this_val, "currentNode");
+  JSValue mask_value = JS_GetPropertyStr(ctx, this_val, "_whatToShow");
+  dom::Node* root = UnwrapNode(root_value);
+  dom::Node* current = UnwrapNode(current_value);
+  uint32_t what_to_show = 0;
+  const int mask_result = JS_ToUint32(ctx, &what_to_show, mask_value);
+  JS_FreeValue(ctx, mask_value);
+  JS_FreeValue(ctx, current_value);
+  JS_FreeValue(ctx, root_value);
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || root == nullptr || current == nullptr || mask_result < 0) {
+    return JS_ThrowTypeError(ctx, "invalid TreeWalker");
+  }
+  for (dom::Node* candidate = NextTreeNode(current, root); candidate != nullptr;
+       candidate = NextTreeNode(candidate, root)) {
+    if ((what_to_show & NodeShowMask(candidate->node_type())) == 0) {
+      continue;
+    }
+    JSValue wrapped = impl->WrapNode(candidate);
+    JSValue walker = JS_DupValue(ctx, this_val);
+    JS_SetPropertyStr(ctx, walker, "currentNode", JS_DupValue(ctx, wrapped));
+    JS_FreeValue(ctx, walker);
+    return wrapped;
+  }
+  return JS_NULL;
+}
+
 JSValue DocCreateComment(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
@@ -518,6 +750,15 @@ JSValue DocGetBaseURI(JSContext* ctx, JSValueConst this_val)
   return DocGetURL(ctx, this_val);
 }
 
+JSValue DocGetDefaultView(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  return JS_DupValue(ctx, impl->window);
+}
+
 JSValue DocGetDocumentURI(JSContext* ctx, JSValueConst this_val)
 {
   return DocGetURL(ctx, this_val);
@@ -614,10 +855,7 @@ JSValue DocGetLinks(JSContext* ctx, JSValueConst this_val)
   return impl->MakeElementArray(out);
 }
 
-JSValue DocWrite(JSContext* ctx,
-                 JSValueConst /*this_val*/,
-                 int argc,
-                 JSValueConst* argv)
+JSValue DocWrite(JSContext* ctx, JSValueConst /*this_val*/, int argc, JSValueConst* argv)
 {
   // Scripts run after parsing, so document.write cannot replace the input
   // stream here.  Keep the legacy entry point callable until parser-time
@@ -637,21 +875,38 @@ JSValue DocWrite(JSContext* ctx,
 
 void DefineDocumentPrototype(JSContext* ctx, Impl& impl)
 {
-  static const std::array<JSCFunctionListEntry, 11> kMethods = {{
+  static const std::array<JSCFunctionListEntry, 14> kMethods = {{
       JS_CFUNC_DEF("getElementById", 1, DocGetElementById),
       JS_CFUNC_DEF("createElement", 1, DocCreateElement),
       JS_CFUNC_DEF("createElementNS", 2, DocCreateElementNS),
       JS_CFUNC_DEF("createTextNode", 1, DocCreateTextNode),
       JS_CFUNC_DEF("createDocumentFragment", 0, DocCreateDocumentFragment),
+      JS_CFUNC_DEF("createTreeWalker", 1, DocCreateTreeWalker),
+      JS_CFUNC_DEF("createRange", 0, DocCreateRange),
       JS_CFUNC_DEF("createComment", 1, DocCreateComment),
       JS_CFUNC_DEF("querySelector", 1, DocQuerySelector),
       JS_CFUNC_DEF("querySelectorAll", 1, DocQuerySelectorAll),
       JS_CFUNC_DEF("getElementsByTagName", 1, DocGetElementsByTagName),
       JS_CFUNC_DEF("getElementsByClassName", 1, DocGetElementsByClassName),
-        JS_CFUNC_DEF("write", 1, DocWrite),
+      JS_CFUNC_DEF("write", 1, DocWrite),
+      JS_CFUNC_DEF("writeln", 1, DocWrite),
   }};
   JS_SetPropertyFunctionList(
       ctx, impl.document_proto, kMethods.data(), static_cast<int>(kMethods.size()));
+
+  DefineGetter(ctx,
+               impl.range_proto,
+               "startContainer",
+               MakeGetter(ctx, "startContainer", RangeGetStartContainer));
+  DefineGetter(
+      ctx, impl.range_proto, "startOffset", MakeGetter(ctx, "startOffset", RangeGetStartOffset));
+  DefineGetter(
+      ctx, impl.range_proto, "endContainer", MakeGetter(ctx, "endContainer", RangeGetEndContainer));
+  DefineGetter(ctx, impl.range_proto, "endOffset", MakeGetter(ctx, "endOffset", RangeGetEndOffset));
+  DefineGetter(ctx,
+               impl.range_proto,
+               "commonAncestorContainer",
+               MakeGetter(ctx, "commonAncestorContainer", RangeGetCommonAncestorContainer));
 
   DefineGetter(ctx,
                impl.document_proto,
@@ -661,6 +916,7 @@ void DefineDocumentPrototype(JSContext* ctx, Impl& impl)
                impl.document_proto,
                "documentElement",
                MakeGetter(ctx, "documentElement", DocGetDocumentElement));
+  DefineGetter(ctx, impl.document_proto, "doctype", MakeGetter(ctx, "doctype", DocGetDoctype));
   DefineGetter(ctx, impl.document_proto, "body", MakeGetter(ctx, "body", DocGetBody));
   DefineGetter(ctx, impl.document_proto, "head", MakeGetter(ctx, "head", DocGetHead));
   DefineGetter(
@@ -676,6 +932,8 @@ void DefineDocumentPrototype(JSContext* ctx, Impl& impl)
                  "cookie",
                  MakeGetter(ctx, "cookie", DocGetCookie),
                  MakeSetter(ctx, "cookie", DocSetCookie));
+  DefineGetter(
+      ctx, impl.document_proto, "defaultView", MakeGetter(ctx, "defaultView", DocGetDefaultView));
   DefineGetter(ctx, impl.document_proto, "baseURI", MakeGetter(ctx, "baseURI", DocGetBaseURI));
   DefineGetter(
       ctx, impl.document_proto, "documentURI", MakeGetter(ctx, "documentURI", DocGetDocumentURI));

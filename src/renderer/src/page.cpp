@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <optional>
@@ -342,6 +343,75 @@ void Page::SetElementImage(const dom::Element& element,
   }
   video_states_.erase(&element); // a static image replaces any video frame
   root_.reset();                 // the replaced box's intrinsic size may have changed
+  display_list_.reset();
+  BumpVersion();
+}
+
+void Page::FillCanvasRect(const dom::Element& element,
+                          double x,
+                          double y,
+                          double width,
+                          double height,
+                          std::array<std::uint8_t, 4> color)
+{
+  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(width) ||
+      !std::isfinite(height) || width == 0 || height == 0) {
+    return;
+  }
+  if (width < 0) {
+    x += width;
+    width = -width;
+  }
+  if (height < 0) {
+    y += height;
+    height = -height;
+  }
+
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto [entry, inserted] = images_.try_emplace(&element);
+  image::Image& canvas = entry->second;
+  if (inserted || canvas.width != 300 || canvas.height != 150 ||
+      canvas.rgba.size() != 300U * 150U * 4U) {
+    canvas.width = 300;
+    canvas.height = 150;
+    canvas.rgba.assign(300U * 150U * 4U, 0);
+    root_.reset();
+  }
+
+  const int left = std::clamp(static_cast<int>(std::floor(x)), 0, canvas.width);
+  const int top = std::clamp(static_cast<int>(std::floor(y)), 0, canvas.height);
+  const int right = std::clamp(static_cast<int>(std::ceil(x + width)), 0, canvas.width);
+  const int bottom = std::clamp(static_cast<int>(std::ceil(y + height)), 0, canvas.height);
+  if (left >= right || top >= bottom) {
+    return;
+  }
+
+  const unsigned source_alpha = color[3];
+  for (int pixel_y = top; pixel_y < bottom; ++pixel_y) {
+    for (int pixel_x = left; pixel_x < right; ++pixel_x) {
+      const std::size_t offset =
+          (static_cast<std::size_t>(pixel_y) * static_cast<std::size_t>(canvas.width) +
+           static_cast<std::size_t>(pixel_x)) *
+          4;
+      const unsigned destination_alpha = canvas.rgba[offset + 3];
+      const unsigned output_alpha =
+          source_alpha + (destination_alpha * (255U - source_alpha) + 127U) / 255U;
+      for (std::size_t channel = 0; channel < 3; ++channel) {
+        if (output_alpha == 0) {
+          canvas.rgba[offset + channel] = 0;
+          continue;
+        }
+        const unsigned premultiplied =
+            static_cast<unsigned>(color[channel]) * source_alpha * 255U +
+            static_cast<unsigned>(canvas.rgba[offset + channel]) * destination_alpha *
+                (255U - source_alpha);
+        canvas.rgba[offset + channel] =
+            static_cast<std::uint8_t>((premultiplied + output_alpha * 127U) /
+                                      (output_alpha * 255U));
+      }
+      canvas.rgba[offset + 3] = static_cast<std::uint8_t>(output_alpha);
+    }
+  }
   display_list_.reset();
   BumpVersion();
 }

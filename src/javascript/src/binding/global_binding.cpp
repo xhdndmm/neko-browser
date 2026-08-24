@@ -7,11 +7,216 @@
 
 #include "binding_internal.h"
 
+#include "neko/security/random.h"
+
 #include <array>
+#include <span>
 #include <quickjs.h>
 #include <string>
+#include <string_view>
 
 namespace neko::javascript {
+
+namespace {
+
+constexpr const char* kCustomElementDefinitions = "__neko_definitions__";
+constexpr const char* kCustomElementPending = "__neko_pending__";
+
+bool IsValidCustomElementName(std::string_view name)
+{
+  if (name.empty() || name.find('-') == std::string_view::npos) {
+    return false;
+  }
+  for (const char raw_ch : name) {
+    const auto ch = static_cast<unsigned char>(raw_ch);
+    if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '.' ||
+        ch == '_') {
+      continue;
+    }
+    return false;
+  }
+  return name != "annotation-xml" && name != "color-profile" && name != "font-face" &&
+         name != "font-face-src" && name != "font-face-uri" && name != "font-face-format" &&
+         name != "font-face-name" && name != "missing-glyph";
+}
+
+JSValue CustomElementsDefine(
+    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  if (argc < 2) {
+    return JS_ThrowTypeError(ctx, "customElements.define requires a name and constructor");
+  }
+  bool ok = false;
+  const std::string name = ArgString(ctx, argv[0], &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  if (!IsValidCustomElementName(name)) {
+    return ThrowDomException(ctx, "SyntaxError", "invalid custom element name");
+  }
+  if (!JS_IsFunction(ctx, argv[1])) {
+    return JS_ThrowTypeError(ctx, "custom element constructor must be callable");
+  }
+
+  JSValue definitions = JS_GetPropertyStr(ctx, this_val, kCustomElementDefinitions);
+  JSValue existing = JS_GetPropertyStr(ctx, definitions, name.c_str());
+  const bool already_defined = !JS_IsUndefined(existing);
+  JS_FreeValue(ctx, existing);
+  if (already_defined) {
+    JS_FreeValue(ctx, definitions);
+    return ThrowDomException(ctx, "NotSupportedError", "custom element name is already defined");
+  }
+  JS_SetPropertyStr(ctx, definitions, name.c_str(), JS_DupValue(ctx, argv[1]));
+  JS_FreeValue(ctx, definitions);
+
+  JSValue pending = JS_GetPropertyStr(ctx, this_val, kCustomElementPending);
+  JSValue record = JS_GetPropertyStr(ctx, pending, name.c_str());
+  if (!JS_IsUndefined(record)) {
+    JSValue resolve = JS_GetPropertyStr(ctx, record, "resolve");
+    JSValue result = JS_Call(ctx, resolve, JS_UNDEFINED, 0, nullptr);
+    JS_FreeValue(ctx, result);
+    JS_FreeValue(ctx, resolve);
+    JS_SetPropertyStr(ctx, pending, name.c_str(), JS_UNDEFINED);
+  }
+  JS_FreeValue(ctx, record);
+  JS_FreeValue(ctx, pending);
+  return JS_UNDEFINED;
+}
+
+JSValue CustomElementsGet(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  if (argc < 1) {
+    return JS_UNDEFINED;
+  }
+  bool ok = false;
+  const std::string name = ArgString(ctx, argv[0], &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  JSValue definitions = JS_GetPropertyStr(ctx, this_val, kCustomElementDefinitions);
+  JSValue constructor = JS_GetPropertyStr(ctx, definitions, name.c_str());
+  JS_FreeValue(ctx, definitions);
+  return constructor;
+}
+
+JSValue
+CustomElementsWhenDefined(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  bool ok = false;
+  const std::string name = argc > 0 ? ArgString(ctx, argv[0], &ok) : std::string();
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  if (!IsValidCustomElementName(name)) {
+    return ThrowDomException(ctx, "SyntaxError", "invalid custom element name");
+  }
+
+  JSValue definitions = JS_GetPropertyStr(ctx, this_val, kCustomElementDefinitions);
+  JSValue constructor = JS_GetPropertyStr(ctx, definitions, name.c_str());
+  JS_FreeValue(ctx, definitions);
+  if (!JS_IsUndefined(constructor)) {
+    JS_FreeValue(ctx, constructor);
+    JSValue resolving_functions[2] = {JS_UNDEFINED, JS_UNDEFINED};
+    JSValue promise = JS_NewPromiseCapability(ctx, resolving_functions);
+    JSValue result = JS_Call(ctx, resolving_functions[0], JS_UNDEFINED, 0, nullptr);
+    JS_FreeValue(ctx, result);
+    JS_FreeValue(ctx, resolving_functions[0]);
+    JS_FreeValue(ctx, resolving_functions[1]);
+    return promise;
+  }
+  JS_FreeValue(ctx, constructor);
+
+  JSValue pending = JS_GetPropertyStr(ctx, this_val, kCustomElementPending);
+  JSValue record = JS_GetPropertyStr(ctx, pending, name.c_str());
+  if (!JS_IsUndefined(record)) {
+    JSValue promise = JS_GetPropertyStr(ctx, record, "promise");
+    JS_FreeValue(ctx, record);
+    JS_FreeValue(ctx, pending);
+    return promise;
+  }
+  JS_FreeValue(ctx, record);
+
+  JSValue resolving_functions[2] = {JS_UNDEFINED, JS_UNDEFINED};
+  JSValue promise = JS_NewPromiseCapability(ctx, resolving_functions);
+  record = JS_NewObject(ctx);
+  JS_SetPropertyStr(ctx, record, "promise", JS_DupValue(ctx, promise));
+  JS_SetPropertyStr(ctx, record, "resolve", resolving_functions[0]);
+  JS_SetPropertyStr(ctx, record, "reject", resolving_functions[1]);
+  JS_SetPropertyStr(ctx, pending, name.c_str(), record);
+  JS_FreeValue(ctx, pending);
+  return promise;
+}
+
+JSValue CustomElementsUpgrade(
+    JSContext* /*ctx*/, JSValueConst /*this_val*/, int /*argc*/, JSValueConst* /*argv*/)
+{
+  return JS_UNDEFINED;
+}
+
+JSValue CryptoGetRandomValues(
+    JSContext* ctx, JSValueConst /*this_val*/, int argc, JSValueConst* argv)
+{
+  if (argc < 1) {
+    return JS_ThrowTypeError(ctx, "getRandomValues requires an integer TypedArray");
+  }
+
+  const int array_type = JS_GetTypedArrayType(argv[0]);
+  if (array_type < JS_TYPED_ARRAY_UINT8C || array_type > JS_TYPED_ARRAY_BIG_UINT64) {
+    return JS_ThrowTypeError(ctx, "getRandomValues requires an integer TypedArray");
+  }
+
+  std::size_t byte_offset = 0;
+  std::size_t byte_length = 0;
+  std::size_t bytes_per_element = 0;
+  JSValue buffer =
+      JS_GetTypedArrayBuffer(ctx, argv[0], &byte_offset, &byte_length, &bytes_per_element);
+  if (JS_IsException(buffer)) {
+    return JS_EXCEPTION;
+  }
+  if (byte_length > 65536) {
+    JS_FreeValue(ctx, buffer);
+    return ThrowDomException(ctx, "QuotaExceededError", "byte length exceeds 65536");
+  }
+
+  std::size_t buffer_size = 0;
+  unsigned char* buffer_data = JS_GetArrayBuffer(ctx, &buffer_size, buffer);
+  if (buffer_data == nullptr || byte_offset > buffer_size || byte_length > buffer_size - byte_offset) {
+    JS_FreeValue(ctx, buffer);
+    return JS_ThrowTypeError(ctx, "getRandomValues requires a valid integer TypedArray");
+  }
+  const bool filled = security::FillRandomBytes(
+      std::span<unsigned char>(buffer_data + byte_offset, byte_length));
+  JS_FreeValue(ctx, buffer);
+  if (!filled) {
+    return ThrowDomException(ctx, "OperationError", "secure random generation failed");
+  }
+  return JS_DupValue(ctx, argv[0]);
+}
+
+} // namespace
+
+void InstallCustomElementRegistry(JSContext* ctx, JSValue global)
+{
+  JSValue registry = JS_NewObject(ctx);
+  JS_SetPropertyStr(ctx, registry, kCustomElementDefinitions, JS_NewObject(ctx));
+  JS_SetPropertyStr(ctx, registry, kCustomElementPending, JS_NewObject(ctx));
+  static const std::array<JSCFunctionListEntry, 4> kMethods = {{
+      JS_CFUNC_DEF("define", 2, CustomElementsDefine),
+      JS_CFUNC_DEF("get", 1, CustomElementsGet),
+      JS_CFUNC_DEF("whenDefined", 1, CustomElementsWhenDefined),
+      JS_CFUNC_DEF("upgrade", 1, CustomElementsUpgrade),
+  }};
+  JS_SetPropertyFunctionList(ctx, registry, kMethods.data(), static_cast<int>(kMethods.size()));
+  JS_SetPropertyStr(ctx, global, "customElements", registry);
+}
+
+void InstallCrypto(JSContext* ctx, JSValue global)
+{
+  JSValue crypto = JS_NewObject(ctx);
+  JS_SetPropertyStr(
+      ctx, crypto, "getRandomValues", JS_NewCFunction(ctx, CryptoGetRandomValues, "getRandomValues", 1));
+  JS_SetPropertyStr(ctx, global, "crypto", crypto);
+}
 
 // The engine's reported platform string (navigator.platform), matching what
 // mainstream browsers report per OS.
@@ -411,6 +616,56 @@ JSValue PerformanceNow(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSVa
   return JS_NewFloat64(ctx, std::chrono::duration<double, std::milli>(elapsed).count());
 }
 
+namespace {
+
+JSValue MakeNavigationPerformanceEntry(JSContext* ctx, Impl& impl)
+{
+  JSValue entry = JS_NewObject(ctx);
+  JS_SetPropertyStr(ctx, entry, "entryType", JS_NewString(ctx, "navigation"));
+  const std::string location = impl.apis.location_href ? impl.apis.location_href() : std::string{};
+  JS_SetPropertyStr(ctx, entry, "name", JS_NewString(ctx, location.c_str()));
+  JS_SetPropertyStr(ctx, entry, "startTime", JS_NewFloat64(ctx, 0));
+  JS_SetPropertyStr(ctx, entry, "duration", PerformanceNow(ctx, entry, 0, nullptr));
+  return entry;
+}
+
+JSValue MakeNavigationPerformanceEntries(JSContext* ctx, Impl& impl)
+{
+  JSValue entries = JS_NewArray(ctx);
+  JS_SetPropertyUint32(ctx, entries, 0, MakeNavigationPerformanceEntry(ctx, impl));
+  return entries;
+}
+
+} // namespace
+
+JSValue PerformanceGetEntries(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  return MakeNavigationPerformanceEntries(ctx, *impl);
+}
+
+JSValue PerformanceGetEntriesByType(
+    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  if (argc == 0) {
+    return JS_NewArray(ctx);
+  }
+  const char* type = JS_ToCString(ctx, argv[0]);
+  if (type == nullptr) {
+    return JS_EXCEPTION;
+  }
+  const bool is_navigation = std::string_view(type) == "navigation";
+  JS_FreeCString(ctx, type);
+  return is_navigation ? MakeNavigationPerformanceEntries(ctx, *impl) : JS_NewArray(ctx);
+}
+
 // ---------------------------------------------------------------------------
 // window.matchMedia(query).
 //
@@ -630,6 +885,11 @@ std::string PropToCamel(std::string_view prop)
     upper = false;
   }
   return camel;
+}
+
+JSValue WindowGetClosed(JSContext* /*ctx*/, JSValueConst /*this_val*/)
+{
+  return JS_FALSE;
 }
 
 JSValue WindowGetComputedStyle(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)

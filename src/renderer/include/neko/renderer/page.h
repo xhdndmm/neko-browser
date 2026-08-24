@@ -9,6 +9,7 @@
 #include "neko/paint/rasterizer.h"
 #include "neko/style/style_engine.h"
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -148,6 +149,16 @@ public:
   void SetElementImage(const dom::Element& element,
                        image::Image image,
                        std::shared_ptr<image::GifAnimation> animation = nullptr);
+
+  // Paints an axis-aligned rectangle into an element's Canvas 2D backing
+  // store using source-over compositing. The store is created at the HTML
+  // default size (300x150) on first use.
+  void FillCanvasRect(const dom::Element& element,
+                      double x,
+                      double y,
+                      double width,
+                      double height,
+                      std::array<std::uint8_t, 4> color);
 
   // A fully decoded video: frame strip + playback metadata.  The browser
   // layer decodes the clip (budgeted) and hands it over together with the

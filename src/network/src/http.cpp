@@ -22,6 +22,73 @@ namespace {
 // any legitimate page body.
 constexpr std::size_t kMaxBodySize = 512u * 1024u * 1024u;
 
+bool NoProxyMatches(std::string_view host, uint16_t port)
+{
+  const char* value = std::getenv("no_proxy");
+  if (value == nullptr || *value == '\0') {
+    value = std::getenv("NO_PROXY");
+  }
+  if (value == nullptr || *value == '\0') {
+    return false;
+  }
+  const std::string lower_host = base::ToLower(host);
+  std::string_view entries(value);
+  while (!entries.empty()) {
+    const std::size_t comma = entries.find(',');
+    std::string entry(base::Trim(entries.substr(0, comma)));
+    entries = comma == std::string_view::npos ? std::string_view{} : entries.substr(comma + 1);
+    if (entry == "*") {
+      return true;
+    }
+    const std::size_t colon = entry.rfind(':');
+    if (colon != std::string::npos && entry.find(':') == colon) {
+      const std::string port_text = entry.substr(colon + 1);
+      if (!port_text.empty() && port_text != std::to_string(port)) {
+        continue;
+      }
+      entry.resize(colon);
+    }
+    entry = base::ToLower(entry);
+    if (entry.empty()) {
+      continue;
+    }
+    if (entry.front() == '.') {
+      entry.erase(entry.begin());
+    }
+    if (lower_host == entry ||
+        (lower_host.size() > entry.size() &&
+         lower_host.compare(lower_host.size() - entry.size(), entry.size(), entry) == 0 &&
+         lower_host[lower_host.size() - entry.size() - 1] == '.')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+base::Result<TlsOptions>
+TlsOptionsWithEnvironmentProxy(std::string_view host, uint16_t port, const TlsOptions& options)
+{
+  if (!options.proxy_host.empty() || NoProxyMatches(host, port)) {
+    return options;
+  }
+  const char* proxy = std::getenv("https_proxy");
+  if (proxy == nullptr || *proxy == '\0') {
+    proxy = std::getenv("HTTPS_PROXY");
+  }
+  if (proxy == nullptr || *proxy == '\0') {
+    return options;
+  }
+  const base::Result<url::Url> parsed = url::Url::Parse(proxy);
+  if (!parsed || parsed.value().scheme() != "http" || parsed.value().host().empty()) {
+    return base::Err(base::Error::Network(
+        "HTTPS proxy must be an http:// URL with a host"));
+  }
+  TlsOptions configured = options;
+  configured.proxy_host = parsed.value().host();
+  configured.proxy_port = parsed.value().effective_port();
+  return configured;
+}
+
 // Parses a decimal byte count, rejecting values that overflow size_t.
 // Returns nullopt for empty or non-numeric input.
 std::optional<std::size_t> ParseByteCount(std::string_view text)
@@ -634,8 +701,13 @@ base::Result<HttpResponse> HttpGet(const url::Url& url,
   // for https) and parse the response.
   base::Result<HttpResponse> response = [&]() -> base::Result<HttpResponse> {
     if (url.scheme() == "https") {
-      base::Result<TlsSocket> tls =
-          TlsSocket::Connect(url.host(), url.effective_port(), tls_options);
+        const base::Result<TlsOptions> configured =
+          TlsOptionsWithEnvironmentProxy(url.host(), url.effective_port(), tls_options);
+      if (!configured) {
+        return base::Err(configured.error());
+      }
+      base::Result<TlsSocket> tls = TlsSocket::Connect(
+          url.host(), url.effective_port(), configured.value());
       if (!tls) {
         return base::Err(tls.error());
       }

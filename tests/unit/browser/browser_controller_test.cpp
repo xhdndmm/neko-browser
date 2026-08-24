@@ -1702,6 +1702,42 @@ TEST(BrowserControllerTest, DataUrlImageIsDecodedWithoutNetwork)
   EXPECT_EQ(decoded->height, 2);
 }
 
+TEST(BrowserControllerTest, PercentEncodedSvgDataUrlIsDecodedWithoutNetwork)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{
+                200,
+                {{"content-type", "text/html"}},
+                "<html><body><img src=\"data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2F"
+                "www.w3.org%2F2000%2Fsvg'%20width%3D'3'%20height%3D'2'%3E%3Crect%20width%3D'3'%20"
+                "height%3D'2'%20fill%3D'%23ff0000'%2F%3E%3C%2Fsvg%3E\"></body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  EXPECT_LE(fetch.requests_.size(), 1u);
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  const bool decoded_ok = WaitForSubresources([&tab] {
+    if (tab->page == nullptr) {
+      return false;
+    }
+    const std::vector<dom::Element*> elements =
+        dom::QuerySelectorAll(*tab->page->document(), "img");
+    return elements.size() == 1u && tab->page->Find(*elements[0]) != nullptr;
+  });
+  ASSERT_TRUE(decoded_ok);
+  const std::vector<dom::Element*> imgs = dom::QuerySelectorAll(*tab->page->document(), "img");
+  ASSERT_EQ(imgs.size(), 1u);
+  const image::Image* decoded = tab->page->Find(*imgs[0]);
+  ASSERT_NE(decoded, nullptr);
+  EXPECT_EQ(decoded->width, 3);
+  EXPECT_EQ(decoded->height, 2);
+}
+
 // External <link rel=stylesheet> sheets are fetched, parsed and applied before
 // the page is published (real pages put most of their CSS in external files).
 TEST(BrowserControllerTest, FetchesAndAppliesExternalStylesheets)

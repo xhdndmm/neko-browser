@@ -39,6 +39,10 @@ JSClassID g_node_class_id = 0;
 std::mutex g_class_mutex;
 std::unordered_set<JSRuntime*> g_class_registered;
 
+JSClassID g_attr_class_id = 0;
+std::mutex g_attr_class_mutex;
+std::unordered_set<JSRuntime*> g_attr_class_registered;
+
 void NodeFinalizer(JSRuntime* /*rt*/, JSValue obj)
 {
   auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(obj, g_node_class_id));
@@ -56,6 +60,26 @@ void EnsureNodeClassRegistered(JSRuntime* rt)
     def.finalizer = &NodeFinalizer;
     JS_NewClass(rt, g_node_class_id, &def);
     g_class_registered.insert(rt);
+  }
+}
+
+void AttrFinalizer(JSRuntime* /*rt*/, JSValue obj)
+{
+  auto* wrapper = static_cast<AttrWrapper*>(JS_GetOpaque(obj, g_attr_class_id));
+  delete wrapper;
+}
+
+void EnsureAttrClassRegistered(JSRuntime* rt)
+{
+  std::lock_guard<std::mutex> lock(g_attr_class_mutex);
+  JS_NewClassID(rt, &g_attr_class_id);
+  if (g_attr_class_registered.find(rt) == g_attr_class_registered.end()) {
+    JSClassDef def;
+    std::memset(&def, 0, sizeof(def));
+    def.class_name = "Attr";
+    def.finalizer = &AttrFinalizer;
+    JS_NewClass(rt, g_attr_class_id, &def);
+    g_attr_class_registered.insert(rt);
   }
 }
 
@@ -87,6 +111,40 @@ dom::Element* AsElement(dom::Node* node)
   return node != nullptr && node->node_type() == dom::NodeType::kElement
              ? static_cast<dom::Element*>(node)
              : nullptr;
+}
+
+JSValue NavigatorGetLanguages(JSContext* ctx, JSValueConst this_val)
+{
+  return JS_GetPropertyStr(ctx, this_val, "__nekoNavigatorLanguages");
+}
+
+JSValue DateTimeFormatResolvedOptions(JSContext* ctx,
+                                      JSValueConst /*this_val*/,
+                                      int /*argc*/,
+                                      JSValueConst* /*argv*/)
+{
+  JSValue options = JS_NewObject(ctx);
+  JS_SetPropertyStr(ctx, options, "locale", JS_NewString(ctx, "en-US"));
+  JS_SetPropertyStr(ctx, options, "calendar", JS_NewString(ctx, "gregory"));
+  JS_SetPropertyStr(ctx, options, "numberingSystem", JS_NewString(ctx, "latn"));
+  JS_SetPropertyStr(ctx, options, "timeZone", JS_NewString(ctx, "UTC"));
+  return options;
+}
+
+JSValue
+DateTimeFormatConstructor(JSContext* ctx, JSValueConst new_target, int argc, JSValueConst* /*argv*/)
+{
+  if (argc != 0) {
+    return ThrowDomException(
+        ctx, "NotSupportedError", "Intl.DateTimeFormat locale and options are not implemented");
+  }
+  JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
+  if (JS_IsException(prototype)) {
+    return prototype;
+  }
+  JSValue formatter = JS_NewObjectProto(ctx, prototype);
+  JS_FreeValue(ctx, prototype);
+  return formatter;
 }
 
 int32_t NodeTypeNumber(dom::NodeType type)
@@ -323,9 +381,11 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
 
   JSRuntime* rt = JS_GetRuntime(ctx);
   EnsureNodeClassRegistered(rt);
+  EnsureAttrClassRegistered(rt);
   EnsureEventClassRegistered(rt);
   EnsureDatasetClassRegistered(rt);
   EnsureXhrClassRegistered(rt);
+  EnsureCanvasClassRegistered(rt);
   {
     std::lock_guard<std::mutex> lock(g_ctx_mutex);
     g_ctx_to_impl[ctx] = this;
@@ -334,8 +394,10 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   // Prototypes (element/text/... inherit Node).
   node_proto = JS_NewObject(ctx);
   element_proto = JS_NewObjectProto(ctx, node_proto);
-  text_proto = JS_NewObjectProto(ctx, node_proto);
-  comment_proto = JS_NewObjectProto(ctx, node_proto);
+  character_data_proto = JS_NewObjectProto(ctx, node_proto);
+  document_type_proto = JS_NewObjectProto(ctx, node_proto);
+  text_proto = JS_NewObjectProto(ctx, character_data_proto);
+  comment_proto = JS_NewObjectProto(ctx, character_data_proto);
   document_proto = JS_NewObjectProto(ctx, node_proto);
   fragment_proto = JS_NewObjectProto(ctx, node_proto);
   style_proto = JS_NewObject(ctx);
@@ -343,21 +405,49 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   // CustomEvent.prototype inherits Event.prototype (spec: CustomEvent extends
   // Event); instances are created with this prototype by CustomEventConstructor.
   custom_event_proto = JS_NewObjectProto(ctx, event_proto);
+  message_event_proto = JS_NewObjectProto(ctx, event_proto);
   class_list_proto = JS_NewObject(ctx);
   JSValue global_for_array = JS_GetGlobalObject(ctx);
   JSValue array_ctor = JS_GetPropertyStr(ctx, global_for_array, "Array");
   JSValue array_proto = JS_GetPropertyStr(ctx, array_ctor, "prototype");
   node_list_proto = JS_NewObjectProto(ctx, array_proto);
+  html_collection_proto = JS_NewObjectProto(ctx, array_proto);
+  named_node_map_proto = JS_NewObjectProto(ctx, array_proto);
+  attr_proto = JS_NewObject(ctx);
+  tree_walker_proto = JS_NewObject(ctx);
+  range_proto = JS_NewObject(ctx);
+  mutation_observer_proto = JS_NewObject(ctx);
+  dom_parser_proto = JS_NewObject(ctx);
+  xml_serializer_proto = JS_NewObject(ctx);
+  dom_implementation_proto = JS_NewObject(ctx);
   JS_FreeValue(ctx, array_proto);
   JS_FreeValue(ctx, array_ctor);
   JS_FreeValue(ctx, global_for_array);
   JS_SetPropertyStr(ctx, node_list_proto, "item", JS_NewCFunction(ctx, NodeListItem, "item", 1));
   DefineGetter(ctx, node_list_proto, "length", MakeGetter(ctx, "length", NodeListLength));
+  JS_SetPropertyStr(
+      ctx, html_collection_proto, "item", JS_NewCFunction(ctx, NodeListItem, "item", 1));
+  JS_SetPropertyStr(ctx,
+                    html_collection_proto,
+                    "namedItem",
+                    JS_NewCFunction(ctx, HTMLCollectionNamedItem, "namedItem", 1));
+  DefineGetter(ctx, html_collection_proto, "length", MakeGetter(ctx, "length", NodeListLength));
+  html_base_element_proto = JS_NewObjectProto(ctx, element_proto);
+  html_script_element_proto = JS_NewObjectProto(ctx, element_proto);
+  html_anchor_element_proto = JS_NewObjectProto(ctx, element_proto);
   html_iframe_element_proto = JS_NewObjectProto(ctx, element_proto);
+  html_form_element_proto = JS_NewObjectProto(ctx, element_proto);
+  html_button_element_proto = JS_NewObjectProto(ctx, element_proto);
+  html_input_element_proto = JS_NewObjectProto(ctx, element_proto);
+  html_image_element_proto = JS_NewObjectProto(ctx, element_proto);
+  html_media_element_proto = JS_NewObjectProto(ctx, element_proto);
+  html_video_element_proto = JS_NewObjectProto(ctx, html_media_element_proto);
+  html_canvas_element_proto = JS_NewObjectProto(ctx, element_proto);
   svg_element_proto = JS_NewObjectProto(ctx, element_proto);
 
   DefineNodePrototype(ctx, *this);
   DefineElementPrototype(ctx, *this);
+  DefineCanvasPrototype(ctx, *this);
   DefineDocumentPrototype(ctx, *this);
   DefineStylePrototype(ctx, *this);
   DefineEventPrototype(ctx, *this);
@@ -375,9 +465,9 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   JSValue global = JS_GetGlobalObject(ctx);
   JSValue doc_wrap = WrapNode(&document);
   JS_SetPropertyStr(ctx, doc_wrap, "visibilityState", JS_NewString(ctx, "visible"));
-  JS_SetPropertyStr(ctx, doc_wrap, "defaultView", JS_DupValue(ctx, global));
   JS_SetPropertyStr(ctx, global, "document", doc_wrap); // steals doc_wrap
   window = JS_DupValue(ctx, global);
+  DefineGetter(ctx, window, "closed", MakeGetter(ctx, "closed", WindowGetClosed));
 
   // Global event handler attributes (HTML spec §8.1.7.2).  In browsers these
   // are global properties (`window.onload === onload`), so scripts may read or
@@ -444,6 +534,10 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
     JSValue fn = JS_GetPropertyStr(ctx, window, name);
     JS_SetPropertyStr(ctx, global, name, fn); // steals fn
   }
+  InstallCustomElementRegistry(ctx, global);
+  InstallCrypto(ctx, global);
+  InstallEventTargetGlobal(ctx, global, *this);
+  InstallMessageChannelGlobals(ctx, global, *this);
 
   // Legacy jQuery compatibility aliases (common on ad/tracking/bootstraps):
   // these are intentionally minimal and only prevent startup ReferenceErrors.
@@ -486,7 +580,7 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   // plus no-op traversal/mutation; the browser's navigation stack is separate
   // and not script-exposed yet — documented).
   {
-    JSValue history = JS_NewObject(ctx);
+    JSValue history_proto = JS_NewObject(ctx);
     static const std::array<JSCFunctionListEntry, 5> kHistory = {{
         JS_CFUNC_DEF("back", 0, HistoryBack),
         JS_CFUNC_DEF("forward", 0, HistoryForward),
@@ -494,21 +588,29 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
         JS_CFUNC_DEF("pushState", 0, HistoryPushState),
         JS_CFUNC_DEF("replaceState", 0, HistoryReplaceState),
     }};
-    JS_SetPropertyFunctionList(ctx, history, kHistory.data(), static_cast<int>(kHistory.size()));
-    DefineGetter(ctx, history, "length", MakeGetter(ctx, "length", HistoryGetLength));
+    JS_SetPropertyFunctionList(
+        ctx, history_proto, kHistory.data(), static_cast<int>(kHistory.size()));
+    DefineGetter(ctx, history_proto, "length", MakeGetter(ctx, "length", HistoryGetLength));
+    DefineInterface(ctx, global, "History", history_proto);
+    JSValue history = JS_NewObjectProto(ctx, history_proto);
+    JS_FreeValue(ctx, history_proto);
     JS_SetPropertyStr(ctx, window, "history", JS_DupValue(ctx, history)); // steals dup
     JS_SetPropertyStr(ctx, global, "history", history);                   // steals
   }
 
-  // window.performance: now()/timeOrigin only (a documented subset; real
-  // navigation/resource timing is future work).
+  // window.performance exposes the current document's navigation entry.
   {
-    JSValue performance = JS_NewObject(ctx);
-    static const std::array<JSCFunctionListEntry, 1> kPerformance = {{
+    JSValue performance_proto = JS_NewObject(ctx);
+    static const std::array<JSCFunctionListEntry, 3> kPerformance = {{
         JS_CFUNC_DEF("now", 0, PerformanceNow),
+        JS_CFUNC_DEF("getEntries", 0, PerformanceGetEntries),
+        JS_CFUNC_DEF("getEntriesByType", 1, PerformanceGetEntriesByType),
     }};
     JS_SetPropertyFunctionList(
-        ctx, performance, kPerformance.data(), static_cast<int>(kPerformance.size()));
+        ctx, performance_proto, kPerformance.data(), static_cast<int>(kPerformance.size()));
+    DefineInterface(ctx, global, "Performance", performance_proto);
+    JSValue performance = JS_NewObjectProto(ctx, performance_proto);
+    JS_FreeValue(ctx, performance_proto);
     // timeOrigin and timing.navigationStart are both the page-load start
     // (epoch ms; same value as a real browser reports for a fresh load).
     JSValue origin = JS_NewFloat64(ctx, navigation_start_epoch_ms);
@@ -530,32 +632,245 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   // not overwrite Element.prototype.constructor.
   DefineInterface(ctx, global, "Node", node_proto);
   DefineInterface(ctx, global, "Document", document_proto);
-  // CharacterData.data is exposed on Text and Comment.
+  // CharacterData.data is shared by Text and Comment.
   DefineAccessor(ctx,
-                 text_proto,
+                 character_data_proto,
                  "data",
                  MakeGetter(ctx, "data", CharacterDataGetData),
                  MakeSetter(ctx, "data", CharacterDataSetData));
-  DefineAccessor(ctx,
-                 comment_proto,
-                 "data",
-                 MakeGetter(ctx, "data", CharacterDataGetData),
-                 MakeSetter(ctx, "data", CharacterDataSetData));
+  DefineGetter(ctx, fragment_proto, "children", MakeGetter(ctx, "children", ElementGetChildren));
+  DefineInterface(ctx, global, "CharacterData", character_data_proto);
+  DefineInterface(ctx, global, "DocumentType", document_type_proto);
   DefineInterface(ctx, global, "Text", text_proto);
   DefineInterface(ctx, global, "Comment", comment_proto);
   DefineInterface(ctx, global, "DocumentFragment", fragment_proto);
   DefineInterface(ctx, global, "CSSStyleDeclaration", style_proto);
   DefineInterface(ctx, global, "Element", element_proto);
   DefineInterface(ctx, global, "HTMLElement", element_proto, /*set_constructor=*/false);
+  DefineAccessor(ctx,
+                 html_script_element_proto,
+                 "src",
+                 MakeGetter(ctx, "src", ElementGetSrc),
+                 MakeSetter(ctx, "src", ElementSetSrc));
+  DefineInterface(ctx, global, "HTMLScriptElement", html_script_element_proto);
+  DefineAccessor(ctx,
+                 html_base_element_proto,
+                 "href",
+                 MakeGetter(ctx, "href", ElementGetHref),
+                 MakeSetter(ctx, "href", ElementSetHref));
+  DefineInterface(ctx, global, "HTMLBaseElement", html_base_element_proto);
+  DefineAccessor(ctx,
+                 html_anchor_element_proto,
+                 "href",
+                 MakeGetter(ctx, "href", ElementGetHref),
+                 MakeSetter(ctx, "href", ElementSetHref));
+  DefineAccessor(ctx,
+                 html_anchor_element_proto,
+                 "download",
+                 MakeGetter(ctx, "download", ElementGetDownload),
+                 MakeSetter(ctx, "download", ElementSetDownload));
+  DefineAccessor(ctx,
+                 html_anchor_element_proto,
+                 "ping",
+                 MakeGetter(ctx, "ping", ElementGetPing),
+                 MakeSetter(ctx, "ping", ElementSetPing));
+  DefineInterface(ctx, global, "HTMLAnchorElement", html_anchor_element_proto);
+  DefineAccessor(ctx,
+                 html_iframe_element_proto,
+                 "src",
+                 MakeGetter(ctx, "src", ElementGetSrc),
+                 MakeSetter(ctx, "src", ElementSetSrc));
+  DefineAccessor(ctx,
+                 html_iframe_element_proto,
+                 "srcdoc",
+                 MakeGetter(ctx, "srcdoc", ElementGetSrcDoc),
+                 MakeSetter(ctx, "srcdoc", ElementSetSrcDoc));
+  DefineAccessor(ctx,
+                 html_iframe_element_proto,
+                 "credentialless",
+                 MakeGetter(ctx, "credentialless", ElementGetCredentialless),
+                 MakeSetter(ctx, "credentialless", ElementSetCredentialless));
   DefineInterface(ctx, global, "HTMLIFrameElement", html_iframe_element_proto);
+  DefineAccessor(ctx,
+                 html_form_element_proto,
+                 "action",
+                 MakeGetter(ctx, "action", FormGetAction),
+                 MakeSetter(ctx, "action", FormSetAction));
+  DefineAccessor(ctx,
+                 html_form_element_proto,
+                 "enctype",
+                 MakeGetter(ctx, "enctype", FormGetEnctype),
+                 MakeSetter(ctx, "enctype", FormSetEnctype));
+  DefineAccessor(ctx,
+                 html_form_element_proto,
+                 "method",
+                 MakeGetter(ctx, "method", FormGetMethod),
+                 MakeSetter(ctx, "method", FormSetMethod));
+  JS_SetPropertyStr(
+      ctx, html_form_element_proto, "submit", JS_NewCFunction(ctx, FormSubmit, "submit", 0));
+  JS_SetPropertyStr(ctx,
+                    html_form_element_proto,
+                    "requestSubmit",
+                    JS_NewCFunction(ctx, FormRequestSubmit, "requestSubmit", 1));
+  DefineInterface(ctx, global, "HTMLFormElement", html_form_element_proto);
+  DefineAccessor(ctx,
+                 html_button_element_proto,
+                 "formAction",
+                 MakeGetter(ctx, "formAction", ElementGetFormAction),
+                 MakeSetter(ctx, "formAction", ElementSetFormAction));
+  DefineInterface(ctx, global, "HTMLButtonElement", html_button_element_proto);
+  DefineAccessor(ctx,
+                 html_input_element_proto,
+                 "formAction",
+                 MakeGetter(ctx, "formAction", ElementGetFormAction),
+                 MakeSetter(ctx, "formAction", ElementSetFormAction));
+  DefineAccessor(ctx,
+                 html_input_element_proto,
+                 "value",
+                 MakeGetter(ctx, "value", ElementGetValue),
+                 MakeSetter(ctx, "value", ElementSetValue));
+  DefineGetter(
+      ctx, html_input_element_proto, "validity", MakeGetter(ctx, "validity", ElementGetValidity));
+  DefineInterface(ctx, global, "HTMLInputElement", html_input_element_proto);
+  {
+    JSValue validity_state_proto = JS_NewObject(ctx);
+    DefineGetter(
+        ctx, validity_state_proto, "valid", MakeGetter(ctx, "valid", ValidityStateGetValid));
+    DefineGetter(ctx,
+                 validity_state_proto,
+                 "typeMismatch",
+                 MakeGetter(ctx, "typeMismatch", ValidityStateGetTypeMismatch));
+    DefineInterface(ctx, global, "ValidityState", validity_state_proto);
+    JS_FreeValue(ctx, validity_state_proto);
+  }
+  DefineAccessor(ctx,
+                 html_image_element_proto,
+                 "src",
+                 MakeGetter(ctx, "src", ElementGetSrc),
+                 MakeSetter(ctx, "src", ElementSetSrc));
+  DefineAccessor(ctx,
+                 html_image_element_proto,
+                 "currentSrc",
+                 MakeGetter(ctx, "currentSrc", ElementGetCurrentSrc),
+                 JS_UNDEFINED);
+  DefineAccessor(ctx,
+                 html_image_element_proto,
+                 "srcset",
+                 MakeGetter(ctx, "srcset", ElementGetSrcSet),
+                 MakeSetter(ctx, "srcset", ElementSetSrcSet));
+  DefineInterface(ctx, global, "HTMLImageElement", html_image_element_proto);
+  DefineAccessor(ctx,
+                 html_media_element_proto,
+                 "src",
+                 MakeGetter(ctx, "src", ElementGetSrc),
+                 MakeSetter(ctx, "src", ElementSetSrc));
+  DefineGetter(ctx,
+               html_media_element_proto,
+               "currentSrc",
+               MakeGetter(ctx, "currentSrc", ElementGetCurrentSrc));
+  DefineInterface(ctx, global, "HTMLMediaElement", html_media_element_proto);
+  DefineInterface(ctx, global, "HTMLVideoElement", html_video_element_proto);
+  DefineInterface(ctx, global, "HTMLCanvasElement", html_canvas_element_proto);
+  DefineInterface(ctx, global, "CanvasRenderingContext2D", canvas_2d_proto);
   DefineInterface(ctx, global, "SVGElement", svg_element_proto);
   DefineInterface(ctx, global, "NodeList", node_list_proto);
+  DefineInterface(ctx, global, "HTMLCollection", html_collection_proto);
+  DefineAccessor(ctx, attr_proto, "name", MakeGetter(ctx, "name", AttrGetName), JS_UNDEFINED);
+  DefineAccessor(ctx,
+                 attr_proto,
+                 "value",
+                 MakeGetter(ctx, "value", AttrGetValue),
+                 MakeSetter(ctx, "value", AttrSetValue));
+  DefineAccessor(ctx,
+                 attr_proto,
+                 "nodeValue",
+                 MakeGetter(ctx, "nodeValue", AttrGetNodeValue),
+                 MakeSetter(ctx, "nodeValue", AttrSetNodeValue));
+  DefineGetter(
+      ctx, attr_proto, "ownerElement", MakeGetter(ctx, "ownerElement", AttrGetOwnerElement));
+  DefineInterface(ctx, global, "Attr", attr_proto);
+  DefineInterface(ctx, global, "Range", range_proto);
+  static const std::array<JSCFunctionListEntry, 2> kNamedNodeMap = {{
+      JS_CFUNC_DEF("item", 1, NamedNodeMapItem),
+      JS_CFUNC_DEF("getNamedItem", 1, NamedNodeMapGetNamedItem),
+  }};
+  JS_SetPropertyFunctionList(
+      ctx, named_node_map_proto, kNamedNodeMap.data(), static_cast<int>(kNamedNodeMap.size()));
+  DefineInterface(ctx, global, "NamedNodeMap", named_node_map_proto);
+  static const std::array<JSCFunctionListEntry, 1> kTreeWalker = {{
+      JS_CFUNC_DEF("nextNode", 0, TreeWalkerNextNode),
+  }};
+  JS_SetPropertyFunctionList(
+      ctx, tree_walker_proto, kTreeWalker.data(), static_cast<int>(kTreeWalker.size()));
+  DefineInterface(ctx, global, "TreeWalker", tree_walker_proto);
+  JSValue node_filter = JS_NewObject(ctx);
+  static constexpr std::array<std::pair<const char*, uint32_t>, 15> kNodeFilterConstants = {{
+      {"FILTER_ACCEPT", 1},
+      {"FILTER_REJECT", 2},
+      {"FILTER_SKIP", 3},
+      {"SHOW_ALL", 0xFFFFFFFFU},
+      {"SHOW_ELEMENT", 0x1U},
+      {"SHOW_ATTRIBUTE", 0x2U},
+      {"SHOW_TEXT", 0x4U},
+      {"SHOW_CDATA_SECTION", 0x8U},
+      {"SHOW_ENTITY_REFERENCE", 0x10U},
+      {"SHOW_ENTITY", 0x20U},
+      {"SHOW_PROCESSING_INSTRUCTION", 0x40U},
+      {"SHOW_COMMENT", 0x80U},
+      {"SHOW_DOCUMENT", 0x100U},
+      {"SHOW_DOCUMENT_TYPE", 0x200U},
+      {"SHOW_DOCUMENT_FRAGMENT", 0x400U},
+  }};
+  for (const auto& [name, value] : kNodeFilterConstants) {
+    JS_SetPropertyStr(ctx, node_filter, name, JS_NewUint32(ctx, value));
+  }
+  JS_SetPropertyStr(ctx, global, "NodeFilter", node_filter);
+  DefineInterface(ctx, global, "DOMTokenList", class_list_proto);
+  static const std::array<JSCFunctionListEntry, 3> kMutationObserver = {{
+      JS_CFUNC_DEF("observe", 2, MutationObserverObserve),
+      JS_CFUNC_DEF("disconnect", 0, MutationObserverDisconnect),
+      JS_CFUNC_DEF("takeRecords", 0, MutationObserverTakeRecords),
+  }};
+  JS_SetPropertyFunctionList(ctx,
+                             mutation_observer_proto,
+                             kMutationObserver.data(),
+                             static_cast<int>(kMutationObserver.size()));
+  JSValue mutation_observer_constructor = JS_NewCFunction2(
+      ctx, MutationObserverConstructor, "MutationObserver", 1, JS_CFUNC_constructor, 0);
   JS_SetPropertyStr(
-      ctx,
-      global,
-      "MutationObserver",
-      JS_NewCFunction2(
-          ctx, MutationObserverConstructor, "MutationObserver", 1, JS_CFUNC_constructor, 0));
+      ctx, mutation_observer_constructor, "prototype", JS_DupValue(ctx, mutation_observer_proto));
+  JS_SetPropertyStr(
+      ctx, mutation_observer_proto, "constructor", JS_DupValue(ctx, mutation_observer_constructor));
+  JS_SetPropertyStr(ctx, global, "MutationObserver", mutation_observer_constructor);
+  JS_SetPropertyStr(ctx,
+                    dom_parser_proto,
+                    "parseFromString",
+                    JS_NewCFunction(ctx, DOMParserParseFromString, "parseFromString", 2));
+  JSValue dom_parser_constructor =
+      JS_NewCFunction2(ctx, DOMParserConstructor, "DOMParser", 0, JS_CFUNC_constructor, 0);
+  JS_SetPropertyStr(ctx, dom_parser_constructor, "prototype", JS_DupValue(ctx, dom_parser_proto));
+  JS_SetPropertyStr(ctx, dom_parser_proto, "constructor", JS_DupValue(ctx, dom_parser_constructor));
+  JS_SetPropertyStr(ctx, global, "DOMParser", dom_parser_constructor);
+  JS_SetPropertyStr(ctx,
+                    xml_serializer_proto,
+                    "serializeToString",
+                    JS_NewCFunction(ctx, XMLSerializerSerializeToString, "serializeToString", 1));
+  JSValue xml_serializer_constructor =
+      JS_NewCFunction2(ctx, XMLSerializerConstructor, "XMLSerializer", 0, JS_CFUNC_constructor, 0);
+  JS_SetPropertyStr(
+      ctx, xml_serializer_constructor, "prototype", JS_DupValue(ctx, xml_serializer_proto));
+  JS_SetPropertyStr(
+      ctx, xml_serializer_proto, "constructor", JS_DupValue(ctx, xml_serializer_constructor));
+  JS_SetPropertyStr(ctx, global, "XMLSerializer", xml_serializer_constructor);
+  static const std::array<JSCFunctionListEntry, 2> kDOMImplementation = {{
+      JS_CFUNC_DEF("hasFeature", 2, DocumentImplementationHasFeature),
+      JS_CFUNC_DEF("createHTMLDocument", 1, DocumentImplementationCreateHTMLDocument),
+  }};
+  JS_SetPropertyFunctionList(ctx,
+                             dom_implementation_proto,
+                             kDOMImplementation.data(),
+                             static_cast<int>(kDOMImplementation.size()));
+  DefineInterface(ctx, global, "DOMImplementation", dom_implementation_proto);
   // Event is constructable: new Event(type, {bubbles, cancelable}).
   {
     JSValue event_ctor =
@@ -563,6 +878,15 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
     JS_SetPropertyStr(ctx, event_ctor, "prototype", JS_DupValue(ctx, event_proto));   // steals
     JS_SetPropertyStr(ctx, event_proto, "constructor", JS_DupValue(ctx, event_ctor)); // steals
     JS_SetPropertyStr(ctx, global, "Event", event_ctor); // steals event_ctor
+  }
+  {
+    JSValue ui_event_proto = JS_NewObjectProto(ctx, event_proto);
+    JSValue ui_event_ctor =
+        JS_NewCFunction2(ctx, UIEventConstructor, "UIEvent", 1, JS_CFUNC_constructor, 0);
+    JS_SetPropertyStr(ctx, ui_event_ctor, "prototype", JS_DupValue(ctx, ui_event_proto));
+    JS_SetPropertyStr(ctx, ui_event_proto, "constructor", JS_DupValue(ctx, ui_event_ctor));
+    JS_SetPropertyStr(ctx, global, "UIEvent", ui_event_ctor);
+    JS_FreeValue(ctx, ui_event_proto);
   }
   // CustomEvent is constructable: new CustomEvent(type, {detail, ...}).
   {
@@ -574,19 +898,67 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
         ctx, custom_event_proto, "constructor", JS_DupValue(ctx, custom_event_ctor)); // steals
     JS_SetPropertyStr(ctx, global, "CustomEvent", custom_event_ctor);                 // steals
   }
+  // MessageEvent is constructable and inherits Event.prototype.
+  {
+    JSValue message_event_ctor =
+        JS_NewCFunction2(ctx, MessageEventConstructor, "MessageEvent", 1, JS_CFUNC_constructor, 0);
+    JS_SetPropertyStr(
+        ctx, message_event_ctor, "prototype", JS_DupValue(ctx, message_event_proto)); // steals
+    JS_SetPropertyStr(
+        ctx, message_event_proto, "constructor", JS_DupValue(ctx, message_event_ctor)); // steals
+    JS_SetPropertyStr(ctx, global, "MessageEvent", message_event_ctor);                 // steals
+  }
+  {
+    JSValue csp_event_proto = JS_NewObjectProto(ctx, event_proto);
+    JSValue csp_event_ctor = JS_NewCFunction2(ctx,
+                                              SecurityPolicyViolationEventConstructor,
+                                              "SecurityPolicyViolationEvent",
+                                              1,
+                                              JS_CFUNC_constructor,
+                                              0);
+    JS_SetPropertyStr(ctx, csp_event_ctor, "prototype", JS_DupValue(ctx, csp_event_proto));
+    JS_SetPropertyStr(ctx, csp_event_proto, "constructor", JS_DupValue(ctx, csp_event_ctor));
+    JS_SetPropertyStr(ctx, global, "SecurityPolicyViolationEvent", csp_event_ctor);
+    JS_FreeValue(ctx, csp_event_proto);
+  }
+
+  {
+    JSValue intl = JS_NewObject(ctx);
+    JSValue date_time_format_proto = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx,
+                      date_time_format_proto,
+                      "resolvedOptions",
+                      JS_NewCFunction(ctx, DateTimeFormatResolvedOptions, "resolvedOptions", 0));
+    JSValue date_time_format_ctor = JS_NewCFunction2(
+        ctx, DateTimeFormatConstructor, "DateTimeFormat", 0, JS_CFUNC_constructor, 0);
+    JS_SetPropertyStr(
+        ctx, date_time_format_ctor, "prototype", JS_DupValue(ctx, date_time_format_proto));
+    JS_SetPropertyStr(
+        ctx, date_time_format_proto, "constructor", JS_DupValue(ctx, date_time_format_ctor));
+    JS_SetPropertyStr(ctx, intl, "DateTimeFormat", date_time_format_ctor);
+    JS_FreeValue(ctx, date_time_format_proto);
+    JS_SetPropertyStr(ctx, global, "Intl", intl);
+  }
 
   // navigator: engine identity.  The UA matches what the network stack sends;
   // the rest are documented defaults (the browser UI language is not wired
   // yet).  Exposed on both the global scope and the window.
-  JSValue navigator = JS_NewObject(ctx);
+  JSValue navigator_proto = JS_NewObject(ctx);
+  JSValue languages = JS_NewArray(ctx);
+  JS_SetPropertyUint32(ctx, languages, 0, JS_NewString(ctx, "en-US")); // steals
+  JS_SetPropertyStr(ctx, navigator_proto, "__nekoNavigatorLanguages", languages);
+  DefineGetter(
+      ctx, navigator_proto, "languages", MakeGetter(ctx, "languages", NavigatorGetLanguages));
+  DefineInterface(ctx, global, "Navigator", navigator_proto);
+  JSValue navigator_ctor = JS_GetPropertyStr(ctx, global, "Navigator");
+  JS_SetPropertyStr(ctx, window, "Navigator", navigator_ctor);
+  JSValue navigator = JS_NewObjectProto(ctx, navigator_proto);
+  JS_FreeValue(ctx, navigator_proto);
   const std::string user_agent = std::string(base::GetUserAgent());
   JS_SetPropertyStr(ctx, navigator, "userAgent", JS_NewString(ctx, user_agent.c_str()));
   JS_SetPropertyStr(ctx, navigator, "appVersion", JS_NewString(ctx, user_agent.c_str()));
   JS_SetPropertyStr(ctx, navigator, "platform", JS_NewString(ctx, NavigatorPlatform()));
   JS_SetPropertyStr(ctx, navigator, "language", JS_NewString(ctx, "en-US"));
-  JSValue languages = JS_NewArray(ctx);
-  JS_SetPropertyUint32(ctx, languages, 0, JS_NewString(ctx, "en-US")); // steals
-  JS_SetPropertyStr(ctx, navigator, "languages", languages);           // steals
   JS_SetPropertyStr(ctx, navigator, "onLine", JS_TRUE);
   JS_SetPropertyStr(ctx, navigator, "cookieEnabled", JS_TRUE);
   const unsigned cores = std::thread::hardware_concurrency();
@@ -595,6 +967,16 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
                     "hardwareConcurrency",
                     JS_NewInt32(ctx, static_cast<int>(std::max(1u, cores))));
   JS_SetPropertyStr(ctx, navigator, "vendor", JS_NewString(ctx, ""));
+  JSValue mime_types = JS_NewObject(ctx);
+  JS_SetPropertyStr(ctx, mime_types, "length", JS_NewInt32(ctx, 0));
+  auto return_null = [](JSContext* /*inner_ctx*/,
+                        JSValueConst /*this_val*/,
+                        int /*argc*/,
+                        JSValueConst* /*argv*/) -> JSValue { return JS_NULL; };
+  JS_SetPropertyStr(ctx, mime_types, "item", JS_NewCFunction(ctx, return_null, "item", 1));
+  JS_SetPropertyStr(
+      ctx, mime_types, "namedItem", JS_NewCFunction(ctx, return_null, "namedItem", 1));
+  JS_SetPropertyStr(ctx, navigator, "mimeTypes", mime_types);
   JS_SetPropertyStr(ctx, window, "navigator", JS_DupValue(ctx, navigator)); // steals dup
   JS_SetPropertyStr(ctx, global, "navigator", navigator);                   // steals
 
@@ -618,31 +1000,29 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   };
 
   JSValue perf_observer_proto = JS_NewObject(ctx);
-  auto performance_observer_noop = [](JSContext* /*inner_ctx*/, JSValueConst /*this_val*/, int /*argc*/, JSValueConst* /*argv*/) -> JSValue {
-    return JS_UNDEFINED;
-  };
+  auto performance_observer_noop = [](JSContext* /*inner_ctx*/,
+                                      JSValueConst /*this_val*/,
+                                      int /*argc*/,
+                                      JSValueConst* /*argv*/) -> JSValue { return JS_UNDEFINED; };
   auto performance_observer_take_records = [](JSContext* inner_ctx,
-                                               JSValueConst /*this_val*/,
-                                               int /*argc*/,
-                                               JSValueConst* /*argv*/) -> JSValue {
+                                              JSValueConst /*this_val*/,
+                                              int /*argc*/,
+                                              JSValueConst* /*argv*/) -> JSValue {
     return JS_NewArray(inner_ctx);
   };
   JS_SetPropertyStr(ctx,
-                   perf_observer_proto,
-                   "observe",
-                   JS_NewCFunction(ctx, performance_observer_noop, "observe", 1));
+                    perf_observer_proto,
+                    "observe",
+                    JS_NewCFunction(ctx, performance_observer_noop, "observe", 1));
   JS_SetPropertyStr(ctx,
-                   perf_observer_proto,
-                   "disconnect",
-                   JS_NewCFunction(ctx, performance_observer_noop, "disconnect", 0));
+                    perf_observer_proto,
+                    "disconnect",
+                    JS_NewCFunction(ctx, performance_observer_noop, "disconnect", 0));
   JS_SetPropertyStr(ctx,
-                   perf_observer_proto,
-                   "takeRecords",
-                   JS_NewCFunction(ctx, performance_observer_take_records, "takeRecords", 0));
-  JS_SetPropertyFunctionList(ctx,
-                             perf_observer_proto,
-                             nullptr,
-                             0);
+                    perf_observer_proto,
+                    "takeRecords",
+                    JS_NewCFunction(ctx, performance_observer_take_records, "takeRecords", 0));
+  JS_SetPropertyFunctionList(ctx, perf_observer_proto, nullptr, 0);
   JSValue performance_observer_ctor = JS_NewCFunction2(
       ctx,
       [](JSContext* inner_ctx, JSValueConst new_target, int /*argc*/, JSValueConst* /*argv*/)
@@ -761,11 +1141,10 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
     JS_FreeValue(ctx, location);
   }
 
-  // Page Web APIs (Phase 8 M3 subset): window.localStorage and window.fetch
-  // are installed only when the browser layer wired the callbacks.
-  if (apis.storage_get || apis.storage_set || apis.storage_remove || apis.storage_clear ||
-      apis.storage_keys) {
-    JSValue local_storage = JS_NewObject(ctx);
+  // Page Web APIs (Phase 8 M3 subset): localStorage uses the browser-layer
+  // backing store while sessionStorage is isolated to this document runtime.
+  {
+    JSValue storage_proto = JS_NewObject(ctx);
     static const std::array<JSCFunctionListEntry, 5> kStorage = {{
         JS_CFUNC_DEF("getItem", 1, LocalStorageGetItem),
         JS_CFUNC_DEF("setItem", 2, LocalStorageSetItem),
@@ -774,12 +1153,24 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
         JS_CFUNC_DEF("key", 1, LocalStorageKey),
     }};
     JS_SetPropertyFunctionList(
-        ctx, local_storage, kStorage.data(), static_cast<int>(kStorage.size()));
-    DefineGetter(ctx, local_storage, "length", MakeGetter(ctx, "length", LocalStorageLength));
+        ctx, storage_proto, kStorage.data(), static_cast<int>(kStorage.size()));
+    DefineGetter(ctx, storage_proto, "length", MakeGetter(ctx, "length", LocalStorageLength));
+    DefineInterface(ctx, global, "Storage", storage_proto);
+    JSValue storage_ctor = JS_GetPropertyStr(ctx, global, "Storage");
+    JS_SetPropertyStr(ctx, window, "Storage", storage_ctor);
+    JSValue local_storage = JS_NewObjectProto(ctx, storage_proto);
     JS_SetPropertyStr(ctx, window, "localStorage", JS_DupValue(ctx, local_storage)); // steals
     JS_SetPropertyStr(ctx, global, "localStorage", local_storage);                   // steals
+    JSValue session_storage_object = JS_NewObjectProto(ctx, storage_proto);
+    JS_SetPropertyStr(ctx, session_storage_object, "__nekoSessionStorage", JS_NewBool(ctx, true));
+    JS_SetPropertyStr(ctx, window, "sessionStorage", JS_DupValue(ctx, session_storage_object));
+    JS_SetPropertyStr(ctx, global, "sessionStorage", session_storage_object);
+    JS_FreeValue(ctx, storage_proto);
   }
   if (apis.fetch) {
+    InstallResponseGlobal(ctx, global);
+    JSValue response_ctor = JS_GetPropertyStr(ctx, global, "Response");
+    JS_SetPropertyStr(ctx, window, "Response", response_ctor);
     JSValue fetch_fn = JS_NewCFunction(ctx, JsFetch, "fetch", 1);
     JS_SetPropertyStr(ctx, window, "fetch", JS_DupValue(ctx, fetch_fn)); // steals
     JS_SetPropertyStr(ctx, global, "fetch", fetch_fn);                   // steals
@@ -790,21 +1181,15 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   JSValue blob_ctor = JS_NewCFunction2(ctx, BlobConstructor, "Blob", 2, JS_CFUNC_constructor, 0);
   JS_SetPropertyStr(ctx, window, "Blob", JS_DupValue(ctx, blob_ctor));
   JS_SetPropertyStr(ctx, global, "Blob", blob_ctor);
-  JSValue image_ctor =
-      JS_NewCFunction2(ctx, ImageConstructor, "Image", 2, JS_CFUNC_constructor, 0);
+  JSValue image_ctor = JS_NewCFunction2(ctx, ImageConstructor, "Image", 2, JS_CFUNC_constructor, 0);
   JS_SetPropertyStr(ctx, window, "Image", JS_DupValue(ctx, image_ctor)); // steals
   JS_SetPropertyStr(ctx, global, "Image", image_ctor);                   // steals
-  JSValue url_object = JS_NewObject(ctx);
-  JS_SetPropertyStr(ctx,
-                    url_object,
-                    "createObjectURL",
-                    JS_NewCFunction(ctx, UrlCreateObjectUrl, "createObjectURL", 1));
-  JS_SetPropertyStr(ctx,
-                    url_object,
-                    "revokeObjectURL",
-                    JS_NewCFunction(ctx, UrlRevokeObjectUrl, "revokeObjectURL", 1));
-  JS_SetPropertyStr(ctx, window, "URL", JS_DupValue(ctx, url_object));
-  JS_SetPropertyStr(ctx, global, "URL", url_object);
+  InstallUrlGlobal(ctx, global);
+  JSValue url_constructor = JS_GetPropertyStr(ctx, global, "URL");
+  JS_SetPropertyStr(ctx, window, "URL", url_constructor);
+  InstallUrlSearchParamsGlobal(ctx, global);
+  InstallFormDataGlobal(ctx, global);
+  InstallHeadersGlobal(ctx, global);
   if (apis.idb_current_version) {
     JSValue idb = JS_NewObject(ctx);
     JSValue open_fn = JS_NewCFunction(ctx, IdbOpen, "open", 1);
@@ -824,6 +1209,7 @@ Impl::~Impl()
   if (ctx == nullptr) {
     return;
   }
+  CloseMessagePorts(*this);
   JSRuntime* rt = JS_GetRuntime(ctx);
 
   // Detach every live wrapper so no JS object can dereference a freed node.
@@ -839,6 +1225,10 @@ Impl::~Impl()
     JS_FreeValue(ctx, entry.second);
   }
   wrappers.clear();
+  for (const auto& entry : canvas_contexts) {
+    JS_FreeValue(ctx, entry.second);
+  }
+  canvas_contexts.clear();
 
   // Free listener callbacks.
   for (auto& entry : listeners) {
@@ -911,7 +1301,10 @@ Impl::~Impl()
                            "scrollBy",
                            "getComputedStyle",
                            "matchMedia",
+                           "customElements",
+                           "crypto",
                            "Node",
+                           "Attr",
                            "Document",
                            "Text",
                            "Comment",
@@ -920,9 +1313,13 @@ Impl::~Impl()
                            "Element",
                            "HTMLElement",
                            "HTMLIFrameElement",
+                           "HTMLVideoElement",
+                           "HTMLCanvasElement",
+                           "CanvasRenderingContext2D",
                            "SVGElement",
                            "MutationObserver",
                            "Event",
+                           "UIEvent",
                            "CustomEvent",
                            "navigator",
                            "screen",
@@ -938,6 +1335,7 @@ Impl::~Impl()
                            "localStorage",
                            "history",
                            "fetch",
+                           "FormData",
                            "indexedDB"}) {
     JSAtom atom = JS_NewAtom(ctx, name);
     JS_DeleteProperty(ctx, global, atom, JS_PROP_THROW);
@@ -957,6 +1355,8 @@ Impl::~Impl()
   }
   JS_FreeValue(ctx, node_proto);
   JS_FreeValue(ctx, element_proto);
+  JS_FreeValue(ctx, character_data_proto);
+  JS_FreeValue(ctx, document_type_proto);
   JS_FreeValue(ctx, text_proto);
   JS_FreeValue(ctx, comment_proto);
   JS_FreeValue(ctx, document_proto);
@@ -964,11 +1364,34 @@ Impl::~Impl()
   JS_FreeValue(ctx, style_proto);
   JS_FreeValue(ctx, event_proto);
   JS_FreeValue(ctx, custom_event_proto);
+  JS_FreeValue(ctx, message_event_proto);
+  JS_FreeValue(ctx, event_target_proto);
   JS_FreeValue(ctx, class_list_proto);
   JS_FreeValue(ctx, node_list_proto);
+  JS_FreeValue(ctx, html_collection_proto);
+  JS_FreeValue(ctx, named_node_map_proto);
+  JS_FreeValue(ctx, attr_proto);
+  JS_FreeValue(ctx, tree_walker_proto);
+  JS_FreeValue(ctx, range_proto);
+  JS_FreeValue(ctx, mutation_observer_proto);
+  JS_FreeValue(ctx, dom_parser_proto);
+  JS_FreeValue(ctx, xml_serializer_proto);
+  JS_FreeValue(ctx, dom_implementation_proto);
+  JS_FreeValue(ctx, html_base_element_proto);
+  JS_FreeValue(ctx, html_script_element_proto);
+  JS_FreeValue(ctx, html_anchor_element_proto);
   JS_FreeValue(ctx, html_iframe_element_proto);
+  JS_FreeValue(ctx, html_form_element_proto);
+  JS_FreeValue(ctx, html_button_element_proto);
+  JS_FreeValue(ctx, html_input_element_proto);
+  JS_FreeValue(ctx, html_image_element_proto);
+  JS_FreeValue(ctx, html_media_element_proto);
+  JS_FreeValue(ctx, html_video_element_proto);
+  JS_FreeValue(ctx, html_canvas_element_proto);
+  JS_FreeValue(ctx, canvas_2d_proto);
   JS_FreeValue(ctx, svg_element_proto);
   JS_FreeValue(ctx, xhr_proto);
+  JS_FreeValue(ctx, message_port_proto);
   for (MutationObserver& observer : mutation_observers) {
     JS_FreeValue(ctx, observer.callback);
     JS_FreeValue(ctx, observer.self);
@@ -1004,6 +1427,10 @@ Impl::~Impl()
     g_class_registered.erase(rt);
   }
   {
+    std::lock_guard<std::mutex> lock(g_attr_class_mutex);
+    g_attr_class_registered.erase(rt);
+  }
+  {
     std::lock_guard<std::mutex> lock(g_event_class_mutex);
     g_event_class_registered.erase(rt);
   }
@@ -1011,6 +1438,15 @@ Impl::~Impl()
     std::lock_guard<std::mutex> lock(g_dataset_class_mutex);
     g_dataset_class_registered.erase(rt);
   }
+  {
+    std::lock_guard<std::mutex> lock(g_canvas_class_mutex);
+    g_canvas_class_registered.erase(rt);
+  }
+  ForgetUrlSearchParamsRuntime(rt);
+  ForgetFormDataRuntime(rt);
+  ForgetHeadersRuntime(rt);
+  ForgetMessageChannelRuntime(rt);
+  ForgetEventTargetRuntime(rt);
 
   // Free owned C++ nodes.  Wrappers were detached and finalized above, so
   // nothing can reach them; ~ScriptEngine (member, destroyed after this body)
@@ -1037,6 +1473,18 @@ JSValue Impl::WrapNode(dom::Node* node)
   return obj; // one owned reference for the caller
 }
 
+JSValue Impl::WrapAttribute(dom::Element* element, std::string_view name)
+{
+  if (element == nullptr) {
+    return JS_NULL;
+  }
+  auto* wrapper = new AttrWrapper{this, element, std::string(name)};
+  JSValue obj = JS_NewObjectClass(ctx, g_attr_class_id);
+  JS_SetOpaque(obj, wrapper);
+  JS_SetPrototype(ctx, obj, attr_proto);
+  return obj;
+}
+
 JSValue Impl::PrototypeFor(const dom::Node* node) const
 {
   switch (node->node_type()) {
@@ -1047,8 +1495,35 @@ JSValue Impl::PrototypeFor(const dom::Node* node) const
     if (element->namespace_uri() == "http://www.w3.org/2000/svg") {
       return svg_element_proto;
     }
+    if (element->tag_name() == "base") {
+      return html_base_element_proto;
+    }
+    if (element->tag_name() == "script") {
+      return html_script_element_proto;
+    }
+    if (element->tag_name() == "a") {
+      return html_anchor_element_proto;
+    }
     if (element->tag_name() == "iframe") {
       return html_iframe_element_proto;
+    }
+    if (element->tag_name() == "form") {
+      return html_form_element_proto;
+    }
+    if (element->tag_name() == "button") {
+      return html_button_element_proto;
+    }
+    if (element->tag_name() == "input") {
+      return html_input_element_proto;
+    }
+    if (element->tag_name() == "img") {
+      return html_image_element_proto;
+    }
+    if (element->tag_name() == "video") {
+      return html_video_element_proto;
+    }
+    if (element->tag_name() == "canvas") {
+      return html_canvas_element_proto;
     }
     return element_proto;
   }
@@ -1082,6 +1557,16 @@ JSValue Impl::MakeElementArray(const std::vector<dom::Element*>& elements)
     JS_SetPropertyUint32(ctx, arr, static_cast<uint32_t>(i), w); // steals w
   }
   return arr;
+}
+
+JSValue Impl::MakeHtmlCollection(const std::vector<dom::Element*>& elements)
+{
+  JSValue collection = JS_NewArray(ctx);
+  JS_SetPrototype(ctx, collection, html_collection_proto);
+  for (std::size_t i = 0; i < elements.size(); ++i) {
+    JS_SetPropertyUint32(ctx, collection, static_cast<uint32_t>(i), WrapNode(elements[i]));
+  }
+  return collection;
 }
 
 void Impl::RecordChildListMutation(dom::Node* target,
@@ -1251,7 +1736,7 @@ int Impl::RunPendingTimers()
       ++it;
     }
   }
-  int ran = 0;
+  int ran = RunPendingMessagePortTasks(*this);
   for (Timer& timer : due) {
     JSValue result = JS_Call(ctx, timer.callback, JS_UNDEFINED, 0, nullptr);
     if (JS_IsException(result)) {

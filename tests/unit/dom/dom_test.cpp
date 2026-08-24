@@ -199,6 +199,27 @@ TEST(DomTest, QuerySelectorCompoundAndDescendant)
   EXPECT_EQ(QuerySelector(*document, "body > p"), nullptr); // p is not a direct child
 }
 
+TEST(DomTest, QuerySelectorAttributeSubstring)
+{
+  auto document = std::make_unique<Document>();
+  auto script = std::make_unique<Element>("script");
+  Element* script_ptr = script.get();
+  script->SetAttribute("src", "https://example.test/scripttemplates/otSDKStub.js");
+  script->SetAttribute("class", "async consent");
+  script->SetAttribute("lang", "en-US");
+  document->AppendChild(std::move(script));
+
+  EXPECT_EQ(QuerySelector(*document, "script[src]"), script_ptr);
+  EXPECT_EQ(QuerySelector(*document, "script[lang='en-US']"), script_ptr);
+  EXPECT_EQ(QuerySelector(*document, "script[class~='consent']"), script_ptr);
+  EXPECT_EQ(QuerySelector(*document, "script[lang|='en']"), script_ptr);
+  EXPECT_EQ(QuerySelector(*document, "script[src^='https://']"), script_ptr);
+  EXPECT_EQ(QuerySelector(*document, "script[src$='.js']"), script_ptr);
+  EXPECT_EQ(QuerySelector(*document, "script[src*='otSDKStub']"), script_ptr);
+  EXPECT_EQ(QuerySelector(*document, "script[src*='missing']"), nullptr);
+  EXPECT_EQ(QuerySelector(*document, "script[src*='']"), nullptr);
+}
+
 TEST(DomTest, MatchesCompoundSelector)
 {
   auto element = std::make_unique<Element>("span");

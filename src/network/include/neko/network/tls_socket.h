@@ -19,6 +19,11 @@ struct TlsOptions
 
   // Bounds the TCP connect, the TLS handshake and each read.
   int timeout_ms = 10000;
+
+  // Optional HTTP proxy endpoint.  When set, HTTPS connections establish an
+  // HTTP CONNECT tunnel before starting TLS to the requested host.
+  std::string proxy_host;
+  uint16_t proxy_port = 0;
 };
 
 // A TLS (SSL/TLS) client socket over a TCP connection, wrapping OpenSSL

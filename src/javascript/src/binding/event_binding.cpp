@@ -7,7 +7,6 @@
 
 #include "binding_internal.h"
 
-#include <array>
 #include <cstring>
 #include <quickjs.h>
 #include <string>
@@ -163,28 +162,21 @@ JSValue MutationObserverTakeRecords(JSContext* ctx,
   return records;
 }
 
-JSValue MutationObserverConstructor(JSContext* ctx,
-                                    JSValueConst /*new_target*/,
-                                    int argc,
-                                    JSValueConst* argv)
+JSValue
+MutationObserverConstructor(JSContext* ctx, JSValueConst new_target, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, JS_UNDEFINED);
   if (impl == nullptr || argc < 1 || !JS_IsFunction(ctx, argv[0])) {
     return JS_ThrowTypeError(ctx, "MutationObserver callback must be a function");
   }
-  JSValue observer = JS_NewObject(ctx);
+  JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
+  if (JS_IsException(prototype)) {
+    return prototype;
+  }
+  JSValue observer = JS_NewObjectProto(ctx, prototype);
+  JS_FreeValue(ctx, prototype);
   const int index = static_cast<int>(impl->mutation_observers.size());
   JS_SetPropertyStr(ctx, observer, "_nekoMutationObserver", JS_NewInt32(ctx, index));
-  JS_SetPropertyStr(
-      ctx, observer, "observe", JS_NewCFunction(ctx, MutationObserverObserve, "observe", 2));
-  JS_SetPropertyStr(ctx,
-                    observer,
-                    "disconnect",
-                    JS_NewCFunction(ctx, MutationObserverDisconnect, "disconnect", 0));
-  JS_SetPropertyStr(ctx,
-                    observer,
-                    "takeRecords",
-                    JS_NewCFunction(ctx, MutationObserverTakeRecords, "takeRecords", 0));
   Impl::MutationObserver state;
   state.callback = JS_DupValue(ctx, argv[0]);
   state.self = JS_DupValue(ctx, observer);
@@ -232,6 +224,28 @@ JSValue EventConstructor(JSContext* ctx, JSValueConst /*this_val*/, int argc, JS
     JS_FreeValue(ctx, c);
   }
   return impl->MakeEvent(type, bubbles, cancelable);
+}
+
+JSValue UIEventConstructor(JSContext* ctx, JSValueConst /*this_val*/, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, JS_UNDEFINED);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  bool ok = false;
+  const std::string type = argc >= 1 ? ArgString(ctx, argv[0], &ok) : std::string();
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  JSValue event = impl->MakeEvent(type, false, false);
+  JSValue global = JS_GetGlobalObject(ctx);
+  JSValue constructor = JS_GetPropertyStr(ctx, global, "UIEvent");
+  JS_FreeValue(ctx, global);
+  JSValue prototype = JS_GetPropertyStr(ctx, constructor, "prototype");
+  JS_FreeValue(ctx, constructor);
+  JS_SetPrototype(ctx, event, prototype);
+  JS_FreeValue(ctx, prototype);
+  return event;
 }
 
 // new CustomEvent(type, {detail, bubbles, cancelable}): an Event whose
@@ -288,6 +302,115 @@ CustomEventConstructor(JSContext* ctx, JSValueConst /*this_val*/, int argc, JSVa
   // Event); MakeEvent wired event_proto, so point it at custom_event_proto.
   JS_SetPrototype(ctx, event, impl->custom_event_proto);
   JS_SetPropertyStr(ctx, event, "detail", detail); // steals detail
+  return event;
+}
+
+JSValue
+MessageEventConstructor(JSContext* ctx, JSValueConst /*this_val*/, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, JS_UNDEFINED);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  bool ok = false;
+  const std::string type = argc >= 1 ? ArgString(ctx, argv[0], &ok) : std::string();
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  JSValue event = impl->MakeEvent(type, false, false);
+  JS_SetPrototype(ctx, event, impl->message_event_proto);
+
+  JSValue data = JS_NULL;
+  JSValue origin = JS_NewString(ctx, "");
+  JSValue last_event_id = JS_NewString(ctx, "");
+  JSValue source = JS_NULL;
+  JSValue ports = JS_NewArray(ctx);
+  if (argc >= 2 && JS_IsObject(argv[1])) {
+    auto read = [&](const char* name, JSValue* destination) {
+      JSValue value = JS_GetPropertyStr(ctx, argv[1], name);
+      if (!JS_IsUndefined(value)) {
+        JS_FreeValue(ctx, *destination);
+        *destination = value;
+      } else {
+        JS_FreeValue(ctx, value);
+      }
+    };
+    read("data", &data);
+    read("origin", &origin);
+    read("lastEventId", &last_event_id);
+    read("source", &source);
+    read("ports", &ports);
+  }
+  JS_DefinePropertyValueStr(ctx, event, "__nekoMessageEventData", data, JS_PROP_CONFIGURABLE);
+  JS_DefinePropertyValueStr(ctx, event, "__nekoMessageEventOrigin", origin, JS_PROP_CONFIGURABLE);
+  JS_DefinePropertyValueStr(
+      ctx, event, "__nekoMessageEventLastEventId", last_event_id, JS_PROP_CONFIGURABLE);
+  JS_DefinePropertyValueStr(ctx, event, "__nekoMessageEventSource", source, JS_PROP_CONFIGURABLE);
+  JS_DefinePropertyValueStr(ctx, event, "__nekoMessageEventPorts", ports, JS_PROP_CONFIGURABLE);
+  return event;
+}
+
+JSValue MessageEventGetData(JSContext* ctx, JSValueConst this_val)
+{
+  return JS_GetPropertyStr(ctx, this_val, "__nekoMessageEventData");
+}
+
+JSValue MessageEventGetOrigin(JSContext* ctx, JSValueConst this_val)
+{
+  return JS_GetPropertyStr(ctx, this_val, "__nekoMessageEventOrigin");
+}
+
+JSValue MessageEventGetLastEventId(JSContext* ctx, JSValueConst this_val)
+{
+  return JS_GetPropertyStr(ctx, this_val, "__nekoMessageEventLastEventId");
+}
+
+JSValue MessageEventGetSource(JSContext* ctx, JSValueConst this_val)
+{
+  return JS_GetPropertyStr(ctx, this_val, "__nekoMessageEventSource");
+}
+
+JSValue MessageEventGetPorts(JSContext* ctx, JSValueConst this_val)
+{
+  return JS_GetPropertyStr(ctx, this_val, "__nekoMessageEventPorts");
+}
+
+JSValue SecurityPolicyViolationEventConstructor(JSContext* ctx,
+                                                JSValueConst /*this_val*/,
+                                                int argc,
+                                                JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, JS_UNDEFINED);
+  if (impl == nullptr)
+    return JS_ThrowTypeError(ctx, "no page runtime");
+
+  bool ok = false;
+  const std::string type = argc >= 1 ? ArgString(ctx, argv[0], &ok) : std::string();
+  if (!ok)
+    return JS_EXCEPTION;
+
+  JSValue event = impl->MakeEvent(type, false, false);
+  JSValue global = JS_GetGlobalObject(ctx);
+  JSValue constructor = JS_GetPropertyStr(ctx, global, "SecurityPolicyViolationEvent");
+  JS_FreeValue(ctx, global);
+  JSValue prototype = JS_GetPropertyStr(ctx, constructor, "prototype");
+  JS_FreeValue(ctx, constructor);
+  JS_SetPrototype(ctx, event, prototype);
+  JS_FreeValue(ctx, prototype);
+
+  for (const char* name : {"blockedURI", "originalPolicy"}) {
+    JSValue value = JS_NewString(ctx, "");
+    if (argc >= 2 && JS_IsObject(argv[1])) {
+      JSValue supplied = JS_GetPropertyStr(ctx, argv[1], name);
+      if (!JS_IsUndefined(supplied)) {
+        JS_FreeValue(ctx, value);
+        value = supplied;
+      } else {
+        JS_FreeValue(ctx, supplied);
+      }
+    }
+    JS_SetPropertyStr(ctx, event, name, value);
+  }
   return event;
 }
 
@@ -636,6 +759,17 @@ void DefineEventPrototype(JSContext* ctx, Impl& impl)
       ctx, impl.event_proto, "eventPhase", MakeGetter(ctx, "eventPhase", EventGetEventPhase));
   DefineGetter(ctx, impl.event_proto, "timeStamp", MakeGetter(ctx, "timeStamp", EventGetTimeStamp));
   DefineGetter(ctx, impl.event_proto, "isTrusted", MakeGetter(ctx, "isTrusted", EventGetIsTrusted));
+  DefineGetter(ctx, impl.message_event_proto, "data", MakeGetter(ctx, "data", MessageEventGetData));
+  DefineGetter(
+      ctx, impl.message_event_proto, "origin", MakeGetter(ctx, "origin", MessageEventGetOrigin));
+  DefineGetter(ctx,
+               impl.message_event_proto,
+               "lastEventId",
+               MakeGetter(ctx, "lastEventId", MessageEventGetLastEventId));
+  DefineGetter(
+      ctx, impl.message_event_proto, "source", MakeGetter(ctx, "source", MessageEventGetSource));
+  DefineGetter(
+      ctx, impl.message_event_proto, "ports", MakeGetter(ctx, "ports", MessageEventGetPorts));
 }
 
 void DefineElementEventHandlers(JSContext* ctx, Impl& impl)

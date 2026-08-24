@@ -206,6 +206,40 @@ JSValue ElementSetValue(JSContext* ctx, JSValueConst this_val, JSValueConst valu
   return JS_UNDEFINED;
 }
 
+JSValue ElementGetValidity(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr || element->tag_name() != "input") {
+    return JS_ThrowTypeError(ctx, "not an input element");
+  }
+
+  const std::string type = ToLower(RawAttr(*element, "type"));
+  const std::string value = RawAttr(*element, "value");
+  const bool type_mismatch = type == "url" && !value.empty() && !url::Url::Parse(value).has_value();
+
+  JSValue global = JS_GetGlobalObject(ctx);
+  JSValue constructor = JS_GetPropertyStr(ctx, global, "ValidityState");
+  JS_FreeValue(ctx, global);
+  JSValue prototype = JS_GetPropertyStr(ctx, constructor, "prototype");
+  JS_FreeValue(ctx, constructor);
+  JSValue validity = JS_NewObjectProto(ctx, prototype);
+  JS_FreeValue(ctx, prototype);
+  JS_SetPropertyStr(ctx, validity, "__nekoValidityValid", JS_NewBool(ctx, !type_mismatch));
+  JS_SetPropertyStr(
+      ctx, validity, "__nekoValidityTypeMismatch", JS_NewBool(ctx, type_mismatch));
+  return validity;
+}
+
+JSValue ValidityStateGetValid(JSContext* ctx, JSValueConst this_val)
+{
+  return JS_GetPropertyStr(ctx, this_val, "__nekoValidityValid");
+}
+
+JSValue ValidityStateGetTypeMismatch(JSContext* ctx, JSValueConst this_val)
+{
+  return JS_GetPropertyStr(ctx, this_val, "__nekoValidityTypeMismatch");
+}
+
 JSValue ElementGetChecked(JSContext* ctx, JSValueConst this_val)
 {
   dom::Element* element = AsElement(UnwrapNode(this_val));
@@ -342,6 +376,130 @@ JSValue ElementSetName(JSContext* ctx, JSValueConst this_val, JSValueConst value
   return JS_UNDEFINED;
 }
 
+JSValue ElementGetFormAction(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const std::string form_action = RawAttr(*element, "formaction");
+  return JS_NewStringLen(ctx, form_action.data(), form_action.size());
+}
+
+JSValue ElementSetFormAction(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  bool ok = false;
+  const std::string form_action = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  element->SetAttribute("formaction", form_action);
+  return JS_UNDEFINED;
+}
+
+JSValue FormGetAction(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (impl == nullptr || element == nullptr || element->tag_name() != "form") {
+    return JS_ThrowTypeError(ctx, "not a form element");
+  }
+  const std::string action = ResolvedUrl(*impl, RawAttr(*element, "action"));
+  return JS_NewStringLen(ctx, action.data(), action.size());
+}
+
+JSValue FormSetAction(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr || element->tag_name() != "form") {
+    return JS_ThrowTypeError(ctx, "not a form element");
+  }
+  bool ok = false;
+  const std::string action = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  element->SetAttribute("action", action);
+  return JS_UNDEFINED;
+}
+
+JSValue FormGetEnctype(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr || element->tag_name() != "form") {
+    return JS_ThrowTypeError(ctx, "not a form element");
+  }
+  const std::string enctype = RawAttr(*element, "enctype");
+  return JS_NewStringLen(ctx, enctype.data(), enctype.size());
+}
+
+JSValue FormSetEnctype(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr || element->tag_name() != "form") {
+    return JS_ThrowTypeError(ctx, "not a form element");
+  }
+  bool ok = false;
+  const std::string enctype = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  element->SetAttribute("enctype", enctype);
+  return JS_UNDEFINED;
+}
+
+JSValue FormGetMethod(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr || element->tag_name() != "form") {
+    return JS_ThrowTypeError(ctx, "not a form element");
+  }
+  const std::string method = RawAttr(*element, "method");
+  return JS_NewStringLen(ctx, method.data(), method.size());
+}
+
+JSValue FormSetMethod(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr || element->tag_name() != "form") {
+    return JS_ThrowTypeError(ctx, "not a form element");
+  }
+  bool ok = false;
+  const std::string method = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  element->SetAttribute("method", method);
+  return JS_UNDEFINED;
+}
+
+JSValue FormSubmit(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr || element->tag_name() != "form") {
+    return JS_ThrowTypeError(ctx, "not a form element");
+  }
+  return JS_UNDEFINED;
+}
+
+JSValue FormRequestSubmit(JSContext* ctx,
+                          JSValueConst this_val,
+                          int /*argc*/,
+                          JSValueConst* /*argv*/)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (impl == nullptr || element == nullptr || element->tag_name() != "form") {
+    return JS_ThrowTypeError(ctx, "not a form element");
+  }
+  (void)impl->DispatchCancelableToNode(element, "submit");
+  return JS_UNDEFINED;
+}
+
 JSValue ElementGetHref(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
@@ -410,6 +568,56 @@ JSValue ElementSetHref(JSContext* ctx, JSValueConst this_val, JSValueConst value
     return JS_EXCEPTION;
   }
   element->SetAttribute("href", href);
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetDownload(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const std::string download = RawAttr(*element, "download");
+  return JS_NewStringLen(ctx, download.data(), download.size());
+}
+
+JSValue ElementSetDownload(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  bool ok = false;
+  const std::string download = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  element->SetAttribute("download", download);
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetPing(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const std::string ping = RawAttr(*element, "ping");
+  return JS_NewStringLen(ctx, ping.data(), ping.size());
+}
+
+JSValue ElementSetPing(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  bool ok = false;
+  const std::string ping = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  element->SetAttribute("ping", ping);
   return JS_UNDEFINED;
 }
 
@@ -487,6 +695,84 @@ JSValue ElementSetSrc(JSContext* ctx, JSValueConst this_val, JSValueConst value)
     return JS_EXCEPTION;
   }
   element->SetAttribute("src", src);
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetSrcSet(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const std::string srcset = RawAttr(*element, "srcset");
+  return JS_NewStringLen(ctx, srcset.data(), srcset.size());
+}
+
+JSValue ElementSetSrcSet(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  bool ok = false;
+  const std::string srcset = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  element->SetAttribute("srcset", srcset);
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetSrcDoc(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const std::string srcdoc = RawAttr(*element, "srcdoc");
+  return JS_NewStringLen(ctx, srcdoc.data(), srcdoc.size());
+}
+
+JSValue ElementSetSrcDoc(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  bool ok = false;
+  const std::string srcdoc = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  element->SetAttribute("srcdoc", srcdoc);
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetCredentialless(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  return JS_NewBool(ctx, element->HasAttribute("credentialless"));
+}
+
+JSValue ElementSetCredentialless(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const int credentialless = JS_ToBool(ctx, value);
+  if (credentialless < 0) {
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return JS_EXCEPTION;
+  }
+  if (credentialless != 0) {
+    element->SetAttribute("credentialless", "");
+  } else {
+    element->RemoveAttribute("credentialless");
+  }
   return JS_UNDEFINED;
 }
 

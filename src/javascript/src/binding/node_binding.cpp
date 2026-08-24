@@ -526,6 +526,16 @@ JSValue NodeGetChildNodes(JSContext* ctx, JSValueConst this_val)
   return impl->MakeNodeArray(nodes);
 }
 
+JSValue NodeGetBaseURI(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || UnwrapNode(this_val) == nullptr) {
+    return JS_ThrowTypeError(ctx, "detached node");
+  }
+  const std::string url = impl->apis.location_href ? impl->apis.location_href() : std::string();
+  return JS_NewStringLen(ctx, url.data(), url.size());
+}
+
 // Returns the sibling at |offset| (+1 next, -1 previous), or nullptr.
 dom::Node* SiblingOf(dom::Node* node, int offset)
 {
@@ -760,6 +770,7 @@ void DefineNodePrototype(JSContext* ctx, Impl& impl)
 
   DefineGetter(ctx, impl.node_proto, "nodeType", MakeGetter(ctx, "nodeType", NodeGetNodeType));
   DefineGetter(ctx, impl.node_proto, "nodeName", MakeGetter(ctx, "nodeName", NodeGetNodeName));
+  DefineGetter(ctx, impl.node_proto, "baseURI", MakeGetter(ctx, "baseURI", NodeGetBaseURI));
   DefineAccessor(ctx,
                  impl.node_proto,
                  "textContent",
@@ -812,6 +823,36 @@ JSValue NodeListLength(JSContext* ctx, JSValueConst this_val)
 {
   JSValue value = JS_GetPropertyStr(ctx, this_val, "length");
   return value;
+}
+
+JSValue HTMLCollectionNamedItem(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  if (argc < 1) {
+    return JS_NULL;
+  }
+  bool ok = false;
+  const std::string name = ArgString(ctx, argv[0], &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  JSValue length_value = JS_GetPropertyStr(ctx, this_val, "length");
+  uint32_t length = 0;
+  (void)JS_ToUint32(ctx, &length, length_value);
+  JS_FreeValue(ctx, length_value);
+  for (uint32_t index = 0; index < length; ++index) {
+    JSValue value = JS_GetPropertyUint32(ctx, this_val, index);
+    dom::Element* element = AsElement(UnwrapNode(value));
+    if (element != nullptr) {
+      const auto id = element->Id();
+      const auto element_name = element->GetAttribute("name");
+      if ((id.has_value() && *id == name)
+          || (element_name.has_value() && *element_name == name)) {
+        return value;
+      }
+    }
+    JS_FreeValue(ctx, value);
+  }
+  return JS_NULL;
 }
 
 } // namespace neko::javascript

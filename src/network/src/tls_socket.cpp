@@ -97,11 +97,47 @@ TlsSocket::Connect(std::string_view host, uint16_t port, const TlsOptions& optio
   socket.impl_->timeout_ms = options.timeout_ms;
 
   // Plain TCP first; the TLS layer rides on top of this fd.
-  base::Result<Socket> tcp = Socket::Connect(host, port, options.timeout_ms);
+  const bool use_proxy = !options.proxy_host.empty();
+  base::Result<Socket> tcp = Socket::Connect(
+      use_proxy ? std::string_view(options.proxy_host) : host,
+      use_proxy ? options.proxy_port : port,
+      options.timeout_ms);
   if (!tcp) {
     return base::Err(tcp.error());
   }
   socket.impl_->tcp = std::move(tcp.value());
+
+  if (use_proxy) {
+    const std::string authority = std::string(host) + ":" + std::to_string(port);
+    const std::string request = "CONNECT " + authority + " HTTP/1.1\r\nHost: " + authority +
+                                "\r\nProxy-Connection: keep-alive\r\n\r\n";
+    const base::Result<std::size_t> sent = socket.impl_->tcp.Send(request);
+    if (!sent) {
+      return base::Err(sent.error());
+    }
+    std::string response;
+    while (response.find("\r\n\r\n") == std::string::npos) {
+      if (response.size() >= 16384) {
+        return base::Err(base::Error::Network("proxy CONNECT response headers too large"));
+      }
+      const base::Result<std::string> chunk =
+          socket.impl_->tcp.Receive(1, options.timeout_ms);
+      if (!chunk) {
+        return base::Err(chunk.error());
+      }
+      if (chunk.value().empty()) {
+        return base::Err(base::Error::Network("proxy closed before CONNECT response"));
+      }
+      response += chunk.value();
+    }
+    const std::size_t status_start = response.find(' ') + 1;
+    if (response.rfind("HTTP/1.", 0) != 0 || status_start == 0 || status_start + 3 > response.size() ||
+        response[status_start] != '2') {
+      const std::size_t line_end = response.find("\r\n");
+      return base::Err(base::Error::Network(
+          "proxy CONNECT failed: " + response.substr(0, line_end)));
+    }
+  }
 
   const base::Result<void> timeouts = SetSocketTimeouts(socket.impl_->tcp.fd(), options.timeout_ms);
   if (!timeouts) {

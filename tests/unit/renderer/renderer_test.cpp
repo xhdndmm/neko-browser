@@ -342,6 +342,40 @@ TEST(PageTest, RendersElementImageAtIntrinsicSize)
   EXPECT_TRUE(found_red);
 }
 
+TEST(PageTest, CanvasFillRectRendersBackingStore)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<html><body style=\"background-color:#ffffff\"><canvas></canvas>"
+                            "</body></html>")
+                  .has_value());
+  dom::Element* canvas = dom::QuerySelector(*page.document(), "canvas");
+  ASSERT_NE(canvas, nullptr);
+
+  page.FillCanvasRect(*canvas, 2, 3, 8, 6, {255, 0, 0, 255});
+  page.FillCanvasRect(*canvas, 4, 4, 2, 2, {0, 0, 255, 128});
+
+  const image::Image* backing_store = page.Find(*canvas);
+  ASSERT_NE(backing_store, nullptr);
+  EXPECT_EQ(backing_store->width, 300);
+  EXPECT_EQ(backing_store->height, 150);
+
+  page.Layout(400);
+  const paint::Rasterizer image = page.Rasterize(400, 200);
+  const auto pixel = [&image](int x, int y) {
+    const std::size_t offset =
+        (static_cast<std::size_t>(y) * static_cast<std::size_t>(image.width()) +
+         static_cast<std::size_t>(x)) *
+        4;
+    return css::Color{image.pixels()[offset],
+                      image.pixels()[offset + 1],
+                      image.pixels()[offset + 2],
+                      image.pixels()[offset + 3]};
+  };
+  EXPECT_EQ(pixel(8, 8), (css::Color{255, 255, 255, 255}));
+  EXPECT_EQ(pixel(11, 12), (css::Color{255, 0, 0, 255}));
+  EXPECT_EQ(pixel(13, 13), (css::Color{127, 0, 128, 255}));
+}
+
 TEST(PageTest, LoadHtmlClearsStaleElementImages)
 {
   // Image entries are keyed by element address.  After a navigation the old

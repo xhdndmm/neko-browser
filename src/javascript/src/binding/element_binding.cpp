@@ -169,6 +169,16 @@ JSValue ElementGetTagName(JSContext* ctx, JSValueConst this_val)
   return JS_NewStringLen(ctx, name.data(), name.size());
 }
 
+JSValue ElementGetNamespaceURI(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const std::string_view namespace_uri = element->namespace_uri();
+  return JS_NewStringLen(ctx, namespace_uri.data(), namespace_uri.size());
+}
+
 JSValue ElementGetId(JSContext* ctx, JSValueConst this_val)
 {
   dom::Element* element = AsElement(UnwrapNode(this_val));
@@ -235,20 +245,89 @@ JSValue ElementSetClassName(JSContext* ctx, JSValueConst this_val, JSValueConst 
   return JS_UNDEFINED;
 }
 
+namespace {
+
+AttrWrapper* UnwrapAttribute(JSContext* ctx, JSValueConst this_val)
+{
+  auto* wrapper = static_cast<AttrWrapper*>(JS_GetOpaque(this_val, g_attr_class_id));
+  if (wrapper == nullptr || wrapper->element == nullptr) {
+    JS_ThrowTypeError(ctx, "not an Attr");
+    return nullptr;
+  }
+  return wrapper;
+}
+
+} // namespace
+
+JSValue AttrGetName(JSContext* ctx, JSValueConst this_val)
+{
+  AttrWrapper* wrapper = UnwrapAttribute(ctx, this_val);
+  if (wrapper == nullptr) {
+    return JS_EXCEPTION;
+  }
+  return JS_NewStringLen(ctx, wrapper->name.data(), wrapper->name.size());
+}
+
+JSValue AttrGetValue(JSContext* ctx, JSValueConst this_val)
+{
+  AttrWrapper* wrapper = UnwrapAttribute(ctx, this_val);
+  if (wrapper == nullptr) {
+    return JS_EXCEPTION;
+  }
+  const auto value = wrapper->element->GetAttribute(wrapper->name);
+  if (!value.has_value()) {
+    return JS_NewStringLen(ctx, "", 0);
+  }
+  return JS_NewStringLen(ctx, value->data(), value->size());
+}
+
+JSValue AttrSetValue(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  AttrWrapper* wrapper = UnwrapAttribute(ctx, this_val);
+  if (wrapper == nullptr) {
+    return JS_EXCEPTION;
+  }
+  bool ok = false;
+  const std::string string_value = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  wrapper->element->SetAttribute(wrapper->name, string_value);
+  wrapper->impl->MarkDomDirty();
+  return JS_UNDEFINED;
+}
+
+JSValue AttrGetNodeValue(JSContext* ctx, JSValueConst this_val)
+{
+  return AttrGetValue(ctx, this_val);
+}
+
+JSValue AttrSetNodeValue(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  return AttrSetValue(ctx, this_val, value);
+}
+
+JSValue AttrGetOwnerElement(JSContext* ctx, JSValueConst this_val)
+{
+  AttrWrapper* wrapper = UnwrapAttribute(ctx, this_val);
+  if (wrapper == nullptr) {
+    return JS_EXCEPTION;
+  }
+  return wrapper->impl->WrapNode(wrapper->element);
+}
+
 JSValue ElementGetAttributes(JSContext* ctx, JSValueConst this_val)
 {
+  Impl* impl = ImplFor(ctx, this_val);
   dom::Element* element = AsElement(UnwrapNode(this_val));
-  if (element == nullptr) {
+  if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
   JSValue arr = JS_NewArray(ctx);
+  JS_SetPrototype(ctx, arr, impl->named_node_map_proto);
   const auto& attrs = element->attributes();
   for (std::size_t i = 0; i < attrs.size(); ++i) {
-    JSValue obj = JS_NewObject(ctx);
-    JS_SetPropertyStr(
-        ctx, obj, "name", JS_NewStringLen(ctx, attrs[i].name.data(), attrs[i].name.size()));
-    JS_SetPropertyStr(
-        ctx, obj, "value", JS_NewStringLen(ctx, attrs[i].value.data(), attrs[i].value.size()));
+    JSValue obj = impl->WrapAttribute(element, attrs[i].name);
     JS_SetPropertyUint32(ctx, // NOLINT: (this_obj, index, value); steals obj
                          arr,
                          static_cast<uint32_t>(i),
@@ -260,20 +339,48 @@ JSValue ElementGetAttributes(JSContext* ctx, JSValueConst this_val)
   return arr;
 }
 
+JSValue NamedNodeMapItem(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  int32_t index = -1;
+  if (argc < 1 || JS_ToInt32(ctx, &index, argv[0]) < 0) {
+    return JS_EXCEPTION;
+  }
+  if (index < 0) {
+    return JS_NULL;
+  }
+  JSValue value = JS_GetPropertyUint32(ctx, this_val, static_cast<uint32_t>(index));
+  return JS_IsUndefined(value) ? (JS_FreeValue(ctx, value), JS_NULL) : value;
+}
+
+JSValue
+NamedNodeMapGetNamedItem(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  if (argc < 1) {
+    return JS_ThrowTypeError(ctx, "getNamedItem requires a name");
+  }
+  bool ok = false;
+  const std::string name = ArgString(ctx, argv[0], &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  JSValue value = JS_GetPropertyStr(ctx, this_val, name.c_str());
+  return JS_IsUndefined(value) ? (JS_FreeValue(ctx, value), JS_NULL) : value;
+}
+
 JSValue ElementGetChildren(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
-  if (impl == nullptr || element == nullptr) {
-    return JS_ThrowTypeError(ctx, "not an element");
+  dom::Node* node = UnwrapNode(this_val);
+  if (impl == nullptr || node == nullptr) {
+    return JS_ThrowTypeError(ctx, "not a ParentNode");
   }
   std::vector<dom::Element*> elements;
-  for (dom::Node* child : element->ChildNodes()) {
+  for (dom::Node* child : node->ChildNodes()) {
     if (dom::Element* el = AsElement(child)) {
       elements.push_back(el);
     }
   }
-  return impl->MakeElementArray(elements);
+  return impl->MakeHtmlCollection(elements);
 }
 
 JSValue ElementGetFirstElementChild(JSContext* ctx, JSValueConst this_val)
@@ -767,6 +874,38 @@ ClassListToString(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueCo
   return JS_NewStringLen(ctx, out.data(), out.size());
 }
 
+JSValue
+ClassListIterator(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "classList: not an element");
+  }
+
+  JSValue values = JS_NewArray(ctx);
+  const std::vector<std::string> tokens = ClassTokens(*element);
+  for (std::size_t index = 0; index < tokens.size(); ++index) {
+    JS_SetPropertyUint32(ctx,
+                         values,
+                         static_cast<std::uint32_t>(index),
+                         JS_NewStringLen(ctx, tokens[index].data(), tokens[index].size()));
+  }
+
+  JSValue global = JS_GetGlobalObject(ctx);
+  JSValue symbol = JS_GetPropertyStr(ctx, global, "Symbol");
+  JSValue iterator_symbol = JS_GetPropertyStr(ctx, symbol, "iterator");
+  const JSAtom iterator_atom = JS_ValueToAtom(ctx, iterator_symbol);
+  JSValue iterator = JS_GetProperty(ctx, values, iterator_atom);
+  JSValue result = JS_Call(ctx, iterator, values, 0, nullptr);
+  JS_FreeValue(ctx, iterator);
+  JS_FreeAtom(ctx, iterator_atom);
+  JS_FreeValue(ctx, iterator_symbol);
+  JS_FreeValue(ctx, symbol);
+  JS_FreeValue(ctx, global);
+  JS_FreeValue(ctx, values);
+  return result;
+}
+
 JSValue ElementGetClassList(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
@@ -1030,6 +1169,37 @@ JSValue ElementHasAttribute(JSContext* ctx, JSValueConst this_val, int argc, JSV
   return JS_NewBool(ctx, element->HasAttribute(name));
 }
 
+JSValue ElementToggleAttribute(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  if (argc < 1) {
+    return JS_ThrowTypeError(ctx, "toggleAttribute requires a name");
+  }
+  bool ok = false;
+  const std::string name = ArgString(ctx, argv[0], &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+
+  const bool present = element->HasAttribute(name);
+  const bool force = argc >= 2 ? JS_ToBool(ctx, argv[1]) != 0 : !present;
+  if (force == present) {
+    return JS_NewBool(ctx, present);
+  }
+  if (force) {
+    element->SetAttribute(name, "");
+  } else {
+    element->RemoveAttribute(name);
+  }
+  Impl* impl = ImplFor(ctx, this_val);
+  impl->RecordAttributeMutation(element, name);
+  impl->MarkDomDirty();
+  return JS_NewBool(ctx, force);
+}
+
 JSValue ElementQuerySelector(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
@@ -1178,15 +1348,30 @@ void DefineClassListPrototype(JSContext* ctx, Impl& impl)
   JS_SetPropertyFunctionList(
       ctx, impl.class_list_proto, kMethods.data(), static_cast<int>(kMethods.size()));
   DefineGetter(ctx, impl.class_list_proto, "length", MakeGetter(ctx, "length", ClassListGetLength));
+
+  JSValue global = JS_GetGlobalObject(ctx);
+  JSValue symbol = JS_GetPropertyStr(ctx, global, "Symbol");
+  JSValue iterator_symbol = JS_GetPropertyStr(ctx, symbol, "iterator");
+  const JSAtom iterator_atom = JS_ValueToAtom(ctx, iterator_symbol);
+  JS_DefinePropertyValue(ctx,
+                         impl.class_list_proto,
+                         iterator_atom,
+                         JS_NewCFunction(ctx, ClassListIterator, "values", 0),
+                         JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+  JS_FreeAtom(ctx, iterator_atom);
+  JS_FreeValue(ctx, iterator_symbol);
+  JS_FreeValue(ctx, symbol);
+  JS_FreeValue(ctx, global);
 }
 
 void DefineElementPrototype(JSContext* ctx, Impl& impl)
 {
-  static const std::array<JSCFunctionListEntry, 15> kMethods = {{
+  static const std::array<JSCFunctionListEntry, 16> kMethods = {{
       JS_CFUNC_DEF("getAttribute", 1, ElementGetAttribute),
       JS_CFUNC_DEF("setAttribute", 2, ElementSetAttribute),
       JS_CFUNC_DEF("removeAttribute", 1, ElementRemoveAttribute),
       JS_CFUNC_DEF("hasAttribute", 1, ElementHasAttribute),
+      JS_CFUNC_DEF("toggleAttribute", 1, ElementToggleAttribute),
       JS_CFUNC_DEF("querySelector", 1, ElementQuerySelector),
       JS_CFUNC_DEF("querySelectorAll", 1, ElementQuerySelectorAll),
       JS_CFUNC_DEF("getElementsByTagName", 1, ElementGetElementsByTagName),
@@ -1203,6 +1388,10 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
       ctx, impl.element_proto, kMethods.data(), static_cast<int>(kMethods.size()));
 
   DefineGetter(ctx, impl.element_proto, "tagName", MakeGetter(ctx, "tagName", ElementGetTagName));
+  DefineGetter(ctx,
+               impl.element_proto,
+               "namespaceURI",
+               MakeGetter(ctx, "namespaceURI", ElementGetNamespaceURI));
   DefineAccessor(ctx,
                  impl.element_proto,
                  "id",
@@ -1282,6 +1471,8 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
   DefineGetter(
       ctx, impl.element_proto, "classList", MakeGetter(ctx, "classList", ElementGetClassList));
   DefineGetter(ctx, impl.element_proto, "dataset", MakeGetter(ctx, "dataset", ElementGetDataset));
+  DefineGetter(
+      ctx, impl.svg_element_proto, "dataset", MakeGetter(ctx, "dataset", ElementGetDataset));
   DefineAccessor(ctx,
                  impl.element_proto,
                  "hidden",

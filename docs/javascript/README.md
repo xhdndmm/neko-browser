@@ -40,8 +40,10 @@
   宽度一致；真实窗口尺寸的接入是后续工作）、`matchMedia`。
 - **navigator**：`userAgent`（与网络栈发送的 UA 一致）、`platform`
   （按 OS 宏）、`language`/`languages`（默认 "en-US"）、`onLine`、
-  `cookieEnabled`、`hardwareConcurrency`、`vendor`。缺失的接口（如
-  geolocation/clipboard）不提供，`"x" in navigator` 诚实地返回 false。
+  `cookieEnabled`、`hardwareConcurrency`、`vendor`、`mimeTypes`（稳定的空
+  legacy collection，支持 `length`/`item()`/`namedItem()`；尚未实现 MIME
+  类型发现）。缺失的接口（如 geolocation/clipboard）不提供，
+  `"x" in navigator` 诚实地返回 false。
 - **screen**：`width`/`height`/`availWidth`/`availHeight`（800×600）、
   `colorDepth`/`pixelDepth`（24）。
 - **Document**：`documentElement`、`body`、`head`、`readyState`（恒为
@@ -78,7 +80,8 @@
 
 - `window.localStorage`（按页面 origin 分区）：`getItem`/`setItem`/
   `removeItem`/`clear`/`key(i)`/`length`。数据由 C++ `storage::LocalStorage`
-  持久化到 profile（跨导航保留）。无 sessionStorage/storage 事件。
+  持久化到 profile（跨导航保留）；对象使用全局不可直接构造的 `Storage`
+  接口及其 prototype。无 sessionStorage/storage 事件。
 - `window.fetch(url)`：返回 Promise，解析为最小 Response 对象
   （`status`/`ok`/`statusText`/`url`/`headers.get(name)`/`text()`/`json()`）；
   相对 URL 按页面 base 解析；网络错误 reject。同步网络调用立即 resolve，
@@ -106,6 +109,17 @@
   页面的视频帧时钟驱动（与 GIF/定时器同泵），对应
   `Page::PlayVideo/PauseVideo/SeekVideo/VideoDuration/VideoCurrentTime`。
   无 `controls`/音轨/缓冲（buffered/readyState 未实现）。
+- **Canvas 2D（最小真实子集）**：`<canvas>` 使用独立
+  `HTMLCanvasElement.prototype`；`getContext("2d")` 对同一元素返回稳定的
+  `CanvasRenderingContext2D`，未知 context 类型与 WebGL 返回 `null`。context
+  支持 `fillStyle`（CSS 颜色）与 `fillRect(x, y, width, height)`。首次绘制建立
+  300×150 透明 RGBA backing store，矩形按画布边界裁剪并执行 source-over
+  合成；canvas 作为 replaced element 进入 layout、`DrawImage` 和最终 raster，
+  不是只为脚本消错的空对象。JS 绑定测试覆盖 context/颜色/绘制回调，renderer
+  像素测试覆盖默认尺寸、透明背景、裁剪及半透明 source-over。CCTV13 直播页
+  实测生成 71×71 二维码 canvas，`jquery.qrcode.min.js` 的同步脚本错误由 1 降为
+  0。当前无 width/height 属性变化时重建 backing store、clearRect、路径、文字、
+  变换、渐变、drawImage、getImageData/putImageData、导出及 WebGL。
 - `window.performance`：`now()`、`timeOrigin`、`timing.navigationStart`
   （均为页面加载起点）。bing 的启动脚本读取 `performance.timing.
   navigationStart`。

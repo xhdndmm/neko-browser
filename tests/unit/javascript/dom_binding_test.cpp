@@ -88,6 +88,11 @@ TEST_F(DomBinderTest, GlobalDocumentAndWindow)
   EXPECT_EQ(EvalString("document.title"), "Test Page");
   EXPECT_TRUE(EvalBool("window.document === document"));
   EXPECT_TRUE(EvalBool("document.defaultView === window"));
+  EXPECT_TRUE(
+      EvalBool("(function(){ var descriptor = Object.getOwnPropertyDescriptor("
+               "Document.prototype, 'defaultView'); "
+               "return typeof descriptor.get === 'function' && descriptor.set === undefined "
+               "    && !Object.prototype.hasOwnProperty.call(document, 'defaultView'); })()"));
   EXPECT_EQ(EvalNumber("document.defaultView.pageYOffset"), 0.0);
   EXPECT_EQ(EvalNumber("window.pageYOffset"), 0.0);
   EXPECT_EQ(EvalNumber("window.scrollY"), 0.0);
@@ -98,18 +103,283 @@ TEST_F(DomBinderTest, GlobalDocumentAndWindow)
 
 TEST_F(DomBinderTest, BlobAndObjectUrl)
 {
-  EXPECT_TRUE(EvalBool("(function(){ var blob = new Blob(['hello', ' world'], {type:'text/plain'}); "
-                       "var url = URL.createObjectURL(blob); return blob.size === 11 && "
-                       "blob.type === 'text/plain' && typeof url === 'string' && "
-                       "url.indexOf('blob:') === 0; })()"));
+  EXPECT_TRUE(
+      EvalBool("(function(){ var blob = new Blob(['hello', ' world'], {type:'text/plain'}); "
+               "var url = URL.createObjectURL(blob); return blob.size === 11 && "
+               "blob.type === 'text/plain' && typeof url === 'string' && "
+               "url.indexOf('blob:') === 0; })()"));
+}
+
+TEST_F(DomBinderTest, UrlConstructsParsedValuesAndExposesPrototype)
+{
+  EXPECT_TRUE(
+      EvalBool("(function(){ var descriptor = Object.getOwnPropertyDescriptor(URL, 'prototype'); "
+               "var url = new URL('../docs?q=hello#part', 'https://example.test/path/page'); "
+               "return descriptor.value === URL.prototype && URL.prototype.constructor === URL "
+               "    && url instanceof URL && url.href === 'https://example.test/docs?q=hello#part' "
+               "    && url.origin === 'https://example.test' && url.pathname === '/docs' "
+               "    && url.search === '?q=hello' && url.hash === '#part' && url.toString() === "
+               "url.href; })()"));
+}
+
+TEST_F(DomBinderTest, UrlAcceptsLocationAsItsBase)
+{
+  EXPECT_TRUE(EvalBool("new URL('/docs', window.location).pathname === '/docs'"));
+}
+
+TEST_F(DomBinderTest, DocumentWritelnIsCallable)
+{
+  EXPECT_TRUE(EvalBool("typeof document.writeln === 'function'"));
+  EXPECT_TRUE(EvalBool("document.writeln('legacy markup') === undefined"));
+}
+
+TEST_F(DomBinderTest, SecurityPolicyViolationEventExposesCspFields)
+{
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var event = new SecurityPolicyViolationEvent('securitypolicyviolation', "
+      "{blockedURI:'https://blocked.test/', originalPolicy:'default-src self'}); "
+      "return event instanceof Event && event.blockedURI === 'https://blocked.test/' "
+      "&& event.originalPolicy === 'default-src self' "
+      "&& SecurityPolicyViolationEvent.prototype.constructor === SecurityPolicyViolationEvent; "
+      "})()"));
+}
+
+TEST_F(DomBinderTest, UrlInputExposesValidityState)
+{
+  EXPECT_TRUE(
+      EvalBool("(function(){ var input = document.createElement('input'); input.type = 'url'; "
+               "input.value = 'not a URL'; var descriptor = Object.getOwnPropertyDescriptor("
+               "ValidityState.prototype, 'valid'); return input.validity instanceof ValidityState "
+               "&& input.validity.typeMismatch && !input.validity.valid "
+               "&& typeof descriptor.get === 'function'; })()"));
 }
 
 TEST_F(DomBinderTest, NodeListCollectionSemantics)
 {
   EXPECT_TRUE(EvalBool("typeof NodeList === 'function'"));
-  EXPECT_TRUE(EvalBool("(function(){ var list = document.querySelectorAll('p'); return list instanceof NodeList; })()"));
-  EXPECT_TRUE(EvalBool("(function(){ var list = document.querySelectorAll('p'); return typeof list.item === 'function'; })()"));
-  EXPECT_TRUE(EvalBool("(function(){ var list = document.querySelectorAll('p'); return list.length > 0; })()"));
+  EXPECT_TRUE(EvalBool("(function(){ var list = document.querySelectorAll('p'); return list "
+                       "instanceof NodeList; })()"));
+  EXPECT_TRUE(EvalBool("(function(){ var list = document.querySelectorAll('p'); return typeof "
+                       "list.item === 'function'; })()"));
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var list = document.querySelectorAll('p'); return list.length > 0; })()"));
+}
+
+TEST_F(DomBinderTest, ChildrenUsesHtmlCollectionInterface)
+{
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var children = document.getElementById('main').children; "
+      "var descriptor = Object.getOwnPropertyDescriptor(HTMLCollection.prototype, 'length'); "
+      "return children instanceof HTMLCollection && children.length === 3 "
+      "    && children.item(0) === children[0] && children.namedItem('first') === children[0] "
+      "    && typeof descriptor.get === 'function' && descriptor.set === undefined; })()"));
+}
+
+TEST_F(DomBinderTest, SvgElementUsesDatasetAccessor)
+{
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var element = document.createElementNS("
+      "'http://www.w3.org/2000/svg', 'svg'); element.dataset.state = 'ready'; "
+      "var descriptor = Object.getOwnPropertyDescriptor(SVGElement.prototype, 'dataset'); "
+      "return element.dataset.state === 'ready' && element.getAttribute('data-state') === 'ready' "
+      "    && typeof descriptor.get === 'function' && descriptor.set === undefined; })()"));
+}
+
+TEST_F(DomBinderTest, DocumentDoctypeUsesReadonlyAccessor)
+{
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var descriptor = Object.getOwnPropertyDescriptor("
+      "Document.prototype, 'doctype'); return document.doctype === null "
+      "    && typeof descriptor.get === 'function' && descriptor.set === undefined; })()"));
+}
+
+TEST_F(DomBinderTest, WindowClosedUsesReadonlyAccessor)
+{
+  EXPECT_TRUE(
+      EvalBool("(function(){ var descriptor = Object.getOwnPropertyDescriptor(window, 'closed'); "
+               "return window.closed === false && typeof descriptor.get === 'function' "
+               "    && descriptor.set === undefined; })()"));
+}
+
+TEST_F(DomBinderTest, HtmlScriptElementUsesDedicatedPrototype)
+{
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var element = document.createElement('script'); element.src = '/app.js'; "
+      "var descriptor = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src'); "
+      "return typeof HTMLScriptElement === 'function' && element instanceof HTMLScriptElement "
+      "    && HTMLScriptElement.prototype !== Element.prototype && typeof descriptor.get === "
+      "'function' "
+      "    && typeof descriptor.set === 'function' && element.src === '/app.js'; })()"));
+}
+
+TEST_F(DomBinderTest, HtmlAnchorElementUsesDedicatedPrototype)
+{
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var element = document.createElement('a'); element.href = '/path'; "
+      "return typeof HTMLAnchorElement === 'function' && element instanceof HTMLAnchorElement "
+      "    && HTMLAnchorElement.prototype !== Element.prototype && element.href.indexOf('/path') "
+      "!== -1; })()"));
+}
+
+TEST_F(DomBinderTest, HtmlFormElementUsesDedicatedPrototype)
+{
+  EXPECT_TRUE(
+      EvalBool("(function(){ var element = document.createElement('form'); return "
+               "typeof HTMLFormElement === 'function' && element instanceof HTMLFormElement "
+               "    && HTMLFormElement.prototype !== Element.prototype; })()"));
+}
+
+TEST_F(DomBinderTest, HtmlFormElementReflectsSubmissionAttributes)
+{
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var form = document.createElement('form'); var submitted = false; "
+      "form.action = '/submit'; form.enctype = 'multipart/form-data'; form.method = 'post'; "
+      "form.addEventListener('submit', function(event) { submitted = true; event.preventDefault(); "
+      "}); "
+      "form.requestSubmit(); "
+      "var action = Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, 'action'); "
+      "var enctype = Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, 'enctype'); "
+      "var method = Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, 'method'); "
+      "return typeof action.get === 'function' && typeof action.set === 'function' "
+      "    && typeof enctype.get === 'function' && typeof enctype.set === 'function' "
+      "    && typeof method.get === 'function' && typeof method.set === 'function' "
+      "    && typeof form.submit === 'function' && typeof form.requestSubmit === 'function' "
+      "    && form.action === '/submit' && form.enctype === 'multipart/form-data' "
+      "    && form.method === 'post' && submitted; })()"));
+}
+
+TEST_F(DomBinderTest, HtmlButtonElementUsesDedicatedPrototype)
+{
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var element = document.createElement('button'); element.disabled = true; "
+      "return typeof HTMLButtonElement === 'function' && element instanceof HTMLButtonElement "
+      "    && HTMLButtonElement.prototype !== Element.prototype && element.disabled === true; "
+      "})()"));
+}
+
+TEST_F(DomBinderTest, HtmlInputElementUsesDedicatedPrototype)
+{
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var element = document.createElement('input'); element.type = 'email'; "
+      "element.value = 'test@example.com'; return typeof HTMLInputElement === 'function' "
+      "    && element instanceof HTMLInputElement && HTMLInputElement.prototype !== "
+      "Element.prototype "
+      "    && element.type === 'email' && element.value === 'test@example.com'; })()"));
+}
+
+TEST_F(DomBinderTest, HtmlImageElementUsesDedicatedPrototype)
+{
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var element = document.createElement('img'); element.src = '/image.png'; "
+      "element.srcset = 'small.png 320w, large.png 640w'; "
+      "var src = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src'); "
+      "var currentSrc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'currentSrc'); "
+      "var srcset = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'srcset'); "
+      "return typeof HTMLImageElement === 'function' && element instanceof HTMLImageElement "
+      "    && HTMLImageElement.prototype !== Element.prototype && typeof src.get === 'function' "
+      "    && typeof src.set === 'function' && typeof currentSrc.get === 'function' "
+      "    && !currentSrc.set && typeof srcset.get === 'function' && typeof srcset.set === "
+      "'function' "
+      "    && element.currentSrc === '/image.png' && element.srcset === 'small.png 320w, large.png "
+      "640w'; })()"));
+}
+
+TEST_F(DomBinderTest, HtmlVideoElementInheritsHtmlMediaElement)
+{
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var element = document.createElement('video'); element.src = '/clip.mp4'; "
+      "var src = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src'); "
+      "var currentSrc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'currentSrc'); "
+      "return "
+      "typeof HTMLMediaElement === 'function' && element instanceof HTMLMediaElement "
+      "    && element instanceof HTMLVideoElement && "
+      "Object.getPrototypeOf(HTMLVideoElement.prototype) "
+      "       === HTMLMediaElement.prototype && typeof src.get === 'function' "
+      "    && typeof src.set === 'function' && typeof currentSrc.get === 'function' "
+      "    && !currentSrc.set && element.currentSrc === '/clip.mp4'; })()"));
+}
+
+TEST_F(DomBinderTest, HtmlIFrameElementReflectsSrcAndSrcDoc)
+{
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var element = document.createElement('iframe'); element.src = '/frame.html'; "
+      "element.srcdoc = '<p>frame</p>'; "
+      "element.credentialless = true; "
+      "var src = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'src'); "
+      "var srcdoc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'srcdoc'); "
+      "var credentialless = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "
+      "'credentialless'); "
+      "return typeof src.get === 'function' && typeof src.set === 'function' "
+      "    && typeof srcdoc.get === 'function' && typeof srcdoc.set === 'function' "
+      "    && typeof credentialless.get === 'function' && typeof credentialless.set === 'function' "
+      "    && element.src === '/frame.html' && element.srcdoc === '<p>frame</p>' "
+      "    && element.credentialless; })()"));
+}
+
+TEST_F(DomBinderTest, HtmlAnchorElementReflectsHrefDownloadAndPing)
+{
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var element = document.createElement('a'); element.href = '/file'; "
+      "element.download = 'report.json'; element.ping = '/audit'; "
+      "var href = Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype, 'href'); "
+      "var download = Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype, 'download'); "
+      "var ping = Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype, 'ping'); "
+      "return typeof href.get === 'function' && typeof href.set === 'function' "
+      "    && typeof download.get === 'function' && typeof download.set === 'function' "
+      "    && typeof ping.get === 'function' && typeof ping.set === 'function' "
+      "    && element.href === '/file' && element.download === 'report.json' "
+      "    && element.ping === '/audit'; })()"));
+}
+
+TEST_F(DomBinderTest, SubmitControlsReflectFormAction)
+{
+  EXPECT_TRUE(
+      EvalBool("(function(){ var button = document.createElement('button'); "
+               "var input = document.createElement('input'); button.formAction = '/button'; "
+               "input.formAction = '/input'; "
+               "var buttonDescriptor = "
+               "Object.getOwnPropertyDescriptor(HTMLButtonElement.prototype, 'formAction'); "
+               "var inputDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "
+               "'formAction'); "
+               "return typeof buttonDescriptor.get === 'function' && typeof buttonDescriptor.set "
+               "=== 'function' "
+               "    && typeof inputDescriptor.get === 'function' && typeof inputDescriptor.set === "
+               "'function' "
+               "    && button.formAction === '/button' && input.formAction === '/input'; })()"));
+}
+
+TEST_F(DomBinderTest, HtmlInputElementHasOwnValueAccessor)
+{
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var input = document.createElement('input'); input.value = 'url'; "
+      "var descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value'); "
+      "return typeof descriptor.get === 'function' && typeof descriptor.set === 'function' "
+      "    && input.value === 'url'; })()"));
+}
+
+TEST_F(DomBinderTest, TranscendDescriptorCacheHasRequiredAccessors)
+{
+  EXPECT_TRUE(EvalBool(
+      "(function(){ "
+      "var base = Object.getOwnPropertyDescriptor(HTMLBaseElement.prototype, 'href'); "
+      "var script = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src'); "
+      "var imageSrc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src'); "
+      "var imageSrcSet = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'srcset'); "
+      "var media = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src'); "
+      "var frameSrc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'src'); "
+      "var frameDoc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'srcdoc'); "
+      "var anchorHref = Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype, 'href'); "
+      "var anchorPing = Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype, 'ping'); "
+      "var anchorDownload = Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype, "
+      "'download'); "
+      "var inputValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value'); "
+      "var innerHtml = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML'); "
+      "var cookie = Object.getOwnPropertyDescriptor(Document.prototype, 'cookie'); "
+      "return [base, script, imageSrc, imageSrcSet, media, frameSrc, frameDoc, anchorHref, "
+      "anchorPing, anchorDownload, inputValue, innerHtml, cookie].every(function(descriptor){ "
+      "return descriptor && typeof descriptor.get === 'function' && typeof descriptor.set === "
+      "'function'; "
+      "}); })()"));
 }
 
 TEST_F(DomBinderTest, DocumentCookieCallbacks)
@@ -148,19 +418,23 @@ TEST_F(DomBinderTest, DocumentReadyState)
 
 TEST_F(DomBinderTest, DocumentImplementationSupportsBasicFeatures)
 {
-  EXPECT_TRUE(EvalBool("document.implementation !== null && typeof document.implementation === 'object'"));
+  EXPECT_TRUE(
+      EvalBool("document.implementation !== null && typeof document.implementation === 'object'"));
   EXPECT_TRUE(EvalBool("document.implementation.hasFeature('HTML', '1.0')"));
   EXPECT_TRUE(EvalBool("document.implementation.hasFeature('DOM', '1.0')"));
   EXPECT_FALSE(EvalBool("document.implementation.hasFeature('NoSuchFeature', '1.0')"));
 
-  EXPECT_TRUE(EvalBool("(function(){ var d = document.implementation.createHTMLDocument('Doc Title'); "
-                       "return d instanceof Document && d.title === 'Doc Title'; })()"));
+  EXPECT_TRUE(
+      EvalBool("(function(){ var d = document.implementation.createHTMLDocument('Doc Title'); "
+               "return d instanceof Document && d.title === 'Doc Title'; })()"));
 }
 
 TEST_F(DomBinderTest, JQueryCompatibilityAliasesAreDefined)
 {
   EXPECT_TRUE(EvalBool("typeof $ === 'function' && typeof jQuery === 'function'"));
-  EXPECT_TRUE(EvalBool("(function(){ var called = false; $.ready = function(fn){ called = typeof fn === 'function'; }; $.ready(function(){}); return called && typeof jQuery.ready === 'function'; })()"));
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var called = false; $.ready = function(fn){ called = typeof fn === 'function'; "
+      "}; $.ready(function(){}); return called && typeof jQuery.ready === 'function'; })()"));
 }
 
 TEST_F(DomBinderTest, LegacyBootstrapCompatibilityGlobals)
@@ -170,22 +444,47 @@ TEST_F(DomBinderTest, LegacyBootstrapCompatibilityGlobals)
   EXPECT_TRUE(EvalBool("document.visibilityState === 'visible'"));
   EXPECT_TRUE(EvalBool("navigator.serviceWorker && navigator.serviceWorker.controller === null"));
   EXPECT_TRUE(EvalBool("window.visualViewport && typeof window.visualViewport.width === 'number'"));
-  EXPECT_TRUE(EvalBool("typeof Feedback === 'object' && Feedback && typeof Feedback.Bootstrap === 'object'"));
+  EXPECT_TRUE(EvalBool(
+      "typeof Feedback === 'object' && Feedback && typeof Feedback.Bootstrap === 'object'"));
   EXPECT_TRUE(EvalBool("BM && typeof BM.trigger === 'function'"));
   EXPECT_TRUE(EvalBool("Log && typeof Log.Log === 'function'"));
 }
 
-TEST_F(DomBinderTest, PerformanceObserverMethodsAreCallable)
+TEST_F(DomBinderTest, ElementPrototypeExposesNamespaceURI)
 {
   EXPECT_TRUE(EvalBool(
-      "(function() {"
-      "  var observer = new PerformanceObserver(function() {});"
-      "  return typeof observer.observe === 'function' &&"
-      "         typeof observer.disconnect === 'function' &&"
-      "         typeof observer.takeRecords === 'function' &&"
-      "         observer.observe({entryTypes: []}) === undefined &&"
-      "         Array.isArray(observer.takeRecords());"
-      "})()"));
+      "(function(){ var html = document.createElement('div'); "
+      "var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); "
+      "var descriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'namespaceURI'); "
+      "return typeof descriptor.get === 'function' && descriptor.set === undefined "
+      "    && html.namespaceURI === 'http://www.w3.org/1999/xhtml' "
+      "    && svg.namespaceURI === 'http://www.w3.org/2000/svg'; })()"));
+}
+
+TEST_F(DomBinderTest, CustomElementRegistryDefinesAndFindsConstructors)
+{
+  EXPECT_TRUE(EvalBool("typeof customElements === 'object'"));
+  EXPECT_TRUE(EvalBool("(function(){ class TestElement extends HTMLElement {} "
+                       "customElements.define('test-element', TestElement); "
+                       "return customElements.get('test-element') === TestElement "
+                       "&& customElements.get('missing-element') === undefined "
+                       "&& customElements.whenDefined('test-element') instanceof Promise; })()"));
+  EXPECT_TRUE(
+      EvalBool("(function(){ try { customElements.define('test-element', class {}); "
+               "return false; } catch (error) { return error.name === 'NotSupportedError'; } "
+               "})()"));
+}
+
+TEST_F(DomBinderTest, PerformanceObserverMethodsAreCallable)
+{
+  EXPECT_TRUE(EvalBool("(function() {"
+                       "  var observer = new PerformanceObserver(function() {});"
+                       "  return typeof observer.observe === 'function' &&"
+                       "         typeof observer.disconnect === 'function' &&"
+                       "         typeof observer.takeRecords === 'function' &&"
+                       "         observer.observe({entryTypes: []}) === undefined &&"
+                       "         Array.isArray(observer.takeRecords());"
+                       "})()"));
 }
 
 TEST_F(DomBinderTest, InterfaceGlobalsAndInstanceof)
@@ -205,6 +504,11 @@ TEST_F(DomBinderTest, InterfaceGlobalsAndInstanceof)
                        "frame instanceof HTMLIFrameElement && frame instanceof HTMLElement && "
                        "frame instanceof Element && frame instanceof Node && "
                        "!(document.body instanceof HTMLIFrameElement); })()"));
+  EXPECT_TRUE(EvalBool("(function(){ var video = document.createElement('video'); "
+                       "return typeof HTMLVideoElement === 'function' && "
+                       "video instanceof HTMLVideoElement && video instanceof HTMLElement && "
+                       "video instanceof Element && video instanceof Node && "
+                       "!(document.body instanceof HTMLVideoElement); })()"));
   EXPECT_TRUE(EvalBool("(function(){ var svg = document.createElementNS("
                        "'http://www.w3.org/2000/svg', 'svg'); "
                        "return typeof SVGElement === 'function' && svg instanceof SVGElement && "
@@ -256,13 +560,99 @@ TEST_F(DomBinderTest, MutationObserverDeliversChildListRecords)
 
 TEST_F(DomBinderTest, MutationObserverDeliversSubtreeAttributeRecords)
 {
-  ASSERT_TRUE(EvalBool("(function(){ window._record = ''; var root = document.createElement('div'); "
-                       "var child = document.createElement('span'); root.appendChild(child); "
-                       "new MutationObserver(function(records) { window._record = records[0].type + ':' + "
-                       "records[0].attributeName + ':' + (records[0].target === child); })"
-                       ".observe(root, {attributes:true, subtree:true}); child.setAttribute('data-x', '1'); "
-                       "return true; })()"));
+  ASSERT_TRUE(EvalBool(
+      "(function(){ window._record = ''; var root = document.createElement('div'); "
+      "var child = document.createElement('span'); root.appendChild(child); "
+      "new MutationObserver(function(records) { window._record = records[0].type + ':' + "
+      "records[0].attributeName + ':' + (records[0].target === child); })"
+      ".observe(root, {attributes:true, subtree:true}); child.setAttribute('data-x', '1'); "
+      "return true; })()"));
   EXPECT_EQ(EvalString("window._record"), "attributes:data-x:true");
+}
+
+TEST_F(DomBinderTest, MutationObserverUsesSharedInterfacePrototype)
+{
+  EXPECT_TRUE(
+      EvalBool("(function(){ var observer = new MutationObserver(function(){}); "
+               "return observer instanceof MutationObserver "
+               "    && Object.getPrototypeOf(observer) === MutationObserver.prototype "
+               "    && observer.observe === MutationObserver.prototype.observe "
+               "    && observer.disconnect === MutationObserver.prototype.disconnect "
+               "    && observer.takeRecords === MutationObserver.prototype.takeRecords; })()"));
+}
+
+TEST_F(DomBinderTest, DOMParserParsesIndependentHtmlDocument)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var parser = new DOMParser(); "
+                       "var parsed = parser.parseFromString('<!doctype html><title>Parsed</title>'"
+                       "  + '<body><main id=content>Hello</main></body>', 'text/html'); "
+                       "return parser instanceof DOMParser "
+                       "    && Object.getPrototypeOf(parser) === DOMParser.prototype "
+                       "    && parsed instanceof Document && parsed !== document "
+                       "    && parsed.title === 'Parsed' "
+                       "    && parsed.querySelector('#content').textContent === 'Hello'; })()"));
+}
+
+TEST_F(DomBinderTest, DOMParserRejectsUnsupportedMimeType)
+{
+  EXPECT_TRUE(EvalBool(
+      "(function(){ try { "
+      "new DOMParser().parseFromString('<root/>', 'application/xml'); "
+      "return false; } catch (error) { return error.name === 'NotSupportedError'; } })()"));
+}
+
+TEST_F(DomBinderTest, XMLSerializerSerializesDomNodes)
+{
+  EXPECT_TRUE(
+      EvalBool("(function(){ var serializer = new XMLSerializer(); "
+               "var parsed = new DOMParser().parseFromString("
+               "  '<main data-value=\"a&amp;b\">x &lt; y<!--note--></main>', 'text/html'); "
+               "var main = parsed.querySelector('main'); "
+               "return serializer instanceof XMLSerializer "
+               "    && Object.getPrototypeOf(serializer) === XMLSerializer.prototype "
+               "    && serializer.serializeToString(main) "
+               "       === '<main data-value=\"a&amp;b\">x &lt; y<!--note--></main>'; })()"));
+}
+
+TEST_F(DomBinderTest, XMLSerializerRejectsNonNode)
+{
+  EXPECT_TRUE(
+      EvalBool("(function(){ try { new XMLSerializer().serializeToString({}); "
+               "return false; } catch (error) { return error instanceof TypeError; } })()"));
+}
+
+TEST_F(DomBinderTest, DocumentImplementationUsesSharedInterfacePrototype)
+{
+  EXPECT_TRUE(
+      EvalBool("(function(){ var implementation = document.implementation; "
+               "return implementation instanceof DOMImplementation "
+               "    && Object.getPrototypeOf(implementation) === DOMImplementation.prototype "
+               "    && implementation.createHTMLDocument "
+               "       === DOMImplementation.prototype.createHTMLDocument "
+               "    && implementation.createHTMLDocument('Shared').title === 'Shared'; })()"));
+}
+
+TEST_F(DomBinderTest, BaseElementUsesHTMLBaseElementInterface)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var base = document.createElement('base'); "
+                       "base.href = '/assets/'; "
+                       "var descriptor = Object.getOwnPropertyDescriptor("
+                       "  HTMLBaseElement.prototype, 'href'); "
+                       "return base instanceof HTMLBaseElement && base instanceof HTMLElement "
+                       "    && Object.getPrototypeOf(base) === HTMLBaseElement.prototype "
+                       "    && typeof descriptor.get === 'function' "
+                       "    && typeof descriptor.set === 'function' "
+                       "    && base.getAttribute('href') === '/assets/'; })()"));
+}
+
+TEST_F(DomBinderTest, NodePrototypeExposesBaseURI)
+{
+  EXPECT_TRUE(
+      EvalBool("(function(){ var node = document.createElement('div'); "
+               "var descriptor = Object.getOwnPropertyDescriptor(Node.prototype, 'baseURI'); "
+               "return typeof descriptor.get === 'function' "
+               "    && !Object.prototype.hasOwnProperty.call(Element.prototype, 'baseURI') "
+               "    && node.baseURI === document.baseURI; })()"));
 }
 
 TEST_F(DomBinderTest, WindowEventListenerAndGlobalAlias)
@@ -352,6 +742,18 @@ TEST_F(DomBinderTest, CharacterDataNodeValueAndData)
                        "return ok; })()"));
 }
 
+TEST_F(DomBinderTest, TextAndCommentUseCharacterDataInterface)
+{
+  EXPECT_TRUE(
+      EvalBool("(function(){ var text = document.createTextNode('text'); "
+               "var comment = document.createComment('comment'); "
+               "return text instanceof CharacterData && comment instanceof CharacterData "
+               "    && Object.getPrototypeOf(Text.prototype) === CharacterData.prototype "
+               "    && Object.getPrototypeOf(Comment.prototype) === CharacterData.prototype "
+               "    && typeof DocumentType === 'function' "
+               "    && Object.getPrototypeOf(DocumentType.prototype) === Node.prototype; })()"));
+}
+
 // DocumentFragment appendChild/insertBefore move the fragment's children.
 TEST_F(DomBinderTest, DocumentFragmentInsertionMovesChildren)
 {
@@ -367,6 +769,20 @@ TEST_F(DomBinderTest, DocumentFragmentInsertionMovesChildren)
                        "    && container.firstElementChild.tagName === 'A' "
                        "    && container.textContent === 'AB'; "
                        "return ok; })()"));
+}
+
+TEST_F(DomBinderTest, DocumentFragmentChildrenContainsOnlyElementsAndIsIterable)
+{
+  EXPECT_TRUE(
+      EvalBool("(function(){ var d = document; "
+               "var frag = d.createDocumentFragment(); "
+               "frag.append(d.createTextNode('before'), d.createElement('a'), "
+               "            d.createComment('note'), d.createElement('b')); "
+               "return frag.children.length === 2 "
+               "    && frag.children[0].tagName === 'A' "
+               "    && frag.children[1].tagName === 'B' "
+               "    && Array.from(frag.children).map(function(e) { return e.tagName; }).join(',') "
+               "       === 'A,B'; })()"));
 }
 
 // DOM tree-mutation violations throw DOMException with the WebIDL exception
@@ -449,6 +865,54 @@ TEST_F(DomBinderTest, Attributes)
                        "e.style.color = 'red'; var a = e.attributes; "
                        "return a.style !== undefined && a.style.name === 'style' "
                        "&& a.style.value.indexOf('color: red') !== -1; })()"));
+}
+
+TEST_F(DomBinderTest, AttributesUseNamedNodeMapInterface)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var attributes = document.getElementById('main').attributes; "
+                       "return attributes instanceof NamedNodeMap "
+                       "    && Object.getPrototypeOf(attributes) === NamedNodeMap.prototype "
+                       "    && attributes.item(0) === attributes[0] "
+                       "    && attributes.getNamedItem('class') === attributes['class'] "
+                       "    && attributes.getNamedItem('missing') === null; })()"));
+}
+
+TEST_F(DomBinderTest, AttributesExposeLiveAttrNodes)
+{
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var element = document.getElementById('main'); var attribute = "
+      "element.attributes.class; "
+      "var descriptor = Object.getOwnPropertyDescriptor(Attr.prototype, 'value'); "
+      "attribute.value = 'updated'; "
+      "return attribute instanceof Attr && attribute.name === 'class' && attribute.value === "
+      "'updated' "
+      "    && attribute.nodeValue === 'updated' && attribute.ownerElement === element "
+      "    && element.getAttribute('class') === 'updated' "
+      "    && typeof descriptor.get === 'function' && typeof descriptor.set === 'function'; })()"));
+}
+
+TEST_F(DomBinderTest, TreeWalkerTraversesDescendantsByNodeType)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var root = document.getElementById('main'); "
+                       "var walker = document.createTreeWalker(root, 1); "
+                       "var first = walker.nextNode(); var second = walker.nextNode(); "
+                       "return walker instanceof TreeWalker "
+                       "    && Object.getPrototypeOf(walker) === TreeWalker.prototype "
+                       "    && walker.root === root && walker.currentNode === second "
+                       "    && first.nodeType === 1 && second.nodeType === 1; })()"));
+}
+
+TEST_F(DomBinderTest, NodeFilterExposesTraversalConstants)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var root = document.createElement('div'); "
+                       "root.appendChild(document.createTextNode('skip')); "
+                       "var child = document.createElement('span'); root.appendChild(child); "
+                       "var walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT); "
+                       "return NodeFilter.SHOW_ALL === 0xFFFFFFFF "
+                       "    && NodeFilter.FILTER_ACCEPT === 1 "
+                       "    && NodeFilter.FILTER_REJECT === 2 "
+                       "    && NodeFilter.FILTER_SKIP === 3 "
+                       "    && walker.nextNode() === child; })()"));
 }
 
 TEST_F(DomBinderTest, StyleDeclaration)
@@ -765,17 +1229,29 @@ TEST_F(DomBinderTest, ClassListOperations)
   EXPECT_TRUE(EvalBool("(function(){ var e = document.getElementById('first'); "
                        "var l = e.classList; "
                        "return l.contains('para') && l.length === 1; })()"));
-  EXPECT_TRUE(
-      EvalBool("(function(){ var e = document.getElementById('first'); "
-               "e.classList.add('a', 'b'); "
-               "var ok = e.classList.contains('a') && e.classList.contains('b') "
-               "    && e.classList.length === 3; "
-               "e.classList.remove('a'); "
-               "ok = ok && !e.classList.contains('a') && e.classList.length === 2; "
-               "ok = ok && e.classList.toggle('c') === true; "
-               "ok = ok && e.classList.toggle('c') === false; "
-               "ok = ok && e.classList.replace('b', 'bb'); "
-               "return ok && e.classList.contains('bb') && e.className === 'para bb'; })()"));
+  EXPECT_TRUE(EvalBool("(function(){ var e = document.getElementById('first'); "
+                       "e.classList.add('a', 'b'); "
+                       "var ok = e.classList.contains('a') && e.classList.contains('b') "
+                       "    && e.classList.length === 3; "
+                       "e.classList.remove('a'); "
+                       "ok = ok && !e.classList.contains('a') && e.classList.length === 2; "
+                       "ok = ok && e.classList.toggle('c') === true; "
+                       "ok = ok && e.classList.toggle('c') === false; "
+                       "ok = ok && e.classList.replace('b', 'bb'); "
+                       "return ok && e.classList.contains('bb') && e.className === 'para bb' "
+                       "    && typeof e.classList[Symbol.iterator] === 'function' "
+                       "    && Array.from(e.classList).join(',') === 'para,bb'; })()"));
+}
+
+TEST_F(DomBinderTest, ToggleAttributeHonorsForceAndReturnsPresence)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var e = document.documentElement; "
+                       "var added = e.toggleAttribute('data-active'); "
+                       "var removed = e.toggleAttribute('data-active'); "
+                       "var forcedOn = e.toggleAttribute('data-active', true); "
+                       "var forcedOff = e.toggleAttribute('data-active', false); "
+                       "return added === true && removed === false && forcedOn === true "
+                       "&& forcedOff === false && !e.hasAttribute('data-active'); })()"));
 }
 
 TEST_F(DomBinderTest, DatasetReadsAndWritesDataAttributes)
@@ -900,12 +1376,12 @@ TEST_F(DomBinderTest, AnchorReflectsResolvedUrlComponents)
     return raw == "/path?x=1#part" ? "https://example.com:8443/path?x=1#part" : raw;
   };
   DomBinder binder(*document_, apis);
-  EXPECT_TRUE(binder.Evaluate(
-      "var a = document.createElement('a'); a.href = '/path?x=1#part';").has_value());
-  const auto result = binder.Evaluate(
-      "a.protocol === 'https:' && a.host === 'example.com:8443' && "
-      "a.hostname === 'example.com' && a.port === '8443' && "
-      "a.pathname === '/path' && a.search === '?x=1' && a.hash === '#part';");
+  EXPECT_TRUE(binder.Evaluate("var a = document.createElement('a'); a.href = '/path?x=1#part';")
+                  .has_value());
+  const auto result =
+      binder.Evaluate("a.protocol === 'https:' && a.host === 'example.com:8443' && "
+                      "a.hostname === 'example.com' && a.port === '8443' && "
+                      "a.pathname === '/path' && a.search === '?x=1' && a.hash === '#part';");
   ASSERT_TRUE(result.has_value());
   EXPECT_TRUE(result.value().ToBoolean().value());
 }
@@ -1031,6 +1507,29 @@ TEST_F(DomBinderTest, WindowAnimationFrameAndPerformance)
   EXPECT_TRUE(EvalBool("typeof performance.now() === 'number' && performance.now() >= 0"));
 }
 
+TEST_F(DomBinderTest, PerformanceExposesTheDocumentNavigationEntry)
+{
+  EXPECT_TRUE(EvalBool("performance instanceof Performance"));
+  EXPECT_TRUE(EvalBool("performance.getEntries().length === 1 && "
+                       "performance.getEntries()[0].entryType === 'navigation'"));
+  EXPECT_TRUE(EvalBool("performance.getEntriesByType('navigation').length === 1 && "
+                       "performance.getEntriesByType('resource').length === 0"));
+}
+
+TEST_F(DomBinderTest, EventIsTrustedSupportsDescriptorReflection)
+{
+  EXPECT_TRUE(EvalBool("(function(descriptor) { return descriptor === undefined || "
+                       "typeof descriptor.get === 'function'; })("
+                       "Object.getOwnPropertyDescriptor(new Event('test'), 'isTrusted'))"));
+}
+
+TEST_F(DomBinderTest, UIEventIsConstructableAndInheritsEvent)
+{
+  EXPECT_TRUE(EvalBool("new UIEvent('test') instanceof UIEvent"));
+  EXPECT_TRUE(EvalBool("new UIEvent('test') instanceof Event"));
+  EXPECT_TRUE(EvalBool("new UIEvent('test').isTrusted === false"));
+}
+
 TEST_F(DomBinderTest, WindowHistoryAndScroll)
 {
   EXPECT_TRUE(EvalBool("(function(){ "
@@ -1040,6 +1539,18 @@ TEST_F(DomBinderTest, WindowHistoryAndScroll)
                        "return history.length === 1 "
                        "    && typeof history.back === 'function' "
                        "    && typeof history.forward === 'function'; })()"));
+}
+
+TEST_F(DomBinderTest, HistoryUsesItsInterfacePrototype)
+{
+  EXPECT_TRUE(
+      EvalBool("(function(){ "
+               "var illegal = false; "
+               "try { new History(); } catch (error) { illegal = error instanceof TypeError; } "
+               "return history instanceof History "
+               "    && Object.getPrototypeOf(history) === History.prototype "
+               "    && history.go === History.prototype.go "
+               "    && illegal; })()"));
 }
 
 TEST_F(DomBinderTest, WindowGetComputedStyleWired)
@@ -1113,6 +1624,90 @@ TEST_F(DomBinderTest, TimerErrorDoesNotKillRuntime)
   EXPECT_EQ(EvalNumber("window._timerHits"), 1.0);
 }
 
+TEST_F(DomBinderTest, MessageChannelQueuesClonedMessagesAndCanClose)
+{
+  ASSERT_TRUE(
+      EvalBool("(function(){ "
+               "var channel = new MessageChannel(); "
+               "var descriptor = Object.getOwnPropertyDescriptor(MessagePort, 'prototype'); "
+               "window._channel = channel; window._messages = []; "
+               "channel.port2.onmessage = function(event) { "
+               "  window._messages.push(event.data.value); "
+               "}; "
+               "var payload = { value: 'first' }; "
+               "channel.port1.postMessage(payload); payload.value = 'changed'; "
+               "return channel.port1 instanceof MessagePort "
+               "    && channel.port2 instanceof MessagePort "
+               "    && descriptor.value === MessagePort.prototype "
+               "    && MessagePort.prototype.constructor === MessagePort "
+               "    && typeof MessagePort.prototype.postMessage === 'function' "
+               "    && typeof MessagePort.prototype.start === 'function' "
+               "    && typeof MessagePort.prototype.close === 'function' "
+               "    && window._messages.length === 0; })()"));
+
+  EXPECT_EQ(binder_->RunPendingTimers(), 1);
+  EXPECT_EQ(EvalString("window._messages.join(',')"), "first");
+
+  ASSERT_TRUE(EvalBool("(function(){ window._channel.port2.close(); "
+                       "window._channel.port1.postMessage({ value: 'second' }); "
+                       "return true; })()"));
+  EXPECT_EQ(binder_->RunPendingTimers(), 0);
+  EXPECT_EQ(EvalString("window._messages.join(',')"), "first");
+}
+
+TEST_F(DomBinderTest, MessagePortEventListenerRequiresStart)
+{
+  ASSERT_TRUE(EvalBool("(function(){ var channel = new MessageChannel(); "
+                       "window._channel = channel; window._messageHits = 0; "
+                       "channel.port2.addEventListener('message', function(event) { "
+                       "  if (event.data === 'queued') window._messageHits++; "
+                       "}); "
+                       "channel.port1.postMessage('queued'); return true; })()"));
+  EXPECT_EQ(binder_->RunPendingTimers(), 0);
+  EXPECT_EQ(EvalNumber("window._messageHits"), 0.0);
+
+  ASSERT_TRUE(EvalBool("(function(){ window._channel.port2.start(); return true; })()"));
+  EXPECT_EQ(binder_->RunPendingTimers(), 1);
+  EXPECT_EQ(EvalNumber("window._messageHits"), 1.0);
+}
+
+TEST_F(DomBinderTest, EventTargetDispatchesEventsAndIsMessagePortBase)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var target = new EventTarget(); var hits = 0; "
+                       "function listener(event) { "
+                       "  if (event.target === target && event.currentTarget === target) hits++; "
+                       "} "
+                       "target.addEventListener('ready', listener); "
+                       "var dispatched = target.dispatchEvent(new Event('ready')); "
+                       "target.removeEventListener('ready', listener); "
+                       "target.dispatchEvent(new Event('ready')); "
+                       "var channel = new MessageChannel(); "
+                       "return dispatched && hits === 1 "
+                       "    && channel.port1 instanceof EventTarget; })()"));
+}
+
+TEST_F(DomBinderTest, DomTokenListInterfaceUsesClassListPrototype)
+{
+  EXPECT_TRUE(EvalBool("typeof DOMTokenList === 'function' "
+                       "&& document.body.classList instanceof DOMTokenList "
+                       "&& DOMTokenList.prototype.contains === "
+                       "   Object.getPrototypeOf(document.body.classList).contains"));
+}
+
+TEST_F(DomBinderTest, HeadersNormalizeNamesAndExposeEntries)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var headers = new Headers(); "
+                       "headers.append('X-Test', 'one'); "
+                       "headers.append('x-test', 'two'); "
+                       "headers.set('Content-Type', 'text/plain'); "
+                       "var entries = Array.from(headers.entries()); "
+                       "headers.delete('CONTENT-TYPE'); "
+                       "return headers.get('X-TEST') === 'one, two' "
+                       "    && !headers.has('content-type') "
+                       "    && entries.length === 2 "
+                       "    && headers[Symbol.iterator] === headers.entries; })()"));
+}
+
 TEST_F(DomBinderTest, ScriptErrorsAreReported)
 {
   auto bad = binder_->Evaluate("document.getElementById('nope').foo");
@@ -1138,6 +1733,12 @@ TEST_F(DomBinderTest, NavigatorGlobal)
   EXPECT_NE(ua.find("NekoBrowser/"), std::string::npos);
   EXPECT_NE(ua.find("Mozilla/5.0"), std::string::npos);
   EXPECT_TRUE(EvalBool("navigator === window.navigator"));
+  EXPECT_TRUE(EvalBool("navigator instanceof Navigator"));
+  EXPECT_TRUE(
+      EvalBool("(function(){ var descriptor = "
+               "Object.getOwnPropertyDescriptor(Navigator.prototype, 'languages'); "
+               "return typeof descriptor.get === 'function' && descriptor.set === undefined "
+               "    && !Object.prototype.hasOwnProperty.call(navigator, 'languages'); })()"));
   EXPECT_EQ(EvalString("navigator.language"), "en-US");
   EXPECT_EQ(EvalString("navigator.languages.join(',')"), "en-US");
   EXPECT_TRUE(EvalBool("navigator.onLine === true"));
@@ -1146,6 +1747,50 @@ TEST_F(DomBinderTest, NavigatorGlobal)
   // Missing features are absent, so "x" in navigator is honestly false.
   EXPECT_FALSE(EvalBool("'geolocation' in navigator"));
   EXPECT_FALSE(EvalBool("'clipboard' in navigator"));
+}
+
+TEST_F(DomBinderTest, IntlDateTimeFormatExposesResolvedOptions)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var formatter = new Intl.DateTimeFormat(); "
+                       "var descriptor = Object.getOwnPropertyDescriptor("
+                       "Intl.DateTimeFormat.prototype, 'resolvedOptions'); "
+                       "var options = formatter.resolvedOptions(); "
+                       "return formatter instanceof Intl.DateTimeFormat "
+                       "    && typeof descriptor.value === 'function' "
+                       "    && options.locale === 'en-US' && options.calendar === 'gregory' "
+                       "    && options.numberingSystem === 'latn'; })()"));
+}
+
+TEST_F(DomBinderTest, DocumentCreateRangeHasDocumentBoundary)
+{
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var range = document.createRange(); "
+      "var descriptor = Object.getOwnPropertyDescriptor("
+      "Range.prototype, 'commonAncestorContainer'); "
+      "return range instanceof Range && range.startContainer === document "
+      "    && range.endContainer === document && range.startOffset === 0 "
+      "    && range.endOffset === 0 && range.commonAncestorContainer === document "
+      "    && typeof descriptor.get === 'function' && descriptor.set === undefined; })()"));
+}
+
+TEST_F(DomBinderTest, MessageEventConstructorAndMessagePortDispatch)
+{
+  EXPECT_TRUE(
+      EvalBool("(function(){ var event = new MessageEvent('message', {data: 42}); "
+               "return event instanceof MessageEvent && event instanceof Event "
+               "    && event.type === 'message' && event.data === 42 "
+               "    && event.origin === '' && event.lastEventId === '' "
+               "    && event.source === null && Array.isArray(event.ports) "
+               "    && typeof Object.getOwnPropertyDescriptor(MessageEvent.prototype, 'data').get "
+               "       === 'function'; })()"));
+  EXPECT_TRUE(EvalBool("(function(){ var channel = new MessageChannel(); var received = false; "
+                       "window._messageEventChannel = channel; "
+                       "channel.port2.onmessage = function(event) { "
+                       "received = event instanceof MessageEvent && event.data === 'ok'; }; "
+                       "channel.port1.postMessage('ok'); window._messageEventReceived = "
+                       "function() { return received; }; return true; })()"));
+  EXPECT_EQ(binder_->RunPendingTimers(), 1);
+  EXPECT_TRUE(EvalBool("window._messageEventReceived()"));
 }
 
 TEST_F(DomBinderTest, ScreenAndViewportGlobals)
@@ -1241,6 +1886,15 @@ TEST_F(DomBinderTest, LocalStorageApis)
   apis.storage_keys = [&store]() { return store.Keys(); };
 
   DomBinder binder(*document_, apis);
+  ASSERT_TRUE(binder.Evaluate("typeof Storage === 'function'").has_value());
+  EXPECT_TRUE(binder.Evaluate("typeof Storage === 'function'").value().ToBoolean());
+  ASSERT_TRUE(binder.Evaluate("localStorage instanceof Storage").has_value());
+  EXPECT_TRUE(binder.Evaluate("localStorage instanceof Storage").value().ToBoolean());
+  ASSERT_TRUE(
+      binder.Evaluate("Storage.prototype === Object.getPrototypeOf(localStorage)").has_value());
+  EXPECT_TRUE(binder.Evaluate("Storage.prototype === Object.getPrototypeOf(localStorage)")
+                  .value()
+                  .ToBoolean());
   ASSERT_TRUE(binder
                   .Evaluate("localStorage.setItem('a', '1');"
                             "localStorage.setItem('b', '2');")
@@ -1261,6 +1915,61 @@ TEST_F(DomBinderTest, LocalStorageApis)
   // key(i) enumerates stored keys; clear() empties the store.
   ASSERT_TRUE(binder.Evaluate("localStorage.key(0) === 'b'").has_value());
   ASSERT_TRUE(binder.Evaluate("localStorage.clear(); localStorage.length === 0").has_value());
+}
+
+TEST_F(DomBinderTest, SessionStorageUsesDocumentScopedStorage)
+{
+  ASSERT_TRUE(binder_->Evaluate("sessionStorage instanceof Storage").has_value());
+  EXPECT_TRUE(binder_->Evaluate("sessionStorage instanceof Storage").value().ToBoolean());
+  ASSERT_TRUE(
+      binder_->Evaluate("sessionStorage.setItem('consent', 'yes'); sessionStorage.length === 1")
+          .has_value());
+  EXPECT_TRUE(
+      binder_->Evaluate("sessionStorage.setItem('consent', 'yes'); sessionStorage.length === 1")
+          .value()
+          .ToBoolean());
+  ASSERT_TRUE(binder_->Evaluate("sessionStorage.getItem('consent') === 'yes'").has_value());
+  EXPECT_TRUE(binder_->Evaluate("sessionStorage.getItem('consent') === 'yes'").value().ToBoolean());
+}
+
+TEST_F(DomBinderTest, UrlSearchParamsParsesMutatesAndSerializes)
+{
+  auto result = binder_->Evaluate(
+      "const params = new URLSearchParams('?q=hello+world&tag=a&tag=b&empty=&encoded=%2F');"
+      "const descriptor = Object.getOwnPropertyDescriptor(URLSearchParams.prototype, 'size');"
+      "const initial = [typeof descriptor.get, params.size, params.get('q'), "
+      "params.getAll('tag').join(','), params.has('empty'),"
+      "                 params.get('missing') === null, params.toString()].join('|');"
+      "params.append('tag', 'c');"
+      "params.set('q', 'a b');"
+      "params.delete('empty');"
+      "params.sort();"
+      "initial + '|' + params.size + '|' + params.toString();");
+
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result.value().ToString().has_value());
+  EXPECT_EQ(result.value().ToString().value(),
+            "function|5|hello world|a,b|true|true|q=hello+world&tag=a&tag=b&empty=&encoded=%2F|"
+            "5|encoded=%2F&q=a+b&tag=a&tag=b&tag=c");
+}
+
+TEST_F(DomBinderTest, FormDataProvidesEntriesAndStringValues)
+{
+  auto result = binder_->Evaluate(
+      "const descriptor = Object.getOwnPropertyDescriptor(FormData.prototype, 'entries');"
+      "const data = new FormData();"
+      "data.append('tag', 'a');"
+      "data.append('tag', 'b');"
+      "data.set('tag', 'updated');"
+      "data.append('mode', 'test');"
+      "[typeof descriptor.value, data.get('tag'), data.has('tag'),"
+      " Array.from(data.entries()).map((entry) => entry.join('=')).join(','),"
+      " data.delete('tag'), data.has('tag')].join('|');");
+
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result.value().ToString().has_value());
+  EXPECT_EQ(result.value().ToString().value(),
+            "function|updated|true|tag=updated,mode=test||false");
 }
 
 TEST_F(DomBinderTest, FetchResolvesResponseAndBody)
@@ -1304,6 +2013,26 @@ TEST_F(DomBinderTest, FetchResolvesResponseAndBody)
   ASSERT_TRUE(body.has_value());
   ASSERT_TRUE(body.value().ToString().has_value());
   EXPECT_EQ(body.value().ToString().value(), "hello body");
+}
+
+TEST_F(DomBinderTest, ResponseUsesSharedPrototype)
+{
+  PageApis apis;
+  apis.resolve_url = [](const std::string& raw) { return raw; };
+  apis.fetch = [](const std::string&) -> base::Result<FetchResponse> {
+    FetchResponse response;
+    response.body = "hello";
+    return base::Ok(std::move(response));
+  };
+  DomBinder binder(*document_, apis);
+  const auto result = binder.Evaluate(
+      "(function(){ var response = new Response('hello'); "
+      "var descriptor = Object.getOwnPropertyDescriptor(Response.prototype, 'json'); "
+      "return response instanceof Response && typeof Response.prototype.text === 'function' "
+      "    && typeof descriptor.value === 'function' && response.text() instanceof Promise; })()");
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  ASSERT_TRUE(result.value().ToBoolean().has_value());
+  EXPECT_TRUE(result.value().ToBoolean().value());
 }
 
 TEST_F(DomBinderTest, FetchRejectsOnNetworkError)
@@ -1498,6 +2227,41 @@ TEST_F(DomBinderTest, NavigatorAppVersionIsAString)
   EXPECT_TRUE(EvalBool("typeof navigator.appVersion === 'string'"));
   EXPECT_EQ(EvalString("navigator.appVersion"), EvalString("navigator.userAgent"));
   EXPECT_TRUE(EvalBool("navigator.appVersion.split(';').length >= 1"));
+}
+
+TEST_F(DomBinderTest, NavigatorMimeTypesIsAStableEmptyCollection)
+{
+  EXPECT_TRUE(EvalBool("typeof navigator.mimeTypes === 'object'"));
+  EXPECT_EQ(EvalNumber("navigator.mimeTypes.length"), 0.0);
+  EXPECT_TRUE(EvalBool("navigator.mimeTypes === window.navigator.mimeTypes"));
+  EXPECT_TRUE(EvalBool("navigator.mimeTypes.item(0) === null"));
+  EXPECT_TRUE(EvalBool("navigator.mimeTypes.namedItem('text/html') === null"));
+}
+
+TEST_F(DomBinderTest, CryptoGetRandomValuesFillsIntegerTypedArrays)
+{
+  EXPECT_TRUE(EvalBool("(function() {"
+                       "  var values = new Uint8Array(32);"
+                       "  var returned = crypto.getRandomValues(values);"
+                       "  return returned === values && values.some(function(value) {"
+                       "    return value !== 0;"
+                       "  });"
+                       "})()"));
+  EXPECT_TRUE(EvalBool("(function() {"
+                       "  var values = new Uint16Array(8);"
+                       "  return crypto.getRandomValues(values) === values;"
+                       "})()"));
+}
+
+TEST_F(DomBinderTest, CryptoGetRandomValuesValidatesInputAndQuota)
+{
+  EXPECT_TRUE(EvalBool("(function() { try { crypto.getRandomValues([]); } "
+                       "catch (error) { return error instanceof TypeError; } return false; })()"));
+  EXPECT_TRUE(EvalBool("(function() { try { crypto.getRandomValues(new Float32Array(4)); } "
+                       "catch (error) { return error instanceof TypeError; } return false; })()"));
+  EXPECT_TRUE(EvalBool("(function() { try { crypto.getRandomValues(new Uint8Array(65537)); } "
+                       "catch (error) { return error.name === 'QuotaExceededError'; } "
+                       "return false; })()"));
 }
 
 // Element layout geometry getters map the browser layer's element_geometry
@@ -2015,6 +2779,50 @@ TEST_F(DomBinderTest, VideoMediaControls)
   EXPECT_FALSE(r.has_value());
 }
 
+TEST_F(DomBinderTest, Canvas2dFillRect)
+{
+  PageApis apis;
+  const dom::Element* painted_element = nullptr;
+  double painted_x = 0;
+  double painted_y = 0;
+  double painted_width = 0;
+  double painted_height = 0;
+  std::array<std::uint8_t, 4> painted_color{};
+  apis.canvas_fill_rect = [&](const dom::Element& element,
+                              double x,
+                              double y,
+                              double width,
+                              double height,
+                              std::array<std::uint8_t, 4> color) {
+    painted_element = &element;
+    painted_x = x;
+    painted_y = y;
+    painted_width = width;
+    painted_height = height;
+    painted_color = color;
+  };
+
+  binder_ = std::make_unique<DomBinder>(*document_, apis);
+  ASSERT_TRUE(binder_
+                  ->Evaluate("var canvas = document.createElement('canvas');\n"
+                             "var context = canvas.getContext('2d');\n"
+                             "context.fillStyle = 'rgba(10, 20, 30, 0.5)';\n"
+                             "context.fillRect(1, 2, 3, 4);")
+                  .has_value());
+  EXPECT_EQ(EvalString("canvas instanceof HTMLCanvasElement"), "true");
+  EXPECT_EQ(EvalString("context instanceof CanvasRenderingContext2D"), "true");
+  EXPECT_EQ(EvalString("canvas.getContext('2d') === context"), "true");
+  EXPECT_EQ(EvalString("canvas.getContext('webgl')"), "null");
+  EXPECT_EQ(EvalString("context.fillStyle"), "rgba(10, 20, 30, 0.5)");
+  ASSERT_NE(painted_element, nullptr);
+  EXPECT_EQ(painted_element->tag_name(), "canvas");
+  EXPECT_DOUBLE_EQ(painted_x, 1);
+  EXPECT_DOUBLE_EQ(painted_y, 2);
+  EXPECT_DOUBLE_EQ(painted_width, 3);
+  EXPECT_DOUBLE_EQ(painted_height, 4);
+  EXPECT_EQ(painted_color, (std::array<std::uint8_t, 4>{10, 20, 30, 128}));
+}
+
 // ---------------------------------------------------------------------------
 // XMLHttpRequest (wired through PageApis::xhr_request).
 // ---------------------------------------------------------------------------
@@ -2084,7 +2892,8 @@ TEST(DomBinderXhrTest, XhrNetworkErrorFiresOnError)
 {
   dom::Document doc;
   PageApis apis;
-  apis.xhr_request = [](const std::string&, const std::string&,
+  apis.xhr_request = [](const std::string&,
+                        const std::string&,
                         const std::vector<std::pair<std::string, std::string>>&,
                         const std::string&) -> base::Result<FetchResponse> {
     return base::Err(base::Error::Network("connection refused"));
@@ -2100,12 +2909,33 @@ TEST(DomBinderXhrTest, XhrNetworkErrorFiresOnError)
     globalThis.out += '-state' + xhr.readyState + '-status' + xhr.status;
   )";
   const auto run2 = binder.Evaluate(script);
-  ASSERT_TRUE(run2.has_value()) << "eval error: " << (run2.has_value() ? "" : run2.error().message());
+  ASSERT_TRUE(run2.has_value()) << "eval error: "
+                                << (run2.has_value() ? "" : run2.error().message());
   auto out = binder.Evaluate("globalThis.out");
   ASSERT_TRUE(out.has_value());
   auto text = out.value().ToString();
   ASSERT_TRUE(text.has_value());
   EXPECT_EQ(text.value(), "error-state4-status0");
+}
+
+TEST(DomBinderXhrTest, XhrReflectsResponseType)
+{
+  dom::Document doc;
+  PageApis apis;
+  apis.xhr_request = [](const std::string&,
+                        const std::string&,
+                        const std::vector<std::pair<std::string, std::string>>&,
+                        const std::string&) -> base::Result<FetchResponse> {
+    return base::Err(base::Error::Network("not used"));
+  };
+  DomBinder binder(doc, apis);
+  const auto run = binder.Evaluate(
+      "(function(){ var request = new XMLHttpRequest(); request.responseType = 'json'; "
+      "var descriptor = Object.getOwnPropertyDescriptor(XMLHttpRequest.prototype, 'responseType'); "
+      "return typeof descriptor.get + ':' + typeof descriptor.set + ':' + request.responseType; "
+      "})()");
+  ASSERT_TRUE(run.has_value());
+  EXPECT_EQ(run.value().ToString().value(), "function:function:json");
 }
 
 } // namespace
