@@ -2433,5 +2433,52 @@ TEST(LayoutTest, BlockMinHeightIsHonored)
   EXPECT_GE(head->height, 200.0f);
 }
 
+// A bare text node directly inside a flex container becomes an anonymous flex
+// item (CSS Flexbox 1 §4) carrying the container's computed style.  Without
+// this the text child is dropped and the box paints empty (regression: the
+// acxun.github.io .contact-btn pills rendered as empty rounded boxes).
+TEST(LayoutTest, FlexContainerTextIsAnonymousFlexItem)
+{
+  Page page = Build("<body><a id=\"btn\" style=\"display:inline-flex;padding:0 24px;"
+                    "min-height:40px\">Email</a></body>");
+  const dom::Element* btn_el = dom::QuerySelector(*page.doc, "#btn");
+  ASSERT_NE(btn_el, nullptr);
+  const InlineBox* holder = nullptr;
+  const LayoutBox* btn = FindInlineBlock(*page.root, btn_el, holder);
+  ASSERT_NE(btn, nullptr);
+  ASSERT_EQ(btn->children.size(), 1u);
+  const LayoutBox* text_box = btn->children[0].get();
+  ASSERT_GE(text_box->lines.size(), 1u);
+  ASSERT_FALSE(text_box->lines[0].runs.empty());
+  EXPECT_EQ(text_box->lines[0].runs[0].text, "Email");
+}
+
+// A grid container whose single auto column holds a nested grid-container
+// item: the auto track sizes to the nested grid's intrinsic (sum-of-tracks)
+// width, so the nested grid is laid out at a wide-enough containing width and
+// its columns do not collapse (regression: the acxun.github.io hero-grid
+// overlapped its two columns, putting the daily quote over the title).
+TEST(LayoutTest, NestedGridItemGetsWideEnoughCell)
+{
+  Page page =
+      Build("<body style=\"margin:0\">"
+            "<div id=\"outer\" style=\"display:grid\">"
+            "  <div style=\"display:grid;grid-template-columns:minmax(0,1fr) "
+            "minmax(300px,.62fr);gap:72px\">"
+            "    <div id=\"a\">A</div>"
+            "    <div id=\"b\">B</div>"
+            "  </div>"
+            "</div></body>");
+  const LayoutBox* outer = FindBox(*page.root, "#outer", *page.doc);
+  ASSERT_NE(outer, nullptr);
+  ASSERT_EQ(outer->children.size(), 1u);
+  const LayoutBox* nested = outer->children[0].get();
+  ASSERT_NE(nested, nullptr);
+  ASSERT_EQ(nested->children.size(), 2u);
+  // The two columns must be placed side by side, not overlapping: B starts
+  // after A's whole column and the gap.
+  EXPECT_GT(nested->children[1]->x, nested->children[0]->x + 72.0f);
+}
+
 } // namespace
 } // namespace neko::layout

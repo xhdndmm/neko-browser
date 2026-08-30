@@ -679,6 +679,68 @@ IntrinsicWidths MeasureContent(const dom::Element& element,
     return w;
   }
 
+  // A grid container's intrinsic width (CSS Grid Layout 1 §7.2).  max-content
+  // is the sum of its in-flow items' max-content contributions (one row, with
+  // `fr` tracks contributing their items' max-content), plus the column gaps;
+  // min-content is the widest item.  Without this, an auto-sized grid track
+  // containing a grid container is measured as a single block, so a nested
+  // grid (e.g. a two-column hero) computes its columns against a too-narrow
+  // containing width and its items overlap.
+  if (style.display == style::Display::kGrid ||
+      style.display == style::Display::kInlineGrid) {
+    IntrinsicWidths gw;
+    double sum_max = 0;
+    bool first = true;
+    for (const dom::Node* child : element.ChildNodes()) {
+      if (child->node_type() == dom::NodeType::kText) {
+        const std::string& text = static_cast<const dom::Text&>(*child).data();
+        const std::string collapsed = CollapseWhitespace(text);
+        if (collapsed.empty()) {
+          continue;
+        }
+        if (!first) {
+          sum_max += style.column_gap;
+        }
+        sum_max += MeasureTextWidth(registry,
+                                    style.font_family,
+                                    style.font_weight,
+                                    style.font_italic,
+                                    collapsed,
+                                    style.font_size);
+        gw.min = std::max(gw.min,
+                          WidestWordWidth(registry,
+                                          style.font_family,
+                                          style.font_weight,
+                                          style.font_italic,
+                                          collapsed,
+                                          style.font_size));
+        first = false;
+        continue;
+      }
+      if (child->node_type() != dom::NodeType::kElement) {
+        continue;
+      }
+      const dom::Element& child_el = static_cast<const dom::Element&>(*child);
+      const style::ComputedStyle& child_style = styles.StyleFor(child_el);
+      if (child_style.display == style::Display::kNone) {
+        continue;
+      }
+      if (child_style.position == style::Position::kAbsolute ||
+          child_style.position == style::Position::kFixed) {
+        continue;
+      }
+      const IntrinsicWidths cw = MeasureContent(child_el, styles, registry);
+      gw.min = std::max(gw.min, cw.min);
+      if (!first) {
+        sum_max += style.column_gap;
+      }
+      sum_max += cw.max;
+      first = false;
+    }
+    gw.max = static_cast<float>(sum_max);
+    return gw;
+  }
+
   IntrinsicWidths out;
   float line_min = 0;
   float line_max = 0;
@@ -2065,6 +2127,12 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
     {
       dom::Element* element = nullptr;
       const style::ComputedStyle* style = nullptr;
+      // An anonymous flex item created from a bare text node child of the
+      // container (CSS Flexbox 1 §4): |text| holds the collapsed text and
+      // |style| points at the container's computed style (which the anonymous
+      // block inherits).  |element| is the container element.
+      bool is_text = false;
+      std::string text;
       float border_padding_main = 0;
       float margin_main = 0;
       float border_padding_cross = 0;
@@ -2091,11 +2159,74 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       float outer_main_sum = 0; // outer main sizes including gaps
     };
 
+    // Builds the anonymous box for a bare text flex item: it inherits the
+    // flex container's computed style and lays out the text as one line (no
+    // borders/padding/margins).  |forced_content_width| is the flex main size
+    // when the algorithm resolved one.
+    std::unique_ptr<LayoutBox> BuildAnonymousTextItem(const FlexItemData& item,
+                                                      std::optional<float> forced_content_width)
+    {
+      auto box = std::make_unique<LayoutBox>();
+      box->element = item.element; // container element (hit-testing)
+      box->style = *item.style;    // anonymous flex item inherits the container
+      const float text_w = MeasureTextWidth(registry,
+                                            item.style->font_family,
+                                            item.style->font_weight,
+                                            item.style->font_italic,
+                                            item.text,
+                                            item.style->font_size);
+      const float content_width = forced_content_width.value_or(text_w);
+      box->width = content_width;
+      InlineItem inl{item.text, item.style, box->element};
+      std::vector<InlineItem> items;
+      items.push_back(std::move(inl));
+      std::vector<Line> lines;
+      float height = 0;
+      // A generous available width keeps the text on one line (the flex main
+      // size is the item's own box, so it must not wrap).
+      LayoutLines(items,
+                  std::max(content_width, text_w) + 1.0f,
+                  0.0f,
+                  0.0f,
+                  registry,
+                  *item.style,
+                  {},
+                  lines,
+                  height);
+      box->lines = std::move(lines);
+      box->height = std::max(height, item.style->line_height);
+      return box;
+    }
+
+    // Builds an element flex item (BuildFlexItem) or an anonymous text item.
+    std::unique_ptr<LayoutBox> BuildFlexItemBox(const FlexItemData& item,
+                                                std::optional<float> forced_content_width,
+                                                std::optional<float> forced_content_height,
+                                                float containing_width,
+                                                float cb_x,
+                                                float cb_y,
+                                                float cb_w,
+                                                float cb_h)
+    {
+      if (item.is_text) {
+        return BuildAnonymousTextItem(item, forced_content_width);
+      }
+      return BuildFlexItem(*item.element,
+                           forced_content_width,
+                           forced_content_height,
+                           containing_width,
+                           cb_x,
+                           cb_y,
+                           cb_w,
+                           cb_h);
+    }
+
     // Collects and measures the in-flow flex items of |element|.  |row|
     // selects the main-axis interpretation.  Column items are laid out at
     // their cross width up front so the measured content height can serve as
     // the flex base size.
     void CollectFlexItems(dom::Element& element,
+                          const style::ComputedStyle& container_style,
                           float avail_width,
                           bool row,
                           style::AlignItems align_items,
@@ -2107,6 +2238,38 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
                           std::vector<FlexItemData>& items)
     {
       for (dom::Node* child : element.ChildNodes()) {
+        // A bare text node inside a flex container becomes an anonymous flex
+        // item (CSS Flexbox 1 §4) carrying the container's computed style.
+        // Whitespace-only text between flex items is dropped.
+        if (child->node_type() == dom::NodeType::kText) {
+          const std::string collapsed =
+              CollapseWhitespace(static_cast<const dom::Text&>(*child).data());
+          if (collapsed.empty()) {
+            continue;
+          }
+          FlexItemData item;
+          item.is_text = true;
+          item.text = collapsed;
+          item.element = &element; // container element (hit-testing)
+          item.style = &container_style;
+          if (row) {
+            item.base_main = MeasureTextWidth(registry,
+                                              container_style.font_family,
+                                              container_style.font_weight,
+                                              container_style.font_italic,
+                                              collapsed,
+                                              container_style.font_size);
+            item.min_main = WidestWordWidth(registry,
+                                            container_style.font_family,
+                                            container_style.font_weight,
+                                            container_style.font_italic,
+                                            collapsed,
+                                            container_style.font_size);
+          }
+          item.cross_auto = true;
+          items.push_back(std::move(item));
+          continue;
+        }
         if (child->node_type() != dom::NodeType::kElement) {
           continue;
         }
@@ -2208,7 +2371,14 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       if (!row) {
         for (FlexItemData& item : items) {
           float cross_width;
-          if (item.style->width.has_value()) {
+          if (item.is_text) {
+            cross_width = MeasureTextWidth(registry,
+                                           item.style->font_family,
+                                           item.style->font_weight,
+                                           item.style->font_italic,
+                                           item.text,
+                                           item.style->font_size);
+          } else if (item.style->width.has_value()) {
             cross_width = SpecToContent(item.style->width.value(),
                                         avail_width,
                                         item.border_padding_cross,
@@ -2221,8 +2391,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
           } else {
             cross_width = MeasureContent(*item.element, styles, registry).max;
           }
-          item.box = BuildFlexItem(
-              *item.element, cross_width, std::nullopt, avail_width, cb_x, cb_y, cb_w, cb_h);
+          item.box = BuildFlexItemBox(
+              item, cross_width, std::nullopt, avail_width, cb_x, cb_y, cb_w, cb_h);
           if (!item.base_from_spec) {
             item.base_main = item.box->content_height();
           }
@@ -2367,6 +2537,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       // ---- Collect and measure flex items (§9.2) ----
       std::vector<FlexItemData> items;
       CollectFlexItems(element,
+                       cs,
                        avail_width,
                        row,
                        cs.align_items,
@@ -2400,8 +2571,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       // heights to their final main size ----
       for (FlexItemData& item : items) {
         if (row) {
-          item.box = BuildFlexItem(
-              *item.element, item.content_main, std::nullopt, avail_width, cb_x, cb_y, cb_w, cb_h);
+          item.box = BuildFlexItemBox(
+              item, item.content_main, std::nullopt, avail_width, cb_x, cb_y, cb_w, cb_h);
           item.content_cross = item.box->content_height();
         } else {
           item.box->height =
