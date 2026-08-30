@@ -19,6 +19,8 @@ add_library(neko_javascript
   src/binding/style_binding.cpp
   src/binding/event_binding.cpp
   src/binding/event_target_binding.cpp
+  src/binding/abort_binding.cpp
+  src/binding/intersection_observer_binding.cpp
   src/binding/headers_binding.cpp
   src/binding/storage_binding.cpp
   src/binding/global_binding.cpp

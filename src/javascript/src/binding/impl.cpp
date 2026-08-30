@@ -537,6 +537,8 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   InstallCustomElementRegistry(ctx, global);
   InstallCrypto(ctx, global);
   InstallEventTargetGlobal(ctx, global, *this);
+  InstallAbortGlobals(ctx, global, *this);
+  InstallIntersectionObserverGlobal(ctx, global, *this);
   InstallMessageChannelGlobals(ctx, global, *this);
 
   // Legacy jQuery compatibility aliases (common on ad/tracking/bootstraps):
@@ -1321,6 +1323,9 @@ Impl::~Impl()
                            "Event",
                            "UIEvent",
                            "CustomEvent",
+                           "AbortController",
+                           "AbortSignal",
+                           "IntersectionObserver",
                            "navigator",
                            "screen",
                            "innerWidth",
@@ -1366,6 +1371,9 @@ Impl::~Impl()
   JS_FreeValue(ctx, custom_event_proto);
   JS_FreeValue(ctx, message_event_proto);
   JS_FreeValue(ctx, event_target_proto);
+  JS_FreeValue(ctx, abort_signal_proto);
+  JS_FreeValue(ctx, abort_controller_proto);
+  JS_FreeValue(ctx, intersection_observer_proto);
   JS_FreeValue(ctx, class_list_proto);
   JS_FreeValue(ctx, node_list_proto);
   JS_FreeValue(ctx, html_collection_proto);
@@ -1447,6 +1455,8 @@ Impl::~Impl()
   ForgetHeadersRuntime(rt);
   ForgetMessageChannelRuntime(rt);
   ForgetEventTargetRuntime(rt);
+  ForgetAbortRuntime(rt);
+  ForgetIntersectionObserverRuntime(rt);
 
   // Free owned C++ nodes.  Wrappers were detached and finalized above, so
   // nothing can reach them; ~ScriptEngine (member, destroyed after this body)

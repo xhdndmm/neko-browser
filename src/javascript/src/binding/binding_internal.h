@@ -477,6 +477,12 @@ void CloseMessagePorts(Impl& impl);
 int RunPendingMessagePortTasks(Impl& impl);
 void InstallEventTargetGlobal(JSContext* ctx, JSValue global, Impl& impl);
 void ForgetEventTargetRuntime(JSRuntime* rt);
+// AbortController/AbortSignal (abort_binding.cpp).
+void InstallAbortGlobals(JSContext* ctx, JSValue global, Impl& impl);
+void ForgetAbortRuntime(JSRuntime* rt);
+// IntersectionObserver (intersection_observer_binding.cpp).
+void InstallIntersectionObserverGlobal(JSContext* ctx, JSValue global, Impl& impl);
+void ForgetIntersectionObserverRuntime(JSRuntime* rt);
 void InstallHeadersGlobal(JSContext* ctx, JSValue global);
 void ForgetHeadersRuntime(JSRuntime* rt);
 JSValue MakeHeaders(JSContext* ctx,
@@ -583,6 +589,9 @@ struct Impl
   JSValue custom_event_proto = JS_UNDEFINED;
   JSValue message_event_proto = JS_UNDEFINED;
   JSValue event_target_proto = JS_UNDEFINED;
+  JSValue abort_signal_proto = JS_UNDEFINED;
+  JSValue abort_controller_proto = JS_UNDEFINED;
+  JSValue intersection_observer_proto = JS_UNDEFINED;
   JSValue class_list_proto = JS_UNDEFINED;
   JSValue node_list_proto = JS_UNDEFINED;
   JSValue html_collection_proto = JS_UNDEFINED;

@@ -2940,5 +2940,213 @@ TEST(DomBinderXhrTest, XhrReflectsResponseType)
   EXPECT_EQ(run.value().ToString().value(), "function:function:json");
 }
 
+// ---------------------------------------------------------------------------
+// AbortController / AbortSignal (DOM Standard §4.1 subset).  Sites use the
+// controller to time out fetch() calls (acxun.github.io's daily-quote fetch);
+// a missing global kills the whole inline script at the first reference.
+// ---------------------------------------------------------------------------
+
+TEST_F(DomBinderTest, AbortControllerConstructsSignal)
+{
+  EXPECT_EQ(EvalString("typeof AbortController"), "function");
+  EXPECT_EQ(EvalString("typeof AbortSignal"), "function");
+  EXPECT_TRUE(EvalBool("(function(){ var c = new AbortController(); "
+                       "return c.signal instanceof AbortSignal "
+                       "    && c.signal.aborted === false; })()"));
+}
+
+TEST_F(DomBinderTest, AbortFiresAbortEventOnce)
+{
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var c = new AbortController(); var calls = 0; var type = ''; "
+      "c.signal.addEventListener('abort', function(e){ calls++; type = e.type; }); "
+      "c.abort(); c.abort(); "
+      "return calls === 1 && type === 'abort' && c.signal.aborted === true; })()"));
+}
+
+TEST_F(DomBinderTest, AbortReasonDefaultsAndCustom)
+{
+  // Default reason is an AbortError DOMException-like error; a custom reason
+  // round-trips unchanged.
+  EXPECT_TRUE(EvalBool("(function(){ var c = new AbortController(); c.abort(); "
+                       "return c.signal.reason.name === 'AbortError'; })()"));
+  EXPECT_TRUE(EvalBool("(function(){ var c = new AbortController(); c.abort('boom'); "
+                       "return c.signal.reason === 'boom'; })()"));
+}
+
+TEST_F(DomBinderTest, ThrowIfAbortedThrowsOnlyAfterAbort)
+{
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var c = new AbortController(); var name = 'no-throw'; "
+      "try { c.signal.throwIfAborted(); } catch(e) { name = e.name; } "
+      "if (name !== 'no-throw') { return false; } "
+      "c.abort(); "
+      "try { c.signal.throwIfAborted(); } catch(e) { name = e.name; } "
+      "return name === 'AbortError'; })()"));
+}
+
+// ---------------------------------------------------------------------------
+// IntersectionObserver (DOM Standard §"IntersectionObserver" subset).  The
+// page at acxun.github.io uses `new IntersectionObserver(...)` in its nav
+// scroll-spy; a missing global killed the whole inline script at the first
+// reference.  The observer reports real intersection geometry (wired through
+// PageApis::element_geometry) and delivers entries asynchronously (via the
+// QuickJS job queue, drained by DomBinder::Evaluate).
+// ---------------------------------------------------------------------------
+
+TEST_F(DomBinderTest, IntersectionObserverExposedAndValidates)
+{
+  EXPECT_EQ(EvalString("typeof IntersectionObserver"), "function");
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var o = new IntersectionObserver(function(){}); "
+      "return typeof o.observe === 'function' && typeof o.unobserve === 'function' "
+      "    && typeof o.disconnect === 'function' && typeof o.takeRecords === 'function' "
+      "    && o instanceof IntersectionObserver; })()"));
+  // Constructor requires a callable callback.
+  EXPECT_TRUE(EvalBool("(function(){ var threw = false; try { new IntersectionObserver(); } "
+                       "catch(e) { threw = (e instanceof TypeError); } return threw; })()"));
+  EXPECT_TRUE(EvalBool("(function(){ var threw = false; try { new IntersectionObserver(null); } "
+                       "catch(e) { threw = (e instanceof TypeError); } return threw; })()"));
+}
+
+namespace {
+
+// A standalone geometry-wired binder for intersection tests.  `box` sits in
+// the viewport, `low` far below it, `mid` in the middle band produced by the
+// `-35% 0px -55% 0px` rootMargin.
+class IntersectionTestHarness
+{
+public:
+  IntersectionTestHarness()
+  {
+    document_ = html::Parser(R"(<html><body>
+      <div id="box">box</div><p id="low">low</p><span id="mid">mid</span>
+    </body></html>)")
+                    .Parse();
+    PageApis apis;
+    apis.element_geometry =
+        [](const dom::Element& element) -> std::optional<ElementGeometry> {
+      const std::string id = std::string(element.GetAttribute("id").value_or(""));
+      ElementGeometry g;
+      g.x = 0;
+      g.width = 200;
+      g.height = 20;
+      g.client_width = 200;
+      g.client_height = 20;
+      g.border_top = 0;
+      g.border_left = 0;
+      g.y = id == "box" ? 12 : id == "low" ? 5000 : id == "mid" ? 220 : 0;
+      return g;
+    };
+    binder_ = std::make_unique<DomBinder>(*document_, apis);
+  }
+
+  std::string Eval(const std::string& code)
+  {
+    auto r = binder_->Evaluate(code);
+    if (!r.has_value()) {
+      return "<error: " + r.error().message() + ">";
+    }
+    auto s = r.value().ToString();
+    return s.has_value() ? s.value() : "<tostring-error>";
+  }
+
+  double Num(const std::string& code)
+  {
+    auto r = binder_->Evaluate(code);
+    if (!r.has_value()) {
+      return -1e9;
+    }
+    auto n = r.value().ToNumber();
+    return n.has_value() ? n.value() : -1e9;
+  }
+
+  bool Bool(const std::string& code)
+  {
+    auto r = binder_->Evaluate(code);
+    if (!r.has_value()) {
+      return false;
+    }
+    auto b = r.value().ToBoolean();
+    return b.has_value() && b.value();
+  }
+  // Runs a setup script and discards its result (assert on follow-up reads).
+  void Run(const std::string& code)
+  {
+    (void)binder_->Evaluate(code);
+  }
+
+private:
+  std::unique_ptr<dom::Document> document_;
+  std::unique_ptr<DomBinder> binder_;
+};
+
+} // namespace
+
+TEST(IntersectionObserverTest, ObserveDeliversIntersectionEntry)
+{
+  IntersectionTestHarness h;
+  // Observe an in-viewport element; the callback runs once the Evaluate that
+  // scheduled it drains the job queue.
+  h.Run("window.__seen = []; var obs = new IntersectionObserver(function(entries){ "
+                   "window.__seen = window.__seen.concat(entries); }); "
+                   "obs.observe(document.getElementById('box'));");
+  EXPECT_EQ(h.Num("window.__seen.length"), 1.0);
+  EXPECT_EQ(h.Eval("window.__seen[0].target.id"), "box");
+  EXPECT_TRUE(h.Bool("window.__seen[0].isIntersecting"));
+  EXPECT_EQ(h.Num("window.__seen[0].intersectionRatio"), 1.0);
+  EXPECT_EQ(h.Num("window.__seen[0].boundingClientRect.y"), 12.0);
+  EXPECT_EQ(h.Num("window.__seen[0].rootBounds.width"), 800.0);
+}
+
+TEST(IntersectionObserverTest, FirstReportFiresForNonIntersectingTarget)
+{
+  IntersectionTestHarness h;
+  h.Run("window.__seen = []; var obs = new IntersectionObserver(function(entries){ "
+                   "window.__seen = window.__seen.concat(entries); }); "
+                   "obs.observe(document.getElementById('low'));");
+  // The initial observation always reports the target, even when it is outside
+  // the viewport (spec behavior) — isIntersecting is false.
+  EXPECT_EQ(h.Num("window.__seen.length"), 1.0);
+  EXPECT_EQ(h.Eval("window.__seen[0].target.id"), "low");
+  EXPECT_TRUE(h.Bool("!window.__seen[0].isIntersecting"));
+  EXPECT_EQ(h.Num("window.__seen[0].intersectionRatio"), 0.0);
+}
+
+TEST(IntersectionObserverTest, RootMarginShrinksTheRootBand)
+{
+  IntersectionTestHarness h;
+  h.Run("window.__seen = []; "
+                   "var obs = new IntersectionObserver(function(entries){ "
+                   "window.__seen = window.__seen.concat(entries); }, "
+                   "{ rootMargin: '-35% 0px -55% 0px' }); "
+                   "obs.observe(document.getElementById('box')); "
+                   "obs.observe(document.getElementById('mid'));");
+  // The root band is [210, 270] for the 800x600 viewport: `box` (y=12..32) is
+  // above the band (not intersecting), `mid` (y=220..240) is inside it.
+  EXPECT_EQ(h.Num("window.__seen.length"), 2.0);
+  EXPECT_TRUE(h.Bool("(function(){ var by = {}; window.__seen.forEach(function(e){ by[e.target.id] "
+                     "= e.isIntersecting; }); return by.box === false && by.mid === true; })()"));
+}
+
+TEST(IntersectionObserverTest, DisconnectClearsPendingAndStopsReports)
+{
+  IntersectionTestHarness h;
+  h.Run("window.__seen = []; var obs = new IntersectionObserver(function(entries){ "
+                   "window.__seen = window.__seen.concat(entries); }); "
+                   "obs.observe(document.getElementById('box')); obs.disconnect();");
+  // disconnect() cleared the queued entry before the job could deliver it.
+  EXPECT_EQ(h.Num("window.__seen.length"), 0.0);
+}
+
+TEST(IntersectionObserverTest, TakeRecordsDrainsQueuedEntries)
+{
+  IntersectionTestHarness h;
+  h.Run("window.__taken = []; var obs = new IntersectionObserver(function(){}); "
+                   "obs.observe(document.getElementById('box')); "
+                   "window.__taken = obs.takeRecords();");
+  EXPECT_EQ(h.Num("window.__taken.length"), 1.0);
+}
+
 } // namespace
 } // namespace neko::javascript

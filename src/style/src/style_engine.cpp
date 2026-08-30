@@ -1679,6 +1679,26 @@ void StyleEngine::ComputeElement(dom::Element& element,
       out.color = v.color;
     }
   }
+  // background-clip: text (CSS Backgrounds 3 §7.4, plus the -webkit- legacy
+  // form) paints the background clipped to the glyph outlines.  Clipped
+  // painting is not implemented; the effect is normally paired with a fully
+  // transparent fill (gradient headlines), which would render the text
+  // invisible.  Drop a fully transparent fill in favor of the inherited color
+  // instead.  Documented deviation: such text paints in the normal color
+  // rather than the clipped gradient.
+  const auto clips_background_to_text = [&](std::string_view property) {
+    const css::Declaration* d = find(property);
+    if (d == nullptr) {
+      return false;
+    }
+    const css::CssValue v = css::ParseCssValue(d->value);
+    return v.type == css::CssValue::Type::kKeyword && v.text == "text";
+  };
+  if ((clips_background_to_text("background-clip")
+       || clips_background_to_text("-webkit-background-clip"))
+      && out.color.has_value() && out.color->a == 0) {
+    out.color = inherited.color;
+  }
   if (const css::Declaration* d = find("text-align")) {
     const css::CssValue v = css::ParseCssValue(d->value);
     if (v.type == css::CssValue::Type::kKeyword) {

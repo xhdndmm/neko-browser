@@ -1158,5 +1158,50 @@ TEST(StyleTest, PercentageOffsetsArePreserved)
   EXPECT_TRUE(s.top_auto);
   EXPECT_TRUE(s.right_auto);
 }
+TEST(StyleTest, BackgroundClipTextDropsTransparentFill)
+{
+  // Gradient-headline pattern (background-clip:text + transparent fill, e.g.
+  // acxun.github.io's .fluid): the engine cannot paint a background clipped
+  // to glyph outlines, so a fully transparent fill would render the text
+  // invisible. The transparent fill is dropped in favor of the inherited
+  // color instead (documented deviation from CSS Backgrounds 3 §7.4).
+  auto doc = MakeDoc(
+      "<html><head><style>"
+      "body { color: #e6e0e9; }"
+      ".fluid { color: transparent; -webkit-text-fill-color: transparent;"
+      "         -webkit-background-clip: text; background-clip: text; }"
+      "</style></head><body><h1><span class=\"fluid\">Acxun</span></h1></body></html>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, ".fluid");
+  ASSERT_TRUE(s.color.has_value());
+  EXPECT_EQ(*s.color, (css::Color{0xe6, 0xe0, 0xe9, 255}));
+}
+
+TEST(StyleTest, BackgroundClipTextKeepsOpaqueColor)
+{
+  // background-clip:text with a non-transparent color keeps that color: the
+  // fallback only rescues fully transparent fills.
+  auto doc = MakeDoc("<body><style>.clip { background-clip: text; color: red; }</style>"
+                     "<span class=\"clip\">x</span></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, ".clip");
+  ASSERT_TRUE(s.color.has_value());
+  EXPECT_EQ(*s.color, (css::Color{255, 0, 0, 255}));
+}
+
+TEST(StyleTest, TransparentColorWithoutClipStaysTransparent)
+{
+  // color: transparent alone must stay transparent (no regression for pages
+  // that intentionally hide text without background-clip).
+  auto doc = MakeDoc("<body><style>.ghost { color: transparent; }</style>"
+                     "<span class=\"ghost\">x</span></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, ".ghost");
+  ASSERT_TRUE(s.color.has_value());
+  EXPECT_EQ(s.color->a, 0);
+}
 } // namespace
 } // namespace neko::style
