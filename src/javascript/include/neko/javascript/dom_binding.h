@@ -252,7 +252,9 @@ struct PageApis
 //               (CSSStyleDeclaration), hidden/title/lang, layout geometry
 //               (getBoundingClientRect / offsetWidth/Height/Left/Top /
 //               offsetParent / clientWidth/Height/Top/Left, backed by the
-//               browser layer's layout tree via PageApis::element_geometry)
+//               browser layer's layout tree via PageApis::element_geometry),
+//               scrollTop/scrollLeft (get/set, documentElement/body) and
+//               scrollWidth/scrollHeight
 //   Form/links: input/textarea/select/option value/checked/type/placeholder/
 //               disabled/name; a.href (resolved absolute)/target/rel;
 //               img.src (resolved)/currentSrc/alt/width/height/
@@ -278,13 +280,16 @@ struct PageApis
 // arguments to text nodes; that is a documented limitation here).
 //
 // NOT implemented (documented limitation): property getters beyond the above,
-// live NodeList objects (childNodes/querySelectorAll return snapshot arrays),
 // event default actions for the browser's built-in behaviors, async script
-// loading (async/defer), module scripts, full CSSOM, scroll-aware element
-// geometry (getBoundingClientRect is in document coordinates — scroll offsets
-// and scrollWidth/scrollHeight/scrollTop are not yet modelled; offsetParent
-// is always <body>), and computed styles for properties the style engine does
-// not track.
+// loading (async/defer), module scripts, full CSSOM (document.styleSheets is a
+// subset: inline sheets are re-appliable, external sheets read-only), and
+// computed styles for properties the style engine does not track.  Live
+// collections (childNodes/children/getElementsBy*/forms/images/links/scripts)
+// ARE spec-live (re-queried on DOM mutation); querySelectorAll stays a static
+// snapshot.  Element scroll geometry is only modelled for documentElement/body
+// (scrollTop/scrollLeft read+write, scrollWidth/scrollHeight); getBoundingClientRect
+// is in document coordinates (not scroll-adjusted) and offsetParent is always
+// <body>.
 //
 // Ownership and lifetime:
 //   * The binder owns its own ScriptEngine (one runtime per document).
