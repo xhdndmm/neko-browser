@@ -196,9 +196,63 @@ TEST_F(DomBinderTest, MatchMediaRegistersListeners)
       "m.addListener(function(){ calls++; }); "
       "m.removeListener(function(){ calls++; }); "
       "return typeof m.addEventListener === 'function' && "
-      "       typeof m.removeEventListener === 'function' && "
-      "       typeof m.addListener === 'function' && "
-      "       typeof m.removeListener === 'function'; })()"));
+      "typeof m.removeEventListener === 'function' && "
+      "typeof m.addListener === 'function' && "
+      "typeof m.removeListener === 'function'; })()"));
+}
+
+TEST_F(DomBinderTest, HistoryPushStateUpdatesLocation)
+{
+  document_ = html::Parser(R"(<!doctype html><html><body><p>hi</p></body></html>)").Parse();
+  PageApis apis;
+  apis.location_href = []() { return "https://www.example.com/start"; };
+  apis.resolve_url = [](const std::string& raw) -> std::string {
+    if (raw.rfind("http://", 0) == 0 || raw.rfind("https://", 0) == 0) {
+      return raw;
+    }
+    return "https://www.example.com" + raw;
+  };
+  std::vector<std::string> pushed;
+  std::vector<std::string> replaced;
+  int64_t length = 1;
+  std::string state_json;
+  std::vector<int> go_deltas;
+  apis.history_push = [&](const std::string& url) {
+    pushed.push_back(url);
+    ++length;
+  };
+  apis.history_replace = [&](const std::string& url) { replaced.push_back(url); };
+  apis.history_length = [&]() { return length; };
+  apis.history_go = [&](int delta) { go_deltas.push_back(delta); };
+  apis.history_state_get = [&]() { return state_json; };
+  apis.history_state_set = [&](const std::string& state) { state_json = state; };
+  binder_ = std::make_unique<DomBinder>(*document_, apis);
+  binder_->SetConsoleSink([this](std::string_view level, std::string_view text) {
+    console_.push_back(std::string(level) + ": " + std::string(text));
+  });
+
+  // pushState advances the binder's URL view and records the entry.
+  EXPECT_EQ(EvalNumber("history.pushState({a: 1}, '', '/x'); history.length"), 2.0);
+  EXPECT_EQ(EvalString("location.href"), "https://www.example.com/x");
+  EXPECT_EQ(EvalNumber("history.state.a"), 1.0);
+  ASSERT_EQ(pushed.size(), 1u);
+  EXPECT_EQ(pushed[0], "https://www.example.com/x");
+
+  // replaceState updates the URL + state without growing the length.
+  EvalString("history.replaceState({b: 2}, '', '/y')");
+  ASSERT_EQ(replaced.size(), 1u);
+  EXPECT_EQ(replaced[0], "https://www.example.com/y");
+  EXPECT_EQ(EvalString("location.href"), "https://www.example.com/y");
+  EXPECT_EQ(EvalNumber("history.state.b"), 2.0);
+
+  // back()/forward()/go(delta) drive the traversal hook.
+  EvalString("history.back()");
+  EvalString("history.forward()");
+  EvalString("history.go(-2)");
+  ASSERT_EQ(go_deltas.size(), 3u);
+  EXPECT_EQ(go_deltas[0], -1);
+  EXPECT_EQ(go_deltas[1], 1);
+  EXPECT_EQ(go_deltas[2], -2);
 }
 
 TEST_F(DomBinderTest, BlobAndObjectUrl)

@@ -496,6 +496,7 @@ JSValue HistoryGo(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst*
 JSValue HistoryPushState(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue HistoryReplaceState(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue HistoryGetLength(JSContext* ctx, JSValueConst this_val);
+JSValue HistoryGetState(JSContext* ctx, JSValueConst this_val);
 JSValue PerformanceNow(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue PerformanceGetEntries(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue
@@ -805,6 +806,14 @@ struct Impl
 
   // Optional browser Web APIs (localStorage/fetch) wired by the browser layer.
   PageApis apis;
+
+  // The binder's view of the current document URL.  Seeded from
+  // |apis.location_href| at construction and kept in sync by history
+  // pushState/replaceState, so location.href / document.URL / baseURI follow
+  // script-driven history updates for the binder's whole lifetime.  Reads
+  // prefer this over calling apis.location_href() (which returns the captured
+  // page-load URL and would go stale).
+  std::string document_url;
 
   // -------------------------------------------------------------------------
   // window.indexedDB state.  Handles back the JS object model (databases,

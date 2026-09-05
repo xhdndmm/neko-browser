@@ -1063,6 +1063,14 @@ void BrowserController::LoadBytes(Tab& tab,
     services.indexed_db = &indexed_db_;
     services.cookies = &cookies_;
     services.origin = origin;
+    // Seed the script-visible session history (window.history) with the loaded
+    // URL; the page's pushState/replaceState extend it.  Worker-thread only.
+    tab.script_history = {final_url};
+    tab.script_history_index = 0;
+    tab.script_history_state.clear();
+    services.script_history = &tab.script_history;
+    services.script_history_index = &tab.script_history_index;
+    services.script_history_state = &tab.script_history_state;
     const auto fetch_subresource = [this](const url::Url& resource_url, std::string_view) {
       return fetch_(resource_url, CookieHeader(resource_url, NowUnix()));
     };
@@ -1105,6 +1113,14 @@ void BrowserController::LoadBytes(Tab& tab,
       tab.content_type = ContentType::kHtml;
       tab.page = new_page; // shared: the background task keeps it alive
       tab.title = std::move(title);
+      // Reflect a script history.pushState/replaceState in the address bar.
+      // Only when the page actually pushed/replaced (the ended-on entry differs
+      // from the loaded URL): otherwise leave the controller's own tab.url
+      // (e.g. a bare file path) untouched.
+      if (!tab.script_history.empty() && tab.script_history_index < tab.script_history.size() &&
+          tab.script_history[tab.script_history_index] != final_url) {
+        tab.url = tab.script_history[tab.script_history_index];
+      }
     }
     RecordVisit(final_url, tab.title);
 

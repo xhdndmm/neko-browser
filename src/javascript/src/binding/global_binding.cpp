@@ -5,7 +5,9 @@
 // requestAnimationFrame, location, history, performance, screen/navigator
 // helpers, matchMedia and getComputedStyle.
 
+#include "neko/security/origin.h"
 #include "neko/security/random.h"
+#include "neko/url/url.h"
 
 #include "binding_internal.h"
 
@@ -425,10 +427,10 @@ std::string ResolveLocationTarget(Impl* impl, std::string_view target)
 JSValue LocationHrefGetter(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  if (impl == nullptr || !impl->apis.location_href) {
+  if (impl == nullptr) {
     return JS_NewStringLen(ctx, "", 0);
   }
-  const std::string href = impl->apis.location_href();
+  const std::string& href = impl->document_url;
   return JS_NewStringLen(ctx, href.data(), href.size());
 }
 
@@ -451,10 +453,10 @@ JSValue LocationHrefSetter(JSContext* ctx, JSValueConst this_val, JSValueConst v
 JSValue LocationPropGetter(JSContext* ctx, JSValueConst this_val, int magic)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  if (impl == nullptr || !impl->apis.location_href) {
+  if (impl == nullptr) {
     return JS_NewStringLen(ctx, "", 0);
   }
-  const LocationParts parts = ParseLocationParts(impl->apis.location_href());
+  const LocationParts parts = ParseLocationParts(impl->document_url);
   const std::string* value = nullptr;
   switch (magic) {
   case 0:
@@ -554,60 +556,166 @@ JSValue WindowScrollBy(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSVa
   return JS_UNDEFINED;
 }
 
-JSValue HistoryBack(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+namespace {
+
+// JSON.stringify's a history state value; undefined state yields "" (null).
+std::string StringifyHistoryState(JSContext* ctx, JSValueConst state)
 {
-  if (ImplFor(ctx, this_val) == nullptr) {
+  if (JS_IsUndefined(state)) {
+    return std::string();
+  }
+  JSValue json = JS_JSONStringify(ctx, state, JS_UNDEFINED, JS_UNDEFINED);
+  if (JS_IsException(json)) {
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return std::string();
+  }
+  bool ok = false;
+  const std::string text = ArgString(ctx, json, &ok);
+  JS_FreeValue(ctx, json);
+  return ok ? text : std::string();
+}
+
+// The origin tuple (scheme://host:port) of |url|, or "" when unparseable.
+std::string UrlOrigin(const std::string& url)
+{
+  const base::Result<url::Url> parsed = url::Url::Parse(url);
+  return parsed.has_value() ? security::Origin::FromUrl(parsed.value()).Serialize() : std::string();
+}
+
+// Shared body of HistoryPushState/HistoryReplaceState.  |replace| selects the
+// replacement vs push semantics.  Returns the exception value on failure.
+JSValue HistoryMutateState(JSContext* ctx,
+                           JSValueConst this_val,
+                           int argc,
+                           JSValueConst* argv,
+                           bool replace)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
     return JS_ThrowTypeError(ctx, "no page runtime");
   }
-  // Script-driven history traversal is not wired to the browser navigation
-  // stack; no-op (documented).
+  const std::string state_json = StringifyHistoryState(ctx, argc >= 1 ? argv[0] : JS_UNDEFINED);
+  // pushState(state, unused, url): the URL is the 3rd argument (the 2nd is the
+  // obsolete title, ignored).  An empty/missing URL keeps the current one.
+  std::string target;
+  if (argc >= 3) {
+    bool ok = false;
+    target = ArgString(ctx, argv[2], &ok);
+    if (!ok) {
+      return JS_EXCEPTION;
+    }
+  }
+  std::string resolved;
+  if (!target.empty()) {
+    resolved = ResolveLocationTarget(impl, target);
+    if (resolved.empty()) {
+      return ThrowDomException(ctx, "SecurityError", "cannot resolve pushState URL");
+    }
+    // Cross-origin guard: only meaningful when both URLs carry a parseable
+    // origin (a raw relative string — the fallback when no resolver is wired —
+    // has none, so it cannot be cross-origin).
+    const std::string current_origin = UrlOrigin(impl->document_url);
+    const std::string resolved_origin = UrlOrigin(resolved);
+    if (!current_origin.empty() && !resolved_origin.empty() &&
+        resolved_origin != current_origin) {
+      return ThrowDomException(ctx, "SecurityError", "pushState to a cross-origin URL");
+    }
+  }
+  // The binder's URL view advances for the rest of the page's lifetime, so
+  // location.href / document.URL / baseURI reflect the new entry.  When the
+  // history callbacks are absent (unwired/tests) the URL still advances but no
+  // entry is recorded.
+  impl->document_url = resolved.empty() ? impl->document_url : resolved;
+  if (replace) {
+    if (impl->apis.history_replace) {
+      impl->apis.history_replace(impl->document_url);
+    }
+  } else if (impl->apis.history_push) {
+    impl->apis.history_push(impl->document_url);
+  }
+  if (impl->apis.history_state_set) {
+    impl->apis.history_state_set(state_json);
+  }
+  return JS_UNDEFINED;
+}
+
+} // namespace
+
+JSValue HistoryBack(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.history_go) {
+    return JS_ThrowTypeError(ctx, "history is not wired");
+  }
+  impl->apis.history_go(-1);
   return JS_UNDEFINED;
 }
 
 JSValue HistoryForward(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
-  if (ImplFor(ctx, this_val) == nullptr) {
-    return JS_ThrowTypeError(ctx, "no page runtime");
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.history_go) {
+    return JS_ThrowTypeError(ctx, "history is not wired");
   }
+  impl->apis.history_go(1);
   return JS_UNDEFINED;
 }
 
-JSValue HistoryGo(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+JSValue HistoryGo(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-  if (ImplFor(ctx, this_val) == nullptr) {
-    return JS_ThrowTypeError(ctx, "no page runtime");
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.history_go) {
+    return JS_ThrowTypeError(ctx, "history is not wired");
   }
+  int64_t delta = 0;
+  if (argc >= 1) {
+    if (JS_ToInt64(ctx, &delta, argv[0]) != 0) {
+      JS_FreeValue(ctx, JS_GetException(ctx));
+      return JS_EXCEPTION;
+    }
+  }
+  impl->apis.history_go(static_cast<int>(delta));
   return JS_UNDEFINED;
 }
 
 JSValue
-HistoryPushState(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+HistoryPushState(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-  if (ImplFor(ctx, this_val) == nullptr) {
-    return JS_ThrowTypeError(ctx, "no page runtime");
-  }
-  // pushState/replaceState are accepted but do not change the URL (the
-  // navigation stack is not exposed to scripts); documented.
-  return JS_UNDEFINED;
+  return HistoryMutateState(ctx, this_val, argc, argv, /*replace=*/false);
 }
 
 JSValue
-HistoryReplaceState(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+HistoryReplaceState(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-  if (ImplFor(ctx, this_val) == nullptr) {
-    return JS_ThrowTypeError(ctx, "no page runtime");
-  }
-  return JS_UNDEFINED;
+  return HistoryMutateState(ctx, this_val, argc, argv, /*replace=*/true);
 }
 
 JSValue HistoryGetLength(JSContext* ctx, JSValueConst this_val)
 {
-  if (ImplFor(ctx, this_val) == nullptr) {
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
     return JS_ThrowTypeError(ctx, "no page runtime");
   }
-  // The script-visible session history has exactly one entry (the current
-  // document); the browser back/forward stack is separate.
-  return JS_NewInt32(ctx, 1);
+  const int64_t length = impl->apis.history_length ? impl->apis.history_length() : 1;
+  return JS_NewInt64(ctx, length);
+}
+
+JSValue HistoryGetState(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  const std::string json = impl->apis.history_state_get ? impl->apis.history_state_get() : "";
+  if (json.empty()) {
+    return JS_NULL;
+  }
+  JSValue value = JS_ParseJSON(ctx, json.c_str(), json.size(), "<state>");
+  if (JS_IsException(value)) {
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return JS_NULL;
+  }
+  return value;
 }
 
 JSValue PerformanceNow(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
@@ -626,7 +734,7 @@ JSValue MakeNavigationPerformanceEntry(JSContext* ctx, Impl& impl)
 {
   JSValue entry = JS_NewObject(ctx);
   JS_SetPropertyStr(ctx, entry, "entryType", JS_NewString(ctx, "navigation"));
-  const std::string location = impl.apis.location_href ? impl.apis.location_href() : std::string{};
+  const std::string& location = impl.document_url;
   JS_SetPropertyStr(ctx, entry, "name", JS_NewString(ctx, location.c_str()));
   JS_SetPropertyStr(ctx, entry, "startTime", JS_NewFloat64(ctx, 0));
   JS_SetPropertyStr(ctx, entry, "duration", PerformanceNow(ctx, entry, 0, nullptr));

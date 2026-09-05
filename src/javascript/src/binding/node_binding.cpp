@@ -529,7 +529,7 @@ JSValue NodeGetBaseURI(JSContext* ctx, JSValueConst this_val)
   if (impl == nullptr || UnwrapNode(this_val) == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
-  const std::string url = impl->apis.location_href ? impl->apis.location_href() : std::string();
+  const std::string& url = impl->document_url;
   return JS_NewStringLen(ctx, url.data(), url.size());
 }
 

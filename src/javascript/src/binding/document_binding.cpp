@@ -689,16 +689,12 @@ DocGetElementsByClassName(JSContext* ctx, JSValueConst this_val, int argc, JSVal
   return impl->MakeLiveCollection(node, Impl::LiveKind::kClassName, cls);
 }
 
-// The current document URL (from the PageApis location callback when wired).
+// The current document URL.  The binder keeps its own document_url (seeded
+// from the PageApis location callback and updated by history
+// pushState/replaceState), so URL reads stay live for the binder's lifetime.
 std::string DocumentUrl(const Impl& impl)
 {
-  if (impl.apis.location_href) {
-    const std::string url = impl.apis.location_href();
-    if (!url.empty()) {
-      return url;
-    }
-  }
-  return std::string();
+  return impl.document_url;
 }
 
 JSValue DocGetURL(JSContext* ctx, JSValueConst this_val)

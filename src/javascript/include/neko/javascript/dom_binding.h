@@ -104,6 +104,20 @@ struct PageApis
   std::function<void(const std::string&)> navigate;
   std::function<void()> reload;
 
+  // window.history (script-visible session history).  |history_push| records a
+  // new entry for the resolved absolute URL (or the current URL when empty);
+  // |history_replace| replaces the current entry.  |history_length| reports the
+  // entry count; |history_go| traverses by a delta relative to the current
+  // index (the browser layer navigates to and reloads the target URL — no SPA
+  // no-reload traversal).  |history_state_get|/|history_state_set| preserve
+  // history.state as JSON text (empty = null).
+  std::function<void(const std::string&)> history_push;
+  std::function<void(const std::string&)> history_replace;
+  std::function<int64_t()> history_length;
+  std::function<void(int)> history_go;
+  std::function<std::string()> history_state_get;
+  std::function<void(std::string)> history_state_set;
+
   // window.getComputedStyle(element): serialized computed style of an element
   // (property -> resolved px value, kebab-case keys).  Wired by the browser
   // layer from the renderer's style engine; when absent, getComputedStyle

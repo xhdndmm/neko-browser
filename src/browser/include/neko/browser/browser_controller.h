@@ -75,6 +75,14 @@ struct Tab
   // current document; cleared on navigation (the document is replaced).
   dom::Element* focused_element = nullptr;
 
+  // Script-visible session history (window.history): the URLs the page pushed,
+  // the index of the current entry, and the last pushed state as JSON.  Worker
+  // thread only; reset to the loaded URL on each navigation.  Distinct from the
+  // browser back/forward |history| stack, which the UI drives.
+  std::vector<std::string> script_history;
+  std::size_t script_history_index = 0;
+  std::string script_history_state;
+
   // The element the pointer currently hovers over (worker-thread only, used to
   // fire mouseover/mouseout).  Points into the current document; the UI posts
   // pointer positions and the worker hit-tests, so no pointers cross threads.

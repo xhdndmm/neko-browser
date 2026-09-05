@@ -9,9 +9,11 @@
 #include "neko/storage/local_storage.h"
 #include "neko/url/url.h"
 
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace neko::browser {
 
@@ -29,6 +31,14 @@ struct PageScriptServices
   storage::IndexedDbStore* indexed_db = nullptr;
   storage::CookieStore* cookies = nullptr;
   std::string origin;
+
+  // Script-visible session history (window.history), backed by the controller's
+  // tab.  |script_history|/|script_history_index|/|script_history_state| point
+  // into the live tab state (worker thread) when non-null.  The controller
+  // initializes them to the loaded URL before running scripts.
+  std::vector<std::string>* script_history = nullptr;
+  std::size_t* script_history_index = nullptr;
+  std::string* script_history_state = nullptr;
 };
 
 // A navigation requested by a page script through window.location (href

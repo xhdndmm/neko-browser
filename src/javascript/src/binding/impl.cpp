@@ -350,6 +350,9 @@ void DefineInterface(
 
 Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(page_apis)
 {
+  if (apis.location_href) {
+    document_url = apis.location_href();
+  }
   navigation_start_epoch_ms =
       static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(
                               std::chrono::system_clock::now().time_since_epoch())
@@ -587,13 +590,14 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
     static const std::array<JSCFunctionListEntry, 5> kHistory = {{
         JS_CFUNC_DEF("back", 0, HistoryBack),
         JS_CFUNC_DEF("forward", 0, HistoryForward),
-        JS_CFUNC_DEF("go", 0, HistoryGo),
-        JS_CFUNC_DEF("pushState", 0, HistoryPushState),
-        JS_CFUNC_DEF("replaceState", 0, HistoryReplaceState),
+        JS_CFUNC_DEF("go", 1, HistoryGo),
+        JS_CFUNC_DEF("pushState", 3, HistoryPushState),
+        JS_CFUNC_DEF("replaceState", 3, HistoryReplaceState),
     }};
     JS_SetPropertyFunctionList(
         ctx, history_proto, kHistory.data(), static_cast<int>(kHistory.size()));
     DefineGetter(ctx, history_proto, "length", MakeGetter(ctx, "length", HistoryGetLength));
+    DefineGetter(ctx, history_proto, "state", MakeGetter(ctx, "state", HistoryGetState));
     DefineInterface(ctx, global, "History", history_proto);
     JSValue history = JS_NewObjectProto(ctx, history_proto);
     JS_FreeValue(ctx, history_proto);

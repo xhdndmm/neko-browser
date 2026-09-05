@@ -407,6 +407,37 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     apis.location_href = [base_url]() { return base_url; };
   }
 
+  // window.history: script-visible session history.  The controller passes
+  // pointers to the live tab state (worker thread).  back()/go() demand a
+  // navigation to the target entry, recorded in out_navigation for the caller
+  // to act on after the run (a full reload; no SPA no-reload traversal).
+  if (services.script_history != nullptr && services.script_history_index != nullptr &&
+      services.script_history_state != nullptr) {
+    auto* history = services.script_history;
+    auto* history_index = services.script_history_index;
+    auto* history_state = services.script_history_state;
+    apis.history_push = [history, history_index](const std::string& url) {
+      history->resize(*history_index + 1); // drop any forward entries
+      history->push_back(url);
+      ++(*history_index);
+    };
+    apis.history_replace = [history, history_index](const std::string& url) {
+      if (*history_index < history->size()) {
+        (*history)[*history_index] = url;
+      }
+    };
+    apis.history_length = [history]() { return static_cast<int64_t>(history->size()); };
+    apis.history_go = [history, history_index, out_navigation](int delta) {
+      const int64_t target = static_cast<int64_t>(*history_index) + delta;
+      if (target >= 0 && target < static_cast<int64_t>(history->size()) &&
+          out_navigation != nullptr) {
+        out_navigation->url = (*history)[static_cast<std::size_t>(target)];
+      }
+    };
+    apis.history_state_get = [history_state]() { return *history_state; };
+    apis.history_state_set = [history_state](const std::string& state) { *history_state = state; };
+  }
+
   // window.getComputedStyle(element): serialize the element's computed style
   // from the page's style engine (the engine keeps per-element styles after
   // ApplyStyles, which RunPageScripts re-runs after DOM mutations).
