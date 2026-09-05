@@ -146,6 +146,61 @@ TEST_F(DomBinderTest, QuerySelectorAllIsStatic)
   EXPECT_EQ(EvalNumber("document.body.appendChild(document.createElement('span')); s.length"), 1.0);
 }
 
+TEST_F(DomBinderTest, DocumentStyleSheetsExposesRules)
+{
+  document_ =
+      html::Parser(R"(<!doctype html><html><body><style>div{color:red}</style></body></html>)")
+          .Parse();
+  PageApis apis;
+  apis.location_href = []() { return "https://www.example.com/"; };
+  // The browser layer normally wires these from the style engine; here the
+  // test drives a fake sheet that insertRule/deleteRule mutate.
+  std::string sheet_text = "div{color:red}";
+  apis.stylesheet_count = []() { return 1; };
+  apis.stylesheet_href = [](std::size_t) { return std::string(); };
+  apis.stylesheet_text = [&sheet_text](std::size_t) { return sheet_text; };
+  apis.stylesheet_replace = [&sheet_text](std::size_t,
+                                          const std::string& text) -> std::optional<std::string> {
+    sheet_text = text;
+    return std::nullopt;
+  };
+  binder_ = std::make_unique<DomBinder>(*document_, apis);
+  binder_->SetConsoleSink([this](std::string_view level, std::string_view text) {
+    console_.push_back(std::string(level) + ": " + std::string(text));
+  });
+
+  EXPECT_EQ(EvalNumber("document.styleSheets.length"), 1.0);
+  EXPECT_EQ(EvalString("document.styleSheets[0].cssRules[0].selectorText"), "div");
+  EXPECT_TRUE(EvalBool("document.styleSheets[0].cssRules[0].cssText.indexOf('color') !== -1"));
+  // insertRule appends a rule and re-queries cssRules on the next access.
+  EXPECT_EQ(EvalNumber("document.styleSheets[0].insertRule('p{font-size:12px}', 1)"), 1.0);
+  EXPECT_EQ(EvalNumber("document.styleSheets[0].cssRules.length"), 2.0);
+  EXPECT_EQ(EvalString("document.styleSheets[0].cssRules[1].selectorText"), "p");
+  // deleteRule removes it again.
+  EvalString("document.styleSheets[0].deleteRule(1)");
+  EXPECT_EQ(EvalNumber("document.styleSheets[0].cssRules.length"), 1.0);
+}
+
+TEST_F(DomBinderTest, MatchMediaRegistersListeners)
+{
+  // matchMedia exposes a live listener API rather than the old no-op stubs:
+  // addEventListener/removeEventListener and the legacy addListener route
+  // register against the binder (the callback is retained, not dropped).
+  EXPECT_TRUE(EvalBool(
+      "(function(){ var m = window.matchMedia('(min-width: 1px)'); "
+      "if (!m.matches) return false; "
+      "if (m.media !== '(min-width: 1px)') return false; "
+      "var calls = 0; "
+      "m.addEventListener('change', function(){ calls++; }); "
+      "m.removeEventListener('change', function(){ calls++; }); "
+      "m.addListener(function(){ calls++; }); "
+      "m.removeListener(function(){ calls++; }); "
+      "return typeof m.addEventListener === 'function' && "
+      "       typeof m.removeEventListener === 'function' && "
+      "       typeof m.addListener === 'function' && "
+      "       typeof m.removeListener === 'function'; })()"));
+}
+
 TEST_F(DomBinderTest, BlobAndObjectUrl)
 {
   EXPECT_TRUE(

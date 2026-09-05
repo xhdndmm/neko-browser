@@ -1,6 +1,7 @@
 #include "neko/css/color.h"
 #include "neko/css/parser.h"
 #include "neko/css/selector.h"
+#include "neko/css/stylesheet.h"
 #include "neko/css/tokenizer.h"
 #include "neko/css/value.h"
 #include "neko/dom/query.h"
@@ -450,6 +451,30 @@ TEST(CssTokenizerTest, BasicTokens)
   Tokenizer tokenizer("div.class { color: red; margin: 10px; }");
   const std::vector<CssToken> tokens = tokenizer.Tokenize();
   EXPECT_GE(tokens.size(), 12u);
+}
+
+TEST(CssSerializeTest, StyleRuleRoundTrips)
+{
+  const StyleSheet sheet = ParseStyleSheet("div{color:red;margin:0 auto;}");
+  ASSERT_EQ(sheet.rules.size(), 1u);
+  // selectorText serializes the first complex selector.
+  EXPECT_EQ(ToString(sheet.rules[0].selectors[0]), "div");
+  const std::string text = SerializeStyleRule(sheet.rules[0]);
+  // Re-parsing the serialized text preserves the rule structure (idempotent).
+  const StyleSheet reparsed = ParseStyleSheet(text);
+  ASSERT_EQ(reparsed.rules.size(), 1u);
+  EXPECT_EQ(SerializeStyleRule(reparsed.rules[0]), text);
+}
+
+TEST(CssSerializeTest, StyleSheetRoundTrips)
+{
+  const std::string source =
+      "div { color: red; margin: 0 auto; }\n"
+      "p.note#x { font-size: 12px !important; }\n";
+  const StyleSheet sheet = ParseStyleSheet(source);
+  const std::string text = SerializeStyleSheet(sheet);
+  const StyleSheet reparsed = ParseStyleSheet(text);
+  EXPECT_EQ(SerializeStyleSheet(reparsed), text);
 }
 
 } // namespace

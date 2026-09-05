@@ -54,4 +54,16 @@ struct StyleSheet
   std::vector<FontFaceRule> font_faces;
 };
 
+// Serializes a complex selector (the compound chain, with combinators) back
+// to CSS text.  Used by the CSSOM cssRules selectorText.  Supported features
+// degrade gracefully: anything the parser could not represent is omitted
+// rather than throwing.  A universal (empty) compound serializes as "*".
+std::string ToString(const ComplexSelector& selector);
+
+// Serializes one qualified rule as "selector { prop: value [!important]; ... }".
+std::string SerializeStyleRule(const StyleRule& rule);
+
+// Serializes a whole stylesheet back to CSS text (rules then at-rules).
+std::string SerializeStyleSheet(const StyleSheet& sheet);
+
 } // namespace neko::css

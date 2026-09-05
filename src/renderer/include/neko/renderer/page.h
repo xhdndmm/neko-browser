@@ -107,6 +107,10 @@ public:
   // cascade so layout reflects them.
   void SetExternalStylesheets(std::vector<css::StyleSheet> sheets);
 
+  // Replaces the Nth author <style> sheet's parsed content with freshly parsed
+  // |text| and re-runs the cascade (document.styleSheets insertRule/deleteRule).
+  void SetAuthorSheetText(std::size_t index, const std::string& text);
+
   // Registers an @font-face web font (bytes already fetched).  Thread-safe;
   // invalidates the layout/paint caches so the next pass uses the face.
   // Returns false when the font data does not parse.

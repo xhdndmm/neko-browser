@@ -67,6 +67,32 @@ public:
   // and parses the CSS, then hands the parsed sheets here.
   void SetExternalStylesheets(std::vector<css::StyleSheet> sheets);
 
+  // CSSOM read access (document.styleSheets).  The document's author sheets
+  // (from <style> elements) come first, in document order, followed by any
+  // external sheets registered via SetExternalStylesheets.
+  const std::vector<css::StyleSheet>& author_sheets() const
+  {
+    return author_sheets_;
+  }
+  const std::vector<css::StyleSheet>& external_sheets() const
+  {
+    return external_sheets_;
+  }
+  // The parsed <style> element -> (original text, parsed sheet) cache; exposed
+  // so the browser layer can enumerate each inline sheet's raw source text.
+  const std::unordered_map<const dom::Element*, std::pair<std::string, css::StyleSheet>>&
+  style_sheet_cache() const
+  {
+    return author_parse_cache_;
+  }
+
+  // Replaces the Nth author sheet (index into author_sheets(), i.e. the Nth
+  // <style> element in document order) with freshly parsed |text|.  Used by
+  // document.styleSheets insertRule()/deleteRule().  The caller is expected to
+  // keep the underlying <style> element's text in sync (via ReapplyStyles) so
+  // later ApplyStyles passes persist the change.
+  void SetAuthorSheetText(std::size_t index, const std::string& text);
+
   // Returns the computed style for |element|.  The element must belong to a
   // document that ApplyStyles() was called on; otherwise a default style is
   // returned.

@@ -336,6 +336,16 @@ void Page::SetExternalStylesheets(std::vector<css::StyleSheet> sheets)
   ReapplyStylesLocked();
 }
 
+void Page::SetAuthorSheetText(std::size_t index, const std::string& text)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  styles_.SetAuthorSheetText(index, text);
+  if (document_ == nullptr) {
+    return;
+  }
+  ReapplyStylesLocked();
+}
+
 base::Result<void> Page::LoadFile(std::string_view path)
 {
   std::ifstream in(std::string(path), std::ios::binary);

@@ -12,12 +12,14 @@
 
 #include "neko/base/logging.h"
 #include "neko/base/string_util.h"
+#include "neko/css/stylesheet.h"
 #include "neko/javascript/import_map.h"
 #include "neko/style/computed_style.h"
 #include "neko/url/url.h"
 
 #include <array>
 #include <ctime>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -457,6 +459,100 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
                                   std::array<std::uint8_t, 4> color) {
     page.FillCanvasRect(element, x, y, width, height, color);
   };
+
+  // document.styleSheets (CSSOM subset): the page's author sheets — inline
+  // <style> elements (document order) then external <link rel=stylesheet>
+  // sheets (also document order).  Inline sheets are re-appliable via
+  // insertRule/deleteRule; external sheets are read-only.  The style engine's
+  // author_sheets_/external_sheets_ vectors are stable members, so the
+  // references captured below observe later re-applications.
+  {
+    const auto* page_document = page.document();
+    const std::size_t author_count = page.styles().author_sheets().size();
+    std::vector<std::string> external_hrefs;
+    {
+      std::function<void(const dom::Node&)> collect = [&](const dom::Node& n) {
+        for (dom::Node* c : n.ChildNodes()) {
+          if (c->node_type() == dom::NodeType::kElement) {
+            auto* el = static_cast<dom::Element*>(c);
+            if (el->tag_name() == "link") {
+              const auto rel = el->GetAttribute("rel");
+              if (rel.has_value() && *rel == "stylesheet") {
+                const auto href = el->GetAttribute("href");
+                if (href.has_value()) {
+                  const base::Result<url::Url> target =
+                      base.has_value() ? url::Url::Parse(*href, base.value())
+                                       : url::Url::Parse(*href);
+                  external_hrefs.push_back(target.has_value() ? target.value().Serialize()
+                                                              : std::string(*href));
+                }
+              }
+            }
+            collect(*el);
+          }
+        }
+      };
+      if (page_document != nullptr) {
+        collect(*page_document);
+      }
+    }
+    auto collect_styles = [page_document](std::vector<dom::Element*>& out) {
+      std::function<void(const dom::Node&)> walk = [&](const dom::Node& n) {
+        for (dom::Node* c : n.ChildNodes()) {
+          if (c->node_type() == dom::NodeType::kElement) {
+            auto* el = static_cast<dom::Element*>(c);
+            if (el->tag_name() == "style") {
+              out.push_back(el);
+            }
+            walk(*el);
+          }
+        }
+      };
+      if (page_document != nullptr) {
+        walk(*page_document);
+      }
+    };
+    apis.stylesheet_count = [&page, author_count]() {
+      return author_count + page.styles().external_sheets().size();
+    };
+    apis.stylesheet_href = [author_count, &external_hrefs](std::size_t index) {
+      if (index < author_count) {
+        return std::string();
+      }
+      const std::size_t external = index - author_count;
+      return external < external_hrefs.size() ? external_hrefs[external] : std::string();
+    };
+    apis.stylesheet_text = [&page, author_count](std::size_t index) {
+      if (index < author_count) {
+        const auto& author = page.styles().author_sheets();
+        return index < author.size() ? css::SerializeStyleSheet(author[index]) : std::string();
+      }
+      const auto& external = page.styles().external_sheets();
+      const std::size_t ext = index - author_count;
+      return ext < external.size() ? css::SerializeStyleSheet(external[ext]) : std::string();
+    };
+    apis.stylesheet_replace =
+        [&page, author_count, collect_styles](std::size_t index,
+                                              const std::string& text) -> std::optional<std::string> {
+      if (index >= author_count) {
+        return std::string("external stylesheets are read-only");
+      }
+      std::vector<dom::Element*> styles;
+      collect_styles(styles);
+      if (index >= styles.size()) {
+        return std::string("stylesheet index out of range");
+      }
+      // Keep the actual <style> element's text in sync so the change persists
+      // across later ApplyStyles passes (the engine cache compares text).
+      dom::Element* style = styles[index];
+      while (style->first_child() != nullptr) {
+        (void)style->RemoveChild(style->first_child());
+      }
+      style->AppendChild(std::make_unique<dom::Text>(text));
+      page.SetAuthorSheetText(index, text);
+      return std::nullopt;
+    };
+  }
 
   auto binder = std::make_shared<javascript::DomBinder>(*document, apis);
   binder->SetConsoleSink(std::move(sink));

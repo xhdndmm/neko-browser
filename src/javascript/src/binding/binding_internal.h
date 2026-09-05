@@ -270,6 +270,7 @@ void DefineNodePrototype(JSContext* ctx, Impl& impl);      // node_binding.cpp
 void DefineElementPrototype(JSContext* ctx, Impl& impl);   // element_binding.cpp
 void DefineDocumentPrototype(JSContext* ctx, Impl& impl);  // document_binding.cpp
 void DefineStylePrototype(JSContext* ctx, Impl& impl);     // style_binding.cpp
+void DefineStyleSheetPrototype(JSContext* ctx, Impl& impl); // document_binding.cpp
 void DefineEventPrototype(JSContext* ctx, Impl& impl);     // event_binding.cpp
 void DefineClassListPrototype(JSContext* ctx, Impl& impl); // element_binding.cpp
 // Element-level global event handler attributes (onclick/oninput/...),
@@ -618,6 +619,8 @@ struct Impl
   JSValue svg_element_proto = JS_UNDEFINED;
   JSValue xhr_proto = JS_UNDEFINED;
   JSValue message_port_proto = JS_UNDEFINED;
+  JSValue css_style_sheet_proto = JS_UNDEFINED;
+  JSValue css_rule_proto = JS_UNDEFINED;
   JSValue window = JS_UNDEFINED;
 
   struct MessagePortTask
@@ -695,6 +698,22 @@ struct Impl
   std::vector<RafEntry> raf_queue;
   std::vector<RafEntry> raf_pending;
   int64_t next_raf_id = 1;
+
+  // window.matchMedia listeners: one entry per registered callback, scoped to
+  // the MediaQueryList it was registered on.  Re-evaluated and fired on
+  // NotifyMediaChanged() (called by the browser layer when the viewport's
+  // media state changes).  Callbacks are Dup'd and released in the destructor.
+  struct MediaListener
+  {
+    JSValue list = JS_UNDEFINED;     // the MediaQueryList object (owned)
+    std::string query;
+    bool matched = false;            // last known match state
+    JSValue callback = JS_UNDEFINED; // dup'd listener fn
+  };
+  std::vector<MediaListener> media_listeners;
+  // Re-checks every registered MediaQueryList against the current media state
+  // and fires a synthetic "change" Event on those whose matches flipped.
+  void RefreshMediaListeners();
 
   // performance.now() origin (steady clock at binder construction).
   std::chrono::steady_clock::time_point performance_origin = std::chrono::steady_clock::now();

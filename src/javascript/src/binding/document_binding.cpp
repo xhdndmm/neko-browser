@@ -4,6 +4,8 @@
 // document callbacks (element factory, query, collections, URL/cookie/
 // metadata getters), DOMImplementation subset, and DefineDocumentPrototype.
 
+#include "neko/css/parser.h"
+#include "neko/css/stylesheet.h"
 #include "neko/dom/element.h"
 #include "neko/dom/node.h"
 #include "neko/dom/query.h"
@@ -12,6 +14,7 @@
 #include "binding_internal.h"
 
 #include <quickjs.h>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -846,6 +849,256 @@ JSValue DocWrite(JSContext* ctx, JSValueConst /*this_val*/, int argc, JSValueCon
 }
 
 // ---------------------------------------------------------------------------
+// document.styleSheets (CSSOM subset).
+//
+// Each CSSStyleSheet wrapper carries its author-sheet index in a hidden
+// "__sheetIndex__" property and reflects the browser layer's sheet list: href
+// read-only, ownerNode (the <style> element for inline sheets), cssRules
+// (re-queried on access), and insertRule/deleteRule for inline sheets.  Rules
+// are serialized/de-serialized through the css module so the sheet text and
+// the live cascade stay in sync.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Reads the hidden author-sheet index off a CSSStyleSheet wrapper.
+std::size_t SheetIndexOf(JSContext* ctx, JSValueConst this_val)
+{
+  JSValue value = JS_GetPropertyStr(ctx, this_val, "__sheetIndex__");
+  int64_t index = 0;
+  (void)JS_ToInt64(ctx, &index, value);
+  JS_FreeValue(ctx, value);
+  return index >= 0 ? static_cast<std::size_t>(index) : 0;
+}
+
+// Builds a read-only CSSStyleDeclaration-like style object for a rule.
+JSValue MakeRuleStyle(JSContext* ctx, const css::StyleRule& rule)
+{
+  JSValue style = JS_NewObject(ctx);
+  std::string css_text;
+  for (const css::Declaration& declaration : rule.declarations) {
+    css_text += declaration.property;
+    css_text += ": ";
+    css_text += declaration.value;
+    if (declaration.important) {
+      css_text += " !important";
+    }
+    css_text += "; ";
+  }
+  JS_SetPropertyStr(ctx, style, "cssText", JS_NewStringLen(ctx, css_text.data(), css_text.size()));
+  JS_SetPropertyStr(ctx, style, "length", JS_NewInt32(ctx, static_cast<int32_t>(rule.declarations.size())));
+  return style;
+}
+
+// Builds a CSSRule object (STYLE_RULE) from a parsed StyleRule.
+JSValue MakeCssRule(Impl& impl, const css::StyleRule& rule, JSValueConst parent_sheet)
+{
+  JSContext* ctx = impl.ctx;
+  JSValue obj = JS_NewObjectProto(ctx, impl.css_rule_proto);
+  JS_SetPropertyStr(ctx, obj, "type", JS_NewInt32(ctx, 1)); // CSSRule.STYLE_RULE
+  const std::string css_text = css::SerializeStyleRule(rule);
+  JS_SetPropertyStr(ctx, obj, "cssText", JS_NewStringLen(ctx, css_text.data(), css_text.size()));
+  const std::string selector =
+      rule.selectors.empty() ? std::string() : css::ToString(rule.selectors.front());
+  JS_SetPropertyStr(ctx,
+                    obj,
+                    "selectorText",
+                    JS_NewStringLen(ctx, selector.data(), selector.size()));
+  JS_SetPropertyStr(ctx, obj, "style", MakeRuleStyle(ctx, rule)); // steals
+  if (!JS_IsUndefined(parent_sheet)) {
+    JS_SetPropertyStr(ctx, obj, "parentStyleSheet", JS_DupValue(ctx, parent_sheet));
+  }
+  return obj;
+}
+
+// Builds a CSSStyleSheet wrapper for the author sheet at |index|.
+JSValue MakeCssStyleSheet(Impl& impl, std::size_t index)
+{
+  JSContext* ctx = impl.ctx;
+  JSValue obj = JS_NewObjectProto(ctx, impl.css_style_sheet_proto);
+  JS_SetPropertyStr(ctx, obj, "__sheetIndex__", JS_NewInt64(ctx, static_cast<int64_t>(index)));
+  return obj;
+}
+
+} // namespace
+
+// Collects every <style> element in document order (the inline author sheets).
+std::vector<dom::Element*> CollectStyleElements(const dom::Node& root)
+{
+  std::vector<dom::Element*> out;
+  std::function<void(const dom::Node&)> walk = [&](const dom::Node& n) {
+    for (dom::Node* child : n.ChildNodes()) {
+      if (dom::Element* el = AsElement(child)) {
+        if (el->tag_name() == "style") {
+          out.push_back(el);
+        }
+        walk(*el);
+      }
+    }
+  };
+  walk(root);
+  return out;
+}
+
+// document.styleSheets -> list of CSSStyleSheet wrappers (rebuilt on access).
+JSValue DocGetStyleSheets(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.stylesheet_count) {
+    return JS_NewArray(ctx);
+  }
+  const std::size_t count = impl->apis.stylesheet_count();
+  JSValue array = JS_NewArray(ctx);
+  for (std::size_t i = 0; i < count; ++i) {
+    JS_SetPropertyUint32(ctx, array, static_cast<uint32_t>(i), MakeCssStyleSheet(*impl, i));
+  }
+  return array;
+}
+
+JSValue StyleSheetGetHref(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.stylesheet_href) {
+    return JS_NewString(ctx, "");
+  }
+  const std::string href = impl->apis.stylesheet_href(SheetIndexOf(ctx, this_val));
+  return JS_NewStringLen(ctx, href.data(), href.size());
+}
+
+JSValue StyleSheetGetOwnerNode(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "detached stylesheet");
+  }
+  // Inline sheets (index < # of <style> elements) map to their <style> node;
+  // external sheets have no owner node here.
+  const std::size_t index = SheetIndexOf(ctx, this_val);
+  const std::vector<dom::Element*> styles = CollectStyleElements(impl->document);
+  if (index < styles.size()) {
+    return impl->WrapNode(styles[index]);
+  }
+  return JS_NULL;
+}
+
+JSValue StyleSheetGetCssRules(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "detached stylesheet");
+  }
+  const std::string text =
+      impl->apis.stylesheet_text ? impl->apis.stylesheet_text(SheetIndexOf(ctx, this_val)) : "";
+  const css::StyleSheet sheet = css::ParseStyleSheet(text);
+  JSValue array = JS_NewArray(ctx);
+  JSValue self = JS_DupValue(ctx, this_val);
+  for (std::size_t i = 0; i < sheet.rules.size(); ++i) {
+    JS_SetPropertyUint32(ctx, array, static_cast<uint32_t>(i), MakeCssRule(*impl, sheet.rules[i], self));
+  }
+  JS_FreeValue(ctx, self);
+  return array;
+}
+
+JSValue
+StyleSheetInsertRule(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.stylesheet_text || !impl->apis.stylesheet_replace) {
+    return JS_ThrowTypeError(ctx, "stylesheets are not wired");
+  }
+  bool ok = false;
+  const std::string rule_text = ArgString(ctx, argc >= 1 ? argv[0] : JS_UNDEFINED, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  const css::StyleSheet added = css::ParseStyleSheet(rule_text);
+  if (added.rules.empty()) {
+    return ThrowDomException(ctx, "SyntaxError", "invalid CSS rule");
+  }
+  css::StyleSheet current = css::ParseStyleSheet(impl->apis.stylesheet_text(SheetIndexOf(ctx, this_val)));
+  std::size_t position = current.rules.size();
+  if (argc >= 2) {
+    int64_t requested = 0;
+    if (JS_ToInt64(ctx, &requested, argv[1]) != 0) {
+      JS_FreeValue(ctx, JS_GetException(ctx));
+      return JS_EXCEPTION;
+    }
+    if (requested < 0) {
+      return ThrowDomException(ctx, "IndexSizeError", "negative rule index");
+    }
+    position = static_cast<std::size_t>(requested);
+  }
+  if (position > current.rules.size()) {
+    position = current.rules.size();
+  }
+  current.rules.insert(current.rules.begin() + static_cast<std::ptrdiff_t>(position),
+                       added.rules.front());
+  const std::string updated = css::SerializeStyleSheet(current);
+  const std::optional<std::string> error = impl->apis.stylesheet_replace(SheetIndexOf(ctx, this_val), updated);
+  if (error.has_value()) {
+    return ThrowDomException(ctx, "SyntaxError", error->data());
+  }
+  return JS_NewInt32(ctx, static_cast<int32_t>(position));
+}
+
+JSValue StyleSheetDeleteRule(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.stylesheet_text || !impl->apis.stylesheet_replace) {
+    return JS_ThrowTypeError(ctx, "stylesheets are not wired");
+  }
+  if (argc < 1) {
+    return ThrowDomException(ctx, "IndexSizeError", "deleteRule requires an index");
+  }
+  int64_t index = 0;
+  if (JS_ToInt64(ctx, &index, argv[0]) != 0) {
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return JS_EXCEPTION;
+  }
+  css::StyleSheet current = css::ParseStyleSheet(impl->apis.stylesheet_text(SheetIndexOf(ctx, this_val)));
+  if (index < 0 || static_cast<std::size_t>(index) >= current.rules.size()) {
+    return ThrowDomException(ctx, "IndexSizeError", "rule index out of range");
+  }
+  current.rules.erase(current.rules.begin() + static_cast<std::ptrdiff_t>(index));
+  const std::string updated = css::SerializeStyleSheet(current);
+  const std::optional<std::string> error = impl->apis.stylesheet_replace(SheetIndexOf(ctx, this_val), updated);
+  if (error.has_value()) {
+    return ThrowDomException(ctx, "SyntaxError", error->data());
+  }
+  return JS_UNDEFINED;
+}
+
+void DefineStyleSheetPrototype(JSContext* ctx, Impl& impl)
+{
+  impl.css_style_sheet_proto = JS_NewObject(ctx);
+  DefineGetter(
+      ctx, impl.css_style_sheet_proto, "href", MakeGetter(ctx, "href", StyleSheetGetHref));
+  DefineGetter(ctx,
+               impl.css_style_sheet_proto,
+               "ownerNode",
+               MakeGetter(ctx, "ownerNode", StyleSheetGetOwnerNode));
+  DefineGetter(ctx,
+               impl.css_style_sheet_proto,
+               "cssRules",
+               MakeGetter(ctx, "cssRules", StyleSheetGetCssRules));
+  JS_SetPropertyStr(
+      ctx,
+      impl.css_style_sheet_proto,
+      "insertRule",
+      JS_NewCFunction(ctx, StyleSheetInsertRule, "insertRule", 2)); // steals
+  JS_SetPropertyStr(
+      ctx,
+      impl.css_style_sheet_proto,
+      "deleteRule",
+      JS_NewCFunction(ctx, StyleSheetDeleteRule, "deleteRule", 1)); // steals
+  impl.css_rule_proto = JS_NewObject(ctx);
+  JSValue global = JS_GetGlobalObject(ctx);
+  DefineInterface(ctx, global, "CSSStyleSheet", impl.css_style_sheet_proto);
+  DefineInterface(ctx, global, "CSSRule", impl.css_rule_proto);
+  JS_FreeValue(ctx, global);
+}
+
+// ---------------------------------------------------------------------------
 // CSSStyleDeclaration methods and accessors.
 
 void DefineDocumentPrototype(JSContext* ctx, Impl& impl)
@@ -923,6 +1176,8 @@ void DefineDocumentPrototype(JSContext* ctx, Impl& impl)
   DefineGetter(ctx, impl.document_proto, "images", MakeGetter(ctx, "images", DocGetImages));
   DefineGetter(ctx, impl.document_proto, "links", MakeGetter(ctx, "links", DocGetLinks));
   DefineGetter(ctx, impl.document_proto, "scripts", MakeGetter(ctx, "scripts", DocGetScripts));
+  DefineGetter(
+      ctx, impl.document_proto, "styleSheets", MakeGetter(ctx, "styleSheets", DocGetStyleSheets));
   DefineGetter(ctx,
                impl.document_proto,
                "currentScript",

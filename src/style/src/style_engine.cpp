@@ -1267,6 +1267,17 @@ void StyleEngine::SetExternalStylesheets(std::vector<css::StyleSheet> sheets)
   external_sheets_ = std::move(sheets);
 }
 
+void StyleEngine::SetAuthorSheetText(std::size_t index, const std::string& text)
+{
+  if (index >= author_sheets_.size()) {
+    return;
+  }
+  // Re-parse and replace the Nth author sheet.  The caller keeps the DOM
+  // <style> element's text in sync and re-runs the cascade (ReapplyStyles),
+  // so this change persists across later ApplyStyles passes.
+  author_sheets_[index] = css::ParseStyleSheet(text);
+}
+
 // The parsed HTML user-agent stylesheet, parsed once.  Returns a reference to
 // a function-local static (NOT a copy — a `[] { static ...; return sheet; }()`
 // lambda deduces a by-value return and leaves the caller with a dangling

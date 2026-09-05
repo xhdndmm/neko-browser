@@ -123,6 +123,11 @@ void DomBinder::DispatchDocumentEvent(std::string_view type)
   impl_->DispatchDocumentEvent(type);
 }
 
+void DomBinder::NotifyMediaChanged()
+{
+  impl_->RefreshMediaListeners();
+}
+
 ScriptEngine& DomBinder::engine()
 {
   return impl_->engine;

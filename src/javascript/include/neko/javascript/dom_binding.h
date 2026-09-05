@@ -132,6 +132,18 @@ struct PageApis
       const dom::Element&, double, double, double, double, std::array<std::uint8_t, 4>)>
       canvas_fill_rect;
 
+  // document.styleSheets (CSSOM subset).  Author sheets are the document's
+  // <style> elements (in document order) followed by any external <link
+  // rel=stylesheet> sheets.  |stylesheet_count| is the total; |stylesheet_href|
+  // returns the sheet's href ("" for inline sheets); |stylesheet_text| returns
+  // the serialized CSS text; |stylesheet_replace| parses |text|, re-applies the
+  // cascade, and returns std::nullopt on success or an error message on
+  // failure (external sheets are read-only and return an error).
+  std::function<std::size_t()> stylesheet_count;
+  std::function<std::string(std::size_t)> stylesheet_href;
+  std::function<std::string(std::size_t)> stylesheet_text;
+  std::function<std::optional<std::string>(std::size_t, const std::string&)> stylesheet_replace;
+
   // window.indexedDB (per-origin; the caller scopes everything by origin).
   // Records travel as JSON text (the structured-clone subset); keys are JSON
   // numbers or strings.  Errors carry an "IDB:<ExceptionName>:" prefix.
@@ -350,6 +362,12 @@ public:
   // window-level listeners are stored.  RunPageScripts calls this after the
   // page's scripts have run.
   void DispatchDocumentEvent(std::string_view type);
+
+  // Notifies the binder that the viewport's media state changed (e.g. the
+  // window resized).  Registered window.matchMedia listeners are re-evaluated
+  // and a synthetic "change" Event is fired on any MediaQueryList whose
+  // matches flipped.  The browser layer calls this from the GUI resize path.
+  void NotifyMediaChanged();
 
   // Sets the <script> element whose body is currently executing (WHATWG HTML
   // §4.12.1).  The document.currentScript getter returns it while set, and

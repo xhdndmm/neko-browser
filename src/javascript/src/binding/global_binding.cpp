@@ -771,15 +771,99 @@ bool MatchMediaQueryImpl(const std::string& query)
   return negate ? !matched : matched;
 }
 
-JSValue
-MatchMediaNoOp(JSContext* /*ctx*/, JSValueConst /*this_val*/, int /*argc*/, JSValueConst* /*argv*/)
+} // namespace
+
+namespace {
+
+// Reads a MediaQueryList's hidden query/matches state.
+std::string MediaQueryOf(JSContext* ctx, JSValueConst list)
 {
+  JSValue value = JS_GetPropertyStr(ctx, list, "__mediaQuery__");
+  bool ok = false;
+  const std::string out = ArgString(ctx, value, &ok);
+  JS_FreeValue(ctx, value);
+  return ok ? out : std::string();
+}
+
+bool MediaMatchesOf(JSContext* ctx, JSValueConst list)
+{
+  JSValue value = JS_GetPropertyStr(ctx, list, "__matches__");
+  const bool matched = JS_ToBool(ctx, value) > 0;
+  JS_FreeValue(ctx, value);
+  return matched;
+}
+
+// Registers a "change" listener on a MediaQueryList (both addEventListener
+// and the legacy addListener route here).
+JSValue MatchMediaAddListener(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  if (argc < 2) {
+    return JS_UNDEFINED;
+  }
+  bool ok = false;
+  const std::string type = ArgString(ctx, argv[0], &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  if (type != "change" || !JS_IsFunction(ctx, argv[1])) {
+    return JS_UNDEFINED;
+  }
+  // Dedup: the same callback registered twice is ignored (HTML spec).
+  for (const Impl::MediaListener& listener : impl->media_listeners) {
+    if (JS_IsStrictEqual(ctx, listener.callback, argv[1]) &&
+        MediaQueryOf(ctx, this_val) == listener.query) {
+      return JS_UNDEFINED;
+    }
+  }
+  Impl::MediaListener listener;
+  listener.list = JS_DupValue(ctx, this_val);
+  listener.query = MediaQueryOf(ctx, this_val);
+  listener.matched = MediaMatchesOf(ctx, this_val);
+  listener.callback = JS_DupValue(ctx, argv[1]);
+  impl->media_listeners.push_back(std::move(listener));
+  return JS_UNDEFINED;
+}
+
+JSValue
+MatchMediaRemoveListener(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  if (argc < 2) {
+    return JS_UNDEFINED;
+  }
+  bool ok = false;
+  const std::string type = ArgString(ctx, argv[0], &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  if (type != "change") {
+    return JS_UNDEFINED;
+  }
+  const std::string query = MediaQueryOf(ctx, this_val);
+  for (auto it = impl->media_listeners.begin(); it != impl->media_listeners.end();) {
+    if (it->query == query && JS_IsStrictEqual(ctx, it->callback, argv[1])) {
+      JS_FreeValue(ctx, it->list);
+      JS_FreeValue(ctx, it->callback);
+      it = impl->media_listeners.erase(it);
+    } else {
+      ++it;
+    }
+  }
   return JS_UNDEFINED;
 }
 
 } // namespace
 
-// window.matchMedia(query) -> MediaQueryList (static; see above).
+// window.matchMedia(query) -> MediaQueryList.  The list carries matches/media
+// plus real add/remove listeners (registered against the binder so a viewport
+// media change re-evaluates them and fires "change").
 JSValue WindowMatchMedia(JSContext* ctx, JSValueConst /*this_val*/, int argc, JSValueConst* argv)
 {
   bool ok = false;
@@ -808,14 +892,43 @@ JSValue WindowMatchMedia(JSContext* ctx, JSValueConst /*this_val*/, int argc, JS
   JS_SetPropertyStr(ctx, list, "matches", JS_NewBool(ctx, matches));
   JS_SetPropertyStr(ctx, list, "media", JS_NewStringLen(ctx, query.data(), query.size()));
   JS_SetPropertyStr(ctx, list, "onchange", JS_NULL);
-  static const std::array<JSCFunctionListEntry, 4> kNoOps = {{
-      JS_CFUNC_DEF("addEventListener", 0, MatchMediaNoOp),
-      JS_CFUNC_DEF("removeEventListener", 0, MatchMediaNoOp),
-      JS_CFUNC_DEF("addListener", 0, MatchMediaNoOp),
-      JS_CFUNC_DEF("removeListener", 0, MatchMediaNoOp),
+  // Hidden state used by the listener registration/removal helpers.
+  JS_SetPropertyStr(ctx, list, "__mediaQuery__", JS_NewStringLen(ctx, query.data(), query.size()));
+  JS_SetPropertyStr(ctx, list, "__matches__", JS_NewBool(ctx, matches));
+  static const std::array<JSCFunctionListEntry, 4> kListeners = {{
+      JS_CFUNC_DEF("addEventListener", 2, MatchMediaAddListener),
+      JS_CFUNC_DEF("removeEventListener", 2, MatchMediaRemoveListener),
+      JS_CFUNC_DEF("addListener", 1, MatchMediaAddListener),
+      JS_CFUNC_DEF("removeListener", 1, MatchMediaRemoveListener),
   }};
-  JS_SetPropertyFunctionList(ctx, list, kNoOps.data(), static_cast<int>(kNoOps.size()));
+  JS_SetPropertyFunctionList(ctx, list, kListeners.data(), static_cast<int>(kListeners.size()));
   return list;
+}
+
+// Re-evaluates every registered MediaQueryList against the current media
+// state; fires a synthetic "change" Event on each whose matches flipped.
+void Impl::RefreshMediaListeners()
+{
+  if (ctx == nullptr) {
+    return;
+  }
+  for (MediaListener& listener : media_listeners) {
+    const bool matches = MatchMediaQueryImpl(listener.query);
+    if (matches == listener.matched) {
+      continue;
+    }
+    listener.matched = matches;
+    JS_SetPropertyStr(ctx, listener.list, "matches", JS_NewBool(ctx, matches));
+    JS_SetPropertyStr(ctx, listener.list, "__matches__", JS_NewBool(ctx, matches));
+    JSValue event = MakeEvent("change", false, false);
+    JSValue args[] = {event};
+    JSValue result = JS_Call(ctx, listener.callback, listener.list, 1, args);
+    if (JS_IsException(result)) {
+      JS_FreeValue(ctx, JS_GetException(ctx));
+    }
+    JS_FreeValue(ctx, result);
+    JS_FreeValue(ctx, event);
+  }
 }
 
 // ---------------------------------------------------------------------------

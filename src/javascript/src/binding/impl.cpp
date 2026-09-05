@@ -450,6 +450,7 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   DefineCanvasPrototype(ctx, *this);
   DefineDocumentPrototype(ctx, *this);
   DefineStylePrototype(ctx, *this);
+  DefineStyleSheetPrototype(ctx, *this);
   DefineEventPrototype(ctx, *this);
   DefineClassListPrototype(ctx, *this);
 
@@ -1266,6 +1267,12 @@ Impl::~Impl()
   }
   raf_pending.clear();
 
+  for (MediaListener& listener : media_listeners) {
+    JS_FreeValue(ctx, listener.list);
+    JS_FreeValue(ctx, listener.callback);
+  }
+  media_listeners.clear();
+
   // Release the global object's references to the objects we installed so the
   // GC below can collect and finalize them (reachable objects would otherwise
   // be torn down by the runtime without running their finalizers, leaking the
@@ -1324,6 +1331,8 @@ Impl::~Impl()
                            "Event",
                            "UIEvent",
                            "CustomEvent",
+                           "CSSStyleSheet",
+                           "CSSRule",
                            "AbortController",
                            "AbortSignal",
                            "IntersectionObserver",
@@ -1401,6 +1410,8 @@ Impl::~Impl()
   JS_FreeValue(ctx, svg_element_proto);
   JS_FreeValue(ctx, xhr_proto);
   JS_FreeValue(ctx, message_port_proto);
+  JS_FreeValue(ctx, css_style_sheet_proto);
+  JS_FreeValue(ctx, css_rule_proto);
   for (MutationObserver& observer : mutation_observers) {
     JS_FreeValue(ctx, observer.callback);
     JS_FreeValue(ctx, observer.self);

@@ -10,6 +10,7 @@ add_library(neko_css
   src/tokenizer.cpp
   src/parser.cpp
   src/selector.cpp
+  src/stylesheet.cpp
   src/value.cpp
 )
 add_library(neko::css ALIAS neko_css)
