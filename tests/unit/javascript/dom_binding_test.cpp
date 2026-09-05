@@ -103,6 +103,49 @@ TEST_F(DomBinderTest, GlobalDocumentAndWindow)
   EXPECT_TRUE(EvalBool("document.location === window.location"));
 }
 
+TEST_F(DomBinderTest, LiveCollectionsRefreshAfterMutation)
+{
+  document_ = html::Parser(R"(<!doctype html><html><body><div id="a"><span>x</span></div></body></html>)")
+                  .Parse();
+  PageApis apis;
+  apis.location_href = []() { return "https://www.example.com/"; };
+  binder_ = std::make_unique<DomBinder>(*document_, apis);
+  binder_->SetConsoleSink([this](std::string_view level, std::string_view text) {
+    console_.push_back(std::string(level) + ": " + std::string(text));
+  });
+
+  // children is a live HTMLCollection: the held reference tracks mutations.
+  EXPECT_EQ(EvalNumber("var el = document.getElementById('a'); var c = el.children; c.length"), 1.0);
+  EXPECT_EQ(EvalNumber("el.appendChild(document.createElement('b')); c.length"), 2.0);
+  // Wrapper identity is preserved across refreshes: the same live node renders
+  // the same JS object no matter how many times it is re-collected.
+  EXPECT_TRUE(EvalBool("c[1] === el.children[1]"));
+
+  // getElementsByTagName is live: adding another <div> appears in the held list.
+  EXPECT_EQ(EvalNumber("var g = document.getElementsByTagName('div'); g.length"), 1.0);
+  EXPECT_EQ(EvalNumber("document.body.appendChild(document.createElement('div')); g.length"), 2.0);
+
+  // childNodes is live and includes text/comment nodes too.
+  EXPECT_EQ(EvalNumber("var cn = el.childNodes; cn.length"), 2.0);
+  EXPECT_EQ(EvalNumber("el.appendChild(document.createElement('p')); cn.length"), 3.0);
+}
+
+TEST_F(DomBinderTest, QuerySelectorAllIsStatic)
+{
+  document_ = html::Parser(R"(<!doctype html><html><body><span>a</span></body></html>)").Parse();
+  PageApis apis;
+  apis.location_href = []() { return "https://www.example.com/"; };
+  binder_ = std::make_unique<DomBinder>(*document_, apis);
+  binder_->SetConsoleSink([this](std::string_view level, std::string_view text) {
+    console_.push_back(std::string(level) + ": " + std::string(text));
+  });
+
+  // querySelectorAll is a static NodeList (HTML spec): the already-returned
+  // list does not grow when a matching element is added afterwards.
+  EXPECT_EQ(EvalNumber("var s = document.querySelectorAll('span'); s.length"), 1.0);
+  EXPECT_EQ(EvalNumber("document.body.appendChild(document.createElement('span')); s.length"), 1.0);
+}
+
 TEST_F(DomBinderTest, BlobAndObjectUrl)
 {
   EXPECT_TRUE(

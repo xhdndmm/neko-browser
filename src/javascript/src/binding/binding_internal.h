@@ -642,6 +642,36 @@ struct Impl
   // wrappers keep pointing at valid memory; freed when the binder dies.
   std::vector<std::unique_ptr<dom::Node>> retained;
 
+  // Live NodeList/HTMLCollection objects (childNodes, children,
+  // getElementsByTagName/ClassName, document.forms/images/links/scripts).
+  //
+  // Unlike a snapshot array, a live collection is a persistent QuickJS Array
+  // whose contents are re-queried (its stored query re-run against its root)
+  // on every JS DOM mutation — see MarkDomDirty, which calls
+  // RefreshLiveCollections().  Wrapper identity is preserved because
+  // WrapNode() returns the cached wrapper for a live node.  querySelectorAll
+  // stays a static snapshot (MakeElementArray); this machinery is only for
+  // the spec-live collections.
+  enum class LiveKind
+  {
+    kChildNodes,
+    kChildren,
+    kTagName,
+    kClassName,
+    kForms,
+    kImages,
+    kLinks,
+    kScripts
+  };
+  struct LiveCollection
+  {
+    dom::Node* root = nullptr;
+    LiveKind kind = LiveKind::kChildNodes;
+    std::string arg;
+    JSValue array = JS_UNDEFINED; // owned reference
+  };
+  std::vector<LiveCollection> live_collections;
+
   // Timers (setTimeout/setInterval).  Callback JSValues are Dup'd.
   struct Timer
   {
@@ -724,9 +754,15 @@ struct Impl
   // interaction events to decide whether to re-run the style cascade/layout,
   // so on-screen updates from event handlers are reflected promptly.
   bool dom_dirty_ = false;
+  // Called by every JS DOM mutation handler (child list, attributes, class,
+  // innerHTML, text content).  Setting the dirty flag lets the browser layer
+  // re-run the style cascade; refreshing the live collections (childNodes /
+  // children / getElementsBy* / forms / images / links / scripts) is what makes
+  // them spec-live rather than a snapshot taken at access time.
   void MarkDomDirty()
   {
     dom_dirty_ = true;
+    RefreshLiveCollections();
   }
   bool TakeDomDirty()
   {
@@ -811,6 +847,14 @@ struct Impl
   JSValue MakeNodeArray(const std::vector<dom::Node*>& nodes);
   JSValue MakeElementArray(const std::vector<dom::Element*>& elements);
   JSValue MakeHtmlCollection(const std::vector<dom::Element*>& elements);
+
+  // Live collection support (see the LiveCollecton member block above):
+  // builds a fresh Array carrying the live query, re-queries it on mutation,
+  // and releases it in the destructor.
+  JSValue MakeLiveCollection(dom::Node* root, LiveKind kind, const std::string& arg);
+  std::vector<dom::Node*> QueryLive(dom::Node* root, LiveKind kind, const std::string& arg) const;
+  void RefreshLiveCollections();
+  void DetachLiveCollections();
 
   // Creates an Event object (class wrapper + event_proto prototype).
   JSValue MakeEvent(std::string type, bool bubbles, bool cancelable);

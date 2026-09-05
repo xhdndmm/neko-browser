@@ -374,13 +374,8 @@ JSValue ElementGetChildren(JSContext* ctx, JSValueConst this_val)
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "not a ParentNode");
   }
-  std::vector<dom::Element*> elements;
-  for (dom::Node* child : node->ChildNodes()) {
-    if (dom::Element* el = AsElement(child)) {
-      elements.push_back(el);
-    }
-  }
-  return impl->MakeHtmlCollection(elements);
+  // Live: re-queries the direct element children on every JS DOM mutation.
+  return impl->MakeLiveCollection(node, Impl::LiveKind::kChildren, "");
 }
 
 JSValue ElementGetFirstElementChild(JSContext* ctx, JSValueConst this_val)
@@ -1290,9 +1285,8 @@ ElementGetElementsByTagName(JSContext* ctx, JSValueConst this_val, int argc, JSV
   if (!ok) {
     return JS_EXCEPTION;
   }
-  std::vector<dom::Element*> out;
-  CollectByTag(*node, name, out);
-  return impl->MakeElementArray(out);
+  // Live: re-queries the scoped descendants on every JS DOM mutation.
+  return impl->MakeLiveCollection(node, Impl::LiveKind::kTagName, name);
 }
 
 JSValue
@@ -1325,9 +1319,9 @@ ElementGetElementsByClassName(JSContext* ctx, JSValueConst this_val, int argc, J
       classes.emplace_back(arg.data() + start, i - start);
     }
   }
-  std::vector<dom::Element*> out;
-  CollectByClass(*node, classes, out);
-  return impl->MakeElementArray(out);
+  (void)classes; // MakeLiveCollection re-queries using the raw |arg| token list.
+  // Live: re-queries the scoped descendants on every JS DOM mutation.
+  return impl->MakeLiveCollection(node, Impl::LiveKind::kClassName, arg);
 }
 
 // ---------------------------------------------------------------------------

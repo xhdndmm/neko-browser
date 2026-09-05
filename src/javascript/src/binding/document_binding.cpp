@@ -662,21 +662,8 @@ JSValue DocGetElementsByTagName(JSContext* ctx, JSValueConst this_val, int argc,
   if (!ok) {
     return JS_EXCEPTION;
   }
-  // "*" matches every element.
-  if (tag == "*") {
-    std::vector<dom::Element*> all;
-    std::function<void(const dom::Node&)> walk = [&](const dom::Node& n) {
-      for (dom::Node* c : n.ChildNodes()) {
-        if (dom::Element* el = AsElement(c)) {
-          all.push_back(el);
-          walk(*el);
-        }
-      }
-    };
-    walk(*node);
-    return impl->MakeElementArray(all);
-  }
-  return impl->MakeElementArray(CollectByTag(*node, tag));
+  // Live: re-queries the whole document on every JS DOM mutation.
+  return impl->MakeLiveCollection(node, Impl::LiveKind::kTagName, tag);
 }
 
 JSValue
@@ -695,7 +682,8 @@ DocGetElementsByClassName(JSContext* ctx, JSValueConst this_val, int argc, JSVal
   if (!ok) {
     return JS_EXCEPTION;
   }
-  return impl->MakeElementArray(CollectByClass(*node, cls));
+  // Live: re-queries the whole document on every JS DOM mutation.
+  return impl->MakeLiveCollection(node, Impl::LiveKind::kClassName, cls);
 }
 
 // The current document URL (from the PageApis location callback when wired).
@@ -795,7 +783,7 @@ JSValue DocGetForms(JSContext* ctx, JSValueConst this_val)
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
-  return impl->MakeElementArray(CollectByTag(*node, "form"));
+  return impl->MakeLiveCollection(node, Impl::LiveKind::kForms, "");
 }
 
 JSValue DocGetImages(JSContext* ctx, JSValueConst this_val)
@@ -805,7 +793,7 @@ JSValue DocGetImages(JSContext* ctx, JSValueConst this_val)
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
-  return impl->MakeElementArray(CollectByTag(*node, "img"));
+  return impl->MakeLiveCollection(node, Impl::LiveKind::kImages, "");
 }
 
 JSValue DocGetScripts(JSContext* ctx, JSValueConst this_val)
@@ -815,7 +803,7 @@ JSValue DocGetScripts(JSContext* ctx, JSValueConst this_val)
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
-  return impl->MakeElementArray(CollectByTag(*node, "script"));
+  return impl->MakeLiveCollection(node, Impl::LiveKind::kScripts, "");
 }
 
 JSValue DocGetCurrentScript(JSContext* ctx, JSValueConst this_val)
@@ -838,21 +826,8 @@ JSValue DocGetLinks(JSContext* ctx, JSValueConst this_val)
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
-  // document.links: <a> and <area> elements with an href.
-  std::vector<dom::Element*> out;
-  std::function<void(const dom::Node&)> walk = [&](const dom::Node& n) {
-    for (dom::Node* c : n.ChildNodes()) {
-      if (dom::Element* el = AsElement(c)) {
-        const std::string_view tag = el->tag_name();
-        if ((tag == "a" || tag == "area") && el->HasAttribute("href")) {
-          out.push_back(el);
-        }
-        walk(*el);
-      }
-    }
-  };
-  walk(*node);
-  return impl->MakeElementArray(out);
+  // document.links: live collection of <a>/<area> elements with an href.
+  return impl->MakeLiveCollection(node, Impl::LiveKind::kLinks, "");
 }
 
 JSValue DocWrite(JSContext* ctx, JSValueConst /*this_val*/, int argc, JSValueConst* argv)

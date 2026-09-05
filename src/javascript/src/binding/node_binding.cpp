@@ -518,12 +518,9 @@ JSValue NodeGetChildNodes(JSContext* ctx, JSValueConst this_val)
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
-  std::vector<dom::Node*> nodes;
-  nodes.reserve(node->child_count());
-  for (dom::Node* child : node->ChildNodes()) {
-    nodes.push_back(child);
-  }
-  return impl->MakeNodeArray(nodes);
+  // Live: the returned NodeList re-queries |node|'s children on every JS DOM
+  // mutation (spec: childNodes is live).
+  return impl->MakeLiveCollection(node, Impl::LiveKind::kChildNodes, "");
 }
 
 JSValue NodeGetBaseURI(JSContext* ctx, JSValueConst this_val)

@@ -1231,6 +1231,7 @@ Impl::~Impl()
     JS_FreeValue(ctx, entry.second);
   }
   canvas_contexts.clear();
+  DetachLiveCollections();
 
   // Free listener callbacks.
   for (auto& entry : listeners) {
@@ -1577,6 +1578,148 @@ JSValue Impl::MakeHtmlCollection(const std::vector<dom::Element*>& elements)
     JS_SetPropertyUint32(ctx, collection, static_cast<uint32_t>(i), WrapNode(elements[i]));
   }
   return collection;
+}
+
+namespace {
+
+// Recursively collects, in document order, every descendant element of |root|
+// (|root| itself excluded) for which |pred| returns true.
+template <typename Pred>
+void CollectDescendantElements(const dom::Node& root, Pred pred, std::vector<dom::Node*>& out)
+{
+  for (dom::Node* child : root.ChildNodes()) {
+    if (dom::Element* el = AsElement(child)) {
+      if (pred(*el)) {
+        out.push_back(el);
+      }
+      CollectDescendantElements(*el, pred, out);
+    }
+  }
+}
+
+} // namespace
+
+JSValue Impl::MakeLiveCollection(dom::Node* root, LiveKind kind, const std::string& arg)
+{
+  JSValue array = JS_NewArray(ctx);
+  JS_SetPrototype(ctx, array, kind == LiveKind::kChildNodes ? node_list_proto : html_collection_proto);
+  const std::vector<dom::Node*> nodes = QueryLive(root, kind, arg);
+  JS_SetPropertyStr(ctx, array, "length", JS_NewInt32(ctx, static_cast<int32_t>(nodes.size())));
+  for (std::size_t i = 0; i < nodes.size(); ++i) {
+    JS_SetPropertyUint32(ctx, array, static_cast<uint32_t>(i), WrapNode(nodes[i])); // steals
+  }
+  // The collection is kept alive by the binder (RefreshLiveCollections) AND
+  // returned as an owned reference to the caller, so the registry holds its
+  // own duplicate reference.
+  live_collections.push_back(LiveCollection{root, kind, arg, JS_DupValue(ctx, array)});
+  return array; // one owned reference for the caller
+}
+
+std::vector<dom::Node*> Impl::QueryLive(dom::Node* root, LiveKind kind, const std::string& arg) const
+{
+  std::vector<dom::Node*> out;
+  if (root == nullptr) {
+    return out;
+  }
+  switch (kind) {
+  case LiveKind::kChildNodes:
+    for (dom::Node* child : root->ChildNodes()) {
+      out.push_back(child);
+    }
+    break;
+  case LiveKind::kChildren:
+    for (dom::Node* child : root->ChildNodes()) {
+      if (AsElement(child) != nullptr) {
+        out.push_back(child);
+      }
+    }
+    break;
+  case LiveKind::kTagName: {
+    const std::string tag = ToLower(arg);
+    CollectDescendantElements(
+        *root, [&tag](const dom::Element& el) { return tag == "*" || el.tag_name() == tag; }, out);
+    break;
+  }
+  case LiveKind::kClassName: {
+    // Space-separated class names: an element matches when its class token
+    // list contains every requested token (the getElementsByClassName spec
+    // behavior).  Tokenize once per query rather than per element.
+    std::vector<std::string> tokens;
+    {
+      std::size_t i = 0;
+      while (i < arg.size()) {
+        while (i < arg.size() && (arg[i] == ' ' || arg[i] == '\t')) {
+          ++i;
+        }
+        const std::size_t start = i;
+        while (i < arg.size() && arg[i] != ' ' && arg[i] != '\t') {
+          ++i;
+        }
+        if (i > start) {
+          tokens.emplace_back(arg.substr(start, i - start));
+        }
+      }
+    }
+    CollectDescendantElements(
+        *root,
+        [&tokens](const dom::Element& el) {
+          const std::vector<std::string_view> actual = el.ClassList();
+          for (const std::string& token : tokens) {
+            if (std::find(actual.begin(), actual.end(), token) == actual.end()) {
+              return false;
+            }
+          }
+          return true;
+        },
+        out);
+    break;
+  }
+  case LiveKind::kForms:
+    CollectDescendantElements(
+        *root, [](const dom::Element& el) { return el.tag_name() == "form"; }, out);
+    break;
+  case LiveKind::kImages:
+    CollectDescendantElements(
+        *root, [](const dom::Element& el) { return el.tag_name() == "img"; }, out);
+    break;
+  case LiveKind::kLinks:
+    CollectDescendantElements(
+        *root,
+        [](const dom::Element& el) {
+          // document.links: <a> and <area> elements with an href.
+          return (el.tag_name() == "a" || el.tag_name() == "area") && el.HasAttribute("href");
+        },
+        out);
+    break;
+  case LiveKind::kScripts:
+    CollectDescendantElements(
+        *root, [](const dom::Element& el) { return el.tag_name() == "script"; }, out);
+    break;
+  }
+  return out;
+}
+
+void Impl::RefreshLiveCollections()
+{
+  if (ctx == nullptr) {
+    return;
+  }
+  for (LiveCollection& collection : live_collections) {
+    const std::vector<dom::Node*> nodes = QueryLive(collection.root, collection.kind, collection.arg);
+    // Setting length first truncates any stale trailing indexes.
+    JS_SetPropertyStr(ctx, collection.array, "length", JS_NewInt32(ctx, static_cast<int32_t>(nodes.size())));
+    for (std::size_t i = 0; i < nodes.size(); ++i) {
+      JS_SetPropertyUint32(ctx, collection.array, static_cast<uint32_t>(i), WrapNode(nodes[i]));
+    }
+  }
+}
+
+void Impl::DetachLiveCollections()
+{
+  for (LiveCollection& collection : live_collections) {
+    JS_FreeValue(ctx, collection.array);
+  }
+  live_collections.clear();
 }
 
 void Impl::RecordChildListMutation(dom::Node* target,
