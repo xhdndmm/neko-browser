@@ -1502,7 +1502,21 @@ void FetchExternalStylesheets(renderer::Page& page,
     if (!response) {
       return base::Err(response.error());
     }
-    return base::Ok(css::ParseStyleSheet(response.value().body));
+    css::StyleSheet sheet = css::ParseStyleSheet(response.value().body);
+    const std::string resolved_url = response.value().final_url.empty()
+                       ? url
+                       : response.value().final_url;
+    const base::Result<url::Url> stylesheet_url = url::Url::Parse(resolved_url);
+    if (stylesheet_url.has_value()) {
+      for (css::FontFaceRule& face : sheet.font_faces) {
+        const base::Result<url::Url> font_url =
+            url::Url::Parse(face.src_url, stylesheet_url.value());
+        if (font_url.has_value()) {
+          face.src_url = font_url.value().Serialize();
+        }
+      }
+    }
+    return base::Ok(std::move(sheet));
   };
 
   std::vector<css::StyleSheet> sheets;

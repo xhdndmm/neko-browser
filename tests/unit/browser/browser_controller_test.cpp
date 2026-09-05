@@ -381,7 +381,6 @@ TEST(BrowserControllerTest, NavigatesToHtmlAndRecordsHistory)
                                {{"content-type", "text/html"}},
                                "<html><head><title>Hello</title></head>"
                                "<body><p>Hi</p></body></html>"});
-
   BrowserController controller(tp.path(), std::ref(fetch));
   controller.NewTab();
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
@@ -429,10 +428,10 @@ TEST(BrowserControllerTest, RunsInlineScriptsOnHtmlLoad)
                                {{"content-type", "text/html"}},
                                "<html><head><title>Before</title>"
                                "<script>document.title = 'After';"
-                               "<link rel=\"stylesheet\" href=\"http://example.com/style.css\">"
                                "var d = document.createElement('div'); d.id = 'made';"
                                "d.textContent = 'from script';"
                                "document.body.appendChild(d);</script>"
+                               "<link rel=\"stylesheet\" href=\"http://example.com/style.css\">"
                                "</head><body><p>Hi</p></body></html>"});
 
   BrowserController controller(tp.path(), std::ref(fetch));
@@ -1260,19 +1259,22 @@ TEST(BrowserControllerTest, FontFaceFetchedAndRegistered)
   fetch.Add("http://example.com/",
             FakeFetcher::Route{200,
                                {{"content-type", "text/html"}},
-                               "<html><head><style>"
+                               "<html><head><link rel=stylesheet href=/css/site.css>"
+                               "</head><body><p>x</p></body></html>"});
+  fetch.Add("http://example.com/css/site.css",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/css"}},
                                "@font-face { font-family: 'myicon';"
-                               "  src: url('//cdn.example/icon.ttf') format('truetype'); }"
-                               "</style></head><body><p>x</p></body></html>"});
-  fetch.Add("http://cdn.example/icon.ttf",
+                               " src: url(fonts/icon.ttf) format('truetype'); }"});
+  fetch.Add("http://example.com/css/fonts/icon.ttf",
             FakeFetcher::Route{200, {{"content-type", "font/ttf"}}, body});
 
   BrowserController controller(tp.path(), std::ref(fetch));
   controller.NewTab();
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
 
-  ASSERT_TRUE(WaitForSubresources([&fetch] { return fetch.requests_.size() == 2u; }));
-  EXPECT_EQ(fetch.requests_.size(), 2u); // page + font
+  ASSERT_TRUE(WaitForSubresources([&fetch] { return fetch.requests_.size() == 3u; }));
+  EXPECT_THAT(fetch.requests_, testing::Contains("http://example.com/css/fonts/icon.ttf"));
 }
 
 TEST(BrowserControllerTest, WebFontDoesNotBlockPagePublication)
