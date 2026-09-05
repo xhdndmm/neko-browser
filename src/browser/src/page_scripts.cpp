@@ -438,17 +438,19 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     apis.history_state_set = [history_state](const std::string& state) { *history_state = state; };
   }
 
-  // window scroll state (window.scrollX/scrollY, pageXOffset/pageYOffset and
-  // the document scrolling element's scrollTop/scrollLeft).  The browser layer
-  // owns the page's scroll offset (the GUI scroll bar) and consumes script-
-  // requested scrolls.  Only the vertical axis is live (horizontal disabled).
-  apis.scroll_offset = [&services]() -> std::pair<double, double> {
-    const double y = services.scroll_offset_y != nullptr ? *services.scroll_offset_y : 0.0;
+  // Copy the callback state out of the RunPageScripts parameter object.  The
+  // binder persists after this function returns, so capturing |services| by
+  // reference leaves a dangling reference; delayed scripts (timers/events)
+  // then crash when they read scroll state or request a scroll.
+  const float* scroll_offset_y = services.scroll_offset_y;
+  const std::function<void(int, float)> set_scroll_request = services.set_scroll_request;
+  apis.scroll_offset = [scroll_offset_y]() -> std::pair<double, double> {
+    const double y = scroll_offset_y != nullptr ? static_cast<double>(*scroll_offset_y) : 0.0;
     return {0.0, y};
   };
-  apis.scroll_to = [&services](double /*x*/, double y) {
-    if (services.set_scroll_request) {
-      services.set_scroll_request(0, static_cast<float>(y));
+  apis.scroll_to = [set_scroll_request](double /*x*/, double y) {
+    if (set_scroll_request) {
+      set_scroll_request(0, static_cast<float>(y));
     }
   };
 
@@ -560,7 +562,11 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     apis.stylesheet_count = [&page, author_count]() {
       return author_count + page.styles().external_sheets().size();
     };
-    apis.stylesheet_href = [author_count, &external_hrefs](std::size_t index) {
+    // Copy the href list into the long-lived callback.  The local vector above
+    // belongs to RunPageScripts; capturing it by reference leaves a dangling
+    // reference as soon as this setup block exits.
+    apis.stylesheet_href = [author_count, external_hrefs = std::move(external_hrefs)](
+                               std::size_t index) {
       if (index < author_count) {
         return std::string();
       }

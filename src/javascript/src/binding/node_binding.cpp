@@ -15,6 +15,50 @@
 
 namespace neko::javascript {
 
+namespace {
+
+// Inserts |owned| before |reference| (or appends when reference is null),
+// applying DOM DocumentFragment semantics: a fragment's children are inserted
+// instead of the fragment itself.  The emptied fragment is then retained by
+// the binder instead of the DOM's AppendChild/InsertBefore freeing it — a
+// consumed fragment can still be held by JS and can be the root of a live
+// childNodes/children collection, so it must not be destroyed (freed roots
+// would leave live collections and node wrappers dangling).
+//
+// |added| collects the nodes actually inserted (the fragment's children for a
+// fragment, otherwise the node itself) for mutation-record reporting.
+void InsertNodeWithFragmentSemantics(Impl& impl,
+                                     dom::Node* parent,
+                                     std::unique_ptr<dom::Node> owned,
+                                     dom::Node* reference,
+                                     std::vector<dom::Node*>& added)
+{
+  if (owned->node_type() == dom::NodeType::kDocumentFragment) {
+    dom::Node* fragment = owned.get();
+    while (fragment->first_child() != nullptr) {
+      dom::Node* child = fragment->first_child();
+      std::unique_ptr<dom::Node> detached = fragment->RemoveChild(child);
+      added.push_back(child);
+      if (reference != nullptr) {
+        parent->InsertBefore(std::move(detached), reference);
+      } else {
+        parent->AppendChild(std::move(detached));
+      }
+    }
+    // Keep the (now empty) fragment alive under binder ownership.
+    impl.TakeOwnership(fragment, std::move(owned));
+    return;
+  }
+  added.push_back(owned.get());
+  if (reference != nullptr) {
+    parent->InsertBefore(std::move(owned), reference);
+  } else {
+    parent->AppendChild(std::move(owned));
+  }
+}
+
+} // namespace
+
 JSValue NodeAppendChild(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
@@ -53,8 +97,9 @@ JSValue NodeAppendChild(JSContext* ctx, JSValueConst this_val, int argc, JSValue
   if (owned == nullptr) {
     return JS_ThrowTypeError(ctx, "appendChild: internal ownership error");
   }
-  parent->AppendChild(std::move(owned));
-  impl->RecordChildListMutation(parent, {child}, {});
+  std::vector<dom::Node*> added;
+  InsertNodeWithFragmentSemantics(*impl, parent, std::move(owned), nullptr, added);
+  impl->RecordChildListMutation(parent, added, {});
   impl->MarkDomDirty();
   return impl->WrapNode(child);
 }
@@ -144,8 +189,9 @@ JSValue NodeInsertBefore(JSContext* ctx, JSValueConst this_val, int argc, JSValu
   if (owned == nullptr) {
     return JS_ThrowTypeError(ctx, "insertBefore: internal ownership error");
   }
-  parent->InsertBefore(std::move(owned), reference);
-  impl->RecordChildListMutation(parent, {child}, {});
+  std::vector<dom::Node*> added;
+  InsertNodeWithFragmentSemantics(*impl, parent, std::move(owned), reference, added);
+  impl->RecordChildListMutation(parent, added, {});
   impl->MarkDomDirty();
   return impl->WrapNode(child);
 }
@@ -684,9 +730,12 @@ JSValue NodeReplaceChild(JSContext* ctx, JSValueConst this_val, int argc, JSValu
   if (owned == nullptr) {
     return JS_ThrowTypeError(ctx, "replaceChild: internal ownership error");
   }
-  parent->InsertBefore(std::move(owned), old_child);
+  std::vector<dom::Node*> added;
+  InsertNodeWithFragmentSemantics(*impl, parent, std::move(owned), old_child, added);
   std::unique_ptr<dom::Node> removed_old = parent->RemoveChild(old_child);
   impl->TakeOwnership(old_child, std::move(removed_old));
+  impl->RecordChildListMutation(parent, added, {old_child});
+  impl->MarkDomDirty();
   return impl->WrapNode(new_child);
 }
 

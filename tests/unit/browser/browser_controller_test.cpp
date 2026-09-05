@@ -475,6 +475,29 @@ TEST(BrowserControllerTest, ScriptScrollSetsPendingScroll)
   EXPECT_FLOAT_EQ(snapshot.pending_scroll_y, 150.0f);
 }
 
+// CSSOM callbacks outlive RunPageScripts; external stylesheet href lookup must
+// not retain a reference to the setup block's local href vector.
+TEST(BrowserControllerTest, ExternalStylesheetHrefSurvivesScriptSetup)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><link rel=\"stylesheet\" href=\"/site.css\">"
+                               "<script>document.title = document.styleSheets[0].href;</script>"
+                               "</head><body>ok</body></html>"});
+  fetch.Add("http://example.com/site.css",
+            FakeFetcher::Route{200, {{"content-type", "text/css"}}, "body { color: red; }"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  const Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  EXPECT_EQ(tab->title, "http://example.com/site.css");
+}
+
 // Finds the first laid-out text run belonging to |target| and returns its
 // top-left point (document coordinates, before scroll).
 bool FindElementRunPoint(const layout::LayoutBox& box,

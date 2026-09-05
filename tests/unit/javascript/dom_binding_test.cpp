@@ -291,6 +291,57 @@ TEST_F(DomBinderTest, ScrollToAndLiveScrollOffset)
   EXPECT_EQ(EvalNumber("document.body.scrollTop"), 130.0);
 }
 
+TEST_F(DomBinderTest, FragmentAppendKeepsFragmentAlive)
+{
+  document_ = html::Parser(R"(<!doctype html><html><body></body></html>)").Parse();
+  PageApis apis;
+  apis.location_href = []() { return "https://www.example.com/"; };
+  binder_ = std::make_unique<DomBinder>(*document_, apis);
+  binder_->SetConsoleSink([this](std::string_view level, std::string_view text) {
+    console_.push_back(std::string(level) + ": " + std::string(text));
+  });
+
+  // A DocumentFragment consumed by appendChild must stay alive: JS may still
+  // hold it and it may be the root of a live childNodes/children collection.
+  // Freeing it (as the DOM's AppendChild does to a fragment) would leave those
+  // dangling and crash on the next live-collection refresh.
+  EXPECT_TRUE(EvalBool(
+      "(function(){"
+      "  var frag = document.createDocumentFragment();"
+      "  var span = document.createElement('span');"
+      "  frag.appendChild(span);"
+      "  var n = frag.childNodes;" // live collection rooted at the fragment
+      "  document.body.appendChild(frag);" // consumes the span, moves it to body
+      "  var p = document.createElement('p');"
+      "  document.body.appendChild(p);" // any mutation refreshes all live collections
+      "  return n.length === 0 && frag.childNodes.length === 0 &&"
+      "         frag.firstChild === null && span.parentNode === document.body;"
+      "})()"));
+}
+
+TEST_F(DomBinderTest, FragmentInsertBeforeAndReplaceKeepsFragmentAlive)
+{
+  document_ = html::Parser(R"(<!doctype html><html><body></body></html>)").Parse();
+  PageApis apis;
+  apis.location_href = []() { return "https://www.example.com/"; };
+  binder_ = std::make_unique<DomBinder>(*document_, apis);
+  binder_->SetConsoleSink([this](std::string_view level, std::string_view text) {
+    console_.push_back(std::string(level) + ": " + std::string(text));
+  });
+
+  EXPECT_TRUE(EvalBool(
+      "(function(){"
+      "  var body = document.body;"
+      "  body.appendChild(document.createElement('b'));"
+      "  var frag = document.createDocumentFragment();"
+      "  frag.appendChild(document.createElement('i'));"
+      "  var n = frag.childNodes;"
+      "  body.insertBefore(frag, body.firstChild);"
+      "  body.replaceChild(frag, body.firstChild);" // frag is empty here
+      "  return n.length === 0 && frag.firstChild === null;"
+      "})()"));
+}
+
 TEST_F(DomBinderTest, BlobAndObjectUrl)
 {
   EXPECT_TRUE(
