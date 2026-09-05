@@ -90,6 +90,96 @@ DEFINE_GEOMETRY_GETTER(ElementGetOffsetLeft, x)
 
 #undef DEFINE_GEOMETRY_GETTER
 
+// The document scrolling element (documentElement or <body>) drives the page's
+// scroll offset; any other element has no scrollable overflow (documented) and
+// reports 0 / no-ops.
+bool IsDocumentScrollingElement(const dom::Element* element)
+{
+  if (element == nullptr) {
+    return false;
+  }
+  const std::string_view tag = element->tag_name();
+  return tag == "html" || tag == "body";
+}
+
+JSValue ElementGetScrollTop(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (impl == nullptr || element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  if (!IsDocumentScrollingElement(element) || !impl->apis.scroll_offset) {
+    return JS_NewInt32(ctx, 0);
+  }
+  return JS_NewFloat64(ctx, impl->apis.scroll_offset().second);
+}
+
+JSValue ElementSetScrollTop(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (impl == nullptr || element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  if (!IsDocumentScrollingElement(element) || !impl->apis.scroll_to) {
+    return JS_UNDEFINED;
+  }
+  double top = 0;
+  if (JS_ToFloat64(ctx, &top, value) != 0) {
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return JS_EXCEPTION;
+  }
+  const auto current = impl->apis.scroll_offset();
+  impl->apis.scroll_to(current.first, top);
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetScrollLeft(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (impl == nullptr || element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  if (!IsDocumentScrollingElement(element) || !impl->apis.scroll_offset) {
+    return JS_NewInt32(ctx, 0);
+  }
+  return JS_NewFloat64(ctx, impl->apis.scroll_offset().first);
+}
+
+JSValue ElementSetScrollLeft(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (impl == nullptr || element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  if (!IsDocumentScrollingElement(element) || !impl->apis.scroll_to) {
+    return JS_UNDEFINED;
+  }
+  double left = 0;
+  if (JS_ToFloat64(ctx, &left, value) != 0) {
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return JS_EXCEPTION;
+  }
+  const auto current = impl->apis.scroll_offset();
+  impl->apis.scroll_to(left, current.second);
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetScrollWidth(JSContext* ctx, JSValueConst this_val)
+{
+  const std::optional<ElementGeometry> g = ElementGeometryOf(ctx, this_val);
+  return JS_NewFloat64(ctx, g ? static_cast<double>(g->client_width) : 0);
+}
+
+JSValue ElementGetScrollHeight(JSContext* ctx, JSValueConst this_val)
+{
+  const std::optional<ElementGeometry> g = ElementGeometryOf(ctx, this_val);
+  return JS_NewFloat64(ctx, g ? static_cast<double>(g->client_height) : 0);
+}
+
 JSValue
 ElementGetOffsetParent(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {

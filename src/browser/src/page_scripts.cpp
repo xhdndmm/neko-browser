@@ -438,6 +438,20 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     apis.history_state_set = [history_state](const std::string& state) { *history_state = state; };
   }
 
+  // window scroll state (window.scrollX/scrollY, pageXOffset/pageYOffset and
+  // the document scrolling element's scrollTop/scrollLeft).  The browser layer
+  // owns the page's scroll offset (the GUI scroll bar) and consumes script-
+  // requested scrolls.  Only the vertical axis is live (horizontal disabled).
+  apis.scroll_offset = [&services]() -> std::pair<double, double> {
+    const double y = services.scroll_offset_y != nullptr ? *services.scroll_offset_y : 0.0;
+    return {0.0, y};
+  };
+  apis.scroll_to = [&services](double /*x*/, double y) {
+    if (services.set_scroll_request) {
+      services.set_scroll_request(0, static_cast<float>(y));
+    }
+  };
+
   // window.getComputedStyle(element): serialize the element's computed style
   // from the page's style engine (the engine keeps per-element styles after
   // ApplyStyles, which RunPageScripts re-runs after DOM mutations).

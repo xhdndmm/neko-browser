@@ -255,6 +255,42 @@ TEST_F(DomBinderTest, HistoryPushStateUpdatesLocation)
   EXPECT_EQ(go_deltas[2], -2);
 }
 
+TEST_F(DomBinderTest, ScrollToAndLiveScrollOffset)
+{
+  document_ = html::Parser(R"(<!doctype html><html><body><p>hi</p></body></html>)").Parse();
+  PageApis apis;
+  apis.location_href = []() { return "https://www.example.com/"; };
+  double offset_x = 0;
+  double offset_y = 0;
+  std::vector<std::pair<double, double>> scrolls;
+  apis.scroll_offset = [&]() -> std::pair<double, double> { return {offset_x, offset_y}; };
+  apis.scroll_to = [&](double x, double y) {
+    scrolls.emplace_back(x, y);
+    offset_x = x;
+    offset_y = y;
+  };
+  binder_ = std::make_unique<DomBinder>(*document_, apis);
+  binder_->SetConsoleSink([this](std::string_view level, std::string_view text) {
+    console_.push_back(std::string(level) + ": " + std::string(text));
+  });
+
+  // window.scrollTo drives the scroll_to callback.
+  EvalString("window.scrollTo(0, 120)");
+  ASSERT_EQ(scrolls.size(), 1u);
+  EXPECT_EQ(scrolls[0].first, 0.0);
+  EXPECT_EQ(scrolls[0].second, 120.0);
+  // window.scrollY/pageYOffset/scrollX read the live offset.
+  EXPECT_EQ(EvalNumber("window.scrollY"), 120.0);
+  EXPECT_EQ(EvalNumber("window.pageYOffset"), 120.0);
+  EXPECT_EQ(EvalNumber("window.scrollX"), 0.0);
+  // scrollBy adds to the current offset.
+  EvalString("window.scrollBy(0, 10)");
+  ASSERT_EQ(scrolls.size(), 2u);
+  EXPECT_EQ(scrolls[1].second, 130.0);
+  // Element scrollTop on the document scrolling element reads the offset too.
+  EXPECT_EQ(EvalNumber("document.body.scrollTop"), 130.0);
+}
+
 TEST_F(DomBinderTest, BlobAndObjectUrl)
 {
   EXPECT_TRUE(

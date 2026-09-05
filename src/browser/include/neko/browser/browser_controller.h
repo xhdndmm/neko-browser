@@ -83,6 +83,16 @@ struct Tab
   std::size_t script_history_index = 0;
   std::string script_history_state;
 
+  // Scroll bridging state (worker thread).  |scroll_offset_y| is the page's
+  // current vertical scroll offset (the GUI reports it via SetTabScrollOffset).
+  // A script-requested scroll sets |pending_scroll_y| and bumps
+  // |scroll_request_id|; the GUI's Refresh() latches the id and applies the
+  // requested offset to its scroll bar.  The horizontal scrollbar is disabled,
+  // so x is always 0.
+  float scroll_offset_y = 0;
+  uint64_t scroll_request_id = 0;
+  float pending_scroll_y = 0;
+
   // The element the pointer currently hovers over (worker-thread only, used to
   // fire mouseover/mouseout).  Points into the current document; the UI posts
   // pointer positions and the worker hit-tests, so no pointers cross threads.
@@ -129,6 +139,12 @@ struct TabSnapshot
   std::shared_ptr<media::AudioData> audio; // kAudio
   std::shared_ptr<std::string> raw_text;   // kText / kOther
   std::shared_ptr<std::string> error;      // kError
+
+  // Scroll bridging latch: the worker bumps scroll_request_id when a page
+  // script requests a scroll; the GUI applies the corresponding
+  // pending_scroll_y to its scroll bar when it observes a changed id.
+  uint64_t scroll_request_id = 0;
+  float pending_scroll_y = 0;
 };
 
 // A network request record for DevTools.
@@ -257,6 +273,14 @@ public:
   // re-applies the page styles so DOM mutations made by timers are reflected.
   // Worker thread only (thread-confined like the JS runtime).
   void PumpScriptTimers();
+
+  // Worker-thread scroll bridging.  |SetTabScrollOffset| records the page's
+  // current vertical scroll offset (the GUI reports it from its scroll bar);
+  // |SetTabScrollRequest| records a script-requested scroll (window.scrollTo /
+  // element.scrollTop assignment) and bumps the request latch the GUI consumes
+  // on its next refresh.
+  void SetTabScrollOffset(int tab_id, float y);
+  void SetTabScrollRequest(int tab_id, float y);
 
   // Returns the content-type of the active tab.
   ContentType active_content_type() const;

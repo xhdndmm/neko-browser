@@ -85,6 +85,9 @@ private:
   // Document generation the hover/active state was resolved against; a change
   // signals a navigation, requiring a scroll reset.
   std::uint64_t cached_document_version_ = 0;
+  // Last applied script-requested scroll latch id.  A fresh value (worker bumped
+  // scroll_request_id) moves the scroll bar to the requested offset exactly once.
+  std::uint64_t applied_scroll_request_id_ = 0;
 
   // Blinking caret for the focused element (GUI thread).  The blink timer
   // flips visibility only while a control holds focus, so an idle page never

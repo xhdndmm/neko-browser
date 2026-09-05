@@ -450,6 +450,31 @@ TEST(BrowserControllerTest, RunsInlineScriptsOnHtmlLoad)
   EXPECT_NE(tab->script_runtime, nullptr);
 }
 
+// A page script calling window.scrollTo requests a scroll: the controller
+// records the pending offset and bumps the GUI-visible latch.
+TEST(BrowserControllerTest, ScriptScrollSetsPendingScroll)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body><script>window.scrollTo(0, 150);</script>"
+                               "<p>hi</p></body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  EXPECT_FLOAT_EQ(tab->pending_scroll_y, 150.0f);
+  EXPECT_EQ(tab->scroll_request_id, 1u);
+  // The snapshot exposes the latch so the GUI can apply it to its scroll bar.
+  const TabSnapshot snapshot = controller.SnapshotActiveTab();
+  EXPECT_EQ(snapshot.scroll_request_id, 1u);
+  EXPECT_FLOAT_EQ(snapshot.pending_scroll_y, 150.0f);
+}
+
 // Finds the first laid-out text run belonging to |target| and returns its
 // top-left point (document coordinates, before scroll).
 bool FindElementRunPoint(const layout::LayoutBox& box,

@@ -30,9 +30,12 @@ WebView::WebView(BrowserWorker* worker, int tab_id, QWidget* parent)
   // Comfortable line step for the scroll-bar arrows / arrow keys. Wheel
   // scrolling is handled separately in wheelEvent().
   verticalScrollBar()->setSingleStep(50);
-  // Re-render the visible region whenever the scroll position changes.
-  connect(
-      verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int) { viewport()->update(); });
+  // Re-render the visible region whenever the scroll position changes, and
+  // report the new offset to the worker so window.scrollY reads it live.
+  connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) {
+    viewport()->update();
+    worker_->SetScrollOffset(tab_id_, value);
+  });
 
   // Blinking caret: repaint every half second while a control holds focus.
   caret_timer_ = new QTimer(this);
@@ -64,6 +67,18 @@ void WebView::Refresh()
   }
   UpdateTextOverlay();
   UpdateScrollRange();
+  // A page script requested a scroll (window.scrollTo / element.scrollTop
+  // assignment): the worker bumped scroll_request_id.  Apply it once when the
+  // id advances past the last-applied value (after the scroll range is set so
+  // the bar actually permits the value), then record it so later refreshes
+  // don't re-apply the same request.
+  if (snapshot_.scroll_request_id != applied_scroll_request_id_) {
+    applied_scroll_request_id_ = snapshot_.scroll_request_id;
+    if (snapshot_.content_type == browser::ContentType::kHtml && snapshot_.page != nullptr &&
+        verticalScrollBar()->maximum() > 0) {
+      verticalScrollBar()->setValue(static_cast<int>(snapshot_.pending_scroll_y));
+    }
+  }
   viewport()->update();
 }
 

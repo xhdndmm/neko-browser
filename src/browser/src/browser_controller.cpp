@@ -301,6 +301,8 @@ TabSnapshot ToSnapshot(const Tab& tab)
   s.audio = tab.audio;
   s.raw_text = tab.raw_text;
   s.error = tab.error;
+  s.scroll_request_id = tab.scroll_request_id;
+  s.pending_scroll_y = tab.pending_scroll_y;
   return s;
 }
 
@@ -927,6 +929,29 @@ void BrowserController::PumpScriptTimers()
   }
 }
 
+void BrowserController::SetTabScrollOffset(int tab_id, float y)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (const auto& tab : tabs_) {
+    if (tab->id == tab_id) {
+      tab->scroll_offset_y = y;
+      return;
+    }
+  }
+}
+
+void BrowserController::SetTabScrollRequest(int tab_id, float y)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (const auto& tab : tabs_) {
+    if (tab->id == tab_id) {
+      tab->pending_scroll_y = y;
+      ++tab->scroll_request_id;
+      return;
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Fetch + content routing
 // ---------------------------------------------------------------------------
@@ -1071,6 +1096,11 @@ void BrowserController::LoadBytes(Tab& tab,
     services.script_history = &tab.script_history;
     services.script_history_index = &tab.script_history_index;
     services.script_history_state = &tab.script_history_state;
+    // Scroll bridging: the tab's offset is read live (window.scrollY) and a
+    // script-requested scroll bumps the GUI-visible latch for the WebView to
+    // apply to its scroll bar.  [this] and &tab are worker-thread only.
+    services.scroll_offset_y = &tab.scroll_offset_y;
+    services.set_scroll_request = [this, &tab](int, float y) { SetTabScrollRequest(tab.id, y); };
     const auto fetch_subresource = [this](const url::Url& resource_url, std::string_view) {
       return fetch_(resource_url, CookieHeader(resource_url, NowUnix()));
     };

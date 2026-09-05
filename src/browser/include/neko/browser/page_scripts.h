@@ -39,6 +39,13 @@ struct PageScriptServices
   std::vector<std::string>* script_history = nullptr;
   std::size_t* script_history_index = nullptr;
   std::string* script_history_state = nullptr;
+
+  // Scroll bridging.  |scroll_offset_y| points to the tab's current vertical
+  // scroll offset (the GUI reports it; window.scrollY reads it live);
+  // |set_scroll_request| records a script-requested scroll (the controller
+  // bumps a latch the GUI consumes to move its scroll bar).
+  float* scroll_offset_y = nullptr;
+  std::function<void(int, float)> set_scroll_request;
 };
 
 // A navigation requested by a page script through window.location (href

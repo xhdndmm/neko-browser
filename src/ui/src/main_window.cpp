@@ -545,6 +545,15 @@ void MainWindow::SyncTabs()
   }
 }
 
+WebView* MainWindow::ActiveView() const
+{
+  const int index = pages_->currentIndex();
+  if (index >= 0 && index < views_.size()) {
+    return views_[index];
+  }
+  return nullptr;
+}
+
 void MainWindow::RefreshDevTools()
 {
   PopulateDomTree(dom_tree_);

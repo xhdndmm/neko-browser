@@ -1093,14 +1093,23 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   JS_SetPropertyStr(ctx, window, "screen", JS_DupValue(ctx, screen)); // steals dup
   JS_SetPropertyStr(ctx, global, "screen", screen);                   // steals
 
-  // Window viewport geometry (engine defaults, see screen above).
+  // Window viewport geometry (engine defaults, see screen above).  The scroll
+  // offsets are live reads off the browser layer's scroll state (PageApis
+  // scroll_offset), so window.scrollX/scrollY/pageXOffset/pageYOffset track the
+  // GUI scrollbar; without the callback they report 0.
   JS_SetPropertyStr(ctx, window, "innerWidth", JS_NewInt32(ctx, 800));
   JS_SetPropertyStr(ctx, window, "innerHeight", JS_NewInt32(ctx, 600));
   JS_SetPropertyStr(ctx, window, "devicePixelRatio", JS_NewInt32(ctx, 1));
-  JS_SetPropertyStr(ctx, window, "pageXOffset", JS_NewInt32(ctx, 0));
-  JS_SetPropertyStr(ctx, window, "pageYOffset", JS_NewInt32(ctx, 0));
-  JS_SetPropertyStr(ctx, window, "scrollX", JS_NewInt32(ctx, 0));
-  JS_SetPropertyStr(ctx, window, "scrollY", JS_NewInt32(ctx, 0));
+  DefineGetter(ctx,
+               window,
+               "pageXOffset",
+               MakeGetterMagic(ctx, "pageXOffset", WindowScrollOffsetGetter, 0));
+  DefineGetter(ctx,
+               window,
+               "pageYOffset",
+               MakeGetterMagic(ctx, "pageYOffset", WindowScrollOffsetGetter, 1));
+  DefineGetter(ctx, window, "scrollX", MakeGetterMagic(ctx, "scrollX", WindowScrollOffsetGetter, 2));
+  DefineGetter(ctx, window, "scrollY", MakeGetterMagic(ctx, "scrollY", WindowScrollOffsetGetter, 3));
 
   // window.self/parent/top/frames: the engine has no frame tree, so each is a
   // self-reference (top-level browsing context semantics).  Because window IS

@@ -1427,6 +1427,22 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
       ctx, impl.element_proto, "clientTop", MakeGetter(ctx, "clientTop", ElementGetClientTop));
   DefineGetter(
       ctx, impl.element_proto, "clientLeft", MakeGetter(ctx, "clientLeft", ElementGetClientLeft));
+  // Element scroll geometry (documented subset: only documentElement/<body>
+  // scroll; other elements report 0 and their setters no-op).
+  DefineAccessor(ctx,
+                 impl.element_proto,
+                 "scrollTop",
+                 MakeGetter(ctx, "scrollTop", ElementGetScrollTop),
+                 MakeSetter(ctx, "scrollTop", ElementSetScrollTop));
+  DefineAccessor(ctx,
+                 impl.element_proto,
+                 "scrollLeft",
+                 MakeGetter(ctx, "scrollLeft", ElementGetScrollLeft),
+                 MakeSetter(ctx, "scrollLeft", ElementSetScrollLeft));
+  DefineGetter(
+      ctx, impl.element_proto, "scrollWidth", MakeGetter(ctx, "scrollWidth", ElementGetScrollWidth));
+  DefineGetter(
+      ctx, impl.element_proto, "scrollHeight", MakeGetter(ctx, "scrollHeight", ElementGetScrollHeight));
   // Element-level global event handler attributes (element.onclick = fn);
   // the table and accessors live in event_binding.cpp.
   DefineElementEventHandlers(ctx, impl);

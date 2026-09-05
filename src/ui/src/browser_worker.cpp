@@ -164,6 +164,16 @@ void BrowserWorker::DispatchWheel(int tab_id, double delta_y)
   Post([this, tab_id, delta_y] { (void)controller_.DispatchWheel(tab_id, delta_y); });
 }
 
+void BrowserWorker::SetScrollOffset(int tab_id, int y)
+{
+  Post([this, tab_id, y] { controller_.SetTabScrollOffset(tab_id, static_cast<float>(y)); });
+}
+
+void BrowserWorker::SetScrollRequest(int tab_id, int y)
+{
+  Post([this, tab_id, y] { controller_.SetTabScrollRequest(tab_id, static_cast<float>(y)); });
+}
+
 void BrowserWorker::DispatchKeyboard(int tab_id,
                                      const QString& type,
                                      const QString& key,

@@ -538,21 +538,82 @@ LocationToString(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueCon
   return LocationHrefGetter(ctx, this_val);
 }
 
-JSValue WindowScrollTo(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+// Reads a scroll target (x, y) from a call's arguments: either two numbers
+// (x, y) or an options object {left, top}.  Returns false on conversion error.
+bool ReadScrollTarget(JSContext* ctx, int argc, JSValueConst* argv, double* x, double* y)
 {
-  if (ImplFor(ctx, this_val) == nullptr) {
-    return JS_ThrowTypeError(ctx, "no page runtime");
+  *x = 0;
+  *y = 0;
+  if (argc >= 1 && JS_IsNumber(argv[0])) {
+    if (JS_ToFloat64(ctx, x, argv[0]) != 0) {
+      JS_FreeValue(ctx, JS_GetException(ctx));
+      return false;
+    }
+    if (argc >= 2 && JS_ToFloat64(ctx, y, argv[1]) != 0) {
+      JS_FreeValue(ctx, JS_GetException(ctx));
+      return false;
+    }
+    return true;
   }
-  // The page viewport is managed by the GUI scroll area; script-initiated
-  // window scrolling is a no-op (documented).
+  if (argc >= 1) {
+    // Options object: {left, top, behavior} (behavior is accepted but ignored;
+    // both smooth and instant act instantly — documented).
+    JSValue left = JS_GetPropertyStr(ctx, argv[0], "left");
+    JSValue top = JS_GetPropertyStr(ctx, argv[0], "top");
+    if (JS_IsNumber(left)) {
+      (void)JS_ToFloat64(ctx, x, left);
+    }
+    if (JS_IsNumber(top)) {
+      (void)JS_ToFloat64(ctx, y, top);
+    }
+    JS_FreeValue(ctx, left);
+    JS_FreeValue(ctx, top);
+    return true;
+  }
+  return true;
+}
+
+// window.scrollX/scrollY/pageXOffset/pageYOffset: live reads off the browser
+// layer's scroll offset.  Magic 0/2 -> x, 1/3 -> y (pageXOffset==scrollX,
+// pageYOffset==scrollY).
+JSValue WindowScrollOffsetGetter(JSContext* ctx, JSValueConst this_val, int magic)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.scroll_offset) {
+    return JS_NewInt32(ctx, 0);
+  }
+  const auto offset = impl->apis.scroll_offset();
+  return JS_NewFloat64(ctx, (magic & 1) ? offset.second : offset.first);
+}
+
+JSValue WindowScrollTo(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.scroll_to) {
+    return JS_UNDEFINED;
+  }
+  double x = 0;
+  double y = 0;
+  if (!ReadScrollTarget(ctx, argc, argv, &x, &y)) {
+    return JS_EXCEPTION;
+  }
+  impl->apis.scroll_to(x, y);
   return JS_UNDEFINED;
 }
 
-JSValue WindowScrollBy(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+JSValue WindowScrollBy(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-  if (ImplFor(ctx, this_val) == nullptr) {
-    return JS_ThrowTypeError(ctx, "no page runtime");
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.scroll_to || !impl->apis.scroll_offset) {
+    return JS_UNDEFINED;
   }
+  double dx = 0;
+  double dy = 0;
+  if (!ReadScrollTarget(ctx, argc, argv, &dx, &dy)) {
+    return JS_EXCEPTION;
+  }
+  const auto current = impl->apis.scroll_offset();
+  impl->apis.scroll_to(current.first + dx, current.second + dy);
   return JS_UNDEFINED;
 }
 

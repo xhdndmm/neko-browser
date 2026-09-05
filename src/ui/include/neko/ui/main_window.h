@@ -51,6 +51,9 @@ public:
   {
     return views_.size();
   }
+  // The view for the active tab, or nullptr (for GUI tests that need direct
+  // access to a WebView's scroll bar).
+  WebView* ActiveView() const;
 
 private slots:
   void OnStateChanged();

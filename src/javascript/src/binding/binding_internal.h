@@ -357,6 +357,12 @@ JSValue ElementGetClientWidth(JSContext* ctx, JSValueConst this_val, int argc, J
 JSValue ElementGetClientHeight(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue ElementGetClientTop(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue ElementGetClientLeft(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue ElementGetScrollTop(JSContext* ctx, JSValueConst this_val);
+JSValue ElementSetScrollTop(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+JSValue ElementGetScrollLeft(JSContext* ctx, JSValueConst this_val);
+JSValue ElementSetScrollLeft(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+JSValue ElementGetScrollWidth(JSContext* ctx, JSValueConst this_val);
+JSValue ElementGetScrollHeight(JSContext* ctx, JSValueConst this_val);
 JSValue ElementGetValue(JSContext* ctx, JSValueConst this_val);
 JSValue ElementSetValue(JSContext* ctx, JSValueConst this_val, JSValueConst value);
 JSValue ElementGetValidity(JSContext* ctx, JSValueConst this_val);
@@ -461,6 +467,7 @@ JSValue
 WindowCancelAnimationFrame(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue WindowScrollTo(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue WindowScrollBy(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue WindowScrollOffsetGetter(JSContext* ctx, JSValueConst this_val, int magic);
 JSValue WindowGetComputedStyle(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue WindowMatchMedia(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue WindowGetClosed(JSContext* ctx, JSValueConst this_val);

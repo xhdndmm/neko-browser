@@ -83,6 +83,11 @@ public:
   void DispatchHoverClear(int tab_id);
   // Dispatches a wheel event (vertical delta px) to the page's script runtime.
   void DispatchWheel(int tab_id, double delta_y);
+  // Post the tab's current vertical scroll offset to the worker (the GUI scroll
+  // bar's value); the worker records it so window.scrollY reads it live.
+  void SetScrollOffset(int tab_id, int y);
+  // Post a script-requested scroll (window.scrollTo / element.scrollTop).
+  void SetScrollRequest(int tab_id, int y);
   // Dispatches a keyboard event (keydown/keyup) to the page's script runtime.
   void DispatchKeyboard(int tab_id, const QString& type, const QString& key, const QString& code);
   void NewTab(const QString& url, bool activate);

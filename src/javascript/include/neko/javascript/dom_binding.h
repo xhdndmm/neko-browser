@@ -158,6 +158,15 @@ struct PageApis
   std::function<std::string(std::size_t)> stylesheet_text;
   std::function<std::optional<std::string>(std::size_t, const std::string&)> stylesheet_replace;
 
+  // Page scroll state (window.scrollX/scrollY, pageXOffset/pageYOffset and the
+  // document scrolling element's scrollTop/scrollLeft).  |scroll_offset| returns
+  // the current (scrollX, scrollY) in css px; |scroll_to| performs a script-
+  // requested scroll to (x, y).  Only the vertical axis is live (the horizontal
+  // scrollbar is disabled); x is always reported as 0.  Absent callbacks mean
+  // the page reports 0 / scrolls are no-ops.
+  std::function<std::pair<double, double>()> scroll_offset;
+  std::function<void(double, double)> scroll_to;
+
   // window.indexedDB (per-origin; the caller scopes everything by origin).
   // Records travel as JSON text (the structured-clone subset); keys are JSON
   // numbers or strings.  Errors carry an "IDB:<ExceptionName>:" prefix.

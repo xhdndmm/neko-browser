@@ -990,4 +990,37 @@ TEST(UiSmokeTest, HoverLinkShowsPointingHand)
   EXPECT_EQ(view->viewport()->cursor().shape(), Qt::ArrowCursor);
 }
 
+// A page script calling window.scrollTo drives the GUI's scroll bar: the
+// worker bumps scroll_request_id and the WebView's Refresh applies the
+// requested offset to its vertical scroll bar.
+TEST(UiSmokeTest, ScriptScrollMovesViewportScrollBar)
+{
+  TempProfile tp;
+  const std::string html_file = tp.path() + "/scroll.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(
+                  html_file,
+                  "<html><body style=\"height:3000px\">"
+                  "<script>window.scrollTo(0, 150);</script>"
+                  "<p>tall content</p></body></html>")
+                  .has_value());
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.resize(800, 600);
+  window.show();
+
+  worker.NavigateActive(QString::fromStdString(html_file));
+  window.AddressBar()->clearFocus();
+
+  // The script's requested scroll lands on the view's scroll bar once the
+  // page has been laid out (scroll range set) and the latch applied.
+  ASSERT_TRUE(WaitFor([&] {
+    neko::ui::WebView* view = window.ActiveView();
+    return view != nullptr && view->verticalScrollBar()->maximum() > 0 &&
+           view->verticalScrollBar()->value() == 150;
+  }));
+  // The content is tall enough that 150 is a real (non-clamped) offset.
+  EXPECT_GT(window.ActiveView()->verticalScrollBar()->maximum(), 150);
+}
+
 } // namespace
