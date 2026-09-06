@@ -15,6 +15,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 
 namespace neko::renderer {
 namespace {
@@ -381,6 +382,12 @@ std::vector<Page::VideoSource> Page::VideoSources() const
   return sources;
 }
 
+std::vector<css::FontFaceRule> Page::FontFaces() const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  return styles_.FontFaces();
+}
+
 const dom::Element* Page::FocusedElement() const
 {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -517,6 +524,51 @@ void Page::SetElementImage(const dom::Element* element,
   }
   video_states_.erase(element); // a static image replaces any video frame
   root_.reset();                 // the replaced box's intrinsic size may have changed
+  display_list_.reset();
+  BumpVersion();
+}
+
+void Page::SetElementImages(const std::vector<const dom::Element*>& elements,
+                            const image::Image& image,
+                            std::shared_ptr<image::GifAnimation> animation)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (document_ == nullptr || elements.empty()) {
+    return;
+  }
+
+  std::unordered_set<const dom::Element*> alive;
+  std::vector<const dom::Node*> stack{document_.get()};
+  while (!stack.empty()) {
+    const dom::Node* node = stack.back();
+    stack.pop_back();
+    if (node->node_type() == dom::NodeType::kElement) {
+      alive.insert(static_cast<const dom::Element*>(node));
+    }
+    for (const dom::Node* child : node->ChildNodes()) {
+      stack.push_back(child);
+    }
+  }
+
+  bool attached = false;
+  for (const dom::Element* element : elements) {
+    if (element == nullptr || alive.find(element) == alive.end()) {
+      continue;
+    }
+    images_[element] = image;
+    if (animation != nullptr && animation->frames.size() > 1) {
+      animation_states_[element] =
+          ImageAnimationState{animation, NowMs(), 0, 0, false};
+    } else {
+      animation_states_.erase(element);
+    }
+    video_states_.erase(element);
+    attached = true;
+  }
+  if (!attached) {
+    return;
+  }
+  root_.reset();
   display_list_.reset();
   BumpVersion();
 }

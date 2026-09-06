@@ -173,6 +173,9 @@ public:
   void SetElementImage(const dom::Element* element,
                        image::Image image,
                        std::shared_ptr<image::GifAnimation> animation = nullptr);
+  void SetElementImages(const std::vector<const dom::Element*>& elements,
+                        const image::Image& image,
+                        std::shared_ptr<image::GifAnimation> animation = nullptr);
   void SetElementImage(const dom::Element& element,
                        image::Image image,
                        std::shared_ptr<image::GifAnimation> animation = nullptr)
@@ -209,6 +212,8 @@ public:
   };
 
   std::vector<VideoSource> VideoSources() const;
+
+  std::vector<css::FontFaceRule> FontFaces() const;
 
   // Attaches a decoded video to a <video> element: |first_frame| becomes the
   // displayed image (the layout's replaced box uses its intrinsic size); the

@@ -1157,18 +1157,26 @@ void BrowserController::LoadBytes(Tab& tab,
     // Web fonts are allowed to arrive after first paint. The page is shared
     // with this task, and Page synchronizes font registration and layout
     // invalidation for the UI thread.
-    pool_->Post(
-        [page = std::shared_ptr(new_page), final_url, fetch_subresource, &pool = *pool_]() mutable {
-          FetchWebFonts(*page, final_url, fetch_subresource, pool);
-        });
-
     // Worker-thread actions run serially, so no navigation can replace
     // tab.page behind our back while this task runs.
-    if (pool_->thread_count() >= 2) {
+    if (pool_->thread_count() >= 4) {
+      // Each loader uses the remaining workers for per-URL futures. With the
+      // normal hardware-sized pool there are enough workers for all three
+      // outer tasks and their nested URL work to make progress together.
+      pool_->Post([page = std::shared_ptr(new_page), final_url, fetch_subresource, &pool = *pool_]() {
+        FetchWebFonts(*page, final_url, fetch_subresource, pool);
+      });
       pool_->Post([page = std::shared_ptr(new_page), final_url, fetch_subresource, &pool = *pool_]() {
         FetchPageImages(*page, final_url, fetch_subresource, pool);
       });
       pool_->Post([page = std::shared_ptr(new_page), final_url, fetch_subresource, &pool = *pool_]() {
+        FetchPageVideos(*page, final_url, fetch_subresource, pool);
+      });
+    } else if (pool_->thread_count() >= 2) {
+      // With fewer workers, one outer task avoids nested-future starvation.
+      pool_->Post([page = std::shared_ptr(new_page), final_url, fetch_subresource, &pool = *pool_]() {
+        FetchWebFonts(*page, final_url, fetch_subresource, pool);
+        FetchPageImages(*page, final_url, fetch_subresource, pool);
         FetchPageVideos(*page, final_url, fetch_subresource, pool);
       });
     } else {
@@ -1556,7 +1564,7 @@ void FetchWebFonts(renderer::Page& page,
                    const BrowserController::FetchFn& fetch,
                    base::ThreadPool& pool)
 {
-  const std::vector<css::FontFaceRule> faces = page.styles().FontFaces();
+  const std::vector<css::FontFaceRule> faces = page.FontFaces();
   if (faces.empty()) {
     return;
   }
@@ -1730,16 +1738,16 @@ void FetchPageImages(renderer::Page& page,
   // cascade has run by the time this is called, after scripts).
   struct PendingImage
   {
-    dom::Element* element = nullptr;
+    const dom::Element* element = nullptr;
     std::string url;
   };
   struct ImageGroup
   {
     std::string url;
-    std::vector<dom::Element*> elements;
+    std::vector<const dom::Element*> elements;
   };
   std::vector<PendingImage> pending;
-  const auto collect_url = [&](dom::Element* element, const std::string& raw_url) {
+  const auto collect_url = [&](const dom::Element* element, const std::string& raw_url) {
     if (raw_url.empty()) {
       return;
     }
@@ -1754,7 +1762,7 @@ void FetchPageImages(renderer::Page& page,
     pending.push_back(PendingImage{element, target.value().Serialize()});
   };
   for (const auto& [element, raw_url] : page.ImageSources()) {
-    collect_url(const_cast<dom::Element*>(element), raw_url);
+    collect_url(element, raw_url);
   }
   if (pending.empty()) {
     return;
@@ -1836,10 +1844,9 @@ void FetchPageImages(renderer::Page& page,
       NEKO_LOG_WARNING("img: fetch/decode failed for " + groups[0].url);
       return;
     }
-    for (dom::Element* element : groups[0].elements) {
-      page.SetElementImage(element, decoded.value().image, decoded.value().animation);
-      NEKO_LOG_INFO("img: injected " + groups[0].url);
-    }
+    page.SetElementImages(groups[0].elements, decoded.value().image, decoded.value().animation);
+    NEKO_LOG_INFO("img: fetched " + groups[0].url + "; attached to " +
+                  std::to_string(groups[0].elements.size()) + " element(s)");
     return;
   }
 
@@ -1855,10 +1862,9 @@ void FetchPageImages(renderer::Page& page,
       NEKO_LOG_WARNING("img: fetch/decode failed for " + groups[i].url);
       continue;
     }
-    for (dom::Element* element : groups[i].elements) {
-      page.SetElementImage(element, decoded.value().image, decoded.value().animation);
-      NEKO_LOG_INFO("img: injected " + groups[i].url);
-    }
+    page.SetElementImages(groups[i].elements, decoded.value().image, decoded.value().animation);
+    NEKO_LOG_INFO("img: fetched " + groups[i].url + "; attached to " +
+                  std::to_string(groups[i].elements.size()) + " element(s)");
   }
 }
 
