@@ -1165,11 +1165,10 @@ void BrowserController::LoadBytes(Tab& tab,
     // Worker-thread actions run serially, so no navigation can replace
     // tab.page behind our back while this task runs.
     if (pool_->thread_count() >= 2) {
-      pool_->Post([page = std::shared_ptr(new_page),
-                   final_url,
-                   fetch_subresource,
-                   &pool = *pool_]() mutable {
+      pool_->Post([page = std::shared_ptr(new_page), final_url, fetch_subresource, &pool = *pool_]() {
         FetchPageImages(*page, final_url, fetch_subresource, pool);
+      });
+      pool_->Post([page = std::shared_ptr(new_page), final_url, fetch_subresource, &pool = *pool_]() {
         FetchPageVideos(*page, final_url, fetch_subresource, pool);
       });
     } else {
@@ -1724,10 +1723,6 @@ void FetchPageImages(renderer::Page& page,
                      const BrowserController::FetchFn& fetch,
                      base::ThreadPool& pool)
 {
-  dom::Document* doc = page.document();
-  if (doc == nullptr) {
-    return;
-  }
   const base::Result<url::Url> base = url::Url::Parse(base_url);
 
   // Depth-first walk collecting <img src> and CSS background-image
@@ -1744,10 +1739,6 @@ void FetchPageImages(renderer::Page& page,
     std::vector<dom::Element*> elements;
   };
   std::vector<PendingImage> pending;
-  std::vector<dom::Node*> stack;
-  for (dom::Node* child : doc->ChildNodes()) {
-    stack.push_back(child);
-  }
   const auto collect_url = [&](dom::Element* element, const std::string& raw_url) {
     if (raw_url.empty()) {
       return;
@@ -1762,26 +1753,8 @@ void FetchPageImages(renderer::Page& page,
     }
     pending.push_back(PendingImage{element, target.value().Serialize()});
   };
-  while (!stack.empty()) {
-    dom::Node* node = stack.back();
-    stack.pop_back();
-    if (node->node_type() != dom::NodeType::kElement) {
-      continue;
-    }
-    dom::Element* element = static_cast<dom::Element*>(node);
-    if (element->tag_name() == "img") {
-      const std::optional<std::string_view> src = element->GetAttribute("src");
-      if (src.has_value()) {
-        collect_url(element, std::string(*src));
-      }
-    }
-    const style::ComputedStyle& cs = page.styles().StyleFor(*element);
-    if (cs.background_image.has_value() && !cs.background_image->empty()) {
-      collect_url(element, cs.background_image.value());
-    }
-    for (dom::Node* child : node->ChildNodes()) {
-      stack.push_back(child);
-    }
+  for (const auto& [element, raw_url] : page.ImageSources()) {
+    collect_url(const_cast<dom::Element*>(element), raw_url);
   }
   if (pending.empty()) {
     return;
@@ -1864,9 +1837,8 @@ void FetchPageImages(renderer::Page& page,
       return;
     }
     for (dom::Element* element : groups[0].elements) {
-      page.SetElementImage(*element, decoded.value().image, decoded.value().animation);
-      NEKO_LOG_INFO("img: injected " + groups[0].url + " -> <" +
-                    std::string(element->tag_name()) + ">");
+      page.SetElementImage(element, decoded.value().image, decoded.value().animation);
+      NEKO_LOG_INFO("img: injected " + groups[0].url);
     }
     return;
   }
@@ -1884,9 +1856,8 @@ void FetchPageImages(renderer::Page& page,
       continue;
     }
     for (dom::Element* element : groups[i].elements) {
-      page.SetElementImage(*element, decoded.value().image, decoded.value().animation);
-      NEKO_LOG_INFO("img: injected " + groups[i].url + " -> <" +
-                    std::string(element->tag_name()) + ">");
+      page.SetElementImage(element, decoded.value().image, decoded.value().animation);
+      NEKO_LOG_INFO("img: injected " + groups[i].url);
     }
   }
 }
@@ -1896,52 +1867,28 @@ void FetchPageVideos(renderer::Page& page,
                      const BrowserController::FetchFn& fetch,
                      base::ThreadPool& pool)
 {
-  dom::Document* doc = page.document();
-  if (doc == nullptr) {
-    return;
-  }
   const base::Result<url::Url> base = url::Url::Parse(base_url);
 
   struct PendingVideo
   {
-    dom::Element* element = nullptr;
+    const dom::Element* element = nullptr;
     std::string url;
     bool autoplay = false;
     bool loop = false;
   };
   std::vector<PendingVideo> pending;
-  std::vector<dom::Node*> stack;
-  for (dom::Node* child : doc->ChildNodes()) {
-    stack.push_back(child);
-  }
-  while (!stack.empty()) {
-    dom::Node* node = stack.back();
-    stack.pop_back();
-    if (node->node_type() != dom::NodeType::kElement) {
-      continue;
+  for (const renderer::Page::VideoSource& source : page.VideoSources()) {
+    base::Result<url::Url> target = url::Url::Parse(source.url);
+    if (base.has_value()) {
+      target = url::Url::Parse(source.url, base.value());
     }
-    dom::Element* element = static_cast<dom::Element*>(node);
-    if (element->tag_name() == "video") {
-      const std::optional<std::string_view> src = element->GetAttribute("src");
-      if (src.has_value() && !src->empty()) {
-        base::Result<url::Url> target = url::Url::Parse(std::string(*src));
-        if (base.has_value()) {
-          target = url::Url::Parse(std::string(*src), base.value());
-        }
-        if (target.has_value()) {
-          PendingVideo item;
-          item.element = element;
-          item.url = target.value().Serialize();
-          item.autoplay = element->HasAttribute("autoplay");
-          item.loop = element->HasAttribute("loop");
-          pending.push_back(std::move(item));
-        } else {
-          NEKO_LOG_WARNING("video: cannot resolve url \"" + std::string(*src) + "\"");
-        }
-      }
-    }
-    for (dom::Node* child : node->ChildNodes()) {
-      stack.push_back(child);
+    if (target.has_value()) {
+      pending.push_back(PendingVideo{source.element,
+                                     target.value().Serialize(),
+                                     source.autoplay,
+                                     source.loop});
+    } else {
+      NEKO_LOG_WARNING("video: cannot resolve url \"" + source.url + "\"");
     }
   }
   if (pending.empty()) {
@@ -1977,9 +1924,9 @@ void FetchPageVideos(renderer::Page& page,
     strip.loop = item.loop;
     const std::size_t frame_count = strip.frames->size();
     const image::Image first_frame = (*strip.frames)[0]; // copy: strip moves below
-    page.SetElementVideo(*item.element, first_frame, std::move(strip), item.autoplay);
+    page.SetElementVideo(item.element, first_frame, std::move(strip), item.autoplay);
     NEKO_LOG_INFO("video: injected " + item.url + " (" + std::to_string(frame_count) +
-                  " frames) -> <" + std::string(item.element->tag_name()) + ">");
+            " frames)");
   };
 
   if (pending.size() == 1) {

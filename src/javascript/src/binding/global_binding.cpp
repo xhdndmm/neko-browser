@@ -1188,7 +1188,7 @@ JSValue WindowGetComputedStyle(JSContext* ctx, JSValueConst this_val, int argc, 
   }
   std::map<std::string, std::string> props;
   if (impl->apis.computed_style) {
-    props = impl->apis.computed_style(*element);
+    props = impl->apis.computed_style(element);
   }
   // The property map (kebab-case keys) is stored as a hidden property so
   // both getPropertyValue() and the camelCase accessors can read it.

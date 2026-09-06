@@ -122,7 +122,7 @@ struct PageApis
   // (property -> resolved px value, kebab-case keys).  Wired by the browser
   // layer from the renderer's style engine; when absent, getComputedStyle
   // returns an empty object.
-  std::function<std::map<std::string, std::string>(const dom::Element&)> computed_style;
+  std::function<std::map<std::string, std::string>(const dom::Element*)> computed_style;
 
   // Element layout geometry (getBoundingClientRect / offsetWidth / offsetTop
   // etc).  Wired by the browser layer from the renderer's layout tree; when

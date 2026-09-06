@@ -289,6 +289,98 @@ void Page::SetFocusedElement(const dom::Element* element)
   focused_element_ = element;
 }
 
+bool Page::TryGetComputedStyle(const dom::Element* element,
+                               style::ComputedStyle& style,
+                               std::string& tag_name) const
+{
+  if (element == nullptr) {
+    return false;
+  }
+
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (document_ == nullptr) {
+    return false;
+  }
+
+  std::vector<const dom::Node*> stack{document_.get()};
+  while (!stack.empty()) {
+    const dom::Node* node = stack.back();
+    stack.pop_back();
+    if (node == element) {
+      style = styles_.StyleFor(*element);
+      tag_name = std::string(element->tag_name());
+      return true;
+    }
+    for (const dom::Node* child : node->ChildNodes()) {
+      stack.push_back(child);
+    }
+  }
+  return false;
+}
+
+std::vector<std::pair<const dom::Element*, std::string>> Page::ImageSources() const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::vector<std::pair<const dom::Element*, std::string>> sources;
+  if (document_ == nullptr) {
+    return sources;
+  }
+
+  std::vector<const dom::Node*> stack{document_.get()};
+  while (!stack.empty()) {
+    const dom::Node* node = stack.back();
+    stack.pop_back();
+    if (node->node_type() == dom::NodeType::kElement) {
+      const auto* element = static_cast<const dom::Element*>(node);
+      if (element->tag_name() == "img") {
+        if (const auto src = element->GetAttribute("src"); src.has_value()) {
+          sources.emplace_back(element, std::string(*src));
+        }
+      }
+      const style::ComputedStyle& computed_style = styles_.StyleFor(*element);
+      if (computed_style.background_image.has_value() &&
+          !computed_style.background_image->empty()) {
+        sources.emplace_back(element, computed_style.background_image.value());
+      }
+    }
+    for (const dom::Node* child : node->ChildNodes()) {
+      stack.push_back(child);
+    }
+  }
+  return sources;
+}
+
+std::vector<Page::VideoSource> Page::VideoSources() const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::vector<VideoSource> sources;
+  if (document_ == nullptr) {
+    return sources;
+  }
+
+  std::vector<const dom::Node*> stack{document_.get()};
+  while (!stack.empty()) {
+    const dom::Node* node = stack.back();
+    stack.pop_back();
+    if (node->node_type() == dom::NodeType::kElement) {
+      const auto* element = static_cast<const dom::Element*>(node);
+      if (element->tag_name() == "video") {
+        const auto src = element->GetAttribute("src");
+        if (src.has_value() && !src->empty()) {
+          sources.push_back(VideoSource{element,
+                                        std::string(*src),
+                                        element->HasAttribute("autoplay"),
+                                        element->HasAttribute("loop")});
+        }
+      }
+    }
+    for (const dom::Node* child : node->ChildNodes()) {
+      stack.push_back(child);
+    }
+  }
+  return sources;
+}
+
 const dom::Element* Page::FocusedElement() const
 {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -393,18 +485,37 @@ void Page::LayoutLocked(float viewport_width, float viewport_height, bool apply_
   BumpVersion();
 }
 
-void Page::SetElementImage(const dom::Element& element,
+void Page::SetElementImage(const dom::Element* element,
                            image::Image image,
                            std::shared_ptr<image::GifAnimation> animation)
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  images_[&element] = std::move(image);
-  if (animation != nullptr && animation->frames.size() > 1) {
-    animation_states_[&element] = ImageAnimationState{std::move(animation), NowMs(), 0, 0, false};
-  } else {
-    animation_states_.erase(&element);
+  if (element == nullptr || document_ == nullptr) {
+    return;
   }
-  video_states_.erase(&element); // a static image replaces any video frame
+  std::vector<const dom::Node*> stack{document_.get()};
+  bool belongs_to_document = false;
+  while (!stack.empty()) {
+    const dom::Node* node = stack.back();
+    stack.pop_back();
+    if (node == element) {
+      belongs_to_document = true;
+      break;
+    }
+    for (const dom::Node* child : node->ChildNodes()) {
+      stack.push_back(child);
+    }
+  }
+  if (!belongs_to_document) {
+    return;
+  }
+  images_[element] = std::move(image);
+  if (animation != nullptr && animation->frames.size() > 1) {
+    animation_states_[element] = ImageAnimationState{std::move(animation), NowMs(), 0, 0, false};
+  } else {
+    animation_states_.erase(element);
+  }
+  video_states_.erase(element); // a static image replaces any video frame
   root_.reset();                 // the replaced box's intrinsic size may have changed
   display_list_.reset();
   BumpVersion();
@@ -508,23 +619,40 @@ bool Page::LoadWebFont(const std::string& family,
   return true;
 }
 
-void Page::SetElementVideo(const dom::Element& element,
+void Page::SetElementVideo(const dom::Element* element,
                            image::Image first_frame,
                            VideoStrip strip,
                            bool autoplay)
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (strip.frames == nullptr || strip.frames->empty()) {
+  if (element == nullptr || document_ == nullptr || strip.frames == nullptr ||
+      strip.frames->empty()) {
     return;
   }
-  images_[&element] = std::move(first_frame);
-  animation_states_.erase(&element);
+  std::vector<const dom::Node*> stack{document_.get()};
+  bool belongs_to_document = false;
+  while (!stack.empty()) {
+    const dom::Node* node = stack.back();
+    stack.pop_back();
+    if (node == element) {
+      belongs_to_document = true;
+      break;
+    }
+    for (const dom::Node* child : node->ChildNodes()) {
+      stack.push_back(child);
+    }
+  }
+  if (!belongs_to_document) {
+    return;
+  }
+  images_[element] = std::move(first_frame);
+  animation_states_.erase(element);
   VideoAnimationState state;
   state.frames = std::move(strip.frames);
   state.frame_rate = strip.frame_rate > 0 ? strip.frame_rate : 24.0;
   state.loop = strip.loop;
   state.autoplay = autoplay;
-  video_states_[&element] = std::move(state);
+  video_states_[element] = std::move(state);
   root_.reset();
   display_list_.reset();
   BumpVersion();

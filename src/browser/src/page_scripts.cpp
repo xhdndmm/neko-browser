@@ -457,8 +457,12 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
   // window.getComputedStyle(element): serialize the element's computed style
   // from the page's style engine (the engine keeps per-element styles after
   // ApplyStyles, which RunPageScripts re-runs after DOM mutations).
-  apis.computed_style = [&page](const dom::Element& element) -> std::map<std::string, std::string> {
-    const style::ComputedStyle& style = page.styles().StyleFor(element);
+  apis.computed_style = [&page](const dom::Element* element) -> std::map<std::string, std::string> {
+    style::ComputedStyle style;
+    std::string tag_name;
+    if (!page.TryGetComputedStyle(element, style, tag_name)) {
+      return {};
+    }
     return SerializeComputedStyle(style);
   };
 

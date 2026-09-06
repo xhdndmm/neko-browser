@@ -124,6 +124,27 @@ TEST(PageTest, HoverStyleInvalidatesCachedRaster)
   EXPECT_EQ(unhovered.pixels()[offset + 2], 0);
 }
 
+TEST(PageTest, ComputedStyleRejectsElementRemovedFromDocument)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body><div id=\"target\"></div></body>").has_value());
+  dom::Element* target = dom::QuerySelector(*page.document(), "#target");
+  ASSERT_NE(target, nullptr);
+
+  style::ComputedStyle computed_style;
+  std::string tag_name;
+  ASSERT_TRUE(page.TryGetComputedStyle(target, computed_style, tag_name));
+  EXPECT_EQ(tag_name, "div");
+
+  dom::Element* body = dom::QuerySelector(*page.document(), "body");
+  ASSERT_NE(body, nullptr);
+  std::unique_ptr<dom::Node> removed = body->RemoveChild(target);
+  ASSERT_NE(removed, nullptr);
+  removed.reset();
+
+  EXPECT_FALSE(page.TryGetComputedStyle(target, computed_style, tag_name));
+}
+
 TEST(PageTest, BodyZoomScalesLayoutAndPaint)
 {
   Page page;

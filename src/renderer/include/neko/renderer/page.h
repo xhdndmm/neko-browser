@@ -18,6 +18,8 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace neko::base {
 class ThreadPool;
@@ -168,9 +170,15 @@ public:
   // same ImageProvider lookup) and invalidates the layout so the replaced
   // box picks up its intrinsic size.  |animation| carries the full frame set
   // of an animated GIF; its first frame is installed as the initial image.
-  void SetElementImage(const dom::Element& element,
+  void SetElementImage(const dom::Element* element,
                        image::Image image,
                        std::shared_ptr<image::GifAnimation> animation = nullptr);
+  void SetElementImage(const dom::Element& element,
+                       image::Image image,
+                       std::shared_ptr<image::GifAnimation> animation = nullptr)
+  {
+    SetElementImage(&element, std::move(image), std::move(animation));
+  }
 
   // Paints an axis-aligned rectangle into an element's Canvas 2D backing
   // store using source-over compositing. The store is created at the HTML
@@ -192,14 +200,31 @@ public:
     bool loop = false;     // <video loop>
   };
 
+  struct VideoSource
+  {
+    const dom::Element* element = nullptr;
+    std::string url;
+    bool autoplay = false;
+    bool loop = false;
+  };
+
+  std::vector<VideoSource> VideoSources() const;
+
   // Attaches a decoded video to a <video> element: |first_frame| becomes the
   // displayed image (the layout's replaced box uses its intrinsic size); the
   // frame strip drives playback.  |autoplay| starts playback on the next
   // AdvanceAnimations tick.
-  void SetElementVideo(const dom::Element& element,
+  void SetElementVideo(const dom::Element* element,
                        image::Image first_frame,
                        VideoStrip strip,
                        bool autoplay);
+  void SetElementVideo(const dom::Element& element,
+                       image::Image first_frame,
+                       VideoStrip strip,
+                       bool autoplay)
+  {
+    SetElementVideo(&element, std::move(first_frame), std::move(strip), autoplay);
+  }
 
   // Playback controls (driven by the JS binding through the browser layer).
   void PlayVideo(const dom::Element& element);
@@ -245,6 +270,16 @@ public:
   {
     return styles_;
   }
+
+  // Copies the computed style for an element while holding the page lock.
+  // Returns false when the pointer no longer belongs to the current document.
+  bool TryGetComputedStyle(const dom::Element* element,
+                           style::ComputedStyle& style,
+                           std::string& tag_name) const;
+
+  // Returns image URLs while holding the page lock. Element pointers are
+  // non-owning and must be revalidated before a later asynchronous update.
+  std::vector<std::pair<const dom::Element*, std::string>> ImageSources() const;
 
   std::string DumpDom() const;
   std::string DumpLayoutTree() const;

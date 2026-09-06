@@ -559,8 +559,8 @@ void MainWindow::RefreshDevTools()
   PopulateDomTree(dom_tree_);
   PopulateCookies(cookie_list_);
   // If a node is selected in the DOM tree, keep its computed style panel in
-  // sync (the underlying element is identified by pointer, which stays valid
-  // for the lifetime of the snapshot held by PopulateDomTree).
+  // sync. The selected element may have been removed by a page script even
+  // when the page itself has not navigated.
   OnDomSelectionChanged();
 
   network_list_->clear();
@@ -730,10 +730,9 @@ void MainWindow::PopulateComputedStyle(QTreeWidget* tree, QTreeWidgetItem* item)
   const browser::TabSnapshot tab = worker_->SnapshotActiveTab();
   if (tab.id < 0 || tab.page == nullptr)
     return;
-  // The element pointer was captured when the DOM tree was built; if the
-  // page has since navigated, the pointer may dangle.  The item stores the
-  // page it came from — only use the pointer when it still belongs to the
-  // active page.
+  // The element pointer was captured when the DOM tree was built; navigation
+  // and same-page DOM mutation can both make it stale. The item stores the
+  // page it came from, then Page validates the element under its mutex.
   const void* item_page = item->data(0, Qt::UserRole + 1).value<void*>();
   if (item_page != static_cast<const void*>(tab.page.get())) {
     return;
@@ -742,13 +741,16 @@ void MainWindow::PopulateComputedStyle(QTreeWidget* tree, QTreeWidgetItem* item)
       static_cast<const dom::Element*>(item->data(0, Qt::UserRole).value<void*>());
   if (element == nullptr)
     return;
-  const style::ComputedStyle& style = tab.page->styles().StyleFor(*element);
+  style::ComputedStyle style;
+  std::string tag_name;
+  if (!tab.page->TryGetComputedStyle(element, style, tag_name))
+    return;
 
   const auto add_row = [&](const QString& prop, const QString& value) {
     auto* row = new QTreeWidgetItem(tree, {prop, value});
     row->setFirstColumnSpanned(false);
   };
-  add_row(tr("tag"), FromUtf8(element->tag_name()));
+  add_row(tr("tag"), FromUtf8(tag_name));
   add_row(tr("display"), FromUtf8(style::ToString(style.display)));
   add_row(tr("position"), FromUtf8(style::ToString(style.position)));
   const auto size_label = [](const std::optional<style::SizeSpec>& spec) {

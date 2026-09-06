@@ -1799,7 +1799,7 @@ TEST_F(DomBinderTest, WindowGetComputedStyleWired)
   // A binder with a computed_style callback returns a style object with
   // getPropertyValue and camelCase accessors.
   javascript::PageApis apis;
-  apis.computed_style = [](const dom::Element&) -> std::map<std::string, std::string> {
+  apis.computed_style = [](const dom::Element*) -> std::map<std::string, std::string> {
     return {{"display", "block"}, {"background-color", "rgb(255, 0, 0)"}};
   };
   DomBinder binder(*document_, apis);
