@@ -70,7 +70,10 @@ base::Result<RendererLoadResult> DecodeLoadResult(std::string_view payload);
 // top-level documents, and answers every request with a bounded reply.  All
 // decoding is bounds-checked; the other end of the pipe stays part of the
 // threat model.
-inline constexpr std::uint8_t kRendererSessionProtocolVersion = 1;
+// The reply layout changed when find-in-page arrived (new trailing fields), so
+// the version moved to 2: an old child and a new browser now fail the version
+// check instead of misreading each other's replies.
+inline constexpr std::uint8_t kRendererSessionProtocolVersion = 2;
 
 enum class SessionOp : std::uint8_t
 {
@@ -85,6 +88,7 @@ enum class SessionOp : std::uint8_t
   kSnapshot = 9,   // rasterize the viewport at the given scroll offset
   kShutdown = 10,  // browser is done with this session
   kSetZoom = 11,   // user-facing page zoom factor (Ctrl+=/Ctrl+-)
+  kFind = 12,      // find-in-page query / step (Ctrl+F)
 };
 
 struct RendererSessionRequest
@@ -103,6 +107,12 @@ struct RendererSessionRequest
 
   // kSetZoom: page zoom factor; the child clamps it to its own bounds.
   float zoom = 1.0F;
+
+  // kFind: the find-in-page query plus a step direction (0 = new query,
+  // +1 = next match, -1 = previous).  The child keeps the match list for its
+  // document, so stepping only needs the query and the direction.
+  std::string find_query;
+  int find_direction = 0;
 
   // kClick / kHover
   float x = 0;
@@ -137,6 +147,16 @@ struct RendererSessionReply
   std::uint64_t scroll_request_id = 0; // script-requested scroll latch
   float pending_scroll_y = 0;
   std::string hover_link; // hyperlink target under the hovered point ("" = none)
+
+  // kFind: how many matches the query has, which one is current (0-based, -1
+  // when there is none) and the current match's rectangle in device pixels
+  // (document coordinates).
+  int find_count = 0;
+  int find_index = -1;
+  float find_x = 0;
+  float find_y = 0;
+  float find_width = 0;
+  float find_height = 0;
 
   // A navigation happened inside the child (a link click or a script).  The
   // browser re-runs it through its own navigation path so cookies and content

@@ -293,6 +293,86 @@ TEST(RendererSessionTest, SetZoomRescalesTheChildLayout)
   session->Shutdown();
 }
 
+// Find-in-page over the session protocol: the child searches its own layout,
+// reports the count, the current index and the match rectangle, and wraps when
+// stepping past the ends.
+TEST(RendererSessionTest, FindReportsMatchesFromTheChild)
+{
+  auto session = SpawnSession();
+  ASSERT_TRUE(session != nullptr);
+  ASSERT_TRUE(LoadFixture(*session).has_value());
+
+  // The fixture contains "Press" (button), "idle" (log div) and "next" (link).
+  const auto found = session->Find("idle", 0);
+  ASSERT_TRUE(found.has_value()) << found.error().message();
+  EXPECT_EQ(found.value().find_count, 1);
+  EXPECT_EQ(found.value().find_index, 0);
+  EXPECT_GT(found.value().find_width, 0.0F);
+  EXPECT_GT(found.value().find_height, 0.0F);
+
+  // Stepping with a single match stays on it (the child wraps).
+  const auto stepped = session->Find("idle", 1);
+  ASSERT_TRUE(stepped.has_value());
+  EXPECT_EQ(stepped.value().find_index, 0);
+
+  // "e" occurs in several runs; the index walks the list.
+  const auto many = session->Find("e", 0);
+  ASSERT_TRUE(many.has_value());
+  ASSERT_GT(many.value().find_count, 1);
+  const auto next = session->Find("e", 1);
+  ASSERT_TRUE(next.has_value());
+  EXPECT_EQ(next.value().find_index, 1);
+
+  // An empty query clears the child's list.
+  const auto cleared = session->Find("", 0);
+  ASSERT_TRUE(cleared.has_value());
+  EXPECT_EQ(cleared.value().find_count, 0);
+  EXPECT_EQ(cleared.value().find_index, -1);
+  session->Shutdown();
+}
+
+TEST(RendererSessionTest, FindProtocolRoundTripsQueryAndDirection)
+{
+  for (const int direction : {0, 1, -1}) {
+    RendererSessionRequest request;
+    request.op = SessionOp::kFind;
+    request.find_query = "idle";
+    request.find_direction = direction;
+    const auto encoded = EncodeSessionRequest(request);
+    ASSERT_TRUE(encoded.has_value()) << encoded.error().message();
+    const auto decoded = DecodeSessionRequest(encoded.value());
+    ASSERT_TRUE(decoded.has_value()) << decoded.error().message();
+    EXPECT_EQ(decoded.value().op, SessionOp::kFind);
+    EXPECT_EQ(decoded.value().find_query, "idle");
+    EXPECT_EQ(decoded.value().find_direction, direction);
+  }
+
+  // The reply carries the match state (count 2, index 1, a rectangle).
+  RendererSessionReply reply;
+  reply.ok = true;
+  reply.find_count = 2;
+  reply.find_index = 1;
+  reply.find_x = 12.0F;
+  reply.find_y = 34.0F;
+  reply.find_width = 56.0F;
+  reply.find_height = 16.0F;
+  const auto encoded = EncodeSessionReply(reply);
+  ASSERT_TRUE(encoded.has_value()) << encoded.error().message();
+  const auto decoded = DecodeSessionReply(encoded.value());
+  ASSERT_TRUE(decoded.has_value()) << decoded.error().message();
+  EXPECT_EQ(decoded.value().find_count, 2);
+  EXPECT_EQ(decoded.value().find_index, 1);
+  EXPECT_FLOAT_EQ(decoded.value().find_x, 12.0F);
+  EXPECT_FLOAT_EQ(decoded.value().find_y, 34.0F);
+  EXPECT_FLOAT_EQ(decoded.value().find_width, 56.0F);
+  EXPECT_FLOAT_EQ(decoded.value().find_height, 16.0F);
+
+  // An old child (protocol version 1) is rejected instead of misparsed.
+  std::string stale = encoded.value();
+  stale[0] = 1;
+  EXPECT_FALSE(DecodeSessionReply(stale).has_value());
+}
+
 TEST(RendererSessionTest, SetZoomProtocolRoundTripsTheFactor)
 {
   RendererSessionRequest request;

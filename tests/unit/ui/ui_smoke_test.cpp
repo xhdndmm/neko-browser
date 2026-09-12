@@ -14,6 +14,7 @@
 #include <QApplication>
 #include <QImage>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QPixmap>
@@ -407,6 +408,61 @@ TEST(UiSmokeTest, ZoomShortcutsAndIndicator)
   SendKey(&window, Qt::Key_0, Qt::ControlModifier);
   ASSERT_TRUE(WaitFor([&] { return window.ZoomIndicator()->text() == "100%"; }));
   EXPECT_FLOAT_EQ(worker.SnapshotActiveTab().zoom, 1.0F);
+}
+
+// Find-in-page (Ctrl+F): the bar opens focused, the query runs against the
+// laid-out page, Enter / Shift+Enter step the matches (the counter follows,
+// wrapping around), a query without matches reports 0/0, and Esc clears the
+// session and closes the bar.
+TEST(UiSmokeTest, FindBarFindsAndStepsMatches)
+{
+  TempProfile tp;
+  const std::string html_file = tp.path() + "/find.html";
+  ASSERT_TRUE(
+      neko::storage::WriteFileAtomic(html_file,
+                                     "<html><head><title>Find Test</title></head>"
+                                     "<body><p>alpha beta</p><p>gamma alpha</p></body></html>")
+          .has_value());
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.resize(800, 600);
+  window.show();
+  worker.NavigateActive(QString::fromStdString(html_file));
+  window.AddressBar()->clearFocus();
+  ASSERT_TRUE(WaitFor([&] {
+    return worker.SnapshotActiveTab().content_type == neko::browser::ContentType::kHtml;
+  }));
+
+  // Ctrl+F opens the bar (hidden by default).
+  ASSERT_NE(window.FindBar(), nullptr);
+  EXPECT_FALSE(window.FindBarShowing());
+  SendKey(&window, Qt::Key_F, Qt::ControlModifier);
+  ASSERT_TRUE(WaitFor([&] { return window.FindBarShowing(); }));
+
+  // Typing searches: two occurrences of "alpha", the first one is current.
+  window.FindInput()->setText(QStringLiteral("alpha"));
+  ASSERT_TRUE(WaitFor([&] { return window.FindStatus()->text() == "1/2"; }));
+  EXPECT_EQ(worker.SnapshotActiveTab().find_match_count, 2);
+
+  // Enter steps forward and wraps; Shift+Enter steps backwards.
+  SendKey(window.FindInput(), Qt::Key_Return);
+  ASSERT_TRUE(WaitFor([&] { return window.FindStatus()->text() == "2/2"; }));
+  SendKey(window.FindInput(), Qt::Key_Return);
+  ASSERT_TRUE(WaitFor([&] { return window.FindStatus()->text() == "1/2"; }));
+  SendKey(window.FindInput(), Qt::Key_Return, Qt::ShiftModifier);
+  ASSERT_TRUE(WaitFor([&] { return window.FindStatus()->text() == "2/2"; }));
+
+  // A query with no matches is reported honestly.
+  window.FindInput()->clear();
+  window.FindInput()->setText(QStringLiteral("absent"));
+  ASSERT_TRUE(WaitFor([&] { return window.FindStatus()->text() == "0/0"; }));
+  EXPECT_EQ(worker.SnapshotActiveTab().find_match_count, 0);
+
+  // Esc closes the bar and drops the find session.
+  SendKey(window.FindInput(), Qt::Key_Escape);
+  ASSERT_TRUE(WaitFor([&] { return !window.FindBarShowing(); }));
+  ASSERT_TRUE(WaitFor([&] { return worker.SnapshotActiveTab().find_query.empty(); }));
 }
 
 TEST(UiSmokeTest, HoverDoesNotResetScroll)

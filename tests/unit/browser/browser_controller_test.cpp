@@ -1997,6 +1997,68 @@ TEST(BrowserControllerTest, DataUrlStylesheetIsApplied)
 // Page zoom (Ctrl+=/Ctrl+-/Ctrl+0) in the in-process path: the factor scales
 // the layout the controller publishes, survives navigation, and the keyboard
 // steps follow the browser ladder.
+// Find-in-page (Ctrl+F) in the in-process path: the query produces a match
+// list, stepping wraps around it, the page is asked to scroll to the current
+// match through the GUI latch, and navigation clears the session.
+TEST(BrowserControllerTest, FindInTabMatchesStepsAndScrolls)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  const std::string html = "<html><body><p>alpha beta alpha</p><p>gamma</p></body></html>";
+  fetch.Add("http://find.test/one", FakeFetcher::Route{200, {{"content-type", "text/html"}}, html});
+  fetch.Add("http://find.test/two", FakeFetcher::Route{200, {{"content-type", "text/html"}}, html});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  const int tab = controller.NewTab();
+  ASSERT_TRUE(controller.Navigate(tab, "http://find.test/one").has_value());
+  Tab* tab_ptr = controller.FindTab(tab);
+  ASSERT_NE(tab_ptr, nullptr);
+  ASSERT_NE(tab_ptr->page, nullptr);
+  tab_ptr->page->Layout(800, 600);
+
+  // Two occurrences of "alpha"; the first is current and the page is asked to
+  // scroll to it (the latch the GUI consumes).
+  TabSnapshot before = controller.SnapshotTab(tab);
+  EXPECT_TRUE(before.find_query.empty());
+  EXPECT_EQ(controller.FindInTab(tab, "alpha"), 2);
+  TabSnapshot found = controller.SnapshotTab(tab);
+  EXPECT_EQ(found.find_query, "alpha");
+  EXPECT_EQ(found.find_match_count, 2);
+  EXPECT_EQ(found.find_current_index, 0);
+  EXPECT_GT(found.find_current_match.width, 0.0F);
+  EXPECT_GT(found.scroll_request_id, before.scroll_request_id);
+
+  // Stepping walks the list and wraps around in both directions.
+  EXPECT_EQ(controller.FindInTab(tab, "alpha", 1), 2);
+  EXPECT_EQ(controller.SnapshotTab(tab).find_current_index, 1);
+  EXPECT_EQ(controller.FindInTab(tab, "alpha", 1), 2);
+  EXPECT_EQ(controller.SnapshotTab(tab).find_current_index, 0);
+  EXPECT_EQ(controller.FindInTab(tab, "alpha", -1), 2);
+  EXPECT_EQ(controller.SnapshotTab(tab).find_current_index, 1);
+
+  // The rectangles belong to different occurrences.
+  const auto second = controller.SnapshotTab(tab).find_current_match;
+  EXPECT_EQ(controller.FindInTab(tab, "g", 0), 1);
+  const auto gamma = controller.SnapshotTab(tab).find_current_match;
+  EXPECT_NE(gamma.y, second.y);
+
+  // No matches and the empty query both clear the state.
+  EXPECT_EQ(controller.FindInTab(tab, "absent"), 0);
+  TabSnapshot missing = controller.SnapshotTab(tab);
+  EXPECT_EQ(missing.find_query, "absent");
+  EXPECT_EQ(missing.find_match_count, 0);
+  EXPECT_EQ(missing.find_current_index, -1);
+  EXPECT_EQ(controller.FindInTab(tab, "alpha"), 2);
+  EXPECT_EQ(controller.FindInTab(tab, ""), 0);
+  EXPECT_TRUE(controller.SnapshotTab(tab).find_query.empty());
+
+  // A navigation describes a new document, so the session is dropped.
+  EXPECT_EQ(controller.FindInTab(tab, "alpha"), 2);
+  ASSERT_TRUE(controller.Navigate(tab, "http://find.test/two").has_value());
+  TabSnapshot reloaded = controller.SnapshotTab(tab);
+  EXPECT_TRUE(reloaded.find_query.empty());
+  EXPECT_EQ(reloaded.find_match_count, 0);
+}
+
 TEST(BrowserControllerTest, NextZoomFactorStepsTheBrowserLadder)
 {
   EXPECT_FLOAT_EQ(NextZoomFactor(1.0F, 1), 1.1F);

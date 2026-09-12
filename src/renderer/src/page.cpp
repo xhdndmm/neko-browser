@@ -4,6 +4,7 @@
 #include "neko/base/status.h"
 #include "neko/base/thread_pool.h"
 #include "neko/css/color.h"
+#include "neko/graphics/font_selector.h"
 #include "neko/html/parser.h"
 #include "neko/paint/painter.h"
 
@@ -439,6 +440,85 @@ float Page::user_zoom() const
 {
   std::lock_guard<std::mutex> lock(mutex_);
   return user_zoom_;
+}
+
+namespace {
+
+// ASCII-only case folding: what find-in-page matching uses.  Unicode case
+// folding (Turkish dotted/dotless i, ß, ...) is NOT IMPLEMENTED.
+char FoldAscii(char c)
+{
+  return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+}
+
+std::string FoldAsciiLower(std::string_view text)
+{
+  std::string out(text);
+  for (char& c : out) {
+    c = FoldAscii(c);
+  }
+  return out;
+}
+
+// Depth-first walk collecting every occurrence of the (already folded) needle
+// inside the laid-out text runs, in document order, with its measured prefix
+// offset so the highlight covers the matched characters rather than the run.
+void CollectMatches(const layout::LayoutBox& box,
+                    const graphics::FontRegistry& fonts,
+                    const std::string& needle,
+                    std::vector<FindMatch>& out)
+{
+  for (const auto& child : box.children) {
+    CollectMatches(*child, fonts, needle, out);
+  }
+  for (const layout::Line& line : box.lines) {
+    for (const layout::TextRun& run : line.runs) {
+      if (run.text.empty()) {
+        continue;
+      }
+      const std::string haystack = FoldAsciiLower(run.text);
+      const graphics::FontSelector* selector =
+          fonts.SelectorFor(run.font_family, run.font_weight, run.font_italic);
+      std::size_t pos = haystack.find(needle);
+      while (pos != std::string::npos) {
+        const std::string_view text(run.text);
+        const float prefix = selector->TextWidth(text.substr(0, pos), run.font_size);
+        const float width = selector->TextWidth(text.substr(pos, needle.size()), run.font_size);
+        out.push_back(FindMatch{run.x + prefix, run.y, width, run.font_size});
+        pos = haystack.find(needle, pos + 1);
+      }
+    }
+  }
+}
+
+} // namespace
+
+std::vector<FindMatch> Page::FindMatches(std::string_view query)
+{
+  std::vector<FindMatch> matches;
+  if (query.empty()) {
+    return matches;
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (document_ == nullptr) {
+    return matches;
+  }
+  if (root_ == nullptr) {
+    // A script (or the find bar) may ask before the UI has laid the page out.
+    LayoutLocked(viewport_width_ > 0 ? viewport_width_ : 800, viewport_height_);
+  }
+  if (root_ == nullptr) {
+    return matches;
+  }
+  CollectMatches(*root_, fonts_, FoldAsciiLower(query), matches);
+  // Every other geometry query reports device pixels; zoom scales this too.
+  for (FindMatch& match : matches) {
+    match.x *= page_zoom_;
+    match.y *= page_zoom_;
+    match.width *= page_zoom_;
+    match.height *= page_zoom_;
+  }
+  return matches;
 }
 
 void Page::SetExternalStylesheets(std::vector<css::StyleSheet> sheets)

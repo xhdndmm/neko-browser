@@ -57,6 +57,8 @@ private:
   // Renderer-process mode: paints the frame the child produced.
   void PaintRemote(QPainter& painter);
   void PaintImage(QPainter& painter);
+  // Find-in-page (Ctrl+F): draws the current match's highlight over the page.
+  void PaintFindHighlight(QPainter& painter);
   // Recomputes the caret overlay layer (layer 1) from the focused element
   // and the current scroll.  Returns true when the caret's screen rect or
   // visibility changed since the last call.

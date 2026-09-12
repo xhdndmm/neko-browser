@@ -339,6 +339,11 @@ base::Result<std::string> EncodeSessionRequest(const RendererSessionRequest& req
   case SessionOp::kSetZoom:
     PutF32(out, request.zoom);
     break;
+  case SessionOp::kFind:
+    PutString(out, request.find_query);
+    // -1 / 0 / +1 mapped to 0 / 1 / 2 so the field stays unsigned.
+    PutU8(out, static_cast<std::uint8_t>(request.find_direction + 1));
+    break;
   case SessionOp::kWheel:
     PutF64(out, request.delta_y);
     break;
@@ -371,7 +376,7 @@ base::Result<RendererSessionRequest> DecodeSessionRequest(std::string_view paylo
     return base::Err(e);
   }
   if (op < static_cast<std::uint8_t>(SessionOp::kLoad) ||
-      op > static_cast<std::uint8_t>(SessionOp::kSetZoom)) {
+      op > static_cast<std::uint8_t>(SessionOp::kFind)) {
     return base::Err(base::Error::InvalidArgument("unknown session operation"));
   }
   request.op = static_cast<SessionOp>(op);
@@ -433,6 +438,20 @@ base::Result<RendererSessionRequest> DecodeSessionRequest(std::string_view paylo
       return base::Err(e);
     }
     break;
+  case SessionOp::kFind: {
+    if (auto e = reader.String(kMaxSessionTextBytes, &request.find_query); !e.ok()) {
+      return base::Err(e);
+    }
+    std::uint8_t direction = 0;
+    if (auto e = reader.U8(&direction); !e.ok()) {
+      return base::Err(e);
+    }
+    if (direction > 2) {
+      return base::Err(base::Error::InvalidArgument("invalid find direction"));
+    }
+    request.find_direction = static_cast<int>(direction) - 1;
+    break;
+  }
   case SessionOp::kWheel:
     if (auto e = reader.F64(&request.delta_y); !e.ok()) {
       return base::Err(e);
@@ -491,6 +510,13 @@ base::Result<std::string> EncodeSessionReply(const RendererSessionReply& reply)
   PutF32(out, reply.scroll_y);
   PutF32(out, reply.pending_scroll_y);
   PutU64(out, reply.scroll_request_id);
+  // Find-in-page state (count 0 when the query has no matches).
+  PutU32(out, static_cast<std::uint32_t>(reply.find_count < 0 ? 0 : reply.find_count));
+  PutU32(out, static_cast<std::uint32_t>(reply.find_index < 0 ? 0 : reply.find_index));
+  PutF32(out, reply.find_x);
+  PutF32(out, reply.find_y);
+  PutF32(out, reply.find_width);
+  PutF32(out, reply.find_height);
   if (reply.has_frame) {
     PutU32(out, static_cast<std::uint32_t>(reply.width));
     PutU32(out, static_cast<std::uint32_t>(reply.height));
@@ -546,6 +572,28 @@ base::Result<RendererSessionReply> DecodeSessionReply(std::string_view payload)
   if (auto e = reader.U64(&reply.scroll_request_id); !e.ok()) {
     return base::Err(e);
   }
+  std::uint32_t find_count = 0;
+  std::uint32_t find_index = 0;
+  if (auto e = reader.U32(&find_count); !e.ok()) {
+    return base::Err(e);
+  }
+  if (auto e = reader.U32(&find_index); !e.ok()) {
+    return base::Err(e);
+  }
+  if (auto e = reader.F32(&reply.find_x); !e.ok()) {
+    return base::Err(e);
+  }
+  if (auto e = reader.F32(&reply.find_y); !e.ok()) {
+    return base::Err(e);
+  }
+  if (auto e = reader.F32(&reply.find_width); !e.ok()) {
+    return base::Err(e);
+  }
+  if (auto e = reader.F32(&reply.find_height); !e.ok()) {
+    return base::Err(e);
+  }
+  reply.find_count = static_cast<int>(find_count);
+  reply.find_index = find_count == 0 ? -1 : static_cast<int>(find_index);
   reply.ok = status == 0;
   reply.handled = (flags & kReplyFlagHandled) != 0;
   reply.changed = (flags & kReplyFlagChanged) != 0;

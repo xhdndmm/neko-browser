@@ -41,6 +41,15 @@ struct RendererUpdate
   // a pointing hand from this without needing the DOM.
   std::string hover_link;
 
+  // Find-in-page (kFind): total matches, the current one (0-based, -1 when
+  // none) and its rectangle in device pixels (document coordinates).
+  int find_count = 0;
+  int find_index = -1;
+  float find_x = 0;
+  float find_y = 0;
+  float find_width = 0;
+  float find_height = 0;
+
   // A navigation happened inside the child; the browser re-runs it through its
   // own navigation path (cookies and content routing stay browser-side).
   std::string redirect_url;
@@ -87,6 +96,9 @@ public:
   base::Result<RendererUpdate> ScrollTo(float y);
   // Applies the user-facing page zoom (Ctrl+=/Ctrl+-); the child clamps it.
   base::Result<RendererUpdate> SetZoom(float factor);
+  // Find-in-page (Ctrl+F): |direction| 0 starts a new query, +1/-1 steps the
+  // current match list (wrapping).  The child keeps the match list.
+  base::Result<RendererUpdate> Find(std::string_view query, int direction);
   // Advances the page's timers and animated images by one frame.
   base::Result<RendererUpdate> Pump();
   // Rasterizes the viewport (|width| x |height|) scrolled to |scroll_y|.

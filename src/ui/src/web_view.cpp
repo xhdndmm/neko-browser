@@ -518,6 +518,31 @@ void WebView::paintEvent(QPaintEvent*)
   default:
     break; // text modes use the QPlainTextEdit overlay
   }
+  PaintFindHighlight(painter);
+}
+
+void WebView::PaintFindHighlight(QPainter& painter)
+{
+  // Find-in-page (Ctrl+F): a browser-side overlay over the page for the
+  // current match, like real browsers (the document itself is untouched).
+  // The rectangle arrives in device pixels in document coordinates, so the
+  // scroll offset is subtracted here.  NOT IMPLEMENTED: highlighting every
+  // match at once (only the current one is drawn).
+  if (snapshot_.content_type != browser::ContentType::kHtml || snapshot_.find_match_count <= 0 ||
+      snapshot_.find_current_index < 0) {
+    return;
+  }
+  const renderer::FindMatch& match = snapshot_.find_current_match;
+  if (match.width <= 0.0F || match.height <= 0.0F) {
+    return;
+  }
+  const QRectF rect(match.x,
+                    match.y - static_cast<float>(verticalScrollBar()->value()),
+                    match.width,
+                    match.height);
+  painter.fillRect(rect, QColor(255, 214, 0, 128));
+  painter.setPen(QColor(180, 140, 0, 200));
+  painter.drawRect(rect.adjusted(0, 0, -1, -1));
 }
 
 void WebView::PaintHtml(QPainter& painter)

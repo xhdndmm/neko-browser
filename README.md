@@ -77,7 +77,8 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
   imports/scopes 子集）、innerText 等子集，
   详见[兼容性矩阵](docs/compatibility/compatibility-matrix.md)）
 - **GUI（Qt6）**：标签页、地址栏、后退/前进/刷新/新标签/书签/下载、**页面缩放
-  （Ctrl+= / Ctrl+- / Ctrl+0，工具栏显示百分比、点击复位）**、DevTools
+  （Ctrl+= / Ctrl+- / Ctrl+0，工具栏显示百分比、点击复位）**、**页面内查找
+  （Ctrl+F，Enter/Shift+Enter 跳转、n/m 计数、页内高亮）**、DevTools
   （DOM 树/网络日志/**JS Console REPL**）、历史/书签/下载/设置面板
 - **下载器**：Content-Disposition/URL 文件名、原子写入
 - **多进程（M1+M2，ADR 0016）**：`neko::ipc`（帧协议 Channel + 跨平台 Subprocess）+ **Renderer 子进程**；M1 为每页子进程（`--renderer-child`，CLI `--renderer-process`）；M2 为**渲染器会话**（`--renderer-session`：持久子进程 + 交互协议，GUI `neko_browser_gui --renderer-process` 下 WebView 绘制子进程帧、输入转发、每站点会话复用、崩溃后重建）—— **PARTIAL**（Network/GPU 进程与沙箱未开始；顶层文档与 Cookie 仍在浏览器侧）

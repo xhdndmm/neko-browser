@@ -237,6 +237,47 @@ TEST(PageTest, UserZoomIsClampedAndCombinesWithCssZoom)
   EXPECT_NEAR(geometry->width, 100.0F, 1.0F);
 }
 
+// Find-in-page (Ctrl+F): matching walks the laid-out text runs in document
+// order, is ASCII case-insensitive, reports the rectangle of the matched
+// characters (not the whole run), and scales with the page zoom.
+TEST(PageTest, FindMatchesReportsInRunRectangles)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body style=\"margin:0\">"
+                            "<p>one two three one</p><p>ONE more</p></body>")
+                  .has_value());
+  page.Layout(400, 300);
+
+  const auto matches = page.FindMatches("one");
+  ASSERT_EQ(matches.size(), 3u);
+  for (const FindMatch& match : matches) {
+    EXPECT_GT(match.width, 0.0F);
+    EXPECT_NEAR(match.height, 16.0F, 0.5F); // the default font size
+  }
+  // Document order: the second match in the first paragraph sits to the right
+  // of the first, the third one is on the next line.
+  EXPECT_GT(matches[1].x, matches[0].x);
+  EXPECT_GT(matches[2].y, matches[0].y);
+  // The rectangle covers the match only: the paragraph runs are wider.
+  EXPECT_LT(matches[0].width, matches[1].x - matches[0].x + matches[0].width);
+
+  // The match offset is measured: "three" starts after "one two ".
+  const auto three = page.FindMatches("three");
+  ASSERT_EQ(three.size(), 1u);
+  EXPECT_GT(three[0].x, matches[0].x + matches[0].width);
+
+  // No match / empty query: nothing to report.
+  EXPECT_TRUE(page.FindMatches("absent").empty());
+  EXPECT_TRUE(page.FindMatches("").empty());
+
+  // Zoomed pages report device pixels for the highlight (browser behavior).
+  page.SetUserZoom(2.0F);
+  const auto zoomed = page.FindMatches("one");
+  ASSERT_EQ(zoomed.size(), 3u);
+  EXPECT_NEAR(zoomed[0].x, matches[0].x * 2.0F, 1.0F);
+  EXPECT_NEAR(zoomed[0].width, matches[0].width * 2.0F, 1.0F);
+}
+
 TEST(PageTest, BodyBackgroundPropagatesToCanvas)
 {
   // CSS canvas background: a <body> background paints the whole viewport when

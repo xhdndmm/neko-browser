@@ -81,6 +81,11 @@ public:
   void ZoomIn();
   void ZoomOut();
   void ResetZoom();
+  // Find-in-page (Ctrl+F) for the active tab: |direction| 0 starts a new query,
+  // +1/-1 steps the match list.  The result arrives in the next snapshot
+  // (find_query / find_match_count / find_current_index).
+  void Find(const QString& query, int direction);
+  void ClearFind();
   // Dispatches a user click (document coordinates) to the page's script
   // runtime on the worker thread; runs the cancelable "click" event and the
   // default action (hyperlink navigation) unless preventDefault was called.

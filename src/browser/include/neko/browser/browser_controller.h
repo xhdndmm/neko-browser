@@ -98,6 +98,18 @@ struct Tab
   // only; the GUI reads it through TabSnapshot::zoom.
   float zoom = 1.0F;
 
+  // Find-in-page state (Ctrl+F).  |find_query| is the active query ("" = no
+  // find session), |find_matches| the in-process match list (renderer-mode tabs
+  // leave it empty: their child owns the list), |find_index| the 0-based
+  // current match (-1 when none) and |find_match| its rectangle in device
+  // pixels.  |find_match_count| mirrors the count for both modes.  Cleared on
+  // navigation (the document is replaced).  Guarded by the controller mutex.
+  std::string find_query;
+  std::vector<renderer::FindMatch> find_matches;
+  int find_index = -1;
+  renderer::FindMatch find_match;
+  int find_match_count = 0;
+
   // The element the pointer currently hovers over (worker-thread only, used to
   // fire mouseover/mouseout).  Points into the current document; the UI posts
   // pointer positions and the worker hit-tests, so no pointers cross threads.
@@ -192,6 +204,15 @@ struct TabSnapshot
   std::string remote_hover_link;
   // User zoom factor driving the CSS-pixel mapping (1.0 = 100%).
   float zoom = 1.0F;
+
+  // Find-in-page state for the tab (Ctrl+F).  |find_match_count| is the number
+  // of matches, |find_current_index| the 0-based current one (-1 when none) and
+  // |find_current_match| its rectangle in device pixels (document coordinates,
+  // so the GUI subtracts its scroll offset when drawing the highlight).
+  std::string find_query;
+  int find_match_count = 0;
+  int find_current_index = -1;
+  renderer::FindMatch find_current_match;
 };
 
 // A network request record for DevTools.
@@ -383,6 +404,19 @@ public:
   float ZoomOutTab(int tab_id);
   float ResetTabZoom(int tab_id);
   float TabZoom(int tab_id) const;
+
+  // ---- Find in page (Ctrl+F) ---------------------------------------------
+  // |FindInTab| runs |query| over the tab's laid-out text when |direction| is 0
+  // (an empty query clears the state), or steps the match list for +1/-1
+  // (wrapping around).  The page scrolls so the current match is visible, and
+  // the match list is re-run after each navigation (a reloaded page cannot be
+  // searched against a stale list — the state is cleared on navigation).
+  // Returns the number of matches.  The current match is exposed through the
+  // tab snapshot (device pixels, document coordinates).  NOT IMPLEMENTED:
+  // matching across text-run boundaries (a phrase split by a line break or an
+  // inline element) and Unicode case folding beyond ASCII.
+  int FindInTab(int tab_id, std::string_view query, int direction = 0);
+  void ClearFindInTab(int tab_id);
 
   // Returns the content-type of the active tab.
   ContentType active_content_type() const;

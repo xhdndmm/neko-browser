@@ -27,6 +27,16 @@ class ThreadPool;
 
 namespace neko::renderer {
 
+// One occurrence of a find-in-page query: the match's rectangle in device
+// pixels (document coordinates — the y is not scroll-adjusted).
+struct FindMatch
+{
+  float x = 0;
+  float y = 0;
+  float width = 0;
+  float height = 0;
+};
+
 // User-facing page zoom bounds (Ctrl+= / Ctrl+-), browser-like 25% .. 500%.
 inline constexpr float kMinUserZoom = 0.25F;
 inline constexpr float kMaxUserZoom = 5.0F;
@@ -132,6 +142,14 @@ public:
 
   // Reads a UTF-8 file and loads it as HTML (encoding sniffing still applies).
   base::Result<void> LoadFile(std::string_view path);
+
+  // Case-insensitive (ASCII) find-in-page over the laid-out text runs, in
+  // document order.  Each occurrence reports its rectangle in device pixels,
+  // like the other geometry queries.  Matches are found within a single text
+  // run — a phrase split across lines or inline elements is not matched — and
+  // Unicode case folding beyond ASCII is NOT IMPLEMENTED.  Runs a layout pass
+  // first when none exists yet.
+  std::vector<FindMatch> FindMatches(std::string_view query);
 
   // Builds the layout tree at the given viewport width.
   void Layout(float viewport_width, float viewport_height = 0);

@@ -100,6 +100,12 @@ base::Result<RendererUpdate> RendererSession::Convert(const RendererSessionReply
   update.pending_scroll_y = reply.pending_scroll_y;
   update.hover_link = reply.hover_link;
   update.redirect_url = reply.redirect_url;
+  update.find_count = reply.find_count;
+  update.find_index = reply.find_index;
+  update.find_x = reply.find_x;
+  update.find_y = reply.find_y;
+  update.find_width = reply.find_width;
+  update.find_height = reply.find_height;
   if (frame != nullptr) {
     frame->width = 0;
     frame->height = 0;
@@ -225,6 +231,19 @@ base::Result<RendererUpdate> RendererSession::SetZoom(float factor)
   RendererSessionRequest request;
   request.op = SessionOp::kSetZoom;
   request.zoom = factor;
+  auto reply = RoundTrip(request);
+  if (!reply.has_value()) {
+    return base::Err(reply.error());
+  }
+  return Convert(reply.value(), nullptr);
+}
+
+base::Result<RendererUpdate> RendererSession::Find(std::string_view query, int direction)
+{
+  RendererSessionRequest request;
+  request.op = SessionOp::kFind;
+  request.find_query.assign(query);
+  request.find_direction = direction;
   auto reply = RoundTrip(request);
   if (!reply.has_value()) {
     return base::Err(reply.error());

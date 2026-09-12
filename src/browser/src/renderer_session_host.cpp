@@ -212,6 +212,20 @@ private:
       // the change so the browser pulls a fresh frame.
       controller_->SetTabZoom(tab_id_, request.zoom);
       break;
+    case SessionOp::kFind: {
+      // Same API as the in-process path: the child's controller keeps the match
+      // list, answers with the count and reports the current match's rectangle.
+      const int count = controller_->FindInTab(tab_id_, request.find_query, request.find_direction);
+      const TabSnapshot snapshot = controller_->SnapshotTab(tab_id_);
+      reply.find_count = count;
+      reply.find_index = snapshot.find_current_index;
+      reply.find_x = snapshot.find_current_match.x;
+      reply.find_y = snapshot.find_current_match.y;
+      reply.find_width = snapshot.find_current_match.width;
+      reply.find_height = snapshot.find_current_match.height;
+      reply.ok = true;
+      return reply;
+    }
     case SessionOp::kPump:
       controller_->PumpScriptTimers();
       break;

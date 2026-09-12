@@ -175,6 +175,24 @@ void BrowserWorker::ResetZoom()
   });
 }
 
+void BrowserWorker::Find(const QString& query, int direction)
+{
+  Post([this, query = query.toStdString(), direction] {
+    if (const browser::TabSnapshot tab = controller_.SnapshotActiveTab(); tab.id >= 0) {
+      (void)controller_.FindInTab(tab.id, query, direction);
+    }
+  });
+}
+
+void BrowserWorker::ClearFind()
+{
+  Post([this] {
+    if (const browser::TabSnapshot tab = controller_.SnapshotActiveTab(); tab.id >= 0) {
+      controller_.ClearFindInTab(tab.id);
+    }
+  });
+}
+
 void BrowserWorker::DispatchPointerClick(int tab_id, float doc_x, float doc_y)
 {
   Post([this, tab_id, doc_x, doc_y] {

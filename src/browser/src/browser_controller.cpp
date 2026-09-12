@@ -340,6 +340,10 @@ TabSnapshot ToSnapshot(const Tab& tab)
   s.remote_content_height = tab.remote_content_height;
   s.remote_hover_link = tab.remote_hover_link;
   s.zoom = tab.zoom;
+  s.find_query = tab.find_query;
+  s.find_match_count = tab.find_match_count;
+  s.find_current_index = tab.find_index;
+  s.find_current_match = tab.find_match;
   return s;
 }
 
@@ -1243,6 +1247,101 @@ float BrowserController::TabZoom(int tab_id) const
   return 1.0F;
 }
 
+int BrowserController::FindInTab(int tab_id, std::string_view query, int direction)
+{
+  Tab* tab = FindTab(tab_id);
+  if (tab == nullptr) {
+    return 0;
+  }
+  if (query.empty()) {
+    ClearFindInTab(tab_id);
+    return 0;
+  }
+  const int viewport_height =
+      tab->remote_viewport_height > 0 ? tab->remote_viewport_height : kDefaultRemoteViewportHeight;
+  renderer::FindMatch match;
+  int count = 0;
+  int index = -1;
+  if (IsRemoteTab(*tab)) {
+    // The child owns the match list; it answers with the count and the current
+    // rectangle, so the browser only has to scroll to it.
+    auto reply = tab->session->Find(query, direction);
+    if (!reply.has_value()) {
+      MarkSessionFailed(*tab, reply.error().message());
+      return 0;
+    }
+    count = reply.value().find_count;
+    index = reply.value().find_index;
+    match = renderer::FindMatch{reply.value().find_x,
+                                reply.value().find_y,
+                                reply.value().find_width,
+                                reply.value().find_height};
+    std::lock_guard<std::mutex> lock(mutex_);
+    tab->find_query = std::string(query);
+    tab->find_index = index;
+    tab->find_match = match;
+    tab->find_match_count = count;
+  } else {
+    if (tab->page == nullptr) {
+      return 0;
+    }
+    // The match list lives with the tab and the page lock is taken after the
+    // controller lock (the same order every other path uses).
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (direction == 0 || tab->find_query != query) {
+      tab->find_query = std::string(query);
+      tab->find_matches = tab->page->FindMatches(query);
+      tab->find_index = tab->find_matches.empty() ? -1 : 0;
+    } else if (!tab->find_matches.empty()) {
+      const int size = static_cast<int>(tab->find_matches.size());
+      tab->find_index = ((tab->find_index + direction) % size + size) % size;
+    }
+    count = static_cast<int>(tab->find_matches.size());
+    index = tab->find_index;
+    if (index >= 0 && index < count) {
+      match = tab->find_matches[static_cast<std::size_t>(index)];
+    }
+    tab->find_match = match;
+    tab->find_match_count = count;
+  }
+  if (index >= 0 && count > 0) {
+    // Centre the match in the viewport, like browsers do, by requesting a
+    // scroll (the GUI applies it to its scroll bar through the latch).
+    const float centre = match.y + match.height / 2.0F;
+    SetTabScrollRequest(tab_id,
+                        std::max(0.0F, centre - static_cast<float>(viewport_height) / 3.0F));
+  } else if (IsRemoteTab(*tab)) {
+    // "No matches" must repaint too: pull a frame so the GUI clears the
+    // previous highlight state.
+    PullRemoteFrame(*tab, /*force=*/true);
+  }
+  return count;
+}
+
+void BrowserController::ClearFindInTab(int tab_id)
+{
+  Tab* tab = FindTab(tab_id);
+  if (tab == nullptr) {
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    tab->find_query.clear();
+    tab->find_matches.clear();
+    tab->find_index = -1;
+    tab->find_match = renderer::FindMatch{};
+    tab->find_match_count = 0;
+  }
+  if (IsRemoteTab(*tab)) {
+    // Clear the child's list too, otherwise its next step would answer from a
+    // stale query.
+    auto reply = tab->session->Find("", 0);
+    if (!reply.has_value()) {
+      MarkSessionFailed(*tab, reply.error().message());
+    }
+  }
+}
+
 void BrowserController::SetTabScrollRequest(int tab_id, float y)
 {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -1326,6 +1425,13 @@ void BrowserController::LoadHtmlInRenderer(Tab& tab,
     // The document lives in the child: no in-process page or script runtime.
     tab.page.reset();
     tab.script_runtime.reset();
+    // A previous find-in-page session described the old document; the child's
+    // list starts empty for the new one.
+    tab.find_query.clear();
+    tab.find_matches.clear();
+    tab.find_index = -1;
+    tab.find_match = renderer::FindMatch{};
+    tab.find_match_count = 0;
     tab.title = reply.value().title.empty() ? std::string("Untitled") : reply.value().title;
     tab.remote_content_height = reply.value().content_height;
     tab.remote_hover_link = reply.value().hover_link;
@@ -1626,6 +1732,12 @@ void BrowserController::LoadBytes(Tab& tab,
       tab.content_type = ContentType::kHtml;
       tab.page = new_page; // shared: the background task keeps it alive
       tab.title = std::move(title);
+      // A previous find-in-page session described the old document.
+      tab.find_query.clear();
+      tab.find_matches.clear();
+      tab.find_index = -1;
+      tab.find_match = renderer::FindMatch{};
+      tab.find_match_count = 0;
       // Reflect a script history.pushState/replaceState in the address bar.
       // Only when the page actually pushed/replaced (the ended-on entry differs
       // from the loaded URL): otherwise leave the controller's own tab.url

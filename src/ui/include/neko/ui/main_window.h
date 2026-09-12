@@ -39,6 +39,24 @@ public:
   {
     return address_;
   }
+  // The find-in-page bar's input and visibility (Ctrl+F).
+  QLineEdit* FindInput() const
+  {
+    return find_input_;
+  }
+  QWidget* FindBar() const
+  {
+    return find_bar_;
+  }
+  // True while the find bar is shown (the toolbar action owns its visibility).
+  bool FindBarShowing() const
+  {
+    return find_action_ != nullptr && find_action_->isVisible();
+  }
+  QLabel* FindStatus() const
+  {
+    return find_status_;
+  }
   // The toolbar's page-zoom indicator ("100%"); clicking it resets the zoom.
   QToolButton* ZoomIndicator() const
   {
@@ -76,8 +94,14 @@ private slots:
   void OnDomSelectionChanged();
 
 private:
+  // Enter/Shift+Enter in the find input step the matches (handled here so the
+  // shift state comes from the key event itself, not global keyboard state).
+  bool eventFilter(QObject* watched, QEvent* event) override;
   void BuildUi();
   void BuildToolbar();
+  void BuildFindBar(QToolBar* toolbar);
+  void ShowFindBar();
+  void HideFindBar();
   void BuildDocks();
   void RefreshAll();
   void SyncTabs();
@@ -102,6 +126,17 @@ private:
   QLineEdit* address_ = nullptr;
   // Page-zoom indicator in the toolbar ("100%"); clicking it resets to 100%.
   QToolButton* zoom_button_ = nullptr;
+  // Find-in-page bar (Ctrl+F): query input, "n/m" status and its container
+  // (hidden until Ctrl+F).
+  QWidget* find_bar_ = nullptr;
+  QLineEdit* find_input_ = nullptr;
+  QLabel* find_status_ = nullptr;
+  // The action the find bar lives in: the toolbar syncs a widget's visibility
+  // from its action, so hiding/showing goes through this.
+  QAction* find_action_ = nullptr;
+  // Set while HideFindBar clears the input, so the programmatic text change is
+  // not mistaken for a user edit (which would re-run the query).
+  bool syncing_find_ = false;
   // True while the user is editing the address bar; RefreshAll() then leaves
   // the text alone instead of clobbering it with the tab's URL.
   bool address_editing_ = false;

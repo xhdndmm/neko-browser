@@ -138,6 +138,9 @@ MainWindow::MainWindow(BrowserWorker* worker, QWidget* parent)
   connect(zoom_out_key, &QShortcut::activated, this, [this] { worker_->ZoomOut(); });
   auto* zoom_reset_key = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_0), this);
   connect(zoom_reset_key, &QShortcut::activated, this, [this] { worker_->ResetZoom(); });
+  // Find-in-page: Ctrl+F opens the bar, Enter / Shift+Enter step the matches.
+  auto* find_key = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_F), this);
+  connect(find_key, &QShortcut::activated, this, [this] { ShowFindBar(); });
   // Ctrl+1..9 jump to the corresponding tab.
   for (int i = 1; i <= 9; ++i) {
     auto* jump =
@@ -235,6 +238,115 @@ void MainWindow::BuildToolbar()
   toolbar->addWidget(zoom_button_);
   auto* zoom_in = toolbar->addAction(tr("+"), this, [this] { worker_->ZoomIn(); });
   zoom_in->setToolTip(tr("Zoom in (Ctrl+=)"));
+
+  BuildFindBar(toolbar);
+}
+
+void MainWindow::BuildFindBar(QToolBar* toolbar)
+{
+  // Hidden until Ctrl+F: a query input, a "current/total" counter and the
+  // next/previous/close buttons.  The bar talks to the worker, which runs the
+  // search on the active tab and reports it back through the tab snapshot.
+  find_bar_ = new QWidget(this);
+  auto* layout = new QHBoxLayout(find_bar_);
+  layout->setContentsMargins(4, 0, 4, 0);
+  layout->setSpacing(4);
+
+  find_input_ = new QLineEdit(find_bar_);
+  find_input_->setPlaceholderText(tr("Find in page"));
+  find_input_->setClearButtonEnabled(true);
+  find_input_->setMinimumWidth(220);
+  layout->addWidget(find_input_);
+
+  find_status_ = new QLabel(tr("0/0"), find_bar_);
+  layout->addWidget(find_status_);
+
+  auto* previous = new QToolButton(find_bar_);
+  previous->setText(QString::fromUtf8("\u25b2"));
+  previous->setToolTip(tr("Previous match (Shift+Enter)"));
+  connect(
+      previous, &QToolButton::clicked, this, [this] { worker_->Find(find_input_->text(), -1); });
+  layout->addWidget(previous);
+
+  auto* next = new QToolButton(find_bar_);
+  next->setText(QString::fromUtf8("\u25bc"));
+  next->setToolTip(tr("Next match (Enter)"));
+  connect(next, &QToolButton::clicked, this, [this] { worker_->Find(find_input_->text(), 1); });
+  layout->addWidget(next);
+
+  auto* close = new QToolButton(find_bar_);
+  close->setText(QString::fromUtf8("\u2715"));
+  close->setToolTip(tr("Close find bar (Esc)"));
+  connect(close, &QToolButton::clicked, this, [this] { HideFindBar(); });
+  layout->addWidget(close);
+
+  connect(find_input_, &QLineEdit::textChanged, this, [this](const QString& text) {
+    if (syncing_find_)
+      return;
+    worker_->Find(text, 0);
+  });
+  // Enter steps forward, Shift+Enter backwards, Esc closes (see eventFilter:
+  // a QShortcut would need a real focus chain, which synthetic key events in
+  // tests and offscreen platforms do not provide).
+  find_input_->installEventFilter(this);
+
+  find_bar_->setVisible(false);
+  if (toolbar != nullptr) {
+    // The toolbar re-syncs a widget's visibility from its action, so the
+    // action is what ShowFindBar/HideFindBar toggle.
+    find_action_ = toolbar->addWidget(find_bar_);
+    find_action_->setVisible(false);
+  }
+}
+bool MainWindow::eventFilter(QObject* watched, QEvent* event)
+{
+  if (watched == find_input_ && event->type() == QEvent::KeyPress) {
+    auto* key = static_cast<QKeyEvent*>(event);
+    if (key->key() == Qt::Key_Escape) {
+      HideFindBar();
+      return true;
+    }
+    if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) {
+      const int direction = key->modifiers().testFlag(Qt::ShiftModifier) ? -1 : 1;
+      worker_->Find(find_input_->text(), direction);
+      return true;
+    }
+  }
+  return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::ShowFindBar()
+{
+  if (find_bar_ == nullptr) {
+    return;
+  }
+  if (find_action_ != nullptr) {
+    find_action_->setVisible(true);
+  }
+  find_bar_->setVisible(true);
+  find_input_->setFocus();
+  find_input_->selectAll();
+}
+
+void MainWindow::HideFindBar()
+{
+  if (find_bar_ == nullptr) {
+    return;
+  }
+  worker_->ClearFind();
+  if (find_action_ != nullptr) {
+    // The action owns the widget's visibility inside the toolbar (a widget-level
+    // setVisible(false) alone leaves Qt's visibility flags inconsistent).
+    find_action_->setVisible(false);
+  }
+  find_bar_->setVisible(false);
+  syncing_find_ = true;
+  find_input_->clear();
+  syncing_find_ = false;
+  find_status_->setText(tr("0/0"));
+  if (WebView* view = ActiveView(); view != nullptr) {
+    view->setFocus();
+  }
 }
 
 void MainWindow::BuildDocks()
@@ -570,6 +682,16 @@ void MainWindow::SyncTabs()
     const QString text = QStringLiteral("%1%").arg(percent);
     if (zoom_button_->text() != text) {
       zoom_button_->setText(text);
+    }
+  }
+  if (find_status_ != nullptr && active >= 0 && active < static_cast<int>(tab_count)) {
+    const browser::TabSnapshot& tab = tabs[static_cast<size_t>(active)];
+    const QString status =
+        tab.find_match_count > 0 && tab.find_current_index >= 0
+            ? QStringLiteral("%1/%2").arg(tab.find_current_index + 1).arg(tab.find_match_count)
+            : QStringLiteral("0/%1").arg(tab.find_match_count);
+    if (find_status_->text() != status) {
+      find_status_->setText(status);
     }
   }
 }

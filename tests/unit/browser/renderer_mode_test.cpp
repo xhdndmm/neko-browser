@@ -292,6 +292,52 @@ TEST(RendererModeTest, ZoomSurvivesNavigationInRendererMode)
   EXPECT_FLOAT_EQ(snapshot.remote_content_height, zoomed_height);
 }
 
+// Find-in-page in renderer-process mode: the query travels to the child, which
+// searches its own layout and reports the count plus the current match's
+// rectangle (the GUI draws the highlight from it).
+TEST(RendererModeTest, FindIsForwardedToTheChild)
+{
+  TempProfile profile;
+  FakeFetcher fetch;
+  fetch.Add(kFixtureUrl, {200, "text/html", ReadFixture(kFixtureName)});
+  BrowserController controller(profile.path(), std::ref(fetch), RendererMode());
+  const int tab_id = controller.NewTab();
+  ASSERT_TRUE(controller.Navigate(tab_id, kFixtureUrl).has_value());
+
+  EXPECT_EQ(controller.FindInTab(tab_id, "idle"), 1);
+  const TabSnapshot found = controller.SnapshotTab(tab_id);
+  EXPECT_EQ(found.find_query, "idle");
+  EXPECT_EQ(found.find_match_count, 1);
+  EXPECT_EQ(found.find_current_index, 0);
+  EXPECT_GT(found.find_current_match.width, 0.0F);
+  EXPECT_GT(found.find_current_match.height, 0.0F);
+
+  // Stepping a single match wraps onto itself; an unknown query reports none.
+  EXPECT_EQ(controller.FindInTab(tab_id, "idle", 1), 1);
+  EXPECT_EQ(controller.SnapshotTab(tab_id).find_current_index, 0);
+  EXPECT_EQ(controller.FindInTab(tab_id, "absent"), 0);
+  EXPECT_EQ(controller.SnapshotTab(tab_id).find_match_count, 0);
+  EXPECT_EQ(controller.SnapshotTab(tab_id).find_current_index, -1);
+
+  // "e" occurs several times in the fixture; the index walks that list.
+  const int many = controller.FindInTab(tab_id, "e", 0);
+  ASSERT_GT(many, 1);
+  EXPECT_EQ(controller.SnapshotTab(tab_id).find_current_index, 0);
+  EXPECT_EQ(controller.FindInTab(tab_id, "e", 1), many);
+  EXPECT_EQ(controller.SnapshotTab(tab_id).find_current_index, 1);
+
+  // Clearing drops the child's list too: the next step with the same query
+  // starts a fresh search (index 0) instead of continuing the old one (which
+  // would be index 2 after the step above).
+  ASSERT_GE(many, 3);
+  EXPECT_EQ(controller.FindInTab(tab_id, "e", 1), many);
+  EXPECT_EQ(controller.SnapshotTab(tab_id).find_current_index, 2);
+  controller.ClearFindInTab(tab_id);
+  EXPECT_TRUE(controller.SnapshotTab(tab_id).find_query.empty());
+  EXPECT_EQ(controller.FindInTab(tab_id, "e", 1), many);
+  EXPECT_EQ(controller.SnapshotTab(tab_id).find_current_index, 0);
+}
+
 TEST(RendererModeTest, SameSiteNavigationReusesTheSession)
 {
   TempProfile profile;
