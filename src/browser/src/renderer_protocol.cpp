@@ -336,6 +336,9 @@ base::Result<std::string> EncodeSessionRequest(const RendererSessionRequest& req
   case SessionOp::kScroll:
     PutF32(out, request.scroll_y);
     break;
+  case SessionOp::kSetZoom:
+    PutF32(out, request.zoom);
+    break;
   case SessionOp::kWheel:
     PutF64(out, request.delta_y);
     break;
@@ -368,7 +371,7 @@ base::Result<RendererSessionRequest> DecodeSessionRequest(std::string_view paylo
     return base::Err(e);
   }
   if (op < static_cast<std::uint8_t>(SessionOp::kLoad) ||
-      op > static_cast<std::uint8_t>(SessionOp::kShutdown)) {
+      op > static_cast<std::uint8_t>(SessionOp::kSetZoom)) {
     return base::Err(base::Error::InvalidArgument("unknown session operation"));
   }
   request.op = static_cast<SessionOp>(op);
@@ -422,6 +425,11 @@ base::Result<RendererSessionRequest> DecodeSessionRequest(std::string_view paylo
     break;
   case SessionOp::kScroll:
     if (auto e = reader.F32(&request.scroll_y); !e.ok()) {
+      return base::Err(e);
+    }
+    break;
+  case SessionOp::kSetZoom:
+    if (auto e = reader.F32(&request.zoom); !e.ok()) {
       return base::Err(e);
     }
     break;

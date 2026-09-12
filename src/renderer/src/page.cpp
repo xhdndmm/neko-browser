@@ -421,6 +421,26 @@ void Page::ReapplyStylesLocked()
   BumpVersion();
 }
 
+float Page::SetUserZoom(float factor)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  const float requested = std::clamp(factor, kMinUserZoom, kMaxUserZoom);
+  if (requested == user_zoom_) {
+    return user_zoom_;
+  }
+  user_zoom_ = requested;
+  // The viewport is unchanged; only the CSS-pixel mapping moves, so the
+  // cascade does not need to run again.
+  LayoutLocked(viewport_width_, viewport_height_, /*apply_styles=*/false);
+  return user_zoom_;
+}
+
+float Page::user_zoom() const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  return user_zoom_;
+}
+
 void Page::SetExternalStylesheets(std::vector<css::StyleSheet> sheets)
 {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -468,7 +488,7 @@ void Page::LayoutLocked(float viewport_width, float viewport_height, bool apply_
   if (apply_styles) {
     styles_.ApplyStyles(*document_);
   }
-  page_zoom_ = 1.0f;
+  page_zoom_ = user_zoom_;
   if (dom::Element* html = document_->document_element()) {
     for (dom::Node* child : html->ChildNodes()) {
       if (child->node_type() != dom::NodeType::kElement) {
@@ -476,7 +496,7 @@ void Page::LayoutLocked(float viewport_width, float viewport_height, bool apply_
       }
       auto* element = static_cast<dom::Element*>(child);
       if (element->tag_name() == "body") {
-        page_zoom_ = styles_.StyleFor(*element).zoom;
+        page_zoom_ = styles_.StyleFor(*element).zoom * user_zoom_;
         break;
       }
     }

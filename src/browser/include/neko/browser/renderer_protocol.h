@@ -84,6 +84,7 @@ enum class SessionOp : std::uint8_t
   kPump = 8,       // advance page timers / animations one frame
   kSnapshot = 9,   // rasterize the viewport at the given scroll offset
   kShutdown = 10,  // browser is done with this session
+  kSetZoom = 11,   // user-facing page zoom factor (Ctrl+=/Ctrl+-)
 };
 
 struct RendererSessionRequest
@@ -99,6 +100,9 @@ struct RendererSessionRequest
 
   // kSnapshot
   float scroll_y = 0;
+
+  // kSetZoom: page zoom factor; the child clamps it to its own bounds.
+  float zoom = 1.0F;
 
   // kClick / kHover
   float x = 0;

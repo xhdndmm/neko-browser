@@ -86,14 +86,17 @@ struct Tab
   std::string script_history_state;
 
   // Scroll bridging state (worker thread).  |scroll_offset_y| is the page's
-  // current vertical scroll offset (the GUI reports it via SetTabScrollOffset).
-  // A script-requested scroll sets |pending_scroll_y| and bumps
-  // |scroll_request_id|; the GUI's Refresh() latches the id and applies the
-  // requested offset to its scroll bar.  The horizontal scrollbar is disabled,
-  // so x is always 0.
+  // current vertical scroll offset (the GUI reports it via SetTabScrollOffset).  // A
+  // script-requested scroll sets |pending_scroll_y| and bumps |scroll_request_id|; the GUI's
+  // Refresh() latches the id and applies the requested offset to its scroll bar.  The horizontal
+  // scrollbar is disabled, so x is always 0.
   float scroll_offset_y = 0;
   uint64_t scroll_request_id = 0;
   float pending_scroll_y = 0;
+
+  // User page zoom for this tab (Ctrl+=/Ctrl+-); 1.0 = 100%.  Worker thread
+  // only; the GUI reads it through TabSnapshot::zoom.
+  float zoom = 1.0F;
 
   // The element the pointer currently hovers over (worker-thread only, used to
   // fire mouseover/mouseout).  Points into the current document; the UI posts
@@ -187,6 +190,8 @@ struct TabSnapshot
   float remote_content_height = 0;
   // Hyperlink under the pointer ("" = none), reported by the child.
   std::string remote_hover_link;
+  // User zoom factor driving the CSS-pixel mapping (1.0 = 100%).
+  float zoom = 1.0F;
 };
 
 // A network request record for DevTools.
@@ -222,6 +227,13 @@ struct RendererOptions
   // next to the running executable.
   std::string executable;
 };
+
+// The browser zoom ladder (Chrome-like steps between renderer::kMinUserZoom and
+// renderer::kMaxUserZoom).  Returns the next factor above |current| when
+// |direction| > 0, the next one below for |direction| < 0, or |current| when
+// already at the end.  A |current| that sits between two steps snaps to the
+// neighbour in the requested direction.
+float NextZoomFactor(float current, int direction);
 
 // The browser application layer: owns tabs, navigation, and the profile
 // stores, and exposes a DevTools view of what the engine is doing.  The UI
@@ -357,6 +369,20 @@ public:
   // (the GUI reports its viewport size) and pulls a fresh frame when it
   // changed.
   void SetTabViewport(int tab_id, int width, int height);
+
+  // ---- Page zoom (Ctrl+= / Ctrl+- / Ctrl+0) -------------------------------
+  // Per-tab user zoom, applied to the renderer's CSS-pixel mapping in both
+  // execution modes (in-process page or renderer child).  The factor is clamped
+  // to [renderer::kMinUserZoom, renderer::kMaxUserZoom]; a navigation keeps the
+  // tab's zoom (browser behavior).  Returns the applied factor, or 1.0 for an
+  // unknown tab.  NOT IMPLEMENTED: persistence across restarts and per-origin
+  // zoom memory (the profile has no preference store yet).
+  float SetTabZoom(int tab_id, float factor);
+  // Steps one entry up/down the browser zoom ladder (see NextZoomFactor).
+  float ZoomInTab(int tab_id);
+  float ZoomOutTab(int tab_id);
+  float ResetTabZoom(int tab_id);
+  float TabZoom(int tab_id) const;
 
   // Returns the content-type of the active tab.
   ContentType active_content_type() const;

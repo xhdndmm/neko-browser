@@ -27,6 +27,10 @@ class ThreadPool;
 
 namespace neko::renderer {
 
+// User-facing page zoom bounds (Ctrl+= / Ctrl+-), browser-like 25% .. 500%.
+inline constexpr float kMinUserZoom = 0.25F;
+inline constexpr float kMaxUserZoom = 5.0F;
+
 // Laid-out geometry of an element in document coordinates (css px), computed
 // from the layout tree.  |x|/|y| is the border box origin, |width|/|height|
 // the border box size, |client_width|/|client_height| the padding box size and
@@ -131,6 +135,16 @@ public:
 
   // Builds the layout tree at the given viewport width.
   void Layout(float viewport_width, float viewport_height = 0);
+
+  // Sets the user-facing page zoom (browser Ctrl+=/Ctrl+-), independent of the
+  // CSS `zoom` property: layout runs at viewport/user_zoom CSS pixels while the
+  // display list is scaled by user_zoom * CSS zoom, and hit-testing, caret and
+  // DOM geometry divide by the same factor.  Scripts therefore see the same
+  // CSS-pixel values a browser would report.  |factor| is clamped to
+  // [kMinUserZoom, kMaxUserZoom]; re-lays out with the current viewport and
+  // returns the applied factor (which equals the previous one when unchanged).
+  float SetUserZoom(float factor);
+  float user_zoom() const;
 
   // Rasterizes the laid-out page into a |width| x |height| image.  |y_offset|
   // scrolls the visible region (see paint::Rasterizer::SetScrollOffset).  When
@@ -313,7 +327,9 @@ private:
   std::unique_ptr<layout::LayoutBox> root_;
   float viewport_width_ = 800;
   float viewport_height_ = 0;
+  // CSS (root `zoom`) times user zoom; see SetUserZoom().
   float page_zoom_ = 1.0f;
+  float user_zoom_ = 1.0f;
 
   graphics::FontRegistry fonts_;
   std::unordered_map<const dom::Element*, image::Image> images_;

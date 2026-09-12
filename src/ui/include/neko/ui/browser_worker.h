@@ -75,6 +75,12 @@ public:
   void Back();
   void Forward();
   void Reload();
+  // Page zoom for the active tab (Ctrl+= / Ctrl+- / Ctrl+0).  The applied
+  // factor shows up in the next SnapshotActiveTab().zoom, which the GUI uses to
+  // update its zoom indicator.
+  void ZoomIn();
+  void ZoomOut();
+  void ResetZoom();
   // Dispatches a user click (document coordinates) to the page's script
   // runtime on the worker thread; runs the cancelable "click" event and the
   // default action (hyperlink navigation) unless preventDefault was called.

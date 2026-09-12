@@ -1994,6 +1994,74 @@ TEST(BrowserControllerTest, DataUrlStylesheetIsApplied)
   EXPECT_NEAR(geometry->height, 45.0f, 1.0f);
 }
 
+// Page zoom (Ctrl+=/Ctrl+-/Ctrl+0) in the in-process path: the factor scales
+// the layout the controller publishes, survives navigation, and the keyboard
+// steps follow the browser ladder.
+TEST(BrowserControllerTest, NextZoomFactorStepsTheBrowserLadder)
+{
+  EXPECT_FLOAT_EQ(NextZoomFactor(1.0F, 1), 1.1F);
+  EXPECT_FLOAT_EQ(NextZoomFactor(1.1F, 1), 1.25F);
+  EXPECT_FLOAT_EQ(NextZoomFactor(1.0F, -1), 0.9F);
+  EXPECT_FLOAT_EQ(NextZoomFactor(0.9F, -1), 0.8F);
+  // Between two steps: snap to the neighbour in the requested direction.
+  EXPECT_FLOAT_EQ(NextZoomFactor(1.3F, 1), 1.5F);
+  EXPECT_FLOAT_EQ(NextZoomFactor(1.3F, -1), 1.25F);
+  // The ends stay put (SetTabZoom clamps the same bounds).
+  EXPECT_FLOAT_EQ(NextZoomFactor(renderer::kMinUserZoom, -1), renderer::kMinUserZoom);
+  EXPECT_FLOAT_EQ(NextZoomFactor(renderer::kMaxUserZoom, 1), renderer::kMaxUserZoom);
+  EXPECT_FLOAT_EQ(NextZoomFactor(1.5F, 0), 1.5F);
+}
+
+TEST(BrowserControllerTest, ZoomScalesInProcessLayoutAndSurvivesNavigation)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  const std::string html =
+      "<html><body style=\"margin:0\"><div id=box "
+      "style=\"background-color:#ff0000;width:100px;height:50px\"></div></body></html>";
+  fetch.Add("http://zoom.test/one", FakeFetcher::Route{200, {{"content-type", "text/html"}}, html});
+  fetch.Add("http://zoom.test/two", FakeFetcher::Route{200, {{"content-type", "text/html"}}, html});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  const int tab = controller.NewTab();
+  ASSERT_TRUE(controller.Navigate(tab, "http://zoom.test/one").has_value());
+  Tab* tab_ptr = controller.FindTab(tab);
+  ASSERT_NE(tab_ptr, nullptr);
+  ASSERT_NE(tab_ptr->page, nullptr);
+  tab_ptr->page->Layout(800, 600);
+  dom::Element* box = dom::QuerySelector(*tab_ptr->page->document(), "#box");
+  ASSERT_NE(box, nullptr);
+  const auto at_100 = tab_ptr->page->ElementBoxGeometry(*box);
+  ASSERT_TRUE(at_100.has_value());
+
+  EXPECT_FLOAT_EQ(controller.SetTabZoom(tab, 2.0F), 2.0F);
+  EXPECT_FLOAT_EQ(controller.TabZoom(tab), 2.0F);
+  const auto at_200 = tab_ptr->page->ElementBoxGeometry(*box);
+  ASSERT_TRUE(at_200.has_value());
+  EXPECT_NEAR(at_200->width, at_100->width * 2.0F, 1.0F);
+  EXPECT_NEAR(at_200->height, at_100->height * 2.0F, 1.0F);
+
+  // Steps are relative to the current factor and the API clamps the bounds.
+  EXPECT_FLOAT_EQ(controller.ZoomInTab(tab), 2.5F);
+  EXPECT_FLOAT_EQ(controller.ZoomOutTab(tab), 2.0F);
+  EXPECT_FLOAT_EQ(controller.SetTabZoom(tab, 100.0F), renderer::kMaxUserZoom);
+  EXPECT_FLOAT_EQ(controller.SetTabZoom(tab, 0.0F), renderer::kMinUserZoom);
+  EXPECT_FLOAT_EQ(controller.SetTabZoom(tab, 2.0F), 2.0F);
+
+  // A zoomed tab keeps its zoom across navigations (browser behavior).
+  ASSERT_TRUE(controller.Navigate(tab, "http://zoom.test/two").has_value());
+  EXPECT_FLOAT_EQ(controller.TabZoom(tab), 2.0F);
+  Tab* reloaded = controller.FindTab(tab);
+  ASSERT_NE(reloaded, nullptr);
+  ASSERT_NE(reloaded->page, nullptr);
+  EXPECT_FLOAT_EQ(reloaded->page->user_zoom(), 2.0F);
+
+  EXPECT_FLOAT_EQ(controller.ResetTabZoom(tab), 1.0F);
+  EXPECT_FLOAT_EQ(reloaded->page->user_zoom(), 1.0F);
+  // Unknown tabs report 100% instead of inventing state.
+  EXPECT_FLOAT_EQ(controller.TabZoom(4242), 1.0F);
+  EXPECT_FLOAT_EQ(controller.SetTabZoom(4242, 3.0F), 1.0F);
+}
+
 TEST(BrowserControllerTest, PercentEncodedSvgDataUrlIsDecodedWithoutNetwork)
 {
   TempProfile tp;

@@ -237,6 +237,61 @@ TEST(RendererModeTest, ViewportResizeReframesAtNewSize)
   EXPECT_EQ(snapshot.remote_frame->height, 200);
 }
 
+// Page zoom in renderer-process mode: the browser forwards the factor to the
+// child, which re-lays out at viewport/zoom CSS pixels.  The button's 200x60
+// CSS box therefore doubles in device pixels, and the content height grows
+// with it (the GUI scroll bar follows).
+TEST(RendererModeTest, ZoomIsForwardedToTheChildAndRescalesFrames)
+{
+  TempProfile profile;
+  FakeFetcher fetch;
+  fetch.Add(kFixtureUrl, {200, "text/html", ReadFixture(kFixtureName)});
+  BrowserController controller(profile.path(), std::ref(fetch), RendererMode());
+  const int tab_id = controller.NewTab();
+  ASSERT_TRUE(controller.Navigate(tab_id, kFixtureUrl).has_value());
+
+  TabSnapshot before = controller.SnapshotTab(tab_id);
+  ASSERT_TRUE(before.remote_frame != nullptr);
+  EXPECT_FLOAT_EQ(before.zoom, 1.0F);
+  const float height_100 = before.remote_content_height;
+
+  // 150%: layout scales 1.5x, so the content is taller than at 100%.
+  EXPECT_FLOAT_EQ(controller.SetTabZoom(tab_id, 1.5F), 1.5F);
+  TabSnapshot after = controller.SnapshotTab(tab_id);
+  EXPECT_FLOAT_EQ(after.zoom, 1.5F);
+  ASSERT_TRUE(after.remote_frame != nullptr);
+  EXPECT_FLOAT_EQ(after.remote_content_height, height_100 * 1.5F);
+
+  // Stepping follows the browser ladder and clamps at the bounds.
+  EXPECT_FLOAT_EQ(controller.ZoomOutTab(tab_id), 1.25F);
+  EXPECT_FLOAT_EQ(controller.SetTabZoom(tab_id, 99.0F), renderer::kMaxUserZoom);
+  EXPECT_FLOAT_EQ(controller.ResetTabZoom(tab_id), 1.0F);
+  TabSnapshot reset = controller.SnapshotTab(tab_id);
+  EXPECT_FLOAT_EQ(reset.remote_content_height, height_100);
+}
+
+TEST(RendererModeTest, ZoomSurvivesNavigationInRendererMode)
+{
+  TempProfile profile;
+  const std::string html = ReadFixture(kFixtureName);
+  FakeFetcher fetch;
+  fetch.Add("https://zoom.invalid/one.html", {200, "text/html", html});
+  fetch.Add("https://zoom.invalid/two.html", {200, "text/html", html});
+  BrowserController controller(profile.path(), std::ref(fetch), RendererMode());
+  const int tab_id = controller.NewTab();
+
+  ASSERT_TRUE(controller.Navigate(tab_id, "https://zoom.invalid/one.html").has_value());
+  EXPECT_FLOAT_EQ(controller.SetTabZoom(tab_id, 2.0F), 2.0F);
+  const float zoomed_height = controller.SnapshotTab(tab_id).remote_content_height;
+
+  // Same-site navigation reuses the child: the new document must come back
+  // zoomed too (browser behavior).
+  ASSERT_TRUE(controller.Navigate(tab_id, "https://zoom.invalid/two.html").has_value());
+  TabSnapshot snapshot = controller.SnapshotTab(tab_id);
+  EXPECT_FLOAT_EQ(snapshot.zoom, 2.0F);
+  EXPECT_FLOAT_EQ(snapshot.remote_content_height, zoomed_height);
+}
+
 TEST(RendererModeTest, SameSiteNavigationReusesTheSession)
 {
   TempProfile profile;

@@ -128,6 +128,16 @@ MainWindow::MainWindow(BrowserWorker* worker, QWidget* parent)
   connect(reload_key, &QShortcut::activated, this, [this] { worker_->Reload(); });
   auto* reload_key2 = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_R), this);
   connect(reload_key2, &QShortcut::activated, this, [this] { worker_->Reload(); });
+  // Page zoom: browsers accept Ctrl+Plus, Ctrl+Equal and Ctrl+Minus; Ctrl+0
+  // returns to 100%.
+  for (const Qt::Key key : {Qt::Key_Plus, Qt::Key_Equal}) {
+    auto* zoom_in_key = new QShortcut(QKeySequence(Qt::CTRL | key), this);
+    connect(zoom_in_key, &QShortcut::activated, this, [this] { worker_->ZoomIn(); });
+  }
+  auto* zoom_out_key = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Minus), this);
+  connect(zoom_out_key, &QShortcut::activated, this, [this] { worker_->ZoomOut(); });
+  auto* zoom_reset_key = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_0), this);
+  connect(zoom_reset_key, &QShortcut::activated, this, [this] { worker_->ResetZoom(); });
   // Ctrl+1..9 jump to the corresponding tab.
   for (int i = 1; i <= 9; ++i) {
     auto* jump =
@@ -213,6 +223,18 @@ void MainWindow::BuildToolbar()
 
   auto* download = toolbar->addAction(tr("↓ Download"), this, [this] { OnDownloadActive(); });
   download->setToolTip(tr("Download the current URL"));
+
+  toolbar->addSeparator();
+  auto* zoom_out = toolbar->addAction(tr("−"), this, [this] { worker_->ZoomOut(); });
+  zoom_out->setToolTip(tr("Zoom out (Ctrl+-)"));
+  zoom_button_ = new QToolButton(this);
+  zoom_button_->setText(tr("100%"));
+  zoom_button_->setToolTip(tr("Page zoom — click to reset to 100% (Ctrl+0)"));
+  zoom_button_->setAutoRaise(true);
+  connect(zoom_button_, &QToolButton::clicked, this, [this] { worker_->ResetZoom(); });
+  toolbar->addWidget(zoom_button_);
+  auto* zoom_in = toolbar->addAction(tr("+"), this, [this] { worker_->ZoomIn(); });
+  zoom_in->setToolTip(tr("Zoom in (Ctrl+=)"));
 }
 
 void MainWindow::BuildDocks()
@@ -542,6 +564,13 @@ void MainWindow::SyncTabs()
   }
   if (active >= 0 && active < pages_->count() && pages_->currentIndex() != active) {
     pages_->setCurrentIndex(active);
+  }
+  if (zoom_button_ != nullptr && active >= 0 && active < static_cast<int>(tab_count)) {
+    const int percent = static_cast<int>(tabs[static_cast<size_t>(active)].zoom * 100.0F + 0.5F);
+    const QString text = QStringLiteral("%1%").arg(percent);
+    if (zoom_button_->text() != text) {
+      zoom_button_->setText(text);
+    }
   }
 }
 

@@ -339,6 +339,7 @@ TabSnapshot ToSnapshot(const Tab& tab)
   s.remote_frame = tab.remote_frame;
   s.remote_content_height = tab.remote_content_height;
   s.remote_hover_link = tab.remote_hover_link;
+  s.zoom = tab.zoom;
   return s;
 }
 
@@ -1145,6 +1146,103 @@ void BrowserController::SetTabViewport(int tab_id, int width, int height)
   PullRemoteFrame(*tab, /*force=*/true);
 }
 
+float NextZoomFactor(float current, int direction)
+{
+  static constexpr float kLadder[] = {0.25F,
+                                      0.33F,
+                                      0.5F,
+                                      0.67F,
+                                      0.75F,
+                                      0.8F,
+                                      0.9F,
+                                      1.0F,
+                                      1.1F,
+                                      1.25F,
+                                      1.5F,
+                                      1.75F,
+                                      2.0F,
+                                      2.5F,
+                                      3.0F,
+                                      4.0F,
+                                      5.0F};
+  if (direction == 0) {
+    return current;
+  }
+  if (direction > 0) {
+    for (const float step : kLadder) {
+      if (step > current + 1e-4F) {
+        return step;
+      }
+    }
+    return current;
+  }
+  for (std::size_t i = sizeof(kLadder) / sizeof(kLadder[0]); i > 0; --i) {
+    if (kLadder[i - 1] < current - 1e-4F) {
+      return kLadder[i - 1];
+    }
+  }
+  return current;
+}
+
+float BrowserController::SetTabZoom(int tab_id, float factor)
+{
+  Tab* tab = FindTab(tab_id);
+  if (tab == nullptr) {
+    return 1.0F;
+  }
+  const float applied = std::clamp(factor, renderer::kMinUserZoom, renderer::kMaxUserZoom);
+  if (tab->zoom == applied) {
+    return applied;
+  }
+  if (IsRemoteTab(*tab)) {
+    // The child owns the CSS-pixel mapping in this mode; it re-lays out and the
+    // next snapshot comes back at the new scale.
+    auto reply = tab->session->SetZoom(applied);
+    if (!reply.has_value()) {
+      // A dead session is replaced by the regular crash-recovery path; the
+      // zoom value still sticks so the replacement renders zoomed.
+      MarkSessionFailed(*tab, reply.error().message());
+    }
+  } else if (tab->page != nullptr) {
+    tab->page->SetUserZoom(applied);
+  }
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    tab->zoom = applied;
+  }
+  if (IsRemoteTab(*tab)) {
+    // Force the frame now: the GUI repaints off the new snapshot.
+    PullRemoteFrame(*tab, /*force=*/true);
+  }
+  return applied;
+}
+
+float BrowserController::ZoomInTab(int tab_id)
+{
+  return SetTabZoom(tab_id, NextZoomFactor(TabZoom(tab_id), 1));
+}
+
+float BrowserController::ZoomOutTab(int tab_id)
+{
+  return SetTabZoom(tab_id, NextZoomFactor(TabZoom(tab_id), -1));
+}
+
+float BrowserController::ResetTabZoom(int tab_id)
+{
+  return SetTabZoom(tab_id, 1.0F);
+}
+
+float BrowserController::TabZoom(int tab_id) const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (const auto& tab : tabs_) {
+    if (tab->id == tab_id) {
+      return tab->zoom;
+    }
+  }
+  return 1.0F;
+}
+
 void BrowserController::SetTabScrollRequest(int tab_id, float y)
 {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -1211,6 +1309,15 @@ void BrowserController::LoadHtmlInRenderer(Tab& tab,
   if (!reply.has_value()) {
     MarkSessionFailed(tab, reply.error().message());
     return;
+  }
+  if (tab.zoom != 1.0F) {
+    // A zoomed tab keeps its zoom across navigations (browser behavior); the
+    // child clamps and re-lays out, so the frame pulled below is scaled.
+    auto zoomed = session->SetZoom(tab.zoom);
+    if (!zoomed.has_value()) {
+      MarkSessionFailed(tab, zoomed.error().message());
+      return;
+    }
   }
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1510,6 +1617,10 @@ void BrowserController::LoadBytes(Tab& tab,
     std::string title = new_page->document()->Title();
     if (title.empty())
       title = final_url;
+    if (tab.zoom != 1.0F) {
+      // A zoomed tab keeps its zoom across navigations (browser behavior).
+      new_page->SetUserZoom(tab.zoom);
+    }
     {
       std::lock_guard<std::mutex> lock(mutex_);
       tab.content_type = ContentType::kHtml;

@@ -167,6 +167,76 @@ TEST(PageTest, BodyZoomScalesLayoutAndPaint)
   EXPECT_EQ(image.pixels()[outside + 2], 255);
 }
 
+TEST(PageTest, UserZoomScalesLayoutPaintAndGeometry)
+{
+  Page page;
+  ASSERT_TRUE(
+      page.LoadHtml("<body style=\"background-color:#ffffff\">"
+                    "<div id=box style=\"background-color:#ff0000;width:100px;height:50px\">"
+                    "</div></body>")
+          .has_value());
+  page.Layout(400, 300);
+
+  dom::Element* box = dom::QuerySelector(*page.document(), "#box");
+  ASSERT_NE(box, nullptr);
+
+  // 200%: the same 100x50 CSS-pixel box fills twice as many device pixels.
+  EXPECT_FLOAT_EQ(page.SetUserZoom(2.0F), 2.0F);
+  paint::Rasterizer image = page.Rasterize(400, 300);
+  const std::size_t inside = (static_cast<std::size_t>(40) * 400 + 100) * 4;
+  const std::size_t outside = (static_cast<std::size_t>(150) * 400 + 100) * 4;
+  EXPECT_EQ(image.pixels()[inside], 255);
+  EXPECT_EQ(image.pixels()[inside + 1], 0);
+  EXPECT_EQ(image.pixels()[outside], 255);
+  EXPECT_EQ(image.pixels()[outside + 1], 255);
+
+  // DOM geometry reports device pixels, so a script sees the zoomed box.
+  const auto geometry = page.ElementBoxGeometry(*box);
+  ASSERT_TRUE(geometry.has_value());
+  EXPECT_NEAR(geometry->width, 200.0F, 1.0F);
+  EXPECT_NEAR(geometry->height, 100.0F, 1.0F);
+
+  // Hit-testing takes device pixels and maps them back to CSS pixels: the
+  // centre of the zoomed box hits it, a point just past its device-space edge
+  // hits an ancestor instead — proof the 2x mapping is applied.
+  EXPECT_EQ(
+      page.ElementAt(geometry->x + geometry->width / 2.0F, geometry->y + geometry->height / 2.0F),
+      box);
+  const dom::Element* past_edge =
+      page.ElementAt(geometry->x + geometry->width + 4.0F, geometry->y + 4.0F);
+  ASSERT_NE(past_edge, nullptr);
+  EXPECT_NE(past_edge, box);
+
+  // Content height scales with the zoom (drives the GUI scroll bar).
+  const float zoomed_height = page.ContentHeight();
+  page.SetUserZoom(1.0F);
+  EXPECT_NEAR(page.ContentHeight(), zoomed_height / 2.0F, 1.0F);
+}
+
+TEST(PageTest, UserZoomIsClampedAndCombinesWithCssZoom)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body style=\"zoom:2;background-color:#ffffff\">"
+                            "<div id=box style=\"width:100px;height:10px\"></div></body>")
+                  .has_value());
+  page.Layout(400, 300);
+  dom::Element* box = dom::QuerySelector(*page.document(), "#box");
+  ASSERT_NE(box, nullptr);
+
+  // Out-of-range requests clamp instead of distorting the layout.
+  EXPECT_FLOAT_EQ(page.SetUserZoom(100.0F), renderer::kMaxUserZoom);
+  EXPECT_FLOAT_EQ(page.SetUserZoom(0.0F), renderer::kMinUserZoom);
+  // A rejected change is a no-op: no re-layout, same value back.
+  EXPECT_FLOAT_EQ(page.SetUserZoom(0.1F), renderer::kMinUserZoom);
+  EXPECT_FLOAT_EQ(page.user_zoom(), renderer::kMinUserZoom);
+
+  // CSS zoom (2) and user zoom (0.5) multiply: 100 CSS px -> 100 device px.
+  EXPECT_FLOAT_EQ(page.SetUserZoom(0.5F), 0.5F);
+  const auto geometry = page.ElementBoxGeometry(*box);
+  ASSERT_TRUE(geometry.has_value());
+  EXPECT_NEAR(geometry->width, 100.0F, 1.0F);
+}
+
 TEST(PageTest, BodyBackgroundPropagatesToCanvas)
 {
   // CSS canvas background: a <body> background paints the whole viewport when

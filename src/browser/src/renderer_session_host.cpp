@@ -206,6 +206,12 @@ private:
     case SessionOp::kScroll:
       controller_->SetTabScrollOffset(tab_id_, request.scroll_y);
       break;
+    case SessionOp::kSetZoom:
+      // The child's controller owns the page, so the zoom goes through the
+      // same API the in-process path uses; the layout version bump below marks
+      // the change so the browser pulls a fresh frame.
+      controller_->SetTabZoom(tab_id_, request.zoom);
+      break;
     case SessionOp::kPump:
       controller_->PumpScriptTimers();
       break;

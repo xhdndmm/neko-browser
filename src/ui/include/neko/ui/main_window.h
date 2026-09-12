@@ -39,6 +39,11 @@ public:
   {
     return address_;
   }
+  // The toolbar's page-zoom indicator ("100%"); clicking it resets the zoom.
+  QToolButton* ZoomIndicator() const
+  {
+    return zoom_button_;
+  }
   QLineEdit* ConsoleInput() const
   {
     return console_input_;
@@ -95,6 +100,8 @@ private:
   QVector<WebView*> views_;
   QVector<int> view_ids_; // tab id for each view, in order
   QLineEdit* address_ = nullptr;
+  // Page-zoom indicator in the toolbar ("100%"); clicking it resets to 100%.
+  QToolButton* zoom_button_ = nullptr;
   // True while the user is editing the address bar; RefreshAll() then leaves
   // the text alone instead of clobbering it with the tab's URL.
   bool address_editing_ = false;

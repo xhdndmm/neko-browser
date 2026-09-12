@@ -269,6 +269,47 @@ TEST(RendererSessionTest, ScrollOffsetIsReportedBack)
   session->Shutdown();
 }
 
+// The zoom op is forwarded over the session protocol and makes the child
+// re-lay out: 200% doubles the content height the browser uses for its scroll
+// bar, and the frame that comes back reflects the new layout.
+TEST(RendererSessionTest, SetZoomRescalesTheChildLayout)
+{
+  auto session = SpawnSession();
+  ASSERT_TRUE(session != nullptr);
+  const auto loaded = LoadFixture(*session);
+  ASSERT_TRUE(loaded.has_value());
+  const float height_100 = loaded.value().content_height;
+
+  const auto zoomed = session->SetZoom(2.0F);
+  ASSERT_TRUE(zoomed.has_value()) << zoomed.error().message();
+  EXPECT_TRUE(zoomed.value().changed);
+  EXPECT_FLOAT_EQ(zoomed.value().content_height, height_100 * 2.0F);
+
+  // Clamping happens in the child (kMaxUserZoom = 5.0): the reply reflects the
+  // factor the child actually applied.
+  const auto clamped = session->SetZoom(100.0F);
+  ASSERT_TRUE(clamped.has_value());
+  EXPECT_FLOAT_EQ(clamped.value().content_height, height_100 * 5.0F);
+  session->Shutdown();
+}
+
+TEST(RendererSessionTest, SetZoomProtocolRoundTripsTheFactor)
+{
+  RendererSessionRequest request;
+  request.op = SessionOp::kSetZoom;
+  request.zoom = 1.75F;
+  const auto encoded = EncodeSessionRequest(request);
+  ASSERT_TRUE(encoded.has_value()) << encoded.error().message();
+  const auto decoded = DecodeSessionRequest(encoded.value());
+  ASSERT_TRUE(decoded.has_value()) << decoded.error().message();
+  EXPECT_EQ(decoded.value().op, SessionOp::kSetZoom);
+  EXPECT_FLOAT_EQ(decoded.value().zoom, 1.75F);
+
+  // A truncated payload (the op byte alone) is rejected, not guessed.
+  const std::string truncated = encoded.value().substr(0, 2);
+  EXPECT_FALSE(DecodeSessionRequest(truncated).has_value());
+}
+
 TEST(RendererSessionTest, ChildCrashIsDetectedAndReported)
 {
   auto session = SpawnSession();

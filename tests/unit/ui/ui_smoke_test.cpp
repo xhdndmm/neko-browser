@@ -20,6 +20,7 @@
 #include <QPlainTextEdit>
 #include <QScrollBar>
 #include <QTabBar>
+#include <QToolButton>
 #include <QWheelEvent>
 #include <QWidget>
 #include <QtTest>
@@ -352,6 +353,60 @@ TEST(UiSmokeTest, KeyboardShortcutOpensAndClosesTabs)
   SendKey(&window, Qt::Key_W, Qt::ControlModifier);
   ASSERT_TRUE(WaitFor([&] { return window.TabBarWidget()->count() <= initial; }));
   EXPECT_EQ(window.TabBarWidget()->count(), initial);
+}
+
+// Page zoom: the keyboard shortcuts step the active tab's factor, the toolbar
+// indicator follows it, and clicking the indicator resets to 100%.  The layout
+// really changes: the 120 CSS-pixel box measures 110% of that after Ctrl+=.
+TEST(UiSmokeTest, ZoomShortcutsAndIndicator)
+{
+  TempProfile tp;
+  const std::string html_file = tp.path() + "/zoom.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(
+                  html_file,
+                  "<html><body style=\"margin:0\"><div id=box "
+                  "style=\"background:#ff0000;width:120px;height:60px\"></div></body></html>")
+                  .has_value());
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.resize(800, 600);
+  window.show();
+  worker.NavigateActive(QString::fromStdString(html_file));
+  window.AddressBar()->clearFocus();
+  ASSERT_TRUE(WaitFor([&] {
+    return worker.SnapshotActiveTab().content_type == neko::browser::ContentType::kHtml;
+  }));
+
+  // The indicator starts at 100%.
+  ASSERT_TRUE(WaitFor([&] { return window.ZoomIndicator()->text() == "100%"; }));
+
+  // Ctrl+= (and Ctrl++, the shifted form) step up; Ctrl+- steps down.
+  SendKey(&window, Qt::Key_Equal, Qt::ControlModifier);
+  ASSERT_TRUE(WaitFor([&] { return window.ZoomIndicator()->text() == "110%"; }));
+  SendKey(&window, Qt::Key_Plus, Qt::ControlModifier);
+  ASSERT_TRUE(WaitFor([&] { return window.ZoomIndicator()->text() == "125%"; }));
+  SendKey(&window, Qt::Key_Minus, Qt::ControlModifier);
+  ASSERT_TRUE(WaitFor([&] { return window.ZoomIndicator()->text() == "110%"; }));
+
+  // The zoom reached the page: 1.1 x 120 CSS px = 132 device px.
+  const neko::browser::TabSnapshot zoomed = worker.SnapshotActiveTab();
+  EXPECT_FLOAT_EQ(zoomed.zoom, 1.1F);
+  ASSERT_TRUE(zoomed.page != nullptr);
+  neko::dom::Element* box = neko::dom::QuerySelector(*zoomed.page->document(), "#box");
+  ASSERT_NE(box, nullptr);
+  const auto geometry = zoomed.page->ElementBoxGeometry(*box);
+  ASSERT_TRUE(geometry.has_value());
+  EXPECT_NEAR(geometry->width, 132.0F, 2.0F);
+
+  // Clicking the indicator resets to 100% (Ctrl+0 does the same).
+  QTest::mouseClick(window.ZoomIndicator(), Qt::LeftButton);
+  ASSERT_TRUE(WaitFor([&] { return window.ZoomIndicator()->text() == "100%"; }));
+  SendKey(&window, Qt::Key_Equal, Qt::ControlModifier);
+  ASSERT_TRUE(WaitFor([&] { return window.ZoomIndicator()->text() == "110%"; }));
+  SendKey(&window, Qt::Key_0, Qt::ControlModifier);
+  ASSERT_TRUE(WaitFor([&] { return window.ZoomIndicator()->text() == "100%"; }));
+  EXPECT_FLOAT_EQ(worker.SnapshotActiveTab().zoom, 1.0F);
 }
 
 TEST(UiSmokeTest, HoverDoesNotResetScroll)
@@ -1124,6 +1179,42 @@ TEST(UiSmokeTest, RendererProcessModePaintsChildFrames)
   EXPECT_TRUE(snapshot.remote);
   EXPECT_EQ(snapshot.page, nullptr);
   ASSERT_NE(snapshot.remote_frame, nullptr);
+}
+
+// Zoom in renderer-process mode: the shortcut travels browser → child over the
+// session protocol, the indicator tracks the applied factor, and the child's
+// reported content height grows with the scale (the GUI scroll bar follows).
+TEST(UiSmokeTest, RendererProcessModeZoomReachesTheChild)
+{
+  TempProfile tp;
+  const std::string html_file = tp.path() + "/remote_zoom.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(html_file,
+                                             "<html><head><title>Remote Zoom</title></head>"
+                                             "<body style=\"margin:0\"><h1>Zoomed</h1></body>"
+                                             "</html>")
+                  .has_value());
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()), nullptr, RendererModeOptions());
+  neko::ui::MainWindow window(&worker);
+  window.resize(800, 600);
+  window.show();
+  worker.NavigateActive(QString::fromStdString(html_file));
+  window.AddressBar()->clearFocus();
+
+  ASSERT_TRUE(WaitFor([&] { return worker.SnapshotActiveTab().remote; }, 10000));
+  ASSERT_TRUE(WaitFor([&] { return window.ZoomIndicator()->text() == "100%"; }));
+  // The height arrives with the child's first frame.
+  ASSERT_TRUE(
+      WaitFor([&] { return worker.SnapshotActiveTab().remote_content_height > 0.0F; }, 10000));
+  const float height_100 = worker.SnapshotActiveTab().remote_content_height;
+  ASSERT_GT(height_100, 0.0F);
+
+  SendKey(&window, Qt::Key_Equal, Qt::ControlModifier);
+  ASSERT_TRUE(WaitFor([&] { return window.ZoomIndicator()->text() == "110%"; }, 10000));
+  const neko::browser::TabSnapshot zoomed = worker.SnapshotActiveTab();
+  EXPECT_FLOAT_EQ(zoomed.zoom, 1.1F);
+  EXPECT_TRUE(zoomed.remote);
+  EXPECT_NEAR(zoomed.remote_content_height, height_100 * 1.1F, 1.0F);
 }
 
 TEST(UiSmokeTest, RendererProcessModeClickAndHoverReachTheChild)

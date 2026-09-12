@@ -220,6 +220,18 @@ base::Result<RendererUpdate> RendererSession::Pump()
   return Convert(reply.value(), nullptr);
 }
 
+base::Result<RendererUpdate> RendererSession::SetZoom(float factor)
+{
+  RendererSessionRequest request;
+  request.op = SessionOp::kSetZoom;
+  request.zoom = factor;
+  auto reply = RoundTrip(request);
+  if (!reply.has_value()) {
+    return base::Err(reply.error());
+  }
+  return Convert(reply.value(), nullptr);
+}
+
 base::Result<RendererUpdate>
 RendererSession::Snapshot(int width, int height, float scroll_y, RemoteFrame* frame)
 {

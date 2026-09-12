@@ -85,6 +85,8 @@ public:
   Key(std::string_view key_type, std::string_view key, std::string_view code);
   // Reports the GUI's scroll-bar offset (so window.scrollY reads it live).
   base::Result<RendererUpdate> ScrollTo(float y);
+  // Applies the user-facing page zoom (Ctrl+=/Ctrl+-); the child clamps it.
+  base::Result<RendererUpdate> SetZoom(float factor);
   // Advances the page's timers and animated images by one frame.
   base::Result<RendererUpdate> Pump();
   // Rasterizes the viewport (|width| x |height|) scrolled to |scroll_y|.

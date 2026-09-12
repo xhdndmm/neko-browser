@@ -148,6 +148,33 @@ void BrowserWorker::Reload()
   Post([this] { controller_.Reload(); });
 }
 
+void BrowserWorker::ZoomIn()
+{
+  Post([this] {
+    if (const browser::TabSnapshot tab = controller_.SnapshotActiveTab(); tab.id >= 0) {
+      (void)controller_.ZoomInTab(tab.id);
+    }
+  });
+}
+
+void BrowserWorker::ZoomOut()
+{
+  Post([this] {
+    if (const browser::TabSnapshot tab = controller_.SnapshotActiveTab(); tab.id >= 0) {
+      (void)controller_.ZoomOutTab(tab.id);
+    }
+  });
+}
+
+void BrowserWorker::ResetZoom()
+{
+  Post([this] {
+    if (const browser::TabSnapshot tab = controller_.SnapshotActiveTab(); tab.id >= 0) {
+      (void)controller_.ResetTabZoom(tab.id);
+    }
+  });
+}
+
 void BrowserWorker::DispatchPointerClick(int tab_id, float doc_x, float doc_y)
 {
   Post([this, tab_id, doc_x, doc_y] {
