@@ -248,6 +248,7 @@ add_executable(neko_javascript_tests
   javascript/dom_binding_test.cpp
   javascript/event_test.cpp
   javascript/import_map_test.cpp
+  javascript/platform_api_test.cpp
 )
 # The WebSocket binding tests run a local echo server, which needs OpenSSL for
 # the handshake accept-key computation.

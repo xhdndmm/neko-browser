@@ -2008,11 +2008,10 @@ TEST(BrowserControllerTest, WindowResizeRelayoutsAndFiresResizeEvent)
 {
   TempProfile tp;
   FakeFetcher fetch;
-  const std::string html =
-      "<html><body><script>"
-      "window.__resizes = 0;"
-      "window.addEventListener('resize', function () { window.__resizes++; });"
-      "</script><p id=text>resize probe</p></body></html>";
+  const std::string html = "<html><body><script>"
+                           "window.__resizes = 0;"
+                           "window.addEventListener('resize', function () { window.__resizes++; });"
+                           "</script><p id=text>resize probe</p></body></html>";
   fetch.Add("http://viewport.test/",
             FakeFetcher::Route{200, {{"content-type", "text/html"}}, html});
   BrowserController controller(tp.path(), std::ref(fetch));

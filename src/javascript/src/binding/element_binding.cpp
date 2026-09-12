@@ -1101,6 +1101,51 @@ JSValue ElementGetAttribute(JSContext* ctx, JSValueConst this_val, int argc, JSV
   return JS_NULL;
 }
 
+// element.getAttributeNames(): the attribute names in document order (DOM
+// Standard §4.9).
+JSValue ElementGetAttributeNames(JSContext* ctx,
+                                 JSValueConst this_val,
+                                 int /*argc*/,
+                                 JSValueConst* /*argv*/)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  JSValue names = JS_NewArray(ctx);
+  std::uint32_t index = 0;
+  for (const dom::Attribute& attribute : element->attributes()) {
+    JS_SetPropertyUint32(
+        ctx, names, index++, JS_NewStringLen(ctx, attribute.name.data(), attribute.name.size()));
+  }
+  return names;
+}
+
+// element.scrollIntoView([options]): scrolls the element into view through the
+// browser layer's scroll request (only the vertical axis is live, so the
+// horizontal part is a no-op — documented).
+JSValue ElementScrollIntoView(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  dom::Element* element = AsElement(UnwrapNode(this_val));
+  if (element == nullptr || argc > 0) {
+    // Options objects (block/inline/behavior) are accepted but ignored: the
+    // engine scrolls the element's top into view, like block:"start".
+    (void)argv;
+  }
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.scroll_to || !impl->apis.element_geometry) {
+    return JS_UNDEFINED;
+  }
+  const auto geometry = impl->apis.element_geometry(*element);
+  if (geometry.has_value()) {
+    impl->apis.scroll_to(0.0, static_cast<double>(geometry->y));
+  }
+  return JS_UNDEFINED;
+}
+
 JSValue ElementSetAttribute(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   dom::Element* element = AsElement(UnwrapNode(this_val));
@@ -1360,11 +1405,13 @@ void DefineClassListPrototype(JSContext* ctx, Impl& impl)
 
 void DefineElementPrototype(JSContext* ctx, Impl& impl)
 {
-  static const std::array<JSCFunctionListEntry, 16> kMethods = {{
+  static const std::array<JSCFunctionListEntry, 18> kMethods = {{
       JS_CFUNC_DEF("getAttribute", 1, ElementGetAttribute),
+      JS_CFUNC_DEF("getAttributeNames", 0, ElementGetAttributeNames),
       JS_CFUNC_DEF("setAttribute", 2, ElementSetAttribute),
       JS_CFUNC_DEF("removeAttribute", 1, ElementRemoveAttribute),
       JS_CFUNC_DEF("hasAttribute", 1, ElementHasAttribute),
+      JS_CFUNC_DEF("scrollIntoView", 1, ElementScrollIntoView),
       JS_CFUNC_DEF("toggleAttribute", 1, ElementToggleAttribute),
       JS_CFUNC_DEF("querySelector", 1, ElementQuerySelector),
       JS_CFUNC_DEF("querySelectorAll", 1, ElementQuerySelectorAll),

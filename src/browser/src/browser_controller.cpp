@@ -1166,7 +1166,6 @@ void BrowserController::SetTabViewport(int tab_id, int width, int height)
   tab->script_runtime->NotifyMediaChanged();
 }
 
-
 float NextZoomFactor(float current, int direction)
 {
   static constexpr float kLadder[] = {0.25F,
@@ -1499,10 +1498,8 @@ void BrowserController::PullRemoteFrame(Tab& tab, bool force)
     tab.remote_scroll_dirty = true;
     return;
   }
-  const int width =
-      tab.viewport_width > 0 ? tab.viewport_width : kDefaultRemoteViewportWidth;
-  const int height =
-      tab.viewport_height > 0 ? tab.viewport_height : kDefaultRemoteViewportHeight;
+  const int width = tab.viewport_width > 0 ? tab.viewport_width : kDefaultRemoteViewportWidth;
+  const int height = tab.viewport_height > 0 ? tab.viewport_height : kDefaultRemoteViewportHeight;
   RemoteFrame frame;
   auto reply = tab.session->Snapshot(width, height, tab.scroll_offset_y, &frame);
   if (!reply.has_value()) {

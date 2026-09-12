@@ -481,6 +481,11 @@ void InstallCustomElementRegistry(JSContext* ctx, JSValue global);
 void InstallCrypto(JSContext* ctx, JSValue global);
 void EnsureUrlSearchParamsClassRegistered(JSRuntime* rt);
 void ForgetUrlSearchParamsRuntime(JSRuntime* rt);
+
+// platform_binding.cpp — TextEncoder/TextDecoder, atob/btoa, queueMicrotask,
+// structuredClone, reportError and CSS (escape/supports).
+void DefinePlatformGlobals(JSContext* ctx);
+void ForgetPlatformRuntime(JSRuntime* rt);
 void InstallUrlSearchParamsGlobal(JSContext* ctx, JSValue global);
 void InstallUrlGlobal(JSContext* ctx, JSValue global);
 void ForgetFormDataRuntime(JSRuntime* rt);

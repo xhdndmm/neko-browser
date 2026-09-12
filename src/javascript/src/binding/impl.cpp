@@ -456,6 +456,7 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   DefineStyleSheetPrototype(ctx, *this);
   DefineEventPrototype(ctx, *this);
   DefineClassListPrototype(ctx, *this);
+  DefinePlatformGlobals(ctx);
 
   // Global scope: document, window, timers, DOM interface constructors.
   //
@@ -1214,22 +1215,14 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   // offsets are live reads off the browser layer's scroll state (PageApis
   // scroll_offset), so window.scrollX/scrollY/pageXOffset/pageYOffset track the
   // GUI scrollbar; without the callback they report 0.
-  DefineGetter(ctx,
-               window,
-               "innerWidth",
-               MakeGetterMagic(ctx, "innerWidth", WindowViewportGetter, 0));
-  DefineGetter(ctx,
-               window,
-               "innerHeight",
-               MakeGetterMagic(ctx, "innerHeight", WindowViewportGetter, 1));
-  DefineGetter(ctx,
-               window,
-               "outerWidth",
-               MakeGetterMagic(ctx, "outerWidth", WindowViewportGetter, 0));
-  DefineGetter(ctx,
-               window,
-               "outerHeight",
-               MakeGetterMagic(ctx, "outerHeight", WindowViewportGetter, 2));
+  DefineGetter(
+      ctx, window, "innerWidth", MakeGetterMagic(ctx, "innerWidth", WindowViewportGetter, 0));
+  DefineGetter(
+      ctx, window, "innerHeight", MakeGetterMagic(ctx, "innerHeight", WindowViewportGetter, 1));
+  DefineGetter(
+      ctx, window, "outerWidth", MakeGetterMagic(ctx, "outerWidth", WindowViewportGetter, 0));
+  DefineGetter(
+      ctx, window, "outerHeight", MakeGetterMagic(ctx, "outerHeight", WindowViewportGetter, 2));
   DefineGetter(ctx,
                window,
                "devicePixelRatio",
@@ -1612,6 +1605,7 @@ Impl::~Impl()
     g_canvas_class_registered.erase(rt);
   }
   ForgetUrlSearchParamsRuntime(rt);
+  ForgetPlatformRuntime(rt);
   ForgetFormDataRuntime(rt);
   ForgetHeadersRuntime(rt);
   ForgetMessageChannelRuntime(rt);

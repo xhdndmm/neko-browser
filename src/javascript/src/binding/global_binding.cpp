@@ -601,7 +601,8 @@ JSValue WindowViewportGetter(JSContext* ctx, JSValueConst this_val, int magic)
   case 2:
     return JS_NewInt32(ctx, size.second);
   default:
-    return JS_NewFloat64(ctx, impl->apis.device_pixel_ratio ? impl->apis.device_pixel_ratio() : 1.0);
+    return JS_NewFloat64(ctx,
+                         impl->apis.device_pixel_ratio ? impl->apis.device_pixel_ratio() : 1.0);
   }
 }
 

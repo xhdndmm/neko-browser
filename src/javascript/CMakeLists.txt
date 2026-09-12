@@ -32,6 +32,7 @@ add_library(neko_javascript
   src/binding/form_data_binding.cpp
   src/binding/message_channel_binding.cpp
   src/binding/websocket_binding.cpp
+  src/binding/platform_binding.cpp
 )
 add_library(neko::javascript ALIAS neko_javascript)
 
