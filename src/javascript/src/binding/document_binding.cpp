@@ -10,11 +10,12 @@
 #include "neko/dom/node.h"
 #include "neko/dom/query.h"
 #include "neko/html/parser.h"
+#include "neko/url/url.h"
 
 #include "binding_internal.h"
 
-#include <quickjs.h>
 #include <functional>
+#include <quickjs.h>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -717,6 +718,70 @@ JSValue DocGetCookie(JSContext* ctx, JSValueConst this_val)
   return JS_NewStringLen(ctx, cookies.data(), cookies.size());
 }
 
+// The host of the current document URL ("" for opaque origins such as
+// file:// pages or about:blank, which have no host).
+std::string DocumentHost(const Impl& impl)
+{
+  const auto parsed = url::Url::Parse(DocumentUrl(impl));
+  return parsed.has_value() ? parsed.value().host() : std::string();
+}
+
+// document.domain (HTML "relaxing the same-origin restriction"): the getter
+// returns the host, or the relaxed value once a script assigned one; the
+// setter accepts only the current domain or a suffix of it (SecurityError
+// otherwise, as browsers do), which is what scripts use to talk to a parent
+// domain.  The engine does not yet enforce the relaxation in its own origin
+// checks — the value is reported faithfully, but Same-Origin decisions keep
+// using the document's real origin.  There is no public-suffix check yet, so
+// shortening to a TLD such as "com" is accepted; because the relaxation is not
+// consumed anywhere it cannot grant access, and wiring it up will require a
+// public-suffix guard first.
+JSValue DocGetDomain(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  const std::string domain =
+      impl->document_domain.empty() ? DocumentHost(*impl) : impl->document_domain;
+  return JS_NewStringLen(ctx, domain.data(), domain.size());
+}
+
+JSValue DocSetDomain(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  bool ok = false;
+  const std::string requested = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  const std::string current =
+      impl->document_domain.empty() ? DocumentHost(*impl) : impl->document_domain;
+  // An empty value resets to the real host; anything else may only *shorten*
+  // the current domain (relaxing it), never lengthen it, as browsers do.
+  if (!requested.empty() && !current.empty() && requested != current) {
+    const bool suffix =
+        current.size() > requested.size() &&
+        current.compare(current.size() - requested.size(), requested.size(), requested) == 0 &&
+        current[current.size() - requested.size() - 1] == '.';
+    if (!suffix) {
+      JSValue error = JS_NewError(ctx);
+      JS_SetPropertyStr(ctx, error, "name", JS_NewString(ctx, "SecurityError"));
+      JS_SetPropertyStr(
+          ctx,
+          error,
+          "message",
+          JS_NewString(ctx, "document.domain may only be relaxed to a parent domain"));
+      return JS_Throw(ctx, error);
+    }
+  }
+  impl->document_domain = requested;
+  return JS_UNDEFINED;
+}
+
 JSValue DocSetCookie(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
   Impl* impl = ImplFor(ctx, this_val);
@@ -882,7 +947,8 @@ JSValue MakeRuleStyle(JSContext* ctx, const css::StyleRule& rule)
     css_text += "; ";
   }
   JS_SetPropertyStr(ctx, style, "cssText", JS_NewStringLen(ctx, css_text.data(), css_text.size()));
-  JS_SetPropertyStr(ctx, style, "length", JS_NewInt32(ctx, static_cast<int32_t>(rule.declarations.size())));
+  JS_SetPropertyStr(
+      ctx, style, "length", JS_NewInt32(ctx, static_cast<int32_t>(rule.declarations.size())));
   return style;
 }
 
@@ -896,10 +962,8 @@ JSValue MakeCssRule(Impl& impl, const css::StyleRule& rule, JSValueConst parent_
   JS_SetPropertyStr(ctx, obj, "cssText", JS_NewStringLen(ctx, css_text.data(), css_text.size()));
   const std::string selector =
       rule.selectors.empty() ? std::string() : css::ToString(rule.selectors.front());
-  JS_SetPropertyStr(ctx,
-                    obj,
-                    "selectorText",
-                    JS_NewStringLen(ctx, selector.data(), selector.size()));
+  JS_SetPropertyStr(
+      ctx, obj, "selectorText", JS_NewStringLen(ctx, selector.data(), selector.size()));
   JS_SetPropertyStr(ctx, obj, "style", MakeRuleStyle(ctx, rule)); // steals
   if (!JS_IsUndefined(parent_sheet)) {
     JS_SetPropertyStr(ctx, obj, "parentStyleSheet", JS_DupValue(ctx, parent_sheet));
@@ -989,14 +1053,14 @@ JSValue StyleSheetGetCssRules(JSContext* ctx, JSValueConst this_val)
   JSValue array = JS_NewArray(ctx);
   JSValue self = JS_DupValue(ctx, this_val);
   for (std::size_t i = 0; i < sheet.rules.size(); ++i) {
-    JS_SetPropertyUint32(ctx, array, static_cast<uint32_t>(i), MakeCssRule(*impl, sheet.rules[i], self));
+    JS_SetPropertyUint32(
+        ctx, array, static_cast<uint32_t>(i), MakeCssRule(*impl, sheet.rules[i], self));
   }
   JS_FreeValue(ctx, self);
   return array;
 }
 
-JSValue
-StyleSheetInsertRule(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+JSValue StyleSheetInsertRule(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
   if (impl == nullptr || !impl->apis.stylesheet_text || !impl->apis.stylesheet_replace) {
@@ -1011,7 +1075,8 @@ StyleSheetInsertRule(JSContext* ctx, JSValueConst this_val, int argc, JSValueCon
   if (added.rules.empty()) {
     return ThrowDomException(ctx, "SyntaxError", "invalid CSS rule");
   }
-  css::StyleSheet current = css::ParseStyleSheet(impl->apis.stylesheet_text(SheetIndexOf(ctx, this_val)));
+  css::StyleSheet current =
+      css::ParseStyleSheet(impl->apis.stylesheet_text(SheetIndexOf(ctx, this_val)));
   std::size_t position = current.rules.size();
   if (argc >= 2) {
     int64_t requested = 0;
@@ -1030,7 +1095,8 @@ StyleSheetInsertRule(JSContext* ctx, JSValueConst this_val, int argc, JSValueCon
   current.rules.insert(current.rules.begin() + static_cast<std::ptrdiff_t>(position),
                        added.rules.front());
   const std::string updated = css::SerializeStyleSheet(current);
-  const std::optional<std::string> error = impl->apis.stylesheet_replace(SheetIndexOf(ctx, this_val), updated);
+  const std::optional<std::string> error =
+      impl->apis.stylesheet_replace(SheetIndexOf(ctx, this_val), updated);
   if (error.has_value()) {
     return ThrowDomException(ctx, "SyntaxError", error->data());
   }
@@ -1051,13 +1117,15 @@ JSValue StyleSheetDeleteRule(JSContext* ctx, JSValueConst this_val, int argc, JS
     JS_FreeValue(ctx, JS_GetException(ctx));
     return JS_EXCEPTION;
   }
-  css::StyleSheet current = css::ParseStyleSheet(impl->apis.stylesheet_text(SheetIndexOf(ctx, this_val)));
+  css::StyleSheet current =
+      css::ParseStyleSheet(impl->apis.stylesheet_text(SheetIndexOf(ctx, this_val)));
   if (index < 0 || static_cast<std::size_t>(index) >= current.rules.size()) {
     return ThrowDomException(ctx, "IndexSizeError", "rule index out of range");
   }
   current.rules.erase(current.rules.begin() + static_cast<std::ptrdiff_t>(index));
   const std::string updated = css::SerializeStyleSheet(current);
-  const std::optional<std::string> error = impl->apis.stylesheet_replace(SheetIndexOf(ctx, this_val), updated);
+  const std::optional<std::string> error =
+      impl->apis.stylesheet_replace(SheetIndexOf(ctx, this_val), updated);
   if (error.has_value()) {
     return ThrowDomException(ctx, "SyntaxError", error->data());
   }
@@ -1067,8 +1135,7 @@ JSValue StyleSheetDeleteRule(JSContext* ctx, JSValueConst this_val, int argc, JS
 void DefineStyleSheetPrototype(JSContext* ctx, Impl& impl)
 {
   impl.css_style_sheet_proto = JS_NewObject(ctx);
-  DefineGetter(
-      ctx, impl.css_style_sheet_proto, "href", MakeGetter(ctx, "href", StyleSheetGetHref));
+  DefineGetter(ctx, impl.css_style_sheet_proto, "href", MakeGetter(ctx, "href", StyleSheetGetHref));
   DefineGetter(ctx,
                impl.css_style_sheet_proto,
                "ownerNode",
@@ -1077,16 +1144,14 @@ void DefineStyleSheetPrototype(JSContext* ctx, Impl& impl)
                impl.css_style_sheet_proto,
                "cssRules",
                MakeGetter(ctx, "cssRules", StyleSheetGetCssRules));
-  JS_SetPropertyStr(
-      ctx,
-      impl.css_style_sheet_proto,
-      "insertRule",
-      JS_NewCFunction(ctx, StyleSheetInsertRule, "insertRule", 2)); // steals
-  JS_SetPropertyStr(
-      ctx,
-      impl.css_style_sheet_proto,
-      "deleteRule",
-      JS_NewCFunction(ctx, StyleSheetDeleteRule, "deleteRule", 1)); // steals
+  JS_SetPropertyStr(ctx,
+                    impl.css_style_sheet_proto,
+                    "insertRule",
+                    JS_NewCFunction(ctx, StyleSheetInsertRule, "insertRule", 2)); // steals
+  JS_SetPropertyStr(ctx,
+                    impl.css_style_sheet_proto,
+                    "deleteRule",
+                    JS_NewCFunction(ctx, StyleSheetDeleteRule, "deleteRule", 1)); // steals
   impl.css_rule_proto = JS_NewObject(ctx);
   JSValue global = JS_GetGlobalObject(ctx);
   DefineInterface(ctx, global, "CSSStyleSheet", impl.css_style_sheet_proto);
@@ -1151,6 +1216,11 @@ void DefineDocumentPrototype(JSContext* ctx, Impl& impl)
                  MakeGetter(ctx, "title", DocGetTitle),
                  MakeSetter(ctx, "title", DocSetTitle));
   DefineGetter(ctx, impl.document_proto, "URL", MakeGetter(ctx, "URL", DocGetURL));
+  DefineAccessor(ctx,
+                 impl.document_proto,
+                 "domain",
+                 MakeGetter(ctx, "domain", DocGetDomain),
+                 MakeSetter(ctx, "domain", DocSetDomain));
   DefineAccessor(ctx,
                  impl.document_proto,
                  "cookie",

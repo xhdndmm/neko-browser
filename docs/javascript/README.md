@@ -51,7 +51,10 @@
   `querySelector(All)`、`createElement`、`createTextNode`、
   `currentScript`（只读：返回正在执行脚本体的 `<script>` 元素，非脚本执行
   期间为 `null`；`browser::RunPageScripts` 在每个脚本体执行前后设置/清除，
-  见下）。
+  见下）、`domain`（getter 返回页面 host；setter 只允许**缩短**到父域——
+  按标签边界判定，非父域抛 `SecurityError`（带 `name`），空串恢复真实
+  host；真实站点用它做跨子域通信的判定，bilibili 的域名探测代码依赖它
+  可读；值本身尚未参与同源判定，也没有 PSL 守卫，见“未实现”）。
 - **Node**：`nodeType`、`nodeName`、`textContent`（读写）、`parentNode`、
   `firstChild`、`lastChild`、`childNodes`、`appendChild`、`append`、
   `replaceChildren`、`insertBefore`、`removeChild`、`hasChildNodes`、
@@ -212,6 +215,9 @@ document wrapper）只靠 GC 看不到的引用计数存活，runtime 销毁时�
 - microtask/Promise：job 队列在 Evaluate/CallGlobal/定时器/事件派发后泵送
   （见上文），但尚未与浏览器事件循环做完整对接（无宏任务/requestAnimationFrame）。
 - Web IDL 完整类型系统（接口继承、字典、枚举转换等）。
+- `document.domain` 的赋值**不**放宽引擎自己的同源判定（后者仍用页面真实
+  origin），因此它目前只影响脚本读到/写到的值；且缺少 Public Suffix List
+  校验（允许缩到 TLD）。在把该值接入 origin 比较之前必须先加 PSL 守卫。
 
 ## 长期架构目标
 

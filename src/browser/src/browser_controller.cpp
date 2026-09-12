@@ -229,8 +229,7 @@ inline constexpr int64_t kRemoteFrameMinIntervalMs = 40;
 // session failure the tab falls back to the in-process paths.
 bool IsRemoteTab(const Tab& tab)
 {
-  return tab.session != nullptr && tab.page == nullptr &&
-         tab.content_type == ContentType::kHtml;
+  return tab.session != nullptr && tab.page == nullptr && tab.content_type == ContentType::kHtml;
 }
 
 // The CLI binary serves --renderer-session and ships next to the GUI
@@ -366,10 +365,12 @@ std::string_view ToString(ContentType type)
   return "unknown";
 }
 
-BrowserController::BrowserController(std::string profile_dir, FetchFn fetch, RendererOptions renderer)
-    : profile_dir_(std::move(profile_dir)), fetch_(std::move(fetch)), renderer_(std::move(renderer)),
-      cookies_(profile_dir_), history_(profile_dir_), bookmarks_(profile_dir_),
-      local_storage_(profile_dir_), indexed_db_(profile_dir_),
+BrowserController::BrowserController(std::string profile_dir,
+                                     FetchFn fetch,
+                                     RendererOptions renderer)
+    : profile_dir_(std::move(profile_dir)), fetch_(std::move(fetch)),
+      renderer_(std::move(renderer)), cookies_(profile_dir_), history_(profile_dir_),
+      bookmarks_(profile_dir_), local_storage_(profile_dir_), indexed_db_(profile_dir_),
       downloads_(profile_dir_ + "/downloads")
 {
   if (renderer_.enabled) {
@@ -924,8 +925,7 @@ bool BrowserController::DispatchKeyboard(int tab_id,
           SubmitForm(tab_id, form);
         }
         return not_canceled;
-      } else if (!key.empty() &&
-                 static_cast<unsigned char>(key.front()) >= 0x20U) {
+      } else if (!key.empty() && static_cast<unsigned char>(key.front()) >= 0x20U) {
         value += key;
       } else {
         return not_canceled;
@@ -1269,10 +1269,10 @@ void BrowserController::PullRemoteFrame(Tab& tab, bool force)
     tab.remote_scroll_dirty = true;
     return;
   }
-  const int width = tab.remote_viewport_width > 0 ? tab.remote_viewport_width
-                                                  : kDefaultRemoteViewportWidth;
-  const int height = tab.remote_viewport_height > 0 ? tab.remote_viewport_height
-                                                    : kDefaultRemoteViewportHeight;
+  const int width =
+      tab.remote_viewport_width > 0 ? tab.remote_viewport_width : kDefaultRemoteViewportWidth;
+  const int height =
+      tab.remote_viewport_height > 0 ? tab.remote_viewport_height : kDefaultRemoteViewportHeight;
   RemoteFrame frame;
   auto reply = tab.session->Snapshot(width, height, tab.scroll_offset_y, &frame);
   if (!reply.has_value()) {
@@ -1302,8 +1302,8 @@ void BrowserController::MarkSessionFailed(Tab& tab, std::string_view message)
     tab.remote_content_height = 0;
     tab.remote_hover_link.clear();
     tab.content_type = ContentType::kError;
-    tab.error = std::make_shared<std::string>("renderer process unavailable: " +
-                                              std::string(message));
+    tab.error =
+        std::make_shared<std::string>("renderer process unavailable: " + std::string(message));
     tab.title = "Renderer error";
     tab.loading = false;
   }
@@ -1535,22 +1535,26 @@ void BrowserController::LoadBytes(Tab& tab,
       // Each loader uses the remaining workers for per-URL futures. With the
       // normal hardware-sized pool there are enough workers for all three
       // outer tasks and their nested URL work to make progress together.
-      pool_->Post([page = std::shared_ptr(new_page), final_url, fetch_subresource, &pool = *pool_]() {
-        FetchWebFonts(*page, final_url, fetch_subresource, pool);
-      });
-      pool_->Post([page = std::shared_ptr(new_page), final_url, fetch_subresource, &pool = *pool_]() {
-        FetchPageImages(*page, final_url, fetch_subresource, pool);
-      });
-      pool_->Post([page = std::shared_ptr(new_page), final_url, fetch_subresource, &pool = *pool_]() {
-        FetchPageVideos(*page, final_url, fetch_subresource, pool);
-      });
+      pool_->Post(
+          [page = std::shared_ptr(new_page), final_url, fetch_subresource, &pool = *pool_]() {
+            FetchWebFonts(*page, final_url, fetch_subresource, pool);
+          });
+      pool_->Post(
+          [page = std::shared_ptr(new_page), final_url, fetch_subresource, &pool = *pool_]() {
+            FetchPageImages(*page, final_url, fetch_subresource, pool);
+          });
+      pool_->Post(
+          [page = std::shared_ptr(new_page), final_url, fetch_subresource, &pool = *pool_]() {
+            FetchPageVideos(*page, final_url, fetch_subresource, pool);
+          });
     } else if (pool_->thread_count() >= 2) {
       // With fewer workers, one outer task avoids nested-future starvation.
-      pool_->Post([page = std::shared_ptr(new_page), final_url, fetch_subresource, &pool = *pool_]() {
-        FetchWebFonts(*page, final_url, fetch_subresource, pool);
-        FetchPageImages(*page, final_url, fetch_subresource, pool);
-        FetchPageVideos(*page, final_url, fetch_subresource, pool);
-      });
+      pool_->Post(
+          [page = std::shared_ptr(new_page), final_url, fetch_subresource, &pool = *pool_]() {
+            FetchWebFonts(*page, final_url, fetch_subresource, pool);
+            FetchPageImages(*page, final_url, fetch_subresource, pool);
+            FetchPageVideos(*page, final_url, fetch_subresource, pool);
+          });
     } else {
       // Single-worker pool: decoding inside a pool task would deadlock on
       // its own futures — keep the old inline path.
@@ -1859,8 +1863,13 @@ void FetchExternalStylesheets(renderer::Page& page,
     if (base.has_value()) {
       target = url::Url::Parse(*href, base.value());
     }
-    if (!target.has_value() ||
-        (target.value().scheme() != "http" && target.value().scheme() != "https")) {
+    if (!target.has_value()) {
+      continue;
+    }
+    // http/https go to the network; data: stylesheets are decoded locally by
+    // the network layer (RFC 2397).  Everything else is skipped for now.
+    const std::string& scheme = target.value().scheme();
+    if (scheme != "http" && scheme != "https" && scheme != "data") {
       continue;
     }
     const std::string serialized = target.value().Serialize();
@@ -1882,9 +1891,8 @@ void FetchExternalStylesheets(renderer::Page& page,
       return base::Err(response.error());
     }
     css::StyleSheet sheet = css::ParseStyleSheet(response.value().body);
-    const std::string resolved_url = response.value().final_url.empty()
-                       ? url
-                       : response.value().final_url;
+    const std::string resolved_url =
+        response.value().final_url.empty() ? url : response.value().final_url;
     const base::Result<url::Url> stylesheet_url = url::Url::Parse(resolved_url);
     if (stylesheet_url.has_value()) {
       for (css::FontFaceRule& face : sheet.font_faces) {
@@ -2033,71 +2041,6 @@ void FetchWebFonts(renderer::Page& page,
   }
 }
 
-// ---------------------------------------------------------------------------
-// data: URL support for image subresources.
-// ---------------------------------------------------------------------------
-
-std::optional<std::string> DecodeBase64(std::string_view input)
-{
-  // -2 = whitespace (skip), -1 = invalid.
-  static const std::array<std::int8_t, 256> kReverse = [] {
-    std::array<std::int8_t, 256> table{};
-    table.fill(-1);
-    table[static_cast<unsigned char>('\t')] = -2;
-    table[static_cast<unsigned char>('\n')] = -2;
-    table[static_cast<unsigned char>('\r')] = -2;
-    table[static_cast<unsigned char>(' ')] = -2;
-    constexpr char kAlphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    for (int i = 0; i < 64; ++i) {
-      table[static_cast<unsigned char>(kAlphabet[i])] = static_cast<std::int8_t>(i);
-    }
-    return table;
-  }();
-  std::string out;
-  out.reserve(input.size() / 4 * 3);
-  std::uint32_t buffer = 0;
-  int bits = 0;
-  for (const char raw : input) {
-    if (raw == '=') {
-      break; // padding: everything after is ignored
-    }
-    const auto code = kReverse[static_cast<unsigned char>(raw)];
-    if (code == -2) {
-      continue; // whitespace
-    }
-    if (code < 0) {
-      return std::nullopt; // invalid character
-    }
-    buffer = (buffer << 6) | static_cast<std::uint32_t>(code);
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      out.push_back(static_cast<char>((buffer >> bits) & 0xFF));
-    }
-  }
-  return out;
-}
-
-bool IsDataUrl(const std::string& url)
-{
-  return url.rfind("data:", 0) == 0;
-}
-
-// Decodes the payload of |url| ("data:[mediatype][;base64],<data>").
-std::optional<std::string> DecodeDataUrlBody(const std::string& url)
-{
-  const std::size_t comma = url.find(',');
-  if (comma == std::string::npos) {
-    return std::nullopt;
-  }
-  const std::string_view header(url.data() + 5, comma - 5);
-  const std::string_view payload = std::string_view(url).substr(comma + 1);
-  if (header.find("base64") == std::string_view::npos) {
-    return url::PercentDecode(payload);
-  }
-  return DecodeBase64(payload);
-}
-
 void FetchPageImages(renderer::Page& page,
                      const std::string& base_url,
                      const BrowserController::FetchFn& fetch,
@@ -2189,20 +2132,17 @@ void FetchPageImages(renderer::Page& page,
   };
   auto fetch_and_decode = [&fetch,
                            &decode_bytes](const std::string& url) -> base::Result<DecodedImage> {
-    if (IsDataUrl(url)) {
-      const std::optional<std::string> body = DecodeDataUrlBody(url);
-      if (!body.has_value()) {
-        return base::Err(base::Error::InvalidArgument("unsupported data URL payload"));
-      }
-      return decode_bytes(body.value());
-    }
     const base::Result<url::Url> parsed = url::Url::Parse(url);
     if (!parsed.has_value()) {
       return base::Err(base::Error::InvalidArgument("invalid image URL"));
     }
-    // Images are fetched without a cookie header (the fetch hook receives
-    // the same header set as the page's other subresources today).
-    const auto response = fetch(parsed.value(), {});
+    // data: URLs never touch the network, but they go through the same
+    // decoder the network layer uses — an injected fetcher (tests) would not
+    // know how to answer one, so they are resolved before it is consulted.
+    const base::Result<network::HttpResponse> response =
+        parsed.value().scheme() == "data"
+            ? network::DecodeDataUrl(parsed.value().Serialize(/*include_fragment=*/false))
+            : fetch(parsed.value(), {});
     if (!response) {
       return base::Err(response.error());
     }
@@ -2261,10 +2201,8 @@ void FetchPageVideos(renderer::Page& page,
       target = url::Url::Parse(source.url, base.value());
     }
     if (target.has_value()) {
-      pending.push_back(PendingVideo{source.element,
-                                     target.value().Serialize(),
-                                     source.autoplay,
-                                     source.loop});
+      pending.push_back(
+          PendingVideo{source.element, target.value().Serialize(), source.autoplay, source.loop});
     } else {
       NEKO_LOG_WARNING("video: cannot resolve url \"" + source.url + "\"");
     }
@@ -2303,8 +2241,7 @@ void FetchPageVideos(renderer::Page& page,
     const std::size_t frame_count = strip.frames->size();
     const image::Image first_frame = (*strip.frames)[0]; // copy: strip moves below
     page.SetElementVideo(item.element, first_frame, std::move(strip), item.autoplay);
-    NEKO_LOG_INFO("video: injected " + item.url + " (" + std::to_string(frame_count) +
-            " frames)");
+    NEKO_LOG_INFO("video: injected " + item.url + " (" + std::to_string(frame_count) + " frames)");
   };
 
   if (pending.size() == 1) {

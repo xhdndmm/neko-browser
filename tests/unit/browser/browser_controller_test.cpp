@@ -12,12 +12,12 @@
 #include "neko/storage/file_util.h"
 #include "neko/url/url.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
-#include <algorithm>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <iterator>
@@ -110,6 +110,12 @@ public:
       std::lock_guard<std::mutex> lock(mutex_);
       requests_.push_back(key);
       cookies_seen_.push_back(std::string(cookie_header));
+      // The real fetch decodes data: URLs locally before it opens a socket
+      // (see network::DecodeDataUrl), so the fake one mirrors that instead of
+      // demanding a route.
+      if (url.scheme() == "data") {
+        return network::DecodeDataUrl(key);
+      }
       const auto it = routes_.find(key);
       if (it == routes_.end()) {
         return base::Err(base::Error::Network("no fake route for " + key));
@@ -777,8 +783,7 @@ TEST(BrowserControllerTest, FileUrlLoadsAbsolutePath)
   TempProfile tp;
   const std::string file = tp.path() + "/file_url.html";
   ASSERT_TRUE(neko::storage::WriteFileAtomic(
-                  file,
-                  "<html><head><title>File URL</title></head><body>file body</body></html>")
+                  file, "<html><head><title>File URL</title></head><body>file body</body></html>")
                   .has_value());
 
   BrowserController controller(tp.path());
@@ -1288,6 +1293,56 @@ TEST(BrowserControllerTest, XhrTransportErrorFiresOnError)
   EXPECT_EQ(controller.ActiveTab()->title, "error-state-4-status-0");
 }
 
+// Loads the first system sans face: real TTF bytes FreeType accepts.
+std::vector<uint8_t> LoadSystemFontBytes()
+{
+  for (const std::string& path : graphics::FindSystemFonts(graphics::GenericFamily::kSansSerif)) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+      continue;
+    }
+    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)),
+                               std::istreambuf_iterator<char>());
+    if (!bytes.empty()) {
+      return bytes;
+    }
+  }
+  return {};
+}
+
+// Standard base64 without line breaks; only used to build data: URLs here.
+std::string TestBase64(const std::vector<uint8_t>& bytes)
+{
+  static constexpr const char* kAlphabet =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string out;
+  out.reserve(((bytes.size() + 2) / 3) * 4);
+  std::size_t i = 0;
+  for (; i + 3 <= bytes.size(); i += 3) {
+    const uint32_t group =
+        (uint32_t(bytes[i]) << 16) | (uint32_t(bytes[i + 1]) << 8) | uint32_t(bytes[i + 2]);
+    out.push_back(kAlphabet[(group >> 18) & 0x3f]);
+    out.push_back(kAlphabet[(group >> 12) & 0x3f]);
+    out.push_back(kAlphabet[(group >> 6) & 0x3f]);
+    out.push_back(kAlphabet[group & 0x3f]);
+  }
+  const std::size_t rest = bytes.size() - i;
+  if (rest == 1) {
+    const uint32_t group = uint32_t(bytes[i]) << 16;
+    out.push_back(kAlphabet[(group >> 18) & 0x3f]);
+    out.push_back(kAlphabet[(group >> 12) & 0x3f]);
+    out.push_back('=');
+    out.push_back('=');
+  } else if (rest == 2) {
+    const uint32_t group = (uint32_t(bytes[i]) << 16) | (uint32_t(bytes[i + 1]) << 8);
+    out.push_back(kAlphabet[(group >> 18) & 0x3f]);
+    out.push_back(kAlphabet[(group >> 12) & 0x3f]);
+    out.push_back(kAlphabet[(group >> 6) & 0x3f]);
+    out.push_back('=');
+  }
+  return out;
+}
+
 // @font-face: the font URL is fetched and registered under its family; a
 // second declaration of the same src is fetched once.  The fixture serves
 // real font bytes (the first system sans face) so FreeType accepts it.
@@ -1296,18 +1351,7 @@ TEST(BrowserControllerTest, FontFaceFetchedAndRegistered)
   TempProfile tp;
   FakeFetcher fetch;
   // Real TTF bytes from the system so LoadWebFont parses them.
-  std::vector<uint8_t> font_bytes;
-  for (const std::string& path : graphics::FindSystemFonts(graphics::GenericFamily::kSansSerif)) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
-      continue;
-    }
-    font_bytes = std::vector<uint8_t>((std::istreambuf_iterator<char>(file)),
-                                      std::istreambuf_iterator<char>());
-    if (!font_bytes.empty()) {
-      break;
-    }
-  }
+  const std::vector<uint8_t> font_bytes = LoadSystemFontBytes();
   ASSERT_FALSE(font_bytes.empty()) << "no system font available for the fixture";
   const std::string body(font_bytes.begin(), font_bytes.end());
   fetch.Add("http://example.com/",
@@ -1329,6 +1373,42 @@ TEST(BrowserControllerTest, FontFaceFetchedAndRegistered)
 
   ASSERT_TRUE(WaitForSubresources([&fetch] { return fetch.requests_.size() == 3u; }));
   EXPECT_THAT(fetch.requests_, testing::Contains("http://example.com/css/fonts/icon.ttf"));
+}
+
+// @font-face with a data: src (the bilibili icon-font case): the bytes are
+// decoded locally by the network layer per RFC 2397, registered under the
+// family, and never travel over the network.
+TEST(BrowserControllerTest, DataUrlFontFaceIsDecodedAndRegistered)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  const std::vector<uint8_t> font_bytes = LoadSystemFontBytes();
+  ASSERT_FALSE(font_bytes.empty()) << "no system font available for the fixture";
+  // A literal space after the comma, like the fonts real pages inline.
+  const std::string data_url = "data:font/ttf;base64, " + TestBase64(font_bytes);
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><link rel=stylesheet href=/css/site.css>"
+                               "</head><body><p>x</p></body></html>"});
+  fetch.Add("http://example.com/css/site.css",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/css"}},
+                               "@font-face { font-family: 'myicon'; src: url(\"" + data_url +
+                                   "\") format('truetype'); }"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  const std::string expected_key = "data:font/ttf;base64, " + TestBase64(font_bytes);
+  ASSERT_TRUE(WaitForSubresources([&controller, &expected_key] {
+    Tab* tab = controller.ActiveTab();
+    return tab != nullptr && tab->page != nullptr && tab->page->HasWebFont(expected_key);
+  }));
+  // Page, stylesheet, then the font data: URL - decoded locally, never routed.
+  ASSERT_EQ(fetch.requests_.size(), 3u);
+  EXPECT_EQ(fetch.requests_[2], expected_key);
 }
 
 TEST(BrowserControllerTest, WebFontDoesNotBlockPagePublication)
@@ -1762,10 +1842,9 @@ TEST(BrowserControllerTest, ReusesOneFetchForDuplicatePageImageUrls)
   });
   ASSERT_TRUE(ready);
 
-  EXPECT_EQ(std::count(fetch.requests_.begin(),
-                       fetch.requests_.end(),
-                       "http://example.com/shared.png"),
-            1);
+  EXPECT_EQ(
+      std::count(fetch.requests_.begin(), fetch.requests_.end(), "http://example.com/shared.png"),
+      1);
 }
 
 // <script type="application/json"> is a data block (HTML §4.12.1): never
@@ -1888,6 +1967,33 @@ TEST(BrowserControllerTest, DataUrlImageIsDecodedWithoutNetwork)
   EXPECT_EQ(decoded->height, 2);
 }
 
+// <link rel="stylesheet" href="data:text/css,..."> is applied: external
+// stylesheets accept data: URLs, decoded locally by the network layer.
+TEST(BrowserControllerTest, DataUrlStylesheetIsApplied)
+{
+  TempProfile tp;
+  // The default fetch (the network stack) is used: a data: URL needs no
+  // network, so this test stays hermetic.
+  BrowserController controller(tp.path());
+  const int tab = controller.NewTab();
+  const std::string html =
+      "<html><head><link rel=\"stylesheet\" href=\"data:text/css,%23box%7Bwidth%3A123px%3B"
+      "height%3A45px%7D\"></head><body><div id=\"box\"></div></body></html>";
+  const auto loaded =
+      controller.LoadDocument(tab, html, "text/html", "https://example.test/stylesheet.html");
+  ASSERT_TRUE(loaded.has_value()) << loaded.error().message();
+  Tab* tab_ptr = controller.FindTab(tab);
+  ASSERT_NE(tab_ptr, nullptr);
+  ASSERT_NE(tab_ptr->page, nullptr);
+  tab_ptr->page->Layout(800, 600);
+  dom::Element* box = dom::QuerySelector(*tab_ptr->page->document(), "#box");
+  ASSERT_NE(box, nullptr);
+  const auto geometry = tab_ptr->page->ElementBoxGeometry(*box);
+  ASSERT_TRUE(geometry.has_value());
+  EXPECT_NEAR(geometry->width, 123.0f, 1.0f);
+  EXPECT_NEAR(geometry->height, 45.0f, 1.0f);
+}
+
 TEST(BrowserControllerTest, PercentEncodedSvgDataUrlIsDecodedWithoutNetwork)
 {
   TempProfile tp;
@@ -1951,9 +2057,9 @@ TEST(BrowserControllerTest, FetchesAndAppliesExternalStylesheets)
   EXPECT_NE(
       std::find(fetch.requests_.begin(), fetch.requests_.end(), "http://example.com/style.css"),
       fetch.requests_.end());
-  EXPECT_EQ(std::count(fetch.requests_.begin(), fetch.requests_.end(),
-                       "http://example.com/style.css"),
-            1);
+  EXPECT_EQ(
+      std::count(fetch.requests_.begin(), fetch.requests_.end(), "http://example.com/style.css"),
+      1);
   EXPECT_EQ(
       std::find(fetch.requests_.begin(), fetch.requests_.end(), "http://example.com/favicon.ico"),
       fetch.requests_.end());

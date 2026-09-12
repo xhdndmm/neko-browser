@@ -1671,6 +1671,34 @@ TEST_F(DomBinderTest, DocumentMetaProperties)
   EXPECT_TRUE(EvalBool("typeof document.URL === 'string' && document.baseURI === document.URL"));
 }
 
+TEST_F(DomBinderTest, DocumentDomainReflectsHostAndAllowsOnlyRelaxing)
+{
+  // The getter defaults to the page host (https://www.example.com/ here).
+  EXPECT_EQ(EvalString("document.domain"), "www.example.com");
+  // Relaxing to a parent domain works, like in browsers.
+  EXPECT_EQ(EvalString("(function(){ document.domain = 'example.com';"
+                       " return document.domain; })()"),
+            "example.com");
+  // Lengthening back to the subdomain is refused (browsers refuse it too).
+  EXPECT_TRUE(EvalBool("(function(){ try { document.domain = 'www.example.com'; }"
+                       " catch (e) { return e.name === 'SecurityError'; } return false; })()"));
+  EXPECT_EQ(EvalString("document.domain"), "example.com");
+  // An unrelated domain is refused and leaves the value untouched.
+  EXPECT_TRUE(EvalBool("(function(){ try { document.domain = 'evil.test'; }"
+                       " catch (e) { return e.name === 'SecurityError'; } return false; })()"));
+  EXPECT_EQ(EvalString("document.domain"), "example.com");
+  // A suffix without a label boundary is not a parent domain.
+  EXPECT_TRUE(EvalBool("(function(){ try { document.domain = 'ample.com'; }"
+                       " catch (e) { return e.name === 'SecurityError'; } return false; })()"));
+  // The empty string resets to the real host.
+  EXPECT_EQ(EvalString("(function(){ document.domain = ''; return document.domain; })()"),
+            "www.example.com");
+  // Same-label-domain assignment is a no-op.
+  EXPECT_EQ(EvalString("(function(){ document.domain = 'www.example.com';"
+                       " return document.domain; })()"),
+            "www.example.com");
+}
+
 TEST_F(DomBinderTest, DocumentElementCollections)
 {
   EXPECT_TRUE(EvalBool("(function(){ var d = document; "

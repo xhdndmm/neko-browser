@@ -7,6 +7,19 @@
 namespace neko::url {
 namespace {
 
+// data: URLs are opaque to the URL parser: they round-trip through
+// Parse + Serialize unchanged, which is what the resource loaders rely on
+// when they hand the URL to the network layer for local decoding.
+TEST(UrlTest, DataUrlRoundTripsThroughParseAndSerialize)
+{
+  const std::string raw =
+      "data:application/font-woff;charset=utf-8;base64,d09GRgABAAAAAAZgABAAAAAADAAA%20+Q==";
+  const auto parsed = Url::Parse(raw);
+  ASSERT_TRUE(parsed.has_value()) << parsed.error().message();
+  EXPECT_EQ(parsed.value().scheme(), "data");
+  EXPECT_EQ(parsed.value().Serialize(/*include_fragment=*/true), raw);
+}
+
 TEST(UrlTest, ParseSimpleHttp)
 {
   const auto r = Url::Parse("http://example.com");

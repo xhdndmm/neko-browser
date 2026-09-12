@@ -22,6 +22,64 @@ namespace {
 // any legitimate page body.
 constexpr std::size_t kMaxBodySize = 512u * 1024u * 1024u;
 
+// Decodes standard base64 (RFC 4648 §4); ASCII whitespace is ignored and
+// missing padding is accepted (both are common in the wild).  Returns
+// InvalidArgument for characters outside the alphabet, non-zero tail bits or
+// data after the padding.
+base::Result<std::string> Base64Decode(std::string_view input)
+{
+  auto value_of = [](char c) -> int {
+    if (c >= 'A' && c <= 'Z') {
+      return c - 'A';
+    }
+    if (c >= 'a' && c <= 'z') {
+      return c - 'a' + 26;
+    }
+    if (c >= '0' && c <= '9') {
+      return c - '0' + 52;
+    }
+    if (c == '+') {
+      return 62;
+    }
+    if (c == '/') {
+      return 63;
+    }
+    return -1;
+  };
+
+  std::string out;
+  out.reserve(input.size() / 4 * 3 + 3);
+  std::uint32_t accumulator = 0;
+  int bits = 0;
+  bool padded = false;
+  for (const char c : input) {
+    if (c == '\r' || c == '\n' || c == ' ' || c == '\t') {
+      continue;
+    }
+    if (c == '=') {
+      padded = true;
+      continue;
+    }
+    if (padded) {
+      return base::Err(base::Error::InvalidArgument("base64 data after padding"));
+    }
+    const int value = value_of(c);
+    if (value < 0) {
+      return base::Err(base::Error::InvalidArgument("invalid base64 character"));
+    }
+    accumulator = (accumulator << 6) | static_cast<std::uint32_t>(value);
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out.push_back(static_cast<char>((accumulator >> bits) & 0xffu));
+    }
+  }
+  if (bits > 0 && (accumulator & ((1u << bits) - 1u)) != 0) {
+    return base::Err(base::Error::InvalidArgument("base64 tail bits are not zero"));
+  }
+  return out;
+}
+
 bool NoProxyMatches(std::string_view host, uint16_t port)
 {
   const char* value = std::getenv("no_proxy");
@@ -652,11 +710,72 @@ base::Result<HttpResponse> PerformRequest(Transport& transport, const std::strin
   return response;
 }
 
+base::Result<HttpResponse> DecodeDataUrl(std::string_view url)
+{
+  // data:[<mediatype>][;base64],<data>   (RFC 2397)
+  constexpr std::string_view kPrefix = "data:";
+  if (url.substr(0, kPrefix.size()) != kPrefix) {
+    return base::Err(base::Error::InvalidArgument("not a data: URL"));
+  }
+  if (url.size() > kMaxBodySize) {
+    return base::Err(base::Error::Parse("data: URL is too large"));
+  }
+  const std::size_t comma = url.find(',');
+  if (comma == std::string_view::npos) {
+    return base::Err(base::Error::InvalidArgument("data: URL has no data"));
+  }
+  std::string_view metadata = url.substr(kPrefix.size(), comma - kPrefix.size());
+  const std::string_view encoded = url.substr(comma + 1);
+
+  // The last parameter may be ";base64" (browsers accept any case).
+  bool is_base64 = false;
+  const std::size_t last_semicolon = metadata.rfind(';');
+  if (last_semicolon != std::string_view::npos &&
+      base::ToLower(metadata.substr(last_semicolon + 1)) == "base64") {
+    is_base64 = true;
+    metadata = metadata.substr(0, last_semicolon);
+  }
+
+  // Percent-decoding applies to the data part before any base64 decoding, so
+  // "%2B" is a literal '+' in the payload.
+  const std::string decoded = url::PercentDecode(encoded);
+  std::string body;
+  if (is_base64) {
+    auto bytes = Base64Decode(decoded);
+    if (!bytes.has_value()) {
+      return base::Err(bytes.error());
+    }
+    body = std::move(bytes.value());
+  } else {
+    body = decoded;
+  }
+  if (body.size() > kMaxBodySize) {
+    return base::Err(base::Error::Parse("data: payload is too large"));
+  }
+
+  HttpResponse response;
+  response.status_code = 200;
+  response.reason = "OK";
+  // RFC 2397's default media type when the URL carries no metadata.
+  response.headers.push_back(
+      {"content-type", std::string(metadata.empty() ? "text/plain;charset=US-ASCII" : metadata)});
+  response.body = std::move(body);
+  response.final_url = std::string(url);
+  return response;
+}
+
 base::Result<HttpResponse> HttpGet(const url::Url& url,
                                    int redirect_limit,
                                    const HeaderProvider& extra_headers,
                                    const TlsOptions& tls_options)
 {
+  if (url.scheme() == "data") {
+    // A data: URL never touches the network, but every resource loader in the
+    // engine (stylesheets, scripts, @font-face, images, fetch()) funnels
+    // through HttpGet — decoding it here gives them all support at once.
+    // The fragment is not part of the resource, hence Serialize(false).
+    return DecodeDataUrl(url.Serialize(/*include_fragment=*/false));
+  }
   if (url.scheme() != "http" && url.scheme() != "https") {
     return base::Err(base::Error::NotImplemented("unsupported URL scheme '" + url.scheme() +
                                                  "' (only http/https)"));

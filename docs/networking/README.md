@@ -11,6 +11,11 @@
   SNI、TLS≥1.2；`HttpGet` 对 https:// 自动启用
 - **gzip/deflate**：`compression` 封装 zlib，RFC 7231 内容编码解码
   （链式编码、raw deflate 兼容、64 MiB 输出上限）
+- **`data:` URL（RFC 2397）**：`HttpGet` 在打开 socket 之前就地解码
+  （`DecodeDataUrl`）——元数据段（含 `;base64` 标记，大小写不敏感）与逗号后的
+  负载、负载百分号解码、缺省 `text/plain;charset=US-ASCII`、无 padding 与
+  空白容忍、非法字符/尾部置位拒绝；所有子资源（样式表、脚本、@font-face、
+  图片、`fetch()`）都走同一入口，因此内联 base64 资源不需要网络
 
 ## 未实现
 

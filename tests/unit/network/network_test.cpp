@@ -14,6 +14,7 @@
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
+#include <random>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -28,6 +29,40 @@
 
 namespace neko::network {
 namespace {
+
+// Standard base64 (with '=' padding); the mirror of the decoder under test, so
+// the round-trip property can be checked over arbitrary byte strings.
+std::string EncodeBase64(std::string_view data)
+{
+  static constexpr const char* kAlphabet =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string out;
+  out.reserve(((data.size() + 2) / 3) * 4);
+  const auto* bytes = reinterpret_cast<const unsigned char*>(data.data());
+  std::size_t i = 0;
+  for (; i + 3 <= data.size(); i += 3) {
+    const uint32_t group =
+        (uint32_t(bytes[i]) << 16) | (uint32_t(bytes[i + 1]) << 8) | uint32_t(bytes[i + 2]);
+    out.push_back(kAlphabet[(group >> 18) & 0x3f]);
+    out.push_back(kAlphabet[(group >> 12) & 0x3f]);
+    out.push_back(kAlphabet[(group >> 6) & 0x3f]);
+    out.push_back(kAlphabet[group & 0x3f]);
+  }
+  const std::size_t rest = data.size() - i;
+  if (rest == 1) {
+    const uint32_t group = uint32_t(bytes[i]) << 16;
+    out.push_back(kAlphabet[(group >> 18) & 0x3f]);
+    out.push_back(kAlphabet[(group >> 12) & 0x3f]);
+    out += "==";
+  } else if (rest == 2) {
+    const uint32_t group = (uint32_t(bytes[i]) << 16) | (uint32_t(bytes[i + 1]) << 8);
+    out.push_back(kAlphabet[(group >> 18) & 0x3f]);
+    out.push_back(kAlphabet[(group >> 12) & 0x3f]);
+    out.push_back(kAlphabet[(group >> 6) & 0x3f]);
+    out.push_back('=');
+  }
+  return out;
+}
 
 // Compresses |data| with a gzip wrapper (RFC 1952), for building test bodies.
 std::string GzipCompress(std::string_view data)
@@ -721,6 +756,123 @@ TEST(HttpTest, UnsupportedSchemeIsNotImplemented)
   const auto result = HttpGet(url.value());
   ASSERT_FALSE(result.has_value());
   EXPECT_EQ(result.error().category(), base::ErrorCategory::kNotImplemented);
+}
+
+// data: URLs are decoded locally (RFC 2397) — no network involved, which is
+// what makes base64 icon fonts / images in real pages work.
+TEST(HttpTest, DecodesBase64DataUrl)
+{
+  // "wOFF" is the WOFF signature: d09GRg decodes to 0x774F4646.
+  const auto url =
+      url::Url::Parse("data:application/font-woff;charset=utf-8;base64,d09GRgABAAAAAAZgABAAAA==");
+  ASSERT_TRUE(url.has_value());
+  const auto response = HttpGet(url.value());
+  ASSERT_TRUE(response.has_value()) << response.error().message();
+  EXPECT_EQ(response.value().status_code, 200);
+  EXPECT_EQ(response.value().GetHeader("content-type"), "application/font-woff;charset=utf-8");
+  ASSERT_GE(response.value().body.size(), 4u);
+  EXPECT_EQ(response.value().body.substr(0, 4), "wOFF");
+  EXPECT_EQ(response.value().final_url, url.value().Serialize(/*include_fragment=*/false));
+}
+
+TEST(HttpTest, DecodesPlainAndPercentEncodedDataUrl)
+{
+  const auto url = url::Url::Parse("data:text/plain,hello%20world");
+  ASSERT_TRUE(url.has_value());
+  const auto response = HttpGet(url.value());
+  ASSERT_TRUE(response.has_value()) << response.error().message();
+  EXPECT_EQ(response.value().GetHeader("content-type"), "text/plain");
+  EXPECT_EQ(response.value().body, "hello world");
+}
+
+TEST(HttpTest, DataUrlWithoutMetadataDefaultsToTextPlain)
+{
+  const auto url = url::Url::Parse("data:,");
+  ASSERT_TRUE(url.has_value());
+  const auto response = HttpGet(url.value());
+  ASSERT_TRUE(response.has_value()) << response.error().message();
+  EXPECT_EQ(response.value().GetHeader("content-type"), "text/plain;charset=US-ASCII");
+  EXPECT_TRUE(response.value().body.empty());
+}
+
+TEST(HttpTest, DataUrlFragmentIsNotPartOfThePayload)
+{
+  const auto url = url::Url::Parse("data:text/plain,body#section");
+  ASSERT_TRUE(url.has_value());
+  const auto response = HttpGet(url.value());
+  ASSERT_TRUE(response.has_value()) << response.error().message();
+  EXPECT_EQ(response.value().body, "body");
+}
+
+TEST(HttpTest, DataUrlBase64SkipsWhitespaceAndMissingPadding)
+{
+  // Whitespace inside the payload (percent-encoded, as a URL requires) plus
+  // missing '=' padding: both are common in hand-written data URLs.
+  const auto url = url::Url::Parse("data:;base64,d2%209m%0AZg");
+  ASSERT_TRUE(url.has_value());
+  const auto response = HttpGet(url.value());
+  ASSERT_TRUE(response.has_value()) << response.error().message();
+  EXPECT_EQ(response.value().body, "woff");
+}
+
+// Real pages emit a literal space after the comma (bilibili does this for its
+// inline base64 WOFF font) and line-wrapped URLs contain raw newlines.  The
+// URL parser rejects the latter, so the decoder must cope with both when it is
+// handed the raw text.
+TEST(HttpTest, DataUrlBase64SkipsRawSpaceAfterTheComma)
+{
+  const auto url = url::Url::Parse("data:application/font-woff;charset=utf-8;base64, d29mZg");
+  ASSERT_TRUE(url.has_value());
+  const auto response = HttpGet(url.value());
+  ASSERT_TRUE(response.has_value()) << response.error().message();
+  EXPECT_EQ(response.value().body, "woff");
+  bool saw_content_type = false;
+  for (const HttpHeader& header : response.value().headers) {
+    if (header.name == "content-type") {
+      saw_content_type = true;
+      EXPECT_EQ(header.value, "application/font-woff;charset=utf-8");
+    }
+  }
+  EXPECT_TRUE(saw_content_type);
+}
+
+TEST(HttpTest, DecodeDataUrlToleratesRawNewlinesInThePayload)
+{
+  const auto response = network::DecodeDataUrl("data:;base64,d2 9m\r\nZg");
+  ASSERT_TRUE(response.has_value()) << response.error().message();
+  EXPECT_EQ(response.value().body, "woff");
+}
+
+// Round-trip property over random byte strings (all three padding remainders,
+// embedded NULs, high bytes): what the encoder produces the decoder must
+// reproduce byte for byte.
+TEST(HttpTest, DataUrlBase64RoundTripsRandomPayloads)
+{
+  std::mt19937 rng(20260815U);
+  std::uniform_int_distribution<int> length_dist(0, 400);
+  std::uniform_int_distribution<int> byte_dist(0, 255);
+  for (int iteration = 0; iteration < 300; ++iteration) {
+    std::string bytes(static_cast<std::size_t>(length_dist(rng)), '\0');
+    for (char& byte : bytes) {
+      byte = static_cast<char>(byte_dist(rng));
+    }
+    const std::string url = "data:application/octet-stream;base64," + EncodeBase64(bytes);
+    const auto response = network::DecodeDataUrl(url);
+    ASSERT_TRUE(response.has_value()) << response.error().message() << " for " << url;
+    EXPECT_EQ(response.value().body, bytes);
+    EXPECT_EQ(response.value().status_code, 200);
+  }
+}
+
+TEST(HttpTest, MalformedDataUrlsAreRejected)
+{
+  for (const char* raw :
+       {"data:no-comma", "data:;base64,!!!!", "data:;base64,d2 9m!", "data:;base64,d29m=g"}) {
+    const auto url = url::Url::Parse(raw);
+    ASSERT_TRUE(url.has_value()) << raw;
+    const auto response = HttpGet(url.value());
+    EXPECT_FALSE(response.has_value()) << raw;
+  }
 }
 
 #ifndef _WIN32

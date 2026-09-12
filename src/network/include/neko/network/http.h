@@ -43,13 +43,21 @@ base::Result<HttpResponse> ParseHttpResponse(std::string_view raw);
 // to the actual request host.
 using HeaderProvider = std::function<std::vector<HttpHeader>(const url::Url&)>;
 
+// Decodes a data: URL (RFC 2397) into a 200 response.  The metadata before the
+// comma is the media type (default "text/plain;charset=US-ASCII"), a trailing
+// ";base64" parameter marks a base64 payload (any case) and the data part is
+// percent-decoded either way.  Loading a data: URL never touches the network:
+// HttpGet routes them here so every resource loader keeps one entry point.
+// Malformed URLs and payloads return InvalidArgument / Parse errors.
+base::Result<HttpResponse> DecodeDataUrl(std::string_view url);
+
 // Sends a GET request and returns the final response, following redirects
 // (301/302/303/307/308) up to |redirect_limit| times.  |extra_headers| is
 // consulted for each hop.  http:// and https:// are supported; https://
 // verifies the server certificate (see TlsSocket), using |tls_options|
 // (e.g. an extra trust anchor for tests).  Response bodies are decoded per
-// Content-Encoding (gzip / deflate).  Any other scheme returns a NOT
-// IMPLEMENTED error.
+// Content-Encoding (gzip / deflate).  data: URLs are decoded locally (see
+// DecodeDataUrl).  Any other scheme returns a NOT IMPLEMENTED error.
 base::Result<HttpResponse> HttpGet(const url::Url& url,
                                    int redirect_limit = 5,
                                    const HeaderProvider& extra_headers = {},

@@ -266,13 +266,13 @@ inline constexpr int kEventBubbling = 3;
 // Prototype/interface construction (implemented across the binding files).
 // ---------------------------------------------------------------------------
 
-void DefineNodePrototype(JSContext* ctx, Impl& impl);      // node_binding.cpp
-void DefineElementPrototype(JSContext* ctx, Impl& impl);   // element_binding.cpp
-void DefineDocumentPrototype(JSContext* ctx, Impl& impl);  // document_binding.cpp
-void DefineStylePrototype(JSContext* ctx, Impl& impl);     // style_binding.cpp
+void DefineNodePrototype(JSContext* ctx, Impl& impl);       // node_binding.cpp
+void DefineElementPrototype(JSContext* ctx, Impl& impl);    // element_binding.cpp
+void DefineDocumentPrototype(JSContext* ctx, Impl& impl);   // document_binding.cpp
+void DefineStylePrototype(JSContext* ctx, Impl& impl);      // style_binding.cpp
 void DefineStyleSheetPrototype(JSContext* ctx, Impl& impl); // document_binding.cpp
-void DefineEventPrototype(JSContext* ctx, Impl& impl);     // event_binding.cpp
-void DefineClassListPrototype(JSContext* ctx, Impl& impl); // element_binding.cpp
+void DefineEventPrototype(JSContext* ctx, Impl& impl);      // event_binding.cpp
+void DefineClassListPrototype(JSContext* ctx, Impl& impl);  // element_binding.cpp
 // Element-level global event handler attributes (onclick/oninput/...),
 // defined in event_binding.cpp and called from DefineElementPrototype.
 void DefineElementEventHandlers(JSContext* ctx, Impl& impl);
@@ -721,7 +721,7 @@ struct Impl
   // media state changes).  Callbacks are Dup'd and released in the destructor.
   struct MediaListener
   {
-    JSValue list = JS_UNDEFINED;     // the MediaQueryList object (owned)
+    JSValue list = JS_UNDEFINED; // the MediaQueryList object (owned)
     std::string query;
     bool matched = false;            // last known match state
     JSValue callback = JS_UNDEFINED; // dup'd listener fn
@@ -829,6 +829,12 @@ struct Impl
   // prefer this over calling apis.location_href() (which returns the captured
   // page-load URL and would go stale).
   std::string document_url;
+
+  // document.domain after a script relaxed it (empty = not relaxed).  The
+  // legacy setter only accepts a suffix of the document's host; the value is
+  // reported back by the getter.  Origin/security checks keep using the real
+  // page origin — see the note in document_binding.cpp.
+  std::string document_domain;
 
   // -------------------------------------------------------------------------
   // window.indexedDB state.  Handles back the JS object model (databases,

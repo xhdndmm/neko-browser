@@ -2,13 +2,15 @@
 
 > 本文档诚实记录每个特性的支持状态。**禁止**把"接口存在"写成"已实现"。
 > 状态取值：Not Started / Planned / In Progress / Partial / Implemented / Tested。
-> 最后更新：2026-08（百度首页：in-head noscript、百分比 inset、:not()、
-> 绝对定位 img 的 HTML 尺寸、hidden input、块级 textarea placeholder）。
+> 最后更新：2026-08（`data:` URL（RFC 2397）本地解码 + `document.domain`；
+> 此前：百度首页 in-head noscript、百分比 inset、:not()、绝对定位 img 的
+> HTML 尺寸、hidden input、块级 textarea placeholder）。
 
 | 特性 | 状态 | 测试证据 | 备注 |
 | --- | --- | --- | --- |
-| URL 解析 | Tested | 19 单元测试 | RFC 3986 相对解析样例 |
+| URL 解析 | Tested | 20 单元测试 | RFC 3986 相对解析样例；`data:` 等不透明 scheme 经 Parse+Serialize 逐字节往返（资源加载器依赖此特性把 URL 交给网络层本地解码） |
 | HTTP/1.1 | Tested | 8 单元测试 | GET、chunked、重定向、Content-Length；**增量读取**（按 framing 精确读取响应体，而非读到关闭），Content-Length 截断校验（防截断攻击的完整性兜底） |
+| `data:` URL（RFC 2397） | Tested | 8 网络单元测试 + 2 浏览器集成测试 | `HttpGet` 在打开 socket 前就地解码（`DecodeDataUrl`）：元数据/`;base64` 标记（大小写不敏感）、负载百分号解码、缺省 `text/plain;charset=US-ASCII`、无 padding 与空白（含逗号后空格、裸换行）容忍、非法字符与尾部置位拒绝；**所有子资源统一入口**——外部样式表（`<link href="data:...">`）、`@font-face` src（bilibili 内联 WOFF 图标字体场景）、`<img>`、脚本、`fetch()` 均可内联 base64 资源；浏览器层不再保留第二份 base64 解码器 |
 | HTTPS / TLS | Tested | 5 单元测试（本地 TLS 服务器 + 自签名 CA） | OpenSSL 封装（ADR 0010），证书+主机名校验、SNI、TLS≥1.2；gzip/deflate 协商；**兼容 CDN 无 close_notify 关闭**（sohu/bing 实测，完整性由 HTTP 层 Content-Length 校验兜底） |
 | gzip/deflate | Tested | 12 单元测试（含链式编码、raw deflate、服务器往返） | RFC 7231 内容编码解码，64 MiB 输出上限 |
 | HTML tokenizer | Tested | HTML 套件 | 完整 WHATWG 命名字符引用表（2125 项，含双码点，生成代码）+ RAWTEXT(style/xmp/iframe/noembed)/RCDATA(title/textarea)/PLAINTEXT/script data；CRLF 归一化、EOF-in-tag 丢弃、属性上下文实体 `=`/alnum 字面规则、DOCTYPE public/system identifier 状态机 |
@@ -73,6 +75,7 @@
 | XMLHttpRequest | Partial | 2 JS 单元测试 + 3 浏览器集成测试 | new XMLHttpRequest()、open（相对 URL 对页面解析）/setRequestHeader/send/abort、readyState/status/statusText/responseText/response/responseURL、getResponseHeader/getAllResponseHeaders、onreadystatechange/onload/onerror/onabort + 同名 addEventListener；HTTP 错误状态走 load（status 透传），传输错误走 error（status 0）。**同步传输近似**：DONE 在 send() 内触发（send 前注册 handler 的通用 loader 模式完整工作）；仅 GET（POST 待传输层扩展）；withCredentials/timeout 接受但无效；无 CORS（Phase 10） |
 | Import maps | Partial | 9 单元测试 + 2 浏览器集成测试 | `<script type="importmap">` JSON 解析（复用 QuickJS JS_ParseJSON，不执行内容）；imports 精确匹配 + `/` 结尾前缀键（余路径追加）；scopes 按**最长 scope** 选择（键对文档 base 规范化为绝对 URL 后前缀匹配导入者）；值对文档 base 解析；仅首个 import map 生效（后续忽略并告警），声明不作为脚本执行；坏 JSON 报错跳过。无多 map 合并、无 invalid-key 完整规范校验 |
 | DOM 元素几何 API | Partial | 1 JS 回调测试 + 1 浏览器集成测试 + Renderer 几何查询 | **getBoundingClientRect** 返回真实布局矩形（border box，文档坐标，含 toJSON）、**offsetWidth/Height**（border box 尺寸）、**offsetLeft/Top**（文档坐标）、**offsetParent**（恒为 body）、**clientWidth/Height**（padding box）、**clientTop/Left**（border 宽）；块级/原子元素读自身布局盒，纯 inline 元素聚合其文本 run 的并集矩形；布局缺失时按需构建（脚本先于 UI 布局）；滚动子集（documentElement/body 的 scrollTop/scrollLeft 读写、scrollWidth/scrollHeight，与 GUI 滚动条联动；其余元素恒 0/no-op；getBoundingClientRect 未减滚动偏移）、offsetParent 恒为 body（positioned 祖先/表格单元格未建模） |
+| document.domain | Partial | 1 JS 绑定测试 | getter 返回页面 host，可赋值放宽到父域（只允许**缩短**，用标签边界判定，非父域抛 `SecurityError`，空串恢复真实 host）；**限制（诚实标注）**：值本身不参与同源判定（引擎仍用真实 origin），且无 Public Suffix List 校验（可缩到 TLD），因此当前不会因此授予任何跨源访问；接线到 origin 判定前必须先加 PSL 守卫 |
 | 用户交互事件（阶段 2） | Partial | 8 JS 事件测试 + 5 浏览器集成 + 4 UI 端到端 | 浏览器派发 **MouseEvent**（clientX/clientY/button，mousedown→mouseup→click）、**mouseover/mouseout**（悬停元素变化时经 Qt MouseMove 接线派发，worker 端命中）、**KeyboardEvent keyCode**、**focus/blur**（点击控件聚焦/失焦触发）、**input**（输入后 bubbling 触发 oninput/listener）、**wheel**（滚动 deltaY，Qt wheelEvent 接线）；**元素全局事件处理属性**：IDL 赋值（element.onclick=fn）与 content attribute（on*="code" 编译执行）都在事件到达元素时触发，click 的 preventDefault 仍控制导航/提交默认行为；**事件 handler 改 DOM → 立即重算+重绘**（DomBinder 脏检测 + ReapplyStyles 立即重建布局，页面脚本交互及时反映）；点击在导航加载中不丢失（worker 端实时命中）；无 mousemove（高频未接线）、mouseenter/mouseleave、dblclick、wheel 的 preventDefault 不阻止默认滚动、on* content attribute 每次触发重新编译（无缓存） |
 | IndexedDB | Partial | 12 核心 + 10 绑定 + 1 集成测试 | 版本化数据库/open+onupgradeneeded、对象存储（keyPath/autoIncrement）、add/put/get/delete/clear/count/getAll（事务 + IDBRequest 微任务回调 + oncomplete）、JSON 结构化克隆子集、按 origin 持久化（indexed_db.txt 原子写入）；无游标/索引/范围、无 Date/BinaryData/循环克隆 |
 | 页面发布/子资源时序 | Tested | 浏览器集成测试（轮询等待辅助，含慢字体不阻塞发布） | 外部样式表在脚本前同步抓取、解析和应用；页面随后发布，`@font-face`、`<img>` 与 `<video>` 在线程池后台抓取注入。字体注册成功后重应用样式与布局，首屏可使用回退字体；单 worker 字体抓取串行执行以避免嵌套线程池等待死锁。Page 版本失效驱动 50ms 周期重绘；单个失败 CDN 请求不阻塞首屏。@font-face 跨加载趟去重（HasWebFont 查询跳过重复抓取） |
