@@ -493,6 +493,18 @@ void CollectMatches(const layout::LayoutBox& box,
 
 } // namespace
 
+float Page::viewport_css_width() const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  return viewport_width_ / page_zoom_;
+}
+
+float Page::viewport_css_height() const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  return viewport_height_ / page_zoom_;
+}
+
 std::vector<FindMatch> Page::FindMatches(std::string_view query)
 {
   std::vector<FindMatch> matches;

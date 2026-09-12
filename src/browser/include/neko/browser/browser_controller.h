@@ -155,8 +155,12 @@ struct Tab
   // Content height reported by the child (drives the GUI's scroll bar) and
   // the geometry the frame was rasterized for.
   float remote_content_height = 0;
-  int remote_viewport_width = 0;
-  int remote_viewport_height = 0;
+  // The window viewport the GUI reported for this tab (device pixels), in both
+  // execution modes: the child lays the page out for it, and in-process pages
+  // are re-laid out and fire a `resize` event when it changes.  0 = not
+  // reported yet (the controller's default applies).
+  int viewport_width = 0;
+  int viewport_height = 0;
   float remote_frame_scroll_y = 0;
   // Hyperlink under the pointer as reported by the child (drives the GUI's
   // pointing-hand cursor; the browser process has no DOM in this mode).

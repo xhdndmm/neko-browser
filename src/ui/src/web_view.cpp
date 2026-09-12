@@ -64,13 +64,7 @@ void WebView::Refresh()
       active_element_ = nullptr;
       verticalScrollBar()->setValue(0);
     }
-    // Report our viewport so the child lays the page out for the real size
-    // (the load itself uses the controller's default until then).
-    ReportViewport();
   } else {
-    // Leaving renderer mode (or not in it): the next session must be told the
-    // viewport again.
-    reported_remote_viewport_ = false;
     // A navigation replaces the page's document; only then must the hover/active
     // pointers be dropped and the scroll reset to the top. Script-driven refresh
     // keeps the same document generation and preserves those states.
@@ -87,6 +81,10 @@ void WebView::Refresh()
   }
   UpdateTextOverlay();
   UpdateScrollRange();
+  // Report our viewport in both modes: the child lays the page out for the real
+  // size (its load uses the controller default until then) and in-process pages
+  // re-lay out and fire a `resize` event when the size changes.
+  ReportViewport();
   // A page script requested a scroll (window.scrollTo / element.scrollTop
   // assignment): the worker bumped scroll_request_id.  Apply it once when the
   // id advances past the last-applied value (after the scroll range is set so
@@ -110,13 +108,12 @@ void WebView::ReportViewport()
 {
   const int width = std::max(1, viewport()->width());
   const int height = std::max(1, viewport()->height());
-  if (reported_remote_viewport_ && width == reported_viewport_w_ &&
-      height == reported_viewport_h_) {
+  if (reported_viewport_ && width == reported_viewport_w_ && height == reported_viewport_h_) {
     return;
   }
   reported_viewport_w_ = width;
   reported_viewport_h_ = height;
-  reported_remote_viewport_ = true;
+  reported_viewport_ = true;
   worker_->SetViewportSize(tab_id_, width, height);
 }
 

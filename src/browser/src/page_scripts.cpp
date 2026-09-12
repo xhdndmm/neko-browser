@@ -454,6 +454,15 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     }
   };
 
+  // window.innerWidth/innerHeight/devicePixelRatio: the renderer's layout
+  // viewport in CSS pixels (so it follows window resizes and the page zoom) and
+  // a device pixel ratio of 1 (the engine rasterizes at CSS-pixel scale).
+  apis.viewport_size = [&page]() -> std::pair<int, int> {
+    return {static_cast<int>(page.viewport_css_width() + 0.5F),
+            static_cast<int>(page.viewport_css_height() + 0.5F)};
+  };
+  apis.device_pixel_ratio = []() { return 1.0; };
+
   // window.getComputedStyle(element): serialize the element's computed style
   // from the page's style engine (the engine keeps per-element styles after
   // ApplyStyles, which RunPageScripts re-runs after DOM mutations).

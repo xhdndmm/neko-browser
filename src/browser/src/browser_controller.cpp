@@ -1132,23 +1132,40 @@ void BrowserController::SetTabScrollOffset(int tab_id, float y)
 void BrowserController::SetTabViewport(int tab_id, int width, int height)
 {
   Tab* tab = FindTab(tab_id);
-  if (tab == nullptr || !IsRemoteTab(*tab)) {
+  if (tab == nullptr) {
     return;
   }
   width = std::max(1, width);
   height = std::max(1, height);
-  if (tab->remote_viewport_width == width && tab->remote_viewport_height == height) {
+  if (tab->viewport_width == width && tab->viewport_height == height) {
     return;
   }
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    tab->remote_viewport_width = width;
-    tab->remote_viewport_height = height;
+    tab->viewport_width = width;
+    tab->viewport_height = height;
   }
-  // The page is laid out for the new viewport inside the child; the frame it
-  // returns is sized to match.
-  PullRemoteFrame(*tab, /*force=*/true);
+  if (IsRemoteTab(*tab)) {
+    // The page is laid out for the new viewport inside the child (kSnapshot
+    // reports the size); the frame it returns is sized to match.
+    PullRemoteFrame(*tab, /*force=*/true);
+    return;
+  }
+  // In-process pages: the load path laid the page out at the controller's
+  // default, so even the first report re-lays out and fires `resize` (the page
+  // already observed the default size in its first script run — the same thing
+  // a browser does when a window opens at its final size).  A re-report of the
+  // same size never reaches this point (the early return above).
+  if (tab->page != nullptr) {
+    tab->page->Layout(static_cast<float>(width), static_cast<float>(height));
+  }
+  if (tab->script_runtime == nullptr) {
+    return;
+  }
+  tab->script_runtime->DispatchDocumentEvent("resize");
+  tab->script_runtime->NotifyMediaChanged();
 }
+
 
 float NextZoomFactor(float current, int direction)
 {
@@ -1258,7 +1275,7 @@ int BrowserController::FindInTab(int tab_id, std::string_view query, int directi
     return 0;
   }
   const int viewport_height =
-      tab->remote_viewport_height > 0 ? tab->remote_viewport_height : kDefaultRemoteViewportHeight;
+      tab->viewport_height > 0 ? tab->viewport_height : kDefaultRemoteViewportHeight;
   renderer::FindMatch match;
   int count = 0;
   int index = -1;
@@ -1368,11 +1385,11 @@ void BrowserController::LoadHtmlInRenderer(Tab& tab,
   int viewport_height = kDefaultRemoteViewportHeight;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (tab.remote_viewport_width > 0) {
-      viewport_width = tab.remote_viewport_width;
+    if (tab.viewport_width > 0) {
+      viewport_width = tab.viewport_width;
     }
-    if (tab.remote_viewport_height > 0) {
-      viewport_height = tab.remote_viewport_height;
+    if (tab.viewport_height > 0) {
+      viewport_height = tab.viewport_height;
     }
   }
 
@@ -1483,9 +1500,9 @@ void BrowserController::PullRemoteFrame(Tab& tab, bool force)
     return;
   }
   const int width =
-      tab.remote_viewport_width > 0 ? tab.remote_viewport_width : kDefaultRemoteViewportWidth;
+      tab.viewport_width > 0 ? tab.viewport_width : kDefaultRemoteViewportWidth;
   const int height =
-      tab.remote_viewport_height > 0 ? tab.remote_viewport_height : kDefaultRemoteViewportHeight;
+      tab.viewport_height > 0 ? tab.viewport_height : kDefaultRemoteViewportHeight;
   RemoteFrame frame;
   auto reply = tab.session->Snapshot(width, height, tab.scroll_offset_y, &frame);
   if (!reply.has_value()) {

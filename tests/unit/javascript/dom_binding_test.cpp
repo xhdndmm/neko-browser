@@ -111,6 +111,51 @@ TEST_F(DomBinderTest, GlobalDocumentAndWindow)
   EXPECT_TRUE(EvalBool("document.location === window.location"));
 }
 
+// The window viewport (innerWidth/innerHeight/devicePixelRatio/screen/
+// visualViewport): engine default without a callback, live reads with one.
+TEST_F(DomBinderTest, WindowViewportIsLiveAndDefaultsToTheEngineSize)
+{
+  // The fixture's PageApis has no viewport_size: the engine default applies.
+  EXPECT_EQ(EvalNumber("window.innerWidth"), 800.0);
+  EXPECT_EQ(EvalNumber("window.innerHeight"), 600.0);
+  EXPECT_EQ(EvalNumber("window.outerWidth"), 800.0);
+  EXPECT_EQ(EvalNumber("window.outerHeight"), 600.0);
+  EXPECT_EQ(EvalNumber("window.devicePixelRatio"), 1.0);
+  EXPECT_EQ(EvalNumber("screen.width"), 800.0);
+  EXPECT_EQ(EvalNumber("screen.availHeight"), 600.0);
+  EXPECT_EQ(EvalNumber("visualViewport.width"), 800.0);
+
+  // With the callback wired (a real page script runtime), the same properties
+  // read the renderer's current viewport on every access: a resize is visible
+  // immediately, like in a browser.
+  auto size = std::make_shared<std::pair<int, int>>(1024, 768);
+  auto ratio = std::make_shared<double>(2.0);
+  PageApis apis;
+  apis.location_href = []() { return "https://www.example.com/"; };
+  apis.viewport_size = [size]() { return *size; };
+  apis.device_pixel_ratio = [ratio]() { return *ratio; };
+  DomBinder binder(*document_, apis);
+
+  const auto number = [&binder](const std::string& code) {
+    auto result = binder.Evaluate(code);
+    EXPECT_TRUE(result.has_value()) << code;
+    if (!result.has_value()) {
+      return -1.0;
+    }
+    auto value = result.value().ToNumber();
+    return value.has_value() ? value.value() : -1.0;
+  };
+  EXPECT_EQ(number("window.innerWidth"), 1024.0);
+  EXPECT_EQ(number("window.innerHeight"), 768.0);
+  EXPECT_EQ(number("window.devicePixelRatio"), 2.0);
+  EXPECT_EQ(number("screen.width"), 1024.0); // captured when the binder was built
+  *size = {640, 480};
+  EXPECT_EQ(number("window.innerWidth"), 640.0);
+  EXPECT_EQ(number("window.innerHeight"), 480.0);
+  *ratio = 1.5;
+  EXPECT_EQ(number("window.devicePixelRatio"), 1.5);
+}
+
 TEST_F(DomBinderTest, LiveCollectionsRefreshAfterMutation)
 {
   document_ =

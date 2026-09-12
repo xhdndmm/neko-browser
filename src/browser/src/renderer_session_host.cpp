@@ -230,6 +230,9 @@ private:
       controller_->PumpScriptTimers();
       break;
     case SessionOp::kSnapshot: {
+      const bool viewport_changed =
+          (request.viewport_width > 0 && request.viewport_width != viewport_width_) ||
+          (request.viewport_height > 0 && request.viewport_height != viewport_height_);
       if (request.viewport_width > 0 && request.viewport_height > 0) {
         viewport_width_ = std::max(1, request.viewport_width);
         viewport_height_ = std::max(1, request.viewport_height);
@@ -239,6 +242,11 @@ private:
         reply.ok = false;
         reply.error = "no document to rasterize";
         return reply;
+      }
+      if (viewport_changed) {
+        // Same path as a GUI resize in the browser process: re-layout and fire
+        // the page's `resize` event so scripts see the new innerWidth.
+        controller_->SetTabViewport(tab_id_, viewport_width_, viewport_height_);
       }
       EnsureLayout();
       const float max_scroll =

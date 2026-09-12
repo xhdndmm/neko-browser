@@ -176,6 +176,15 @@ struct PageApis
   std::function<std::pair<double, double>()> scroll_offset;
   std::function<void(double, double)> scroll_to;
 
+  // Window viewport in CSS pixels and the device pixel ratio.
+  // |viewport_size| reports the *layout* viewport (the renderer lays the page
+  // out at window_size / page_zoom, so a zoomed-in page reports fewer CSS
+  // pixels — the same thing browsers expose); |device_pixel_ratio| is the
+  // window's DPR (zoom does not change it).  When unset, the binder reports the
+  // engine default 800x600@1x.
+  std::function<std::pair<int, int>()> viewport_size;
+  std::function<double()> device_pixel_ratio;
+
   // window.indexedDB (per-origin; the caller scopes everything by origin).
   // Records travel as JSON text (the structured-clone subset); keys are JSON
   // numbers or strings.  Errors carry an "IDB:<ExceptionName>:" prefix.

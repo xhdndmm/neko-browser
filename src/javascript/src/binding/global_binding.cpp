@@ -586,6 +586,25 @@ JSValue WindowScrollOffsetGetter(JSContext* ctx, JSValueConst this_val, int magi
   return JS_NewFloat64(ctx, (magic & 1) ? offset.second : offset.first);
 }
 
+JSValue WindowViewportGetter(JSContext* ctx, JSValueConst this_val, int magic)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_NewInt32(ctx, magic == 3 ? 1 : 800);
+  }
+  const std::pair<int, int> size =
+      impl->apis.viewport_size ? impl->apis.viewport_size() : std::pair<int, int>{800, 600};
+  switch (magic) {
+  case 0:
+    return JS_NewInt32(ctx, size.first);
+  case 1:
+  case 2:
+    return JS_NewInt32(ctx, size.second);
+  default:
+    return JS_NewFloat64(ctx, impl->apis.device_pixel_ratio ? impl->apis.device_pixel_ratio() : 1.0);
+  }
+}
+
 JSValue WindowScrollTo(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);

@@ -106,7 +106,7 @@ private:
   // True once the viewport has been reported for the tab's current renderer
   // session.  Reset when the tab leaves remote mode so the next session gets
   // the current size (a report sent before the session existed is ignored).
-  bool reported_remote_viewport_ = false;
+  bool reported_viewport_ = false;
   bool remote_hover_active_ = false;
 
   // Blinking caret for the focused element (GUI thread).  The blink timer

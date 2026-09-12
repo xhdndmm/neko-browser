@@ -154,6 +154,12 @@ public:
   // Builds the layout tree at the given viewport width.
   void Layout(float viewport_width, float viewport_height = 0);
 
+  // The layout viewport in CSS pixels: the window's viewport divided by the
+  // page zoom, i.e. exactly what window.innerWidth/innerHeight must report.
+  // Returns 0x0 before the first layout.
+  float viewport_css_width() const;
+  float viewport_css_height() const;
+
   // Sets the user-facing page zoom (browser Ctrl+=/Ctrl+-), independent of the
   // CSS `zoom` property: layout runs at viewport/user_zoom CSS pixels while the
   // display list is scaled by user_zoom * CSS zoom, and hit-testing, caret and

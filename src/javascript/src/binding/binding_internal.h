@@ -468,6 +468,12 @@ WindowCancelAnimationFrame(JSContext* ctx, JSValueConst this_val, int argc, JSVa
 JSValue WindowScrollTo(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue WindowScrollBy(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue WindowScrollOffsetGetter(JSContext* ctx, JSValueConst this_val, int magic);
+
+// window.innerWidth / innerHeight / outerWidth / outerHeight /
+// devicePixelRatio.  magic selects the value (0 = width, 1 = height,
+// 2 = outerHeight, 3 = device pixel ratio); the viewport comes from
+// PageApis::viewport_size (the renderer's layout viewport).
+JSValue WindowViewportGetter(JSContext* ctx, JSValueConst this_val, int magic);
 JSValue WindowGetComputedStyle(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue WindowMatchMedia(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue WindowGetClosed(JSContext* ctx, JSValueConst this_val);

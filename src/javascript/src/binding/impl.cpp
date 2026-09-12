@@ -1167,9 +1167,16 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   JS_SetPropertyStr(ctx, window, "serviceWorker", JS_DupValue(ctx, service_worker));
   JS_SetPropertyStr(ctx, global, "serviceWorker", service_worker);
 
+  // The window's viewport in CSS pixels (PageApis::viewport_size — the
+  // renderer's layout viewport, so it follows window resizes and the page
+  // zoom) and the device pixel ratio.  Without the callback the engine default
+  // 800x600@1x is reported.
+  const int viewport_w = apis.viewport_size ? apis.viewport_size().first : 800;
+  const int viewport_h = apis.viewport_size ? apis.viewport_size().second : 600;
+
   JSValue visual_viewport = JS_NewObject(ctx);
-  JS_SetPropertyStr(ctx, visual_viewport, "width", JS_NewFloat64(ctx, 800.0));
-  JS_SetPropertyStr(ctx, visual_viewport, "height", JS_NewFloat64(ctx, 600.0));
+  JS_SetPropertyStr(ctx, visual_viewport, "width", JS_NewFloat64(ctx, viewport_w));
+  JS_SetPropertyStr(ctx, visual_viewport, "height", JS_NewFloat64(ctx, viewport_h));
   JS_SetPropertyStr(ctx, visual_viewport, "scale", JS_NewFloat64(ctx, 1.0));
   JS_SetPropertyStr(ctx, window, "visualViewport", JS_DupValue(ctx, visual_viewport));
   JS_SetPropertyStr(ctx, global, "visualViewport", visual_viewport);
@@ -1190,26 +1197,43 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   JS_SetPropertyStr(ctx, window, "Log", JS_DupValue(ctx, log));
   JS_SetPropertyStr(ctx, global, "Log", log);
 
-  // screen: the engine's default viewport (matches renderer::Page's default
-  // layout width).  Wiring real window dimensions is future work, so scripts
-  // see these defaults.
+  // screen: reports the window's viewport (see the declaration above), so it
+  // follows window resizes and the page zoom.  A real display-size query (Qt
+  // screen geometry) is future work.
   JSValue screen = JS_NewObject(ctx);
-  JS_SetPropertyStr(ctx, screen, "width", JS_NewInt32(ctx, 800));
-  JS_SetPropertyStr(ctx, screen, "height", JS_NewInt32(ctx, 600));
-  JS_SetPropertyStr(ctx, screen, "availWidth", JS_NewInt32(ctx, 800));
-  JS_SetPropertyStr(ctx, screen, "availHeight", JS_NewInt32(ctx, 600));
+  JS_SetPropertyStr(ctx, screen, "width", JS_NewInt32(ctx, viewport_w));
+  JS_SetPropertyStr(ctx, screen, "height", JS_NewInt32(ctx, viewport_h));
+  JS_SetPropertyStr(ctx, screen, "availWidth", JS_NewInt32(ctx, viewport_w));
+  JS_SetPropertyStr(ctx, screen, "availHeight", JS_NewInt32(ctx, viewport_h));
   JS_SetPropertyStr(ctx, screen, "colorDepth", JS_NewInt32(ctx, 24));
   JS_SetPropertyStr(ctx, screen, "pixelDepth", JS_NewInt32(ctx, 24));
   JS_SetPropertyStr(ctx, window, "screen", JS_DupValue(ctx, screen)); // steals dup
   JS_SetPropertyStr(ctx, global, "screen", screen);                   // steals
 
-  // Window viewport geometry (engine defaults, see screen above).  The scroll
+  // Window viewport geometry (live reads, see screen above).  The scroll
   // offsets are live reads off the browser layer's scroll state (PageApis
   // scroll_offset), so window.scrollX/scrollY/pageXOffset/pageYOffset track the
   // GUI scrollbar; without the callback they report 0.
-  JS_SetPropertyStr(ctx, window, "innerWidth", JS_NewInt32(ctx, 800));
-  JS_SetPropertyStr(ctx, window, "innerHeight", JS_NewInt32(ctx, 600));
-  JS_SetPropertyStr(ctx, window, "devicePixelRatio", JS_NewInt32(ctx, 1));
+  DefineGetter(ctx,
+               window,
+               "innerWidth",
+               MakeGetterMagic(ctx, "innerWidth", WindowViewportGetter, 0));
+  DefineGetter(ctx,
+               window,
+               "innerHeight",
+               MakeGetterMagic(ctx, "innerHeight", WindowViewportGetter, 1));
+  DefineGetter(ctx,
+               window,
+               "outerWidth",
+               MakeGetterMagic(ctx, "outerWidth", WindowViewportGetter, 0));
+  DefineGetter(ctx,
+               window,
+               "outerHeight",
+               MakeGetterMagic(ctx, "outerHeight", WindowViewportGetter, 2));
+  DefineGetter(ctx,
+               window,
+               "devicePixelRatio",
+               MakeGetterMagic(ctx, "devicePixelRatio", WindowViewportGetter, 3));
   DefineGetter(
       ctx, window, "pageXOffset", MakeGetterMagic(ctx, "pageXOffset", WindowScrollOffsetGetter, 0));
   DefineGetter(

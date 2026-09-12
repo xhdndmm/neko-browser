@@ -2000,6 +2000,59 @@ TEST(BrowserControllerTest, DataUrlStylesheetIsApplied)
 // Find-in-page (Ctrl+F) in the in-process path: the query produces a match
 // list, stepping wraps around it, the page is asked to scroll to the current
 // match through the GUI latch, and navigation clears the session.
+// The GUI's viewport report drives the in-process page: the layout is redone at
+// the new width, window.innerWidth follows it and the page's scripts get the
+// `resize` event (browsers do the same on a window resize).  A repeated report
+// of the same size is a no-op.
+TEST(BrowserControllerTest, WindowResizeRelayoutsAndFiresResizeEvent)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  const std::string html =
+      "<html><body><script>"
+      "window.__resizes = 0;"
+      "window.addEventListener('resize', function () { window.__resizes++; });"
+      "</script><p id=text>resize probe</p></body></html>";
+  fetch.Add("http://viewport.test/",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}}, html});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  const int tab = controller.NewTab();
+  ASSERT_TRUE(controller.Navigate(tab, "http://viewport.test/").has_value());
+  Tab* tab_ptr = controller.FindTab(tab);
+  ASSERT_NE(tab_ptr, nullptr);
+  ASSERT_NE(tab_ptr->script_runtime, nullptr);
+  ASSERT_NE(tab_ptr->page, nullptr);
+
+  // Before the GUI reports anything, the page reports its own layout viewport.
+  const auto number = [&tab_ptr](const std::string& code) {
+    auto result = tab_ptr->script_runtime->Evaluate(code);
+    EXPECT_TRUE(result.has_value()) << code;
+    if (!result.has_value()) {
+      return -1.0;
+    }
+    auto value = result.value().ToNumber();
+    return value.has_value() ? value.value() : -1.0;
+  };
+  EXPECT_EQ(number("window.innerWidth"), static_cast<double>(tab_ptr->page->viewport_css_width()));
+  EXPECT_EQ(number("window.__resizes"), 0.0);
+
+  controller.SetTabViewport(tab, 1024, 700);
+  EXPECT_FLOAT_EQ(tab_ptr->page->viewport_css_width(), 1024.0F);
+  EXPECT_EQ(number("window.innerWidth"), 1024.0);
+  EXPECT_EQ(number("window.innerHeight"), 700.0);
+  EXPECT_EQ(number("window.__resizes"), 1.0);
+
+  // Re-reporting the same size does not re-fire the event.
+  controller.SetTabViewport(tab, 1024, 700);
+  EXPECT_EQ(number("window.__resizes"), 1.0);
+
+  // A real change fires again.
+  controller.SetTabViewport(tab, 640, 480);
+  EXPECT_EQ(number("window.__resizes"), 2.0);
+  EXPECT_EQ(number("window.innerWidth"), 640.0);
+  EXPECT_FLOAT_EQ(tab_ptr->page->viewport_css_width(), 640.0F);
+}
+
 TEST(BrowserControllerTest, FindInTabMatchesStepsAndScrolls)
 {
   TempProfile tp;
