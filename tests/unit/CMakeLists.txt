@@ -140,6 +140,7 @@ gtest_discover_tests(neko_graphics_tests DISCOVERY_MODE PRE_TEST)
 # -----------------------------------------------------------------------------
 add_executable(neko_network_tests
   network/network_test.cpp
+  network/dns_test.cpp
   network/websocket_test.cpp
 )
 target_link_libraries(neko_network_tests PRIVATE neko::network ZLIB::ZLIB

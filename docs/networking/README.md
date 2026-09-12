@@ -4,7 +4,11 @@
 
 ## 已实现
 
-- TCP Socket 抽象（POSIX；getaddrinfo 解析、连接超时、完整收发）
+- TCP Socket 抽象（POSIX；连接超时、完整收发）
+- **DNS 客户端（ADR 0018）**：自研 RFC 1035 报文编解码（A/AAAA/CNAME、
+  压缩指针、边界检查）、TTL 缓存 + 负缓存、`/etc/hosts`、
+  `/etc/resolv.conf` 服务器列表、随机 id 防伪造、CNAME 链跟随；
+  `Socket::Connect` 顺序 = 数字地址 → hosts → 内置 DNS → getaddrinfo 回退
 - HTTP/1.1 GET：请求构建、响应解析（状态行/头/体）、Content-Length、
   chunked 传输、重定向跟随（301/302/303/307/308）
 - **HTTPS/TLS**：`TlsSocket` 封装 OpenSSL（ADR 0010）——证书+主机名校验、

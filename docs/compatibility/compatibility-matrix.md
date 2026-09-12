@@ -10,6 +10,7 @@
 | URL 解析 | Tested | 20 单元测试 | RFC 3986 相对解析样例；`data:` 等不透明 scheme 经 Parse+Serialize 逐字节往返（资源加载器依赖此特性把 URL 交给网络层本地解码） |
 | HTTP/1.1 | Tested | 8 单元测试 | GET、chunked、重定向、Content-Length；**增量读取**（按 framing 精确读取响应体，而非读到关闭），Content-Length 截断校验（防截断攻击的完整性兜底） |
 | `data:` URL（RFC 2397） | Tested | 8 网络单元测试 + 2 浏览器集成测试 | `HttpGet` 在打开 socket 前就地解码（`DecodeDataUrl`）：元数据/`;base64` 标记（大小写不敏感）、负载百分号解码、缺省 `text/plain;charset=US-ASCII`、无 padding 与空白（含逗号后空格、裸换行）容忍、非法字符与尾部置位拒绝；**所有子资源统一入口**——外部样式表（`<link href="data:...">`）、`@font-face` src（bilibili 内联 WOFF 图标字体场景）、`<img>`、脚本、`fetch()` 均可内联 base64 资源；浏览器层不再保留第二份 base64 解码器 |
+| DNS（RFC 1035 客户端） | Tested | 11 网络单元测试（本地 UDP DNS 服务器 + 临时 hosts + 注入时钟） | 自研解析器（ADR 0018）：A/AAAA/CNAME、名压缩指针（跳数上限）、报文边界与截断拒绝、RCODE 透传（NXDOMAIN/SERVFAIL…）、随机 id + QR/问题段校验、TTL 夹取缓存（默认 1s–1h，可注入时钟）、负缓存 10s、`/etc/hosts` 优先、`/etc/resolv.conf` 服务器列表、`Socket::Connect` 顺序为数字→hosts→内置 DNS→getaddrinfo 回退；未实现：DNSSEC、EDNS0、截断应答 TCP 重试、每网卡配置、DoH/DoT，Windows UDP 解析 NOT IMPLEMENTED |
 | HTTPS / TLS | Tested | 5 单元测试（本地 TLS 服务器 + 自签名 CA） | OpenSSL 封装（ADR 0010），证书+主机名校验、SNI、TLS≥1.2；gzip/deflate 协商；**兼容 CDN 无 close_notify 关闭**（sohu/bing 实测，完整性由 HTTP 层 Content-Length 校验兜底） |
 | gzip/deflate | Tested | 12 单元测试（含链式编码、raw deflate、服务器往返） | RFC 7231 内容编码解码，64 MiB 输出上限 |
 | HTML tokenizer | Tested | HTML 套件 | 完整 WHATWG 命名字符引用表（2125 项，含双码点，生成代码）+ RAWTEXT(style/xmp/iframe/noembed)/RCDATA(title/textarea)/PLAINTEXT/script data；CRLF 归一化、EOF-in-tag 丢弃、属性上下文实体 `=`/alnum 字面规则、DOCTYPE public/system identifier 状态机 |

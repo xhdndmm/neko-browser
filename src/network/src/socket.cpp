@@ -1,5 +1,7 @@
 #include "neko/network/socket.h"
 
+#include "neko/network/dns.h"
+
 #include <cerrno>
 #include <cstring>
 #include <string>
@@ -58,6 +60,102 @@ void Socket::Close()
 #endif
 }
 
+namespace {
+
+// Connects to one numeric address ("1.2.3.4" or "::1") over TCP.  Returns the
+// connected descriptor, or -1 with |failures| extended with the reason.
+int ConnectToAddress(std::string_view address, uint16_t port, int timeout_ms, std::string* failures)
+{
+  struct addrinfo hints = {};
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  struct addrinfo* results = nullptr;
+  const std::string host_text(address);
+  const std::string service = std::to_string(port);
+  const int rc = ::getaddrinfo(host_text.c_str(), service.c_str(), &hints, &results);
+  if (rc != 0) {
+    if (!failures->empty()) {
+      *failures += "; ";
+    }
+    *failures += host_text + ": " + ::gai_strerror(rc);
+    return -1;
+  }
+  int fd = -1;
+  for (struct addrinfo* ai = results; ai != nullptr; ai = ai->ai_next) {
+    const std::string family = ai->ai_family == AF_INET ? "IPv4"
+                               : ai->ai_family == AF_INET6
+                                   ? "IPv6"
+                                   : "family " + std::to_string(ai->ai_family);
+    const auto record_failure = [failures, &family, &host_text](std::string reason) {
+      if (!failures->empty()) {
+        *failures += "; ";
+      }
+      *failures += family + " " + host_text + ": " + std::move(reason);
+    };
+    fd = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+    if (fd < 0) {
+      record_failure("socket: " + std::string(std::strerror(errno)));
+      continue;
+    }
+    const int flags = ::fcntl(fd, F_GETFL, 0);
+    if (flags < 0 || ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+      record_failure("fcntl: " + std::string(std::strerror(errno)));
+      ::close(fd);
+      fd = -1;
+      continue;
+    }
+    bool connected = false;
+    const int c = ::connect(fd, ai->ai_addr, static_cast<socklen_t>(ai->ai_addrlen));
+    if (c == 0) {
+      connected = true;
+    } else if (errno == EINPROGRESS) {
+      struct pollfd pfd = {fd, static_cast<short>(POLLOUT), 0};
+      const int pr = ::poll(&pfd, 1, timeout_ms);
+      if (pr > 0) {
+        int so_error = 0;
+        socklen_t error_len = sizeof(so_error);
+        if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &error_len) == 0) {
+          connected = so_error == 0;
+          if (!connected) {
+            record_failure("connect: " + std::string(std::strerror(so_error)));
+          }
+        } else {
+          record_failure("getsockopt: " + std::string(std::strerror(errno)));
+        }
+      } else if (pr == 0) {
+        record_failure("connect timed out");
+      } else {
+        record_failure("poll: " + std::string(std::strerror(errno)));
+      }
+    } else {
+      record_failure("connect: " + std::string(std::strerror(errno)));
+    }
+    ::fcntl(fd, F_SETFL, flags); // restore blocking mode
+    if (connected) {
+      break;
+    }
+    ::close(fd);
+    fd = -1;
+  }
+  ::freeaddrinfo(results);
+  return fd;
+}
+
+bool LooksNumericHost(std::string_view host)
+{
+  struct in_addr v4
+  {
+  };
+  struct in6_addr v6
+  {
+  };
+  const std::string text(host);
+  return ::inet_pton(AF_INET, text.c_str(), &v4) == 1 ||
+         ::inet_pton(AF_INET6, text.c_str(), &v6) == 1;
+}
+
+} // namespace
+
 base::Result<Socket> Socket::Connect(std::string_view host, uint16_t port, int timeout_ms)
 {
 #ifdef _WIN32
@@ -66,11 +164,37 @@ base::Result<Socket> Socket::Connect(std::string_view host, uint16_t port, int t
   (void)timeout_ms;
   return base::Err(base::Error::NotImplemented("Windows sockets are not implemented yet"));
 #else
+  const std::string host_str(host);
+  // Built-in DNS first (project-owned client with TTL caching and /etc/hosts
+  // support, see neko/network/dns.h), then getaddrinfo as the fallback so
+  // NSS-only setups (mDNS, LDAP, VPN plugins) keep working.  A failed lookup is
+  // remembered briefly by the resolver, so the fallback does not pay the DNS
+  // timeout on every request.
+  const auto dns_addresses = DnsResolver::Default().Resolve(host);
+  if (dns_addresses.has_value()) {
+    int dns_fd = -1;
+    std::string dns_failures;
+    for (const std::string& address : dns_addresses.value()) {
+      const int candidate = ConnectToAddress(address, port, timeout_ms, &dns_failures);
+      if (candidate >= 0) {
+        dns_fd = candidate;
+        break;
+      }
+    }
+    if (dns_fd >= 0) {
+      return Socket(dns_fd);
+    }
+    if (LooksNumericHost(host)) {
+      // A numeric host that does not connect must not fall through to
+      // getaddrinfo (it would resolve to the same address anyway).
+      return base::Err(base::Error::Network("connect(" + host_str + "): " + dns_failures));
+    }
+  }
+
   struct addrinfo hints = {};
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
   struct addrinfo* results = nullptr;
-  const std::string host_str(host);
   const std::string service = std::to_string(port);
   const int rc = ::getaddrinfo(host_str.c_str(), service.c_str(), &hints, &results);
   if (rc != 0) {
