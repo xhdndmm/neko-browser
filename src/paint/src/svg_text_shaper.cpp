@@ -53,7 +53,7 @@ image::SvgOutlineEdge ConvertEdge(const graphics::OutlineEdge& edge)
     break;
   }
   for (int i = 0; i < 6; ++i) {
-    out.p[static_cast<std::size_t>(i)] = edge.p[i];
+    out.p[static_cast<std::size_t>(i)] = static_cast<double>(edge.p[i]);
   }
   return out;
 }
@@ -109,7 +109,7 @@ image::SvgTextShaper CreateSvgTextShaper(const graphics::FontRegistry& fonts)
         return false;
       }
       image::SvgGlyphOutline glyph;
-      glyph.advance = outline->advance;
+      glyph.advance = static_cast<double>(outline->advance);
       glyph.edges.reserve(outline->edges.size());
       for (const graphics::OutlineEdge& edge : outline->edges) {
         glyph.edges.push_back(ConvertEdge(edge));
