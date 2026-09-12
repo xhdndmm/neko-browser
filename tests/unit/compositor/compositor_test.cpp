@@ -1,14 +1,17 @@
-// Unit tests for the software compositor (ADR 0015): Surface blit/scroll
-// semantics and SoftwareCompositor layering, opacity, dirty-rect
-// recomposition and scroll bands.
+// Unit tests for the compositor: Surface blit/scroll semantics and
+// SoftwareCompositor layering, opacity, dirty-rect recomposition and scroll
+// bands, plus the GPU front end's fallback and device ledger (ADR 0017).
 //
 // Reference values are computed with the same fixed-point math as
 // paint::Rasterizer's BlendPixel (documented in surface.h).
 
 #include "neko/compositor/compositor.h"
+#include "neko/compositor/gpu_compositor.h"
+#include "neko/compositor/gpu_context.h"
 
 #include <cstdint>
 #include <gtest/gtest.h>
+#include <memory>
 #include <vector>
 
 namespace neko::compositor {
@@ -22,6 +25,12 @@ Surface SolidSurface(int width, int height, Color c)
   Surface s(width, height);
   s.Clear(c);
   return s;
+}
+
+// A copy of |c| with an explicit alpha component.
+Color ColorWithAlpha(std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a)
+{
+  return Color{r, g, b, a};
 }
 
 const Color kOpaqueRed{255, 0, 0, 255};
@@ -278,6 +287,167 @@ TEST(SoftwareCompositorTest, LayerPlacementOffsetComposites)
   compositor.Composite(kTransparent);
   EXPECT_EQ(PixelAt(compositor.Output(), 0, 0), kOpaqueGreen);
   EXPECT_EQ(PixelAt(compositor.Output(), 1, 1), kOpaqueBlue);
+}
+
+// ---------------------------------------------------------------------------
+// GPU compositor (ADR 0017).  The device backends are not implemented, so the
+// tests pin down what does exist: the software fallback, the capability probe,
+// and the upload/draw ledger that a real backend will drive.
+// ---------------------------------------------------------------------------
+
+TEST(GpuCompositorTest, ProbeReportsNoBackendWithoutDevice)
+{
+  const GpuCapabilities caps = ProbeGpuCapabilities();
+  // No platform backend is wired yet; reporting availability would make the
+  // compositor take a path that cannot present.
+  EXPECT_FALSE(caps.available);
+  EXPECT_EQ(caps.backend, GpuBackend::None);
+}
+
+TEST(GpuCompositorTest, CreateFallsBackToSoftware)
+{
+  auto compositor = GpuCompositor::Create(8, 4);
+  ASSERT_NE(compositor, nullptr);
+  // The fallback is a real software compositor, not a broken GPU stand-in.
+  auto* software = dynamic_cast<SoftwareCompositor*>(compositor.get());
+  EXPECT_NE(software, nullptr);
+  EXPECT_EQ(compositor->Output().width(), 8);
+  EXPECT_EQ(compositor->Output().height(), 4);
+
+  auto forced = GpuCompositor::Create(2, 2, /*force_software=*/true);
+  EXPECT_NE(dynamic_cast<SoftwareCompositor*>(forced.get()), nullptr);
+}
+
+TEST(GpuCompositorTest, BackendNamesAreStable)
+{
+  EXPECT_STREQ(GpuBackendName(GpuBackend::None), "None");
+  EXPECT_STREQ(GpuBackendName(GpuBackend::OpenGL), "OpenGL");
+  EXPECT_STREQ(GpuBackendName(GpuBackend::Vulkan), "Vulkan");
+  EXPECT_STREQ(GpuBackendName(GpuBackend::Metal), "Metal");
+  EXPECT_STREQ(GpuBackendName(GpuBackend::Direct3D), "Direct3D");
+}
+
+TEST(GpuCompositorTest, RecordingContextReceivesLayerUploadsAndDraws)
+{
+  auto context = std::make_unique<RecordingGpuContext>();
+  auto* recorder = context.get();
+  auto compositor = GpuCompositor::CreateWithContext(4, 4, std::move(context));
+  ASSERT_TRUE(compositor->using_gpu());
+
+  compositor->LayerSurface(0) = SolidSurface(4, 4, kOpaqueBlue);
+  compositor->LayerSurface(1) = SolidSurface(2, 2, kOpaqueRed);
+  compositor->SetLayerPlacement(1, 1, 1);
+  compositor->Composite(kTransparent);
+
+  // One texture per distinct layer, uploaded in full.
+  ASSERT_EQ(recorder->textures().size(), 2u);
+  EXPECT_EQ(recorder->textures()[0].width, 4);
+  EXPECT_EQ(recorder->textures()[0].height, 4);
+  EXPECT_EQ(recorder->textures()[1].width, 2);
+  EXPECT_EQ(recorder->textures()[1].height, 2);
+  EXPECT_EQ(compositor->texture_uploads(), 2);
+
+  // One textured quad per visible layer, at the layer's placement.
+  ASSERT_EQ(recorder->draws().size(), 2u);
+  EXPECT_EQ(recorder->draws()[0].x, 0.0f);
+  EXPECT_EQ(recorder->draws()[0].y, 0.0f);
+  EXPECT_EQ(recorder->draws()[1].x, 1.0f);
+  EXPECT_EQ(recorder->draws()[1].y, 1.0f);
+  EXPECT_EQ(compositor->draw_calls(), 2);
+  EXPECT_EQ(recorder->frames_presented(), 1);
+
+  // The uploaded texture holds the layer's pixels.
+  const auto& pixels = recorder->textures()[1].pixels;
+  ASSERT_EQ(pixels.size(), 2u * 2u * 4u);
+  EXPECT_EQ(pixels[0], kOpaqueRed.r);
+  EXPECT_EQ(pixels[1], kOpaqueRed.g);
+  EXPECT_EQ(pixels[2], kOpaqueRed.b);
+  EXPECT_EQ(pixels[3], kOpaqueRed.a);
+}
+
+TEST(GpuCompositorTest, GpuPathOutputMatchesSoftwareReference)
+{
+  // The presented surface must be pixel-identical to what the software
+  // compositor produces: the GPU path is an acceleration, not a behavior.
+  SoftwareCompositor reference(6, 6);
+  reference.LayerSurface(0) = SolidSurface(6, 6, kOpaqueBlue);
+  reference.LayerSurface(1) =
+      SolidSurface(4, 4, ColorWithAlpha(kOpaqueGreen.r, kOpaqueGreen.g, kOpaqueGreen.b, 128));
+  reference.SetLayerPlacement(1, 1, 1);
+  reference.Composite(kTransparent);
+
+  auto compositor = GpuCompositor::CreateWithContext(6, 6, std::make_unique<RecordingGpuContext>());
+  compositor->LayerSurface(0) = SolidSurface(6, 6, kOpaqueBlue);
+  compositor->LayerSurface(1) =
+      SolidSurface(4, 4, ColorWithAlpha(kOpaqueGreen.r, kOpaqueGreen.g, kOpaqueGreen.b, 128));
+  compositor->SetLayerPlacement(1, 1, 1);
+  compositor->Composite(kTransparent);
+
+  ASSERT_EQ(compositor->Output().pixels(), reference.Output().pixels());
+}
+
+TEST(GpuCompositorTest, DirtyLayersUploadOnceUntilInvalidated)
+{
+  auto context = std::make_unique<RecordingGpuContext>();
+  auto* recorder = context.get();
+  auto compositor = GpuCompositor::CreateWithContext(2, 2, std::move(context));
+  compositor->LayerSurface(0) = SolidSurface(2, 2, kOpaqueBlue);
+
+  compositor->Composite(kTransparent);
+  EXPECT_EQ(compositor->texture_uploads(), 1);
+
+  // No layer write between frames: the texture stays valid, no re-upload.
+  compositor->Composite(kTransparent);
+  EXPECT_EQ(compositor->texture_uploads(), 1);
+  EXPECT_EQ(recorder->frames_presented(), 2);
+
+  // Writing the layer marks it dirty again.
+  compositor->LayerSurface(0) = SolidSurface(2, 2, kOpaqueRed);
+  compositor->Composite(kTransparent);
+  EXPECT_EQ(compositor->texture_uploads(), 2);
+}
+
+TEST(GpuCompositorTest, CompositeRectBlendsOverlaysAndKeepsBackdrop)
+{
+  auto compositor = GpuCompositor::CreateWithContext(6, 6, std::make_unique<RecordingGpuContext>());
+  compositor->LayerSurface(0) = SolidSurface(6, 6, kOpaqueBlue);
+  compositor->LayerSurface(1) = SolidSurface(2, 2, kOpaqueGreen);
+  compositor->SetLayerPlacement(1, 2, 2);
+  compositor->Composite(kTransparent);
+
+  compositor->CompositeRect(2, 2, 2, 2);
+  EXPECT_EQ(PixelAt(compositor->Output(), 2, 2), kOpaqueGreen);
+  EXPECT_EQ(PixelAt(compositor->Output(), 0, 0), kOpaqueBlue);
+}
+
+TEST(GpuCompositorTest, ScrollReportsExposedBandLikeSoftware)
+{
+  auto compositor = GpuCompositor::CreateWithContext(4, 8, std::make_unique<RecordingGpuContext>());
+  compositor->LayerSurface(0) = SolidSurface(4, 8, kOpaqueBlue);
+  compositor->Composite(kTransparent);
+
+  int band_y0 = -1;
+  int band_y1 = -1;
+  compositor->ScrollOutput(3, &band_y0, &band_y1);
+  EXPECT_EQ(band_y0, 0);
+  EXPECT_EQ(band_y1, 3);
+
+  compositor->ScrollOutput(-2, &band_y0, &band_y1);
+  EXPECT_EQ(band_y0, 6);
+  EXPECT_EQ(band_y1, 8);
+}
+
+TEST(GpuCompositorTest, NullContextReportsNotImplemented)
+{
+  // The no-device context satisfies the interface but refuses device work.
+  NullGpuContext null_context;
+  EXPECT_FALSE(null_context.hardware_accelerated());
+  std::uintptr_t handle = 0;
+  const auto created = null_context.CreateTexture(2, 2, &handle);
+  EXPECT_FALSE(created.has_value());
+  EXPECT_EQ(created.error().category(), base::ErrorCategory::kNotImplemented);
+  const auto presented = null_context.EndFrame();
+  EXPECT_FALSE(presented.has_value());
 }
 
 } // namespace

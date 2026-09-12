@@ -1,10 +1,11 @@
 # =============================================================================
-# neko_compositor — the software compositor abstraction (ADR 0015).
+# neko_compositor — the compositor abstraction (ADR 0015, ADR 0017).
 #
 # Presentation seam between rasterization and the UI: the compositor owns the
 # output surface and an ordered list of layers (page backdrop + overlays such
 # as the caret), composites them on the CPU and performs the scroll blit.
-# A GPU implementation can provide the same Compositor interface later.
+# The GPU front end (gpu_compositor / gpu_context) presents the same interface;
+# its device backends are not implemented yet (ADR 0017).
 #
 # Dependencies stay low-level on purpose (css for colors, base for warnings):
 # the compositor must not depend on paint/renderer, so GPU backends can reuse
@@ -14,6 +15,8 @@
 add_library(neko_compositor
   src/surface.cpp
   src/compositor.cpp
+  src/gpu_context.cpp
+  src/gpu_compositor.cpp
 )
 add_library(neko::compositor ALIAS neko_compositor)
 
