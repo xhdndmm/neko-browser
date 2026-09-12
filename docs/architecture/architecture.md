@@ -127,9 +127,11 @@ graph LR
   Bookmarks、Downloads；Profile 结构。
 - 安全：Origin、SOP、CORS、CSP、Cookie 安全、TLS 校验、沙箱、权限、进程隔离。
 - 多进程：Browser / Renderer / Network / GPU / Utility 进程 + IPC（ADR 0016）。
-  M1 已落地：`neko::ipc`（帧协议 Channel + Subprocess）+ Renderer 子进程
-  （完整页面管线在独立地址空间，位图 + DOM 经 IPC 回传，CLI 接入）；
-  Network/GPU 进程、沙箱、GUI 接入为后续里程碑。
+  M1+M2 已落地：`neko::ipc`（帧协议 Channel + Subprocess）+ Renderer 子进程
+  （完整页面管线在独立地址空间，位图 + DOM 经 IPC 回传，CLI 接入）+ **渲染器
+  会话**（持久子进程 + 交互协议；顶层文档与 Cookie 仍在浏览器侧；GUI
+  `--renderer-process` 下 WebView 绘制子进程帧、输入转发、每站点会话复用、
+  崩溃后重建）；Network/GPU 进程、沙箱为后续里程碑。
 
 ### storage（已落地，Phase 7 前）
 
