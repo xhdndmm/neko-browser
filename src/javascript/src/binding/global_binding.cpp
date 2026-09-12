@@ -645,11 +645,8 @@ std::string UrlOrigin(const std::string& url)
 
 // Shared body of HistoryPushState/HistoryReplaceState.  |replace| selects the
 // replacement vs push semantics.  Returns the exception value on failure.
-JSValue HistoryMutateState(JSContext* ctx,
-                           JSValueConst this_val,
-                           int argc,
-                           JSValueConst* argv,
-                           bool replace)
+JSValue HistoryMutateState(
+    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, bool replace)
 {
   Impl* impl = ImplFor(ctx, this_val);
   if (impl == nullptr) {
@@ -677,8 +674,7 @@ JSValue HistoryMutateState(JSContext* ctx,
     // has none, so it cannot be cross-origin).
     const std::string current_origin = UrlOrigin(impl->document_url);
     const std::string resolved_origin = UrlOrigin(resolved);
-    if (!current_origin.empty() && !resolved_origin.empty() &&
-        resolved_origin != current_origin) {
+    if (!current_origin.empty() && !resolved_origin.empty() && resolved_origin != current_origin) {
       return ThrowDomException(ctx, "SecurityError", "pushState to a cross-origin URL");
     }
   }
@@ -739,14 +735,12 @@ JSValue HistoryGo(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst*
   return JS_UNDEFINED;
 }
 
-JSValue
-HistoryPushState(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+JSValue HistoryPushState(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   return HistoryMutateState(ctx, this_val, argc, argv, /*replace=*/false);
 }
 
-JSValue
-HistoryReplaceState(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+JSValue HistoryReplaceState(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   return HistoryMutateState(ctx, this_val, argc, argv, /*replace=*/true);
 }

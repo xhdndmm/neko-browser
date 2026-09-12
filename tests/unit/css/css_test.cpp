@@ -468,9 +468,8 @@ TEST(CssSerializeTest, StyleRuleRoundTrips)
 
 TEST(CssSerializeTest, StyleSheetRoundTrips)
 {
-  const std::string source =
-      "div { color: red; margin: 0 auto; }\n"
-      "p.note#x { font-size: 12px !important; }\n";
+  const std::string source = "div { color: red; margin: 0 auto; }\n"
+                             "p.note#x { font-size: 12px !important; }\n";
   const StyleSheet sheet = ParseStyleSheet(source);
   const std::string text = SerializeStyleSheet(sheet);
   const StyleSheet reparsed = ParseStyleSheet(text);

@@ -11,8 +11,8 @@ std::string ToString(const CompoundSelector& compound)
   std::string out;
   if (compound.tag.has_value()) {
     out += *compound.tag;
-  } else if (!compound.id.has_value() && compound.classes.empty() &&
-             compound.attributes.empty() && compound.pseudo_classes.empty()) {
+  } else if (!compound.id.has_value() && compound.classes.empty() && compound.attributes.empty() &&
+             compound.pseudo_classes.empty()) {
     // A compound with no components at all is the universal selector.
     out += '*';
   }

@@ -78,6 +78,15 @@ struct PendingEvent
   bool was_clean = false;
 };
 
+// Builds an event with only its kind set.  (A designated initializer with
+// holes trips GCC's -Wmissing-field-initializers, which is an error in CI.)
+PendingEvent MakeEvent(PendingEvent::Kind kind)
+{
+  PendingEvent event;
+  event.kind = kind;
+  return event;
+}
+
 struct Outgoing
 {
   bool binary = false;
@@ -279,7 +288,7 @@ void ReceiveLoop(const std::shared_ptr<WebSocketState>& state)
   auto connected =
       network::WebSocket::Connect(url::Url::Parse(state->url).value(), "", state->protocols);
   if (!connected.has_value()) {
-    Enqueue(state, PendingEvent{.kind = PendingEvent::Kind::Error});
+    Enqueue(state, MakeEvent(PendingEvent::Kind::Error));
     PendingEvent closed;
     closed.kind = PendingEvent::Kind::Close;
     closed.code = 1006; // abnormal closure
@@ -292,7 +301,7 @@ void ReceiveLoop(const std::shared_ptr<WebSocketState>& state)
   }
 
   auto socket = std::move(connected.value());
-  Enqueue(state, PendingEvent{.kind = PendingEvent::Kind::Open});
+  Enqueue(state, MakeEvent(PendingEvent::Kind::Open));
 
   while (true) {
     {
@@ -719,7 +728,7 @@ JSValue WebSocketConstructor(JSContext* ctx, JSValueConst new_target, int argc, 
   const bool valid =
       parsed.has_value() && (parsed.value().scheme() == "ws" || parsed.value().scheme() == "wss");
   if (!valid) {
-    Enqueue(state, PendingEvent{.kind = PendingEvent::Kind::Error});
+    Enqueue(state, MakeEvent(PendingEvent::Kind::Error));
     PendingEvent closed;
     closed.kind = PendingEvent::Kind::Close;
     closed.code = 1006;

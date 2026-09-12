@@ -2460,15 +2460,14 @@ TEST(LayoutTest, FlexContainerTextIsAnonymousFlexItem)
 // overlapped its two columns, putting the daily quote over the title).
 TEST(LayoutTest, NestedGridItemGetsWideEnoughCell)
 {
-  Page page =
-      Build("<body style=\"margin:0\">"
-            "<div id=\"outer\" style=\"display:grid\">"
-            "  <div style=\"display:grid;grid-template-columns:minmax(0,1fr) "
-            "minmax(300px,.62fr);gap:72px\">"
-            "    <div id=\"a\">A</div>"
-            "    <div id=\"b\">B</div>"
-            "  </div>"
-            "</div></body>");
+  Page page = Build("<body style=\"margin:0\">"
+                    "<div id=\"outer\" style=\"display:grid\">"
+                    "  <div style=\"display:grid;grid-template-columns:minmax(0,1fr) "
+                    "minmax(300px,.62fr);gap:72px\">"
+                    "    <div id=\"a\">A</div>"
+                    "    <div id=\"b\">B</div>"
+                    "  </div>"
+                    "</div></body>");
   const LayoutBox* outer = FindBox(*page.root, "#outer", *page.doc);
   ASSERT_NE(outer, nullptr);
   ASSERT_EQ(outer->children.size(), 1u);

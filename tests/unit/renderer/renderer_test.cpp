@@ -64,8 +64,9 @@ TEST(PageTest, RasterizeProducesImage)
 TEST(PageTest, FocusedCaretGeometryIsThreadSafeAndInputOnly)
 {
   Page page;
-  ASSERT_TRUE(page.LoadHtml("<body><input id=\"field\" value=\"hello\"><div id=\"box\">text</div></body>")
-                  .has_value());
+  ASSERT_TRUE(
+      page.LoadHtml("<body><input id=\"field\" value=\"hello\"><div id=\"box\">text</div></body>")
+          .has_value());
   dom::Element* input = dom::QuerySelector(*page.document(), "#field");
   dom::Element* div = dom::QuerySelector(*page.document(), "#box");
   ASSERT_NE(input, nullptr);
@@ -857,8 +858,8 @@ TEST(PageTest, ExternalStylesheetUpdateBuildsLayoutImmediately)
   ASSERT_NE(target, nullptr);
   EXPECT_FALSE(page.HasLayout());
 
-  page.SetExternalStylesheets({css::ParseStyleSheet(
-      "#target { width: 240px; height: 30px; background-color: #ff0000; }")});
+  page.SetExternalStylesheets(
+      {css::ParseStyleSheet("#target { width: 240px; height: 30px; background-color: #ff0000; }")});
 
   ASSERT_TRUE(page.HasLayout());
   const auto geometry = page.ElementBoxGeometry(*target);

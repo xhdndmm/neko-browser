@@ -30,9 +30,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cmath>
-#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -55,8 +55,14 @@ struct Rect
 {
   double x0 = 0, y0 = 0, x1 = 0, y1 = 0;
 
-  double width() const { return x1 - x0; }
-  double height() const { return y1 - y0; }
+  double width() const
+  {
+    return x1 - x0;
+  }
+  double height() const
+  {
+    return y1 - y0;
+  }
 };
 
 struct IoTarget
@@ -165,12 +171,15 @@ std::optional<Rect> Intersect(const Rect& a, const Rect& b)
   return Rect{x0, y0, x1, y1};
 }
 
-double Area(const Rect& r) { return r.width() * r.height(); }
+double Area(const Rect& r)
+{
+  return r.width() * r.height();
+}
 
 double NowMsSinceOrigin(const Impl* impl)
 {
-  return std::chrono::duration<double, std::milli>(
-             std::chrono::steady_clock::now() - impl->performance_origin)
+  return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                   impl->performance_origin)
       .count();
 }
 
@@ -284,7 +293,8 @@ std::optional<Rect> RootRect(IoWrapper* w)
               base.y1 + w->root_bottom};
 }
 
-JSValue MakeEntry(JSContext* ctx, IoWrapper* w, const dom::Element* el, JSValue target, const Rect& root)
+JSValue
+MakeEntry(JSContext* ctx, IoWrapper* w, const dom::Element* el, JSValue target, const Rect& root)
 {
   const std::optional<Rect> el_rect = RectOf(w->impl, *el);
   const Rect elem = el_rect.value_or(Rect{0, 0, 0, 0});
@@ -296,8 +306,8 @@ JSValue MakeEntry(JSContext* ctx, IoWrapper* w, const dom::Element* el, JSValue 
   JS_SetPropertyStr(ctx, entry, "target", JS_DupValue(ctx, target));
   JS_SetPropertyStr(ctx, entry, "isIntersecting", JS_NewBool(ctx, intersecting));
   JS_SetPropertyStr(ctx, entry, "intersectionRatio", JS_NewFloat64(ctx, ratio));
-  JS_SetPropertyStr(ctx, entry, "intersectionRect",
-                    MakeRectObject(ctx, inter.value_or(Rect{0, 0, 0, 0})));
+  JS_SetPropertyStr(
+      ctx, entry, "intersectionRect", MakeRectObject(ctx, inter.value_or(Rect{0, 0, 0, 0})));
   JS_SetPropertyStr(ctx, entry, "boundingClientRect", MakeRectObject(ctx, elem));
   JS_SetPropertyStr(ctx, entry, "rootBounds", MakeRectObject(ctx, root));
   JS_SetPropertyStr(ctx, entry, "time", JS_NewFloat64(ctx, NowMsSinceOrigin(w->impl)));
@@ -323,8 +333,8 @@ void ComputeAndEnqueue(JSContext* ctx, IoWrapper* w)
       continue;
     }
     const std::optional<Rect> el_rect = RectOf(w->impl, *el);
-    const bool intersecting = root.has_value() && el_rect.has_value() &&
-                              Intersect(*el_rect, *root).has_value();
+    const bool intersecting =
+        root.has_value() && el_rect.has_value() && Intersect(*el_rect, *root).has_value();
     if (t.reported && intersecting == t.last_intersecting) {
       continue;
     }
@@ -334,8 +344,7 @@ void ComputeAndEnqueue(JSContext* ctx, IoWrapper* w)
     // matching the spec's initial observer callback; later reports fire only
     // on change.
     changed = true;
-    new_entries.push_back(
-        MakeEntry(ctx, w, el, t.element, root.value_or(Rect{0, 0, 0, 0})));
+    new_entries.push_back(MakeEntry(ctx, w, el, t.element, root.value_or(Rect{0, 0, 0, 0})));
   }
   for (JSValue e : new_entries) {
     w->pending_entries.push_back(e);
@@ -421,7 +430,8 @@ JSValue IoObserverUnobserve(JSContext* ctx, JSValueConst this_val, int argc, JSV
   return JS_UNDEFINED;
 }
 
-JSValue IoObserverDisconnect(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+JSValue
+IoObserverDisconnect(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
   IoWrapper* w = UnwrapIo(this_val);
   if (w == nullptr) {
@@ -438,7 +448,8 @@ JSValue IoObserverDisconnect(JSContext* ctx, JSValueConst this_val, int /*argc*/
   return JS_UNDEFINED;
 }
 
-JSValue IoObserverTakeRecords(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+JSValue
+IoObserverTakeRecords(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
   IoWrapper* w = UnwrapIo(this_val);
   if (w == nullptr) {
@@ -483,8 +494,8 @@ JSValue IntersectionObserverConstructor(JSContext* ctx,
     JS_FreeValue(ctx, rm);
     // `threshold` is accepted but treated as 0 (any intersection counts).
   }
-  JSValue obj = JS_NewObjectProtoClass(ctx, impl->intersection_observer_proto,
-                                       g_intersection_observer_class_id);
+  JSValue obj = JS_NewObjectProtoClass(
+      ctx, impl->intersection_observer_proto, g_intersection_observer_class_id);
   if (JS_IsException(obj)) {
     IoFinalizer(JS_GetRuntime(ctx), obj); // no opaque set; frees nothing but is safe
     delete w;

@@ -686,11 +686,10 @@ TEST(StyleTest, MediaQueryPrintSkipped)
 
 TEST(StyleTest, MediaQueryUsesViewportWidthAndOrientation)
 {
-  auto doc = MakeDoc(
-      "<style>"
-      "@media (min-width: 900px) { p { color: red; } }"
-      "@media (max-width: 899px) and (orientation: portrait) { p { color: blue; } }"
-      "</style><body><p>x</p></body>");
+  auto doc = MakeDoc("<style>"
+                     "@media (min-width: 900px) { p { color: red; } }"
+                     "@media (max-width: 899px) and (orientation: portrait) { p { color: blue; } }"
+                     "</style><body><p>x</p></body>");
   StyleEngine engine;
   engine.SetViewport(1024, 600);
   engine.ApplyStyles(*doc);
@@ -1165,12 +1164,12 @@ TEST(StyleTest, BackgroundClipTextDropsTransparentFill)
   // to glyph outlines, so a fully transparent fill would render the text
   // invisible. The transparent fill is dropped in favor of the inherited
   // color instead (documented deviation from CSS Backgrounds 3 §7.4).
-  auto doc = MakeDoc(
-      "<html><head><style>"
-      "body { color: #e6e0e9; }"
-      ".fluid { color: transparent; -webkit-text-fill-color: transparent;"
-      "         -webkit-background-clip: text; background-clip: text; }"
-      "</style></head><body><h1><span class=\"fluid\">Acxun</span></h1></body></html>");
+  auto doc =
+      MakeDoc("<html><head><style>"
+              "body { color: #e6e0e9; }"
+              ".fluid { color: transparent; -webkit-text-fill-color: transparent;"
+              "         -webkit-background-clip: text; background-clip: text; }"
+              "</style></head><body><h1><span class=\"fluid\">Acxun</span></h1></body></html>");
   StyleEngine engine;
   engine.ApplyStyles(*doc);
   const ComputedStyle& s = Style(engine, *doc, ".fluid");

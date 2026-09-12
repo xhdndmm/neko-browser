@@ -686,10 +686,12 @@ IntrinsicWidths MeasureContent(const dom::Element& element,
   // containing a grid container is measured as a single block, so a nested
   // grid (e.g. a two-column hero) computes its columns against a too-narrow
   // containing width and its items overlap.
-  if (style.display == style::Display::kGrid ||
-      style.display == style::Display::kInlineGrid) {
+  if (style.display == style::Display::kGrid || style.display == style::Display::kInlineGrid) {
     IntrinsicWidths gw;
     double sum_max = 0;
+    // Intrinsic widths are floats; the accumulation stays in double to avoid
+    // rounding drift over many items, so each add promotes explicitly.
+    auto add_max = [&sum_max](float value) { sum_max += static_cast<double>(value); };
     bool first = true;
     for (const dom::Node* child : element.ChildNodes()) {
       if (child->node_type() == dom::NodeType::kText) {
@@ -699,14 +701,14 @@ IntrinsicWidths MeasureContent(const dom::Element& element,
           continue;
         }
         if (!first) {
-          sum_max += style.column_gap;
+          add_max(style.column_gap);
         }
-        sum_max += MeasureTextWidth(registry,
-                                    style.font_family,
-                                    style.font_weight,
-                                    style.font_italic,
-                                    collapsed,
-                                    style.font_size);
+        add_max(MeasureTextWidth(registry,
+                                 style.font_family,
+                                 style.font_weight,
+                                 style.font_italic,
+                                 collapsed,
+                                 style.font_size));
         gw.min = std::max(gw.min,
                           WidestWordWidth(registry,
                                           style.font_family,
@@ -732,9 +734,9 @@ IntrinsicWidths MeasureContent(const dom::Element& element,
       const IntrinsicWidths cw = MeasureContent(child_el, styles, registry);
       gw.min = std::max(gw.min, cw.min);
       if (!first) {
-        sum_max += style.column_gap;
+        add_max(style.column_gap);
       }
-      sum_max += cw.max;
+      add_max(cw.max);
       first = false;
     }
     gw.max = static_cast<float>(sum_max);

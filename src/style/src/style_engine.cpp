@@ -1132,8 +1132,8 @@ bool MediaQueryMatches(std::string_view prelude, float viewport_width, float vie
         if (!threshold.has_value()) {
           return false;
         }
-        const float actual = feature.find("height") != std::string::npos ? viewport_height
-                                                                          : viewport_width;
+        const float actual =
+            feature.find("height") != std::string::npos ? viewport_height : viewport_width;
         if ((feature.rfind("min-", 0) == 0 && actual < *threshold) ||
             (feature.rfind("max-", 0) == 0 && actual > *threshold) ||
             (feature == "width" && actual != *threshold) ||
@@ -1156,9 +1156,8 @@ bool MediaQueryMatches(std::string_view prelude, float viewport_width, float vie
   std::size_t start = 0;
   while (start <= prelude.size()) {
     const std::size_t comma = prelude.find(',', start);
-    if (matches_branch(prelude.substr(start, comma == std::string_view::npos
-                                              ? prelude.size() - start
-                                              : comma - start))) {
+    if (matches_branch(prelude.substr(
+            start, comma == std::string_view::npos ? prelude.size() - start : comma - start))) {
       return true;
     }
     if (comma == std::string_view::npos) {
@@ -1331,7 +1330,7 @@ void StyleEngine::BuildCascadeIndex(dom::Document& /*document*/)
       add_rule(rule);
     }
     for (const css::AtRule& at_rule : sheet.at_rules) {
-        if (at_rule.name == "media" &&
+      if (at_rule.name == "media" &&
           !MediaQueryMatches(at_rule.prelude, viewport_width_, viewport_height_)) {
         continue;
       }
@@ -1705,9 +1704,9 @@ void StyleEngine::ComputeElement(dom::Element& element,
     const css::CssValue v = css::ParseCssValue(d->value);
     return v.type == css::CssValue::Type::kKeyword && v.text == "text";
   };
-  if ((clips_background_to_text("background-clip")
-       || clips_background_to_text("-webkit-background-clip"))
-      && out.color.has_value() && out.color->a == 0) {
+  if ((clips_background_to_text("background-clip") ||
+       clips_background_to_text("-webkit-background-clip")) &&
+      out.color.has_value() && out.color->a == 0) {
     out.color = inherited.color;
   }
   if (const css::Declaration* d = find("text-align")) {

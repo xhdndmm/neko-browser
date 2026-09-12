@@ -97,7 +97,9 @@ WebSocket::WebSocket() = default;
 WebSocket::~WebSocket()
 {
   if (socket_open_ && !close_sent_) {
-    Close(WebSocketCloseCode::GoingAway);
+    // Destructors cannot report failures: the connection is going away either
+    // way, so a close frame that does not make it out is not actionable here.
+    (void)Close(WebSocketCloseCode::GoingAway);
   }
 }
 
@@ -452,7 +454,7 @@ base::Result<WebSocket::Message> WebSocket::ReceiveFrame(int timeout_ms)
       return base::Err(ext.error());
     }
     payload_len = 0;
-    for (int i = 0; i < 8; ++i) {
+    for (std::size_t i = 0; i < 8; ++i) {
       payload_len =
           (payload_len << 8) | static_cast<uint64_t>(static_cast<uint8_t>(ext.value()[i]));
     }
@@ -469,7 +471,7 @@ base::Result<WebSocket::Message> WebSocket::ReceiveFrame(int timeout_ms)
     if (!mk) {
       return base::Err(mk.error());
     }
-    for (int i = 0; i < 4; ++i) {
+    for (std::size_t i = 0; i < masking_key.size(); ++i) {
       masking_key[i] = static_cast<uint8_t>(mk.value()[i]);
     }
   }
@@ -490,16 +492,23 @@ base::Result<WebSocket::Message> WebSocket::ReceiveFrame(int timeout_ms)
 
   if (opcode == kClose) {
     if (!close_sent_) {
-      SendFrame(kClose,
-                payload.size() >= 2 ? payload.substr(0, 2) : "",
-                /*mask=*/true);
+      // Echo the peer's status code when it sent one.  The echo is best
+      // effort: a failed send ends up in the same place as a successful one
+      // (socket_open_ = false below), so the error is not propagated.
+      (void)SendFrame(kClose, payload.size() >= 2 ? payload.substr(0, 2) : "", /*mask=*/true);
       close_sent_ = true;
     }
     socket_open_ = false;
     return base::Ok(Message{WebSocketMessageType::Text, ""});
   }
   if (opcode == kPing) {
-    SendFrame(kPong, payload, /*mask=*/true);
+    auto pong = SendFrame(kPong, payload, /*mask=*/true);
+    if (!pong) {
+      // RFC 6455 requires the pong; if it cannot be sent the connection is
+      // broken, so surface the failure instead of pretending it succeeded.
+      socket_open_ = false;
+      return base::Err(pong.error());
+    }
     return ReceiveFrame(timeout_ms);
   }
   if (opcode == kPong) {

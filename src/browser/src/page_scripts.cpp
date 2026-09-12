@@ -531,9 +531,9 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
               if (rel.has_value() && *rel == "stylesheet") {
                 const auto href = el->GetAttribute("href");
                 if (href.has_value()) {
-                  const base::Result<url::Url> target =
-                      base.has_value() ? url::Url::Parse(*href, base.value())
-                                       : url::Url::Parse(*href);
+                  const base::Result<url::Url> target = base.has_value()
+                                                            ? url::Url::Parse(*href, base.value())
+                                                            : url::Url::Parse(*href);
                   external_hrefs.push_back(target.has_value() ? target.value().Serialize()
                                                               : std::string(*href));
                 }
@@ -569,8 +569,8 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     // Copy the href list into the long-lived callback.  The local vector above
     // belongs to RunPageScripts; capturing it by reference leaves a dangling
     // reference as soon as this setup block exits.
-    apis.stylesheet_href = [author_count, external_hrefs = std::move(external_hrefs)](
-                               std::size_t index) {
+    apis.stylesheet_href = [author_count,
+                            external_hrefs = std::move(external_hrefs)](std::size_t index) {
       if (index < author_count) {
         return std::string();
       }
@@ -586,9 +586,9 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
       const std::size_t ext = index - author_count;
       return ext < external.size() ? css::SerializeStyleSheet(external[ext]) : std::string();
     };
-    apis.stylesheet_replace =
-        [&page, author_count, collect_styles](std::size_t index,
-                                              const std::string& text) -> std::optional<std::string> {
+    apis.stylesheet_replace = [&page, author_count, collect_styles](
+                                  std::size_t index,
+                                  const std::string& text) -> std::optional<std::string> {
       if (index >= author_count) {
         return std::string("external stylesheets are read-only");
       }

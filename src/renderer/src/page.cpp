@@ -125,11 +125,8 @@ bool CollectFragmentRect(const layout::LayoutBox& box,
   return found;
 }
 
-bool FindCaretGeometry(const layout::LayoutBox& box,
-                       const dom::Element* target,
-                       float& x,
-                       float& y,
-                       float& height)
+bool FindCaretGeometry(
+    const layout::LayoutBox& box, const dom::Element* target, float& x, float& y, float& height)
 {
   for (const layout::Line& line : box.lines) {
     for (const layout::TextRun& run : line.runs) {
@@ -397,8 +394,7 @@ const dom::Element* Page::FocusedElement() const
 std::optional<CaretGeometry> Page::FocusedCaretGeometry() const
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (focused_element_ == nullptr || focused_element_->tag_name() != "input" ||
-      root_ == nullptr) {
+  if (focused_element_ == nullptr || focused_element_->tag_name() != "input" || root_ == nullptr) {
     return std::nullopt;
   }
   CaretGeometry geometry;
@@ -523,7 +519,7 @@ void Page::SetElementImage(const dom::Element* element,
     animation_states_.erase(element);
   }
   video_states_.erase(element); // a static image replaces any video frame
-  root_.reset();                 // the replaced box's intrinsic size may have changed
+  root_.reset();                // the replaced box's intrinsic size may have changed
   display_list_.reset();
   BumpVersion();
 }
@@ -557,8 +553,7 @@ void Page::SetElementImages(const std::vector<const dom::Element*>& elements,
     }
     images_[element] = image;
     if (animation != nullptr && animation->frames.size() > 1) {
-      animation_states_[element] =
-          ImageAnimationState{animation, NowMs(), 0, 0, false};
+      animation_states_[element] = ImageAnimationState{animation, NowMs(), 0, 0, false};
     } else {
       animation_states_.erase(element);
     }

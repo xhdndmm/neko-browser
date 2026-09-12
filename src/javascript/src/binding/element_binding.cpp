@@ -1439,10 +1439,14 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
                  "scrollLeft",
                  MakeGetter(ctx, "scrollLeft", ElementGetScrollLeft),
                  MakeSetter(ctx, "scrollLeft", ElementSetScrollLeft));
-  DefineGetter(
-      ctx, impl.element_proto, "scrollWidth", MakeGetter(ctx, "scrollWidth", ElementGetScrollWidth));
-  DefineGetter(
-      ctx, impl.element_proto, "scrollHeight", MakeGetter(ctx, "scrollHeight", ElementGetScrollHeight));
+  DefineGetter(ctx,
+               impl.element_proto,
+               "scrollWidth",
+               MakeGetter(ctx, "scrollWidth", ElementGetScrollWidth));
+  DefineGetter(ctx,
+               impl.element_proto,
+               "scrollHeight",
+               MakeGetter(ctx, "scrollHeight", ElementGetScrollHeight));
   // Element-level global event handler attributes (element.onclick = fn);
   // the table and accessors live in event_binding.cpp.
   DefineElementEventHandlers(ctx, impl);

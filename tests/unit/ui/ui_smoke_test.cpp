@@ -1096,8 +1096,7 @@ TEST(UiSmokeTest, RendererProcessModePaintsChildFrames)
                                              "<body><h1>Hello Remote</h1></body></html>")
                   .has_value());
 
-  neko::ui::BrowserWorker worker(
-      QString::fromStdString(tp.path()), nullptr, RendererModeOptions());
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()), nullptr, RendererModeOptions());
   neko::ui::MainWindow window(&worker);
   window.resize(800, 600);
   window.show();
@@ -1132,17 +1131,16 @@ TEST(UiSmokeTest, RendererProcessModeClickAndHoverReachTheChild)
   TempProfile tp;
   const std::string first = tp.path() + "/first.html";
   const std::string second = tp.path() + "/second.html";
-  ASSERT_TRUE(neko::storage::WriteFileAtomic(
-                  second,
-                  "<html><head><title>Second Remote</title></head><body>second</body></html>")
-                  .has_value());
+  ASSERT_TRUE(
+      neko::storage::WriteFileAtomic(
+          second, "<html><head><title>Second Remote</title></head><body>second</body></html>")
+          .has_value());
   const std::string first_html = "<html><head><title>First Remote</title></head>"
                                  "<body><a id=\"next\" href=\"file://" +
                                  second + "\">go</a></body></html>";
   ASSERT_TRUE(neko::storage::WriteFileAtomic(first, first_html).has_value());
 
-  neko::ui::BrowserWorker worker(
-      QString::fromStdString(tp.path()), nullptr, RendererModeOptions());
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()), nullptr, RendererModeOptions());
   neko::ui::MainWindow window(&worker);
   window.resize(800, 600);
   window.show();
@@ -1191,14 +1189,16 @@ TEST(UiSmokeTest, RendererProcessModeClickAndHoverReachTheChild)
   // browser re-runs it (file read) and the tab lands on the second page.
   QTest::mousePress(view->viewport(), Qt::LeftButton, Qt::NoModifier, point);
   QTest::mouseRelease(view->viewport(), Qt::LeftButton, Qt::NoModifier, point);
-  EXPECT_TRUE(WaitFor([&] {
-    for (int i = 0; i < window.TabBarWidget()->count(); ++i) {
-      if (window.TabBarWidget()->tabText(i).contains("Second Remote")) {
-        return true;
-      }
-    }
-    return false;
-  }, 10000));
+  EXPECT_TRUE(WaitFor(
+      [&] {
+        for (int i = 0; i < window.TabBarWidget()->count(); ++i) {
+          if (window.TabBarWidget()->tabText(i).contains("Second Remote")) {
+            return true;
+          }
+        }
+        return false;
+      },
+      10000));
 }
 
 } // namespace

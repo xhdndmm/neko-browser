@@ -114,7 +114,8 @@ bool IsRed(const RemoteFrame& frame, const Point& point)
   if (x < 0 || y < 0 || x >= frame.width || y >= frame.height) {
     return false;
   }
-  const std::size_t index = (static_cast<std::size_t>(y) * frame.width + x) * 4;
+  const std::size_t width = static_cast<std::size_t>(frame.width);
+  const std::size_t index = (static_cast<std::size_t>(y) * width + static_cast<std::size_t>(x)) * 4;
   if (index + 3 >= frame.rgba.size()) {
     return false;
   }

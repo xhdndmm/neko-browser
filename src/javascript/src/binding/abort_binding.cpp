@@ -125,8 +125,7 @@ JSValue SignalGetReason(JSContext* ctx, JSValueConst this_val)
   return JS_DupValue(ctx, w->reason);
 }
 
-JSValue
-SignalAddEventListener(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+JSValue SignalAddEventListener(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   AbortSignalWrapper* w = UnwrapAbortSignal(this_val);
   if (w == nullptr) {
@@ -143,11 +142,10 @@ SignalAddEventListener(JSContext* ctx, JSValueConst this_val, int argc, JSValueC
   if (type != "abort") {
     return JS_UNDEFINED; // only the "abort" type is modeled
   }
-  const auto duplicate = std::find_if(w->abort_listeners.begin(),
-                                      w->abort_listeners.end(),
-                                      [&](JSValue listener) {
-                                        return JS_IsStrictEqual(ctx, listener, argv[1]);
-                                      });
+  const auto duplicate =
+      std::find_if(w->abort_listeners.begin(), w->abort_listeners.end(), [&](JSValue listener) {
+        return JS_IsStrictEqual(ctx, listener, argv[1]);
+      });
   if (duplicate == w->abort_listeners.end()) {
     w->abort_listeners.push_back(JS_DupValue(ctx, argv[1]));
   }
@@ -172,11 +170,10 @@ SignalRemoveEventListener(JSContext* ctx, JSValueConst this_val, int argc, JSVal
   if (type != "abort") {
     return JS_UNDEFINED;
   }
-  const auto listener = std::find_if(w->abort_listeners.begin(),
-                                     w->abort_listeners.end(),
-                                     [&](JSValue value) {
-                                       return JS_IsStrictEqual(ctx, value, argv[1]);
-                                     });
+  const auto listener =
+      std::find_if(w->abort_listeners.begin(), w->abort_listeners.end(), [&](JSValue value) {
+        return JS_IsStrictEqual(ctx, value, argv[1]);
+      });
   if (listener != w->abort_listeners.end()) {
     JS_FreeValue(ctx, *listener);
     w->abort_listeners.erase(listener);
@@ -184,7 +181,8 @@ SignalRemoveEventListener(JSContext* ctx, JSValueConst this_val, int argc, JSVal
   return JS_UNDEFINED;
 }
 
-JSValue SignalThrowIfAborted(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+JSValue
+SignalThrowIfAborted(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
   AbortSignalWrapper* w = UnwrapAbortSignal(this_val);
   if (w == nullptr) {
@@ -202,14 +200,18 @@ JSValue SignalThrowIfAborted(JSContext* ctx, JSValueConst this_val, int /*argc*/
 
 // new AbortSignal() is an illegal constructor (DOM Standard §4.1): signals are
 // created only through AbortController or the (unimplemented) statics.
-JSValue
-AbortSignalConstructor(JSContext* ctx, JSValueConst /*new_target*/, int /*argc*/, JSValueConst* /*argv*/)
+JSValue AbortSignalConstructor(JSContext* ctx,
+                               JSValueConst /*new_target*/,
+                               int /*argc*/,
+                               JSValueConst* /*argv*/)
 {
   return JS_ThrowTypeError(ctx, "Illegal constructor");
 }
 
-JSValue
-AbortControllerConstructor(JSContext* ctx, JSValueConst /*new_target*/, int /*argc*/, JSValueConst* /*argv*/)
+JSValue AbortControllerConstructor(JSContext* ctx,
+                                   JSValueConst /*new_target*/,
+                                   int /*argc*/,
+                                   JSValueConst* /*argv*/)
 {
   Impl* impl = ImplFor(ctx, JS_UNDEFINED);
   if (impl == nullptr) {
@@ -228,8 +230,7 @@ AbortControllerConstructor(JSContext* ctx, JSValueConst /*new_target*/, int /*ar
     JS_FreeValue(ctx, signal);
     return controller;
   }
-  JS_DefinePropertyValueStr(
-      ctx, controller, "_nekoAbortSignal", signal, JS_PROP_CONFIGURABLE);
+  JS_DefinePropertyValueStr(ctx, controller, "_nekoAbortSignal", signal, JS_PROP_CONFIGURABLE);
   return controller;
 }
 
@@ -305,18 +306,16 @@ void InstallAbortGlobals(JSContext* ctx, JSValue global, Impl& impl)
       JS_CFUNC_DEF("removeEventListener", 2, SignalRemoveEventListener),
       JS_CFUNC_DEF("throwIfAborted", 0, SignalThrowIfAborted),
   }};
-  JS_SetPropertyFunctionList(ctx,
-                             impl.abort_signal_proto,
-                             kSignalMethods.data(),
-                             static_cast<int>(kSignalMethods.size()));
-  DefineGetter(ctx, impl.abort_signal_proto, "aborted", MakeGetter(ctx, "aborted", SignalGetAborted));
+  JS_SetPropertyFunctionList(
+      ctx, impl.abort_signal_proto, kSignalMethods.data(), static_cast<int>(kSignalMethods.size()));
+  DefineGetter(
+      ctx, impl.abort_signal_proto, "aborted", MakeGetter(ctx, "aborted", SignalGetAborted));
   DefineGetter(ctx, impl.abort_signal_proto, "reason", MakeGetter(ctx, "reason", SignalGetReason));
 
-  JSValue signal_ctor = JS_NewCFunction2(
-      ctx, AbortSignalConstructor, "AbortSignal", 0, JS_CFUNC_constructor, 0);
+  JSValue signal_ctor =
+      JS_NewCFunction2(ctx, AbortSignalConstructor, "AbortSignal", 0, JS_CFUNC_constructor, 0);
   JS_SetPropertyStr(ctx, signal_ctor, "prototype", JS_DupValue(ctx, impl.abort_signal_proto));
-  JS_SetPropertyStr(
-      ctx, impl.abort_signal_proto, "constructor", JS_DupValue(ctx, signal_ctor));
+  JS_SetPropertyStr(ctx, impl.abort_signal_proto, "constructor", JS_DupValue(ctx, signal_ctor));
   JS_SetPropertyStr(ctx, global, "AbortSignal", signal_ctor); // steals
 
   impl.abort_controller_proto = JS_NewObject(ctx);

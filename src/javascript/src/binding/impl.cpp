@@ -990,17 +990,18 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
                         JSValueConst /*this_val*/,
                         int /*argc*/,
                         JSValueConst* /*argv*/) -> JSValue { return JS_TRUE; };
-  JS_SetPropertyStr(ctx, navigator, "sendBeacon", JS_NewCFunction(ctx, send_beacon, "sendBeacon", 2));
+  JS_SetPropertyStr(
+      ctx, navigator, "sendBeacon", JS_NewCFunction(ctx, send_beacon, "sendBeacon", 2));
 
   // navigator.clipboard: stub object with writeText/readText returning resolved promises.
   JSValue clipboard = JS_NewObject(ctx);
   auto clipboard_write_text = [](JSContext* inner_ctx,
-                                  JSValueConst /*this_val*/,
-                                  int /*argc*/,
-                                  JSValueConst* /*argv*/) -> JSValue {
+                                 JSValueConst /*this_val*/,
+                                 int /*argc*/,
+                                 JSValueConst* /*argv*/) -> JSValue {
     JSValue resolve_fn = JS_NewCFunction(
         inner_ctx,
-        [](JSContext* c, JSValueConst /*t*/, int /*a*/, JSValueConst* /*v*/) -> JSValue {
+        [](JSContext* /*c*/, JSValueConst /*t*/, int /*a*/, JSValueConst* /*v*/) -> JSValue {
           return JS_UNDEFINED;
         },
         "",
@@ -1021,8 +1022,10 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
                      JSValueConst /*this_val*/,
                      int /*argc*/,
                      JSValueConst* /*argv*/) -> JSValue { return JS_UNDEFINED; };
-  JS_SetPropertyStr(
-      ctx, geolocation, "getCurrentPosition", JS_NewCFunction(ctx, geo_noop, "getCurrentPosition", 1));
+  JS_SetPropertyStr(ctx,
+                    geolocation,
+                    "getCurrentPosition",
+                    JS_NewCFunction(ctx, geo_noop, "getCurrentPosition", 1));
   JS_SetPropertyStr(
       ctx, geolocation, "watchPosition", JS_NewCFunction(ctx, geo_noop, "watchPosition", 1));
   JS_SetPropertyStr(
@@ -1032,9 +1035,9 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   // navigator.mediaDevices: stub returning empty enumerateDevices().
   JSValue media_devices = JS_NewObject(ctx);
   auto enumerate_devices = [](JSContext* inner_ctx,
-                               JSValueConst /*this_val*/,
-                               int /*argc*/,
-                               JSValueConst* /*argv*/) -> JSValue {
+                              JSValueConst /*this_val*/,
+                              int /*argc*/,
+                              JSValueConst* /*argv*/) -> JSValue {
     JSValue arr = JS_NewArray(inner_ctx);
     JSValue resolve_fn = JS_NewCFunction(
         inner_ctx,
@@ -1076,8 +1079,7 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
     JS_FreeValue(inner_ctx, status);
     return promise;
   };
-  JS_SetPropertyStr(
-      ctx, permissions, "query", JS_NewCFunction(ctx, permissions_query, "query", 1));
+  JS_SetPropertyStr(ctx, permissions, "query", JS_NewCFunction(ctx, permissions_query, "query", 1));
   JS_SetPropertyStr(ctx, navigator, "permissions", permissions);
 
   // navigator.connection: stub NetworkInformation object.
@@ -1208,16 +1210,14 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   JS_SetPropertyStr(ctx, window, "innerWidth", JS_NewInt32(ctx, 800));
   JS_SetPropertyStr(ctx, window, "innerHeight", JS_NewInt32(ctx, 600));
   JS_SetPropertyStr(ctx, window, "devicePixelRatio", JS_NewInt32(ctx, 1));
-  DefineGetter(ctx,
-               window,
-               "pageXOffset",
-               MakeGetterMagic(ctx, "pageXOffset", WindowScrollOffsetGetter, 0));
-  DefineGetter(ctx,
-               window,
-               "pageYOffset",
-               MakeGetterMagic(ctx, "pageYOffset", WindowScrollOffsetGetter, 1));
-  DefineGetter(ctx, window, "scrollX", MakeGetterMagic(ctx, "scrollX", WindowScrollOffsetGetter, 2));
-  DefineGetter(ctx, window, "scrollY", MakeGetterMagic(ctx, "scrollY", WindowScrollOffsetGetter, 3));
+  DefineGetter(
+      ctx, window, "pageXOffset", MakeGetterMagic(ctx, "pageXOffset", WindowScrollOffsetGetter, 0));
+  DefineGetter(
+      ctx, window, "pageYOffset", MakeGetterMagic(ctx, "pageYOffset", WindowScrollOffsetGetter, 1));
+  DefineGetter(
+      ctx, window, "scrollX", MakeGetterMagic(ctx, "scrollX", WindowScrollOffsetGetter, 2));
+  DefineGetter(
+      ctx, window, "scrollY", MakeGetterMagic(ctx, "scrollY", WindowScrollOffsetGetter, 3));
 
   // window.self/parent/top/frames: the engine has no frame tree, so each is a
   // self-reference (top-level browsing context semantics).  Because window IS
@@ -1738,7 +1738,8 @@ void CollectDescendantElements(const dom::Node& root, Pred pred, std::vector<dom
 JSValue Impl::MakeLiveCollection(dom::Node* root, LiveKind kind, const std::string& arg)
 {
   JSValue array = JS_NewArray(ctx);
-  JS_SetPrototype(ctx, array, kind == LiveKind::kChildNodes ? node_list_proto : html_collection_proto);
+  JS_SetPrototype(
+      ctx, array, kind == LiveKind::kChildNodes ? node_list_proto : html_collection_proto);
   const std::vector<dom::Node*> nodes = QueryLive(root, kind, arg);
   JS_SetPropertyStr(ctx, array, "length", JS_NewInt32(ctx, static_cast<int32_t>(nodes.size())));
   for (std::size_t i = 0; i < nodes.size(); ++i) {
@@ -1751,7 +1752,8 @@ JSValue Impl::MakeLiveCollection(dom::Node* root, LiveKind kind, const std::stri
   return array; // one owned reference for the caller
 }
 
-std::vector<dom::Node*> Impl::QueryLive(dom::Node* root, LiveKind kind, const std::string& arg) const
+std::vector<dom::Node*>
+Impl::QueryLive(dom::Node* root, LiveKind kind, const std::string& arg) const
 {
   std::vector<dom::Node*> out;
   if (root == nullptr) {
@@ -1841,9 +1843,11 @@ void Impl::RefreshLiveCollections()
     return;
   }
   for (LiveCollection& collection : live_collections) {
-    const std::vector<dom::Node*> nodes = QueryLive(collection.root, collection.kind, collection.arg);
+    const std::vector<dom::Node*> nodes =
+        QueryLive(collection.root, collection.kind, collection.arg);
     // Setting length first truncates any stale trailing indexes.
-    JS_SetPropertyStr(ctx, collection.array, "length", JS_NewInt32(ctx, static_cast<int32_t>(nodes.size())));
+    JS_SetPropertyStr(
+        ctx, collection.array, "length", JS_NewInt32(ctx, static_cast<int32_t>(nodes.size())));
     for (std::size_t i = 0; i < nodes.size(); ++i) {
       JS_SetPropertyUint32(ctx, collection.array, static_cast<uint32_t>(i), WrapNode(nodes[i]));
     }
