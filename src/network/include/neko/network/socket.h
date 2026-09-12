@@ -35,7 +35,21 @@ public:
   // closed or the timeout elapsed mid-read.  I/O errors are returned as Err.
   // The HTTP layer uses this to read exactly as many body bytes as the
   // response framing requires instead of waiting for a clean close.
+  //
+  // Use ReceiveWithOutcome when the caller must tell "timeout" apart from
+  // "peer closed" (polling protocols such as WebSocket).
   base::Result<std::string> Receive(std::size_t max_bytes, int timeout_ms = 10000);
+
+  // The outcome of a receive attempt, distinguishing a deadline from EOF.
+  struct ReceiveOutcome
+  {
+    std::string data;       // bytes received (possibly empty)
+    bool timed_out = false; // deadline elapsed with no new byte available
+  };
+  // Like Receive, but reports whether the empty/short result came from the
+  // timeout rather than the peer closing.  EOF and I/O errors keep
+  // timed_out = false.
+  base::Result<ReceiveOutcome> ReceiveWithOutcome(std::size_t max_bytes, int timeout_ms = 10000);
   // Reads until EOF or timeout, returning everything received.
   base::Result<std::string> ReceiveAll(int timeout_ms = 10000);
 

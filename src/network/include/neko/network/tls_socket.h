@@ -58,7 +58,18 @@ public:
   // completeness of the HTTP message is validated by the HTTP layer (via
   // Content-Length / the chunked terminator), which keeps a truncated-stream
   // attack from being accepted silently.
+  //
+  // Use ReceiveWithOutcome when the caller must tell "timeout" apart from
+  // "peer closed" (polling protocols such as WebSocket).
   base::Result<std::string> Receive(std::size_t max_bytes, int timeout_ms = 10000);
+
+  // The outcome of a receive attempt, distinguishing a deadline from EOF.
+  struct ReceiveOutcome
+  {
+    std::string data;       // bytes received (possibly empty)
+    bool timed_out = false; // deadline elapsed with no new byte available
+  };
+  base::Result<ReceiveOutcome> ReceiveWithOutcome(std::size_t max_bytes, int timeout_ms = 10000);
   // Reads until a clean TLS close, EOF or |timeout_ms|, returning everything
   // received so far.
   base::Result<std::string> ReceiveAll(int timeout_ms = 10000);

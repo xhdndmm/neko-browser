@@ -14,6 +14,7 @@ add_library(neko_network
   src/compression.cpp
   src/tls_socket.cpp
   src/http.cpp
+  src/websocket.cpp
 )
 add_library(neko::network ALIAS neko_network)
 

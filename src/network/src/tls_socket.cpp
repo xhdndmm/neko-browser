@@ -294,6 +294,64 @@ base::Result<std::string> TlsSocket::Receive(std::size_t max_bytes, int timeout_
   return out;
 }
 
+base::Result<TlsSocket::ReceiveOutcome> TlsSocket::ReceiveWithOutcome(std::size_t max_bytes,
+                                                                      int timeout_ms)
+{
+  if (impl_->ssl == nullptr) {
+    return base::Err(base::Error::Network("TLS: not connected"));
+  }
+  ReceiveOutcome outcome;
+  char buffer[16384];
+  while (outcome.data.size() < max_bytes) {
+    // Hand back any data that is already buffered inside the TLS layer
+    // before waiting on the socket.
+    if (SSL_pending(impl_->ssl.get()) <= 0) {
+#ifdef _WIN32
+      fd_set readfds;
+      FD_ZERO(&readfds);
+      FD_SET(impl_->tcp.fd(), &readfds);
+      timeval tv = {};
+      tv.tv_sec = timeout_ms / 1000;
+      tv.tv_usec = (timeout_ms % 1000) * 1000;
+      const int pr = ::select(impl_->tcp.fd() + 1, &readfds, nullptr, nullptr, &tv);
+#else
+      struct pollfd pfd = {impl_->tcp.fd(), static_cast<short>(POLLIN), 0};
+      const int pr = ::poll(&pfd, 1, timeout_ms);
+#endif
+      if (pr == 0) {
+        outcome.timed_out = true;
+        return outcome;
+      }
+      if (pr < 0) {
+        if (errno == EINTR) {
+          continue;
+        }
+        return base::Err(base::Error::Network("TLS poll failed"));
+      }
+    }
+    const std::size_t want = std::min<std::size_t>(max_bytes - outcome.data.size(), sizeof(buffer));
+    const int n = SSL_read(impl_->ssl.get(), buffer, static_cast<int>(want));
+    if (n > 0) {
+      outcome.data.append(buffer, static_cast<std::size_t>(n));
+      continue;
+    }
+    const int err = SSL_get_error(impl_->ssl.get(), n);
+    if (err == SSL_ERROR_ZERO_RETURN) {
+      return outcome; // clean close_notify: EOF
+    }
+    if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+      continue;
+    }
+    if (err == SSL_ERROR_SSL || (err == SSL_ERROR_SYSCALL && n == 0)) {
+      // Abrupt TCP close without close_notify: treat as EOF, same as
+      // Receive (see its comment for the framing-validation argument).
+      return outcome;
+    }
+    return base::Err(base::Error::Network("TLS read failed: " + SslErrorString()));
+  }
+  return outcome;
+}
+
 base::Result<std::string> TlsSocket::ReceiveAll(int timeout_ms)
 {
   if (impl_->ssl == nullptr) {

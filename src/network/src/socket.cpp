@@ -216,6 +216,46 @@ base::Result<std::string> Socket::Receive(std::size_t max_bytes, int timeout_ms)
 #endif
 }
 
+base::Result<Socket::ReceiveOutcome> Socket::ReceiveWithOutcome(std::size_t max_bytes,
+                                                                int timeout_ms)
+{
+#ifdef _WIN32
+  (void)max_bytes;
+  (void)timeout_ms;
+  return base::Err(base::Error::NotImplemented("Windows sockets are not implemented yet"));
+#else
+  ReceiveOutcome outcome;
+  char buffer[16384];
+  while (outcome.data.size() < max_bytes) {
+    struct pollfd pfd = {fd_, static_cast<short>(POLLIN), 0};
+    const int pr = ::poll(&pfd, 1, timeout_ms);
+    if (pr == 0) {
+      outcome.timed_out = true;
+      return outcome;
+    }
+    if (pr < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return base::Err(base::Error::Network("poll failed"));
+    }
+    const std::size_t want = std::min<std::size_t>(max_bytes - outcome.data.size(), sizeof(buffer));
+    const ssize_t n = ::recv(fd_, buffer, want, 0);
+    if (n == 0) {
+      return outcome; // EOF (timed_out stays false)
+    }
+    if (n < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return base::Err(base::Error::Network("recv failed"));
+    }
+    outcome.data.append(buffer, static_cast<std::size_t>(n));
+  }
+  return outcome;
+#endif
+}
+
 base::Result<std::string> Socket::ReceiveAll(int timeout_ms)
 {
 #ifdef _WIN32
