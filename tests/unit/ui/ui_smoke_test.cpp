@@ -615,8 +615,7 @@ TEST(UiSmokeTest, TextInputPreservesPrintableUnicodeCharacters)
       return false;
     }
     auto* current_input = neko::dom::QuerySelector(*current.page->document(), "#q");
-    return current_input != nullptr &&
-          current_input->GetAttribute("value").value_or("") == "x@中";
+    return current_input != nullptr && current_input->GetAttribute("value").value_or("") == "x@中";
   }));
 }
 
@@ -883,8 +882,20 @@ TEST(UiSmokeTest, HoverOverElementFiresPageMouseOver)
   ASSERT_NE(view, nullptr);
   view->Refresh();
 
-  // Move over the box (top-left of the page) -> page onmouseover.
-  QTest::mouseMove(view->viewport(), QPoint(static_cast<int>(50), static_cast<int>(10)));
+  // Move over the box (top-left of the page) -> page onmouseover.  The event
+  // is sent directly because QTest::mouseMove goes through the platform
+  // integration, which the offscreen plugin may coalesce when the global
+  // cursor position is unchanged.
+  {
+    const QPointF local(50, 10);
+    QMouseEvent move(QEvent::MouseMove,
+                     local,
+                     view->viewport()->mapToGlobal(local),
+                     Qt::NoButton,
+                     Qt::NoButton,
+                     Qt::NoModifier);
+    QApplication::sendEvent(view->viewport(), &move);
+  }
   ASSERT_TRUE(WaitFor([&] {
     const auto snap = worker.SnapshotActiveTab();
     if (snap.page == nullptr || snap.page->document() == nullptr) {
@@ -973,6 +984,10 @@ TEST(UiSmokeTest, HoverLinkShowsPointingHand)
   }));
   auto* view = window.findChild<neko::ui::WebView*>();
   ASSERT_NE(view, nullptr);
+  // Sync the view's copy of the snapshot: HandleHover hit-tests against it and
+  // bails out while it is still empty (the periodic refresh is not guaranteed
+  // to have run yet).
+  view->Refresh();
 
   const auto snap = worker.SnapshotActiveTab();
   neko::dom::Element* link = neko::dom::QuerySelector(*snap.page->document(), "#lk");
@@ -981,13 +996,27 @@ TEST(UiSmokeTest, HoverLinkShowsPointingHand)
   float y = 0;
   ASSERT_TRUE(FindElementRunPoint(*snap.page->layout_root(), link, x, y));
 
-  // Hovering the hyperlink switches the pointer to a pointing hand.
-  QTest::mouseMove(view->viewport(), QPoint(static_cast<int>(x), static_cast<int>(y)));
-  EXPECT_EQ(view->viewport()->cursor().shape(), Qt::PointingHandCursor);
+  // Hovering the hyperlink switches the pointer to a pointing hand.  The event
+  // is sent directly (QTest::mouseMove goes through the platform integration,
+  // which the offscreen plugin may coalesce when the global cursor position is
+  // unchanged, making the assertion racy).
+  auto send_move = [&](int px, int py) {
+    const QPointF local(px, py);
+    QMouseEvent move(QEvent::MouseMove,
+                     local,
+                     view->viewport()->mapToGlobal(local),
+                     Qt::NoButton,
+                     Qt::NoButton,
+                     Qt::NoModifier);
+    QApplication::sendEvent(view->viewport(), &move);
+  };
+  send_move(static_cast<int>(x), static_cast<int>(y));
+  EXPECT_TRUE(
+      WaitFor([&] { return view->viewport()->cursor().shape() == Qt::PointingHandCursor; }));
 
   // Hovering elsewhere restores the arrow.
-  QTest::mouseMove(view->viewport(), QPoint(static_cast<int>(500), static_cast<int>(400)));
-  EXPECT_EQ(view->viewport()->cursor().shape(), Qt::ArrowCursor);
+  send_move(500, 400);
+  EXPECT_TRUE(WaitFor([&] { return view->viewport()->cursor().shape() == Qt::ArrowCursor; }));
 }
 
 // A page script calling window.scrollTo drives the GUI's scroll bar: the
@@ -997,11 +1026,10 @@ TEST(UiSmokeTest, ScriptScrollMovesViewportScrollBar)
 {
   TempProfile tp;
   const std::string html_file = tp.path() + "/scroll.html";
-  ASSERT_TRUE(neko::storage::WriteFileAtomic(
-                  html_file,
-                  "<html><body style=\"height:3000px\">"
-                  "<script>window.scrollTo(0, 150);</script>"
-                  "<p>tall content</p></body></html>")
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(html_file,
+                                             "<html><body style=\"height:3000px\">"
+                                             "<script>window.scrollTo(0, 150);</script>"
+                                             "<p>tall content</p></body></html>")
                   .has_value());
 
   neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
