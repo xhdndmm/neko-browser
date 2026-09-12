@@ -88,6 +88,15 @@ struct PageApis
       const std::string& body)>
       xhr_request;
 
+  // WebSocket: create a WebSocket connection to |url| with optional |protocols|.
+  // Returns a handle (positive int) on success or 0 on failure. The browser
+  // layer manages the connection lifecycle and delivers events via callbacks.
+  std::function<int(const std::string& url, const std::vector<std::string>& protocols)>
+      websocket_create;
+  std::function<void(int handle, const std::string& data)> websocket_send_text;
+  std::function<void(int handle, const std::vector<uint8_t>& data)> websocket_send_binary;
+  std::function<void(int handle, uint16_t code, const std::string& reason)> websocket_close;
+
   // document.cookie for the current document. The setter receives one
   // Set-Cookie-style assignment and returns no value.
   std::function<std::string()> cookie_get;

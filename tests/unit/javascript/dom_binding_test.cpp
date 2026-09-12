@@ -19,6 +19,14 @@
 #include <unistd.h>
 #include <vector>
 
+#ifndef _WIN32
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <openssl/evp.h>
+#include <openssl/sha.h>
+#include <sys/socket.h>
+#endif
+
 namespace neko::javascript {
 namespace {
 
@@ -105,8 +113,9 @@ TEST_F(DomBinderTest, GlobalDocumentAndWindow)
 
 TEST_F(DomBinderTest, LiveCollectionsRefreshAfterMutation)
 {
-  document_ = html::Parser(R"(<!doctype html><html><body><div id="a"><span>x</span></div></body></html>)")
-                  .Parse();
+  document_ =
+      html::Parser(R"(<!doctype html><html><body><div id="a"><span>x</span></div></body></html>)")
+          .Parse();
   PageApis apis;
   apis.location_href = []() { return "https://www.example.com/"; };
   binder_ = std::make_unique<DomBinder>(*document_, apis);
@@ -115,7 +124,8 @@ TEST_F(DomBinderTest, LiveCollectionsRefreshAfterMutation)
   });
 
   // children is a live HTMLCollection: the held reference tracks mutations.
-  EXPECT_EQ(EvalNumber("var el = document.getElementById('a'); var c = el.children; c.length"), 1.0);
+  EXPECT_EQ(EvalNumber("var el = document.getElementById('a'); var c = el.children; c.length"),
+            1.0);
   EXPECT_EQ(EvalNumber("el.appendChild(document.createElement('b')); c.length"), 2.0);
   // Wrapper identity is preserved across refreshes: the same live node renders
   // the same JS object no matter how many times it is re-collected.
@@ -186,19 +196,18 @@ TEST_F(DomBinderTest, MatchMediaRegistersListeners)
   // matchMedia exposes a live listener API rather than the old no-op stubs:
   // addEventListener/removeEventListener and the legacy addListener route
   // register against the binder (the callback is retained, not dropped).
-  EXPECT_TRUE(EvalBool(
-      "(function(){ var m = window.matchMedia('(min-width: 1px)'); "
-      "if (!m.matches) return false; "
-      "if (m.media !== '(min-width: 1px)') return false; "
-      "var calls = 0; "
-      "m.addEventListener('change', function(){ calls++; }); "
-      "m.removeEventListener('change', function(){ calls++; }); "
-      "m.addListener(function(){ calls++; }); "
-      "m.removeListener(function(){ calls++; }); "
-      "return typeof m.addEventListener === 'function' && "
-      "typeof m.removeEventListener === 'function' && "
-      "typeof m.addListener === 'function' && "
-      "typeof m.removeListener === 'function'; })()"));
+  EXPECT_TRUE(EvalBool("(function(){ var m = window.matchMedia('(min-width: 1px)'); "
+                       "if (!m.matches) return false; "
+                       "if (m.media !== '(min-width: 1px)') return false; "
+                       "var calls = 0; "
+                       "m.addEventListener('change', function(){ calls++; }); "
+                       "m.removeEventListener('change', function(){ calls++; }); "
+                       "m.addListener(function(){ calls++; }); "
+                       "m.removeListener(function(){ calls++; }); "
+                       "return typeof m.addEventListener === 'function' && "
+                       "typeof m.removeEventListener === 'function' && "
+                       "typeof m.addListener === 'function' && "
+                       "typeof m.removeListener === 'function'; })()"));
 }
 
 TEST_F(DomBinderTest, HistoryPushStateUpdatesLocation)
@@ -305,18 +314,18 @@ TEST_F(DomBinderTest, FragmentAppendKeepsFragmentAlive)
   // hold it and it may be the root of a live childNodes/children collection.
   // Freeing it (as the DOM's AppendChild does to a fragment) would leave those
   // dangling and crash on the next live-collection refresh.
-  EXPECT_TRUE(EvalBool(
-      "(function(){"
-      "  var frag = document.createDocumentFragment();"
-      "  var span = document.createElement('span');"
-      "  frag.appendChild(span);"
-      "  var n = frag.childNodes;" // live collection rooted at the fragment
-      "  document.body.appendChild(frag);" // consumes the span, moves it to body
-      "  var p = document.createElement('p');"
-      "  document.body.appendChild(p);" // any mutation refreshes all live collections
-      "  return n.length === 0 && frag.childNodes.length === 0 &&"
-      "         frag.firstChild === null && span.parentNode === document.body;"
-      "})()"));
+  EXPECT_TRUE(
+      EvalBool("(function(){"
+               "  var frag = document.createDocumentFragment();"
+               "  var span = document.createElement('span');"
+               "  frag.appendChild(span);"
+               "  var n = frag.childNodes;"         // live collection rooted at the fragment
+               "  document.body.appendChild(frag);" // consumes the span, moves it to body
+               "  var p = document.createElement('p');"
+               "  document.body.appendChild(p);" // any mutation refreshes all live collections
+               "  return n.length === 0 && frag.childNodes.length === 0 &&"
+               "         frag.firstChild === null && span.parentNode === document.body;"
+               "})()"));
 }
 
 TEST_F(DomBinderTest, FragmentInsertBeforeAndReplaceKeepsFragmentAlive)
@@ -329,17 +338,16 @@ TEST_F(DomBinderTest, FragmentInsertBeforeAndReplaceKeepsFragmentAlive)
     console_.push_back(std::string(level) + ": " + std::string(text));
   });
 
-  EXPECT_TRUE(EvalBool(
-      "(function(){"
-      "  var body = document.body;"
-      "  body.appendChild(document.createElement('b'));"
-      "  var frag = document.createDocumentFragment();"
-      "  frag.appendChild(document.createElement('i'));"
-      "  var n = frag.childNodes;"
-      "  body.insertBefore(frag, body.firstChild);"
-      "  body.replaceChild(frag, body.firstChild);" // frag is empty here
-      "  return n.length === 0 && frag.firstChild === null;"
-      "})()"));
+  EXPECT_TRUE(EvalBool("(function(){"
+                       "  var body = document.body;"
+                       "  body.appendChild(document.createElement('b'));"
+                       "  var frag = document.createDocumentFragment();"
+                       "  frag.appendChild(document.createElement('i'));"
+                       "  var n = frag.childNodes;"
+                       "  body.insertBefore(frag, body.firstChild);"
+                       "  body.replaceChild(frag, body.firstChild);" // frag is empty here
+                       "  return n.length === 0 && frag.firstChild === null;"
+                       "})()"));
 }
 
 TEST_F(DomBinderTest, BlobAndObjectUrl)
@@ -1985,9 +1993,19 @@ TEST_F(DomBinderTest, NavigatorGlobal)
   EXPECT_TRUE(EvalBool("navigator.onLine === true"));
   EXPECT_TRUE(EvalBool("navigator.cookieEnabled === true"));
   EXPECT_TRUE(EvalNumber("navigator.hardwareConcurrency") >= 1.0);
-  // Missing features are absent, so "x" in navigator is honestly false.
-  EXPECT_FALSE(EvalBool("'geolocation' in navigator"));
-  EXPECT_FALSE(EvalBool("'clipboard' in navigator"));
+  // Web APIs pages feature-detect: these exist as documented stubs (see the
+  // compatibility matrix), so feature detection takes the supported branch.
+  EXPECT_TRUE(EvalBool("'geolocation' in navigator"));
+  EXPECT_TRUE(EvalBool("typeof navigator.geolocation.getCurrentPosition === 'function'"));
+  EXPECT_TRUE(EvalBool("typeof navigator.geolocation.watchPosition === 'function'"));
+  EXPECT_TRUE(EvalBool("typeof navigator.geolocation.clearWatch === 'function'"));
+  EXPECT_TRUE(EvalBool("'clipboard' in navigator"));
+  EXPECT_TRUE(EvalBool("typeof navigator.clipboard.writeText === 'function'"));
+  EXPECT_TRUE(EvalBool("typeof navigator.clipboard.readText === 'function'"));
+  EXPECT_TRUE(EvalBool("typeof navigator.sendBeacon === 'function'"));
+  EXPECT_TRUE(EvalBool("typeof navigator.permissions.query === 'function'"));
+  EXPECT_TRUE(EvalBool("typeof navigator.mediaDevices.enumerateDevices === 'function'"));
+  EXPECT_EQ(EvalString("navigator.connection.effectiveType"), "4g");
 }
 
 TEST_F(DomBinderTest, IntlDateTimeFormatExposesResolvedOptions)
@@ -3180,6 +3198,380 @@ TEST(DomBinderXhrTest, XhrReflectsResponseType)
 }
 
 // ---------------------------------------------------------------------------
+// WebSocket (RFC 6455) binding.
+//
+// The transport is real network I/O on a background thread, so the test runs a
+// local echo server and drives the page pump (RunPendingTimers) until the
+// script's handlers have run.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+#ifndef _WIN32
+
+// Serves one WebSocket connection: completes the handshake, echoes every text
+// message once, then stays open for the client to close.
+class WsEchoServer
+{
+public:
+  WsEchoServer()
+  {
+    listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (listen_fd_ < 0) {
+      return;
+    }
+    int yes = 1;
+    ::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+    if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 ||
+        ::listen(listen_fd_, 4) != 0) {
+      ::close(listen_fd_);
+      listen_fd_ = -1;
+      return;
+    }
+    socklen_t len = sizeof(addr);
+    ::getsockname(listen_fd_, reinterpret_cast<sockaddr*>(&addr), &len);
+    port_ = ntohs(addr.sin_port);
+    thread_ = std::thread([this] { Run(); });
+  }
+
+  ~WsEchoServer()
+  {
+    ::shutdown(listen_fd_, SHUT_RDWR);
+    ::close(listen_fd_);
+    if (thread_.joinable()) {
+      thread_.join();
+    }
+  }
+
+  bool valid() const
+  {
+    return listen_fd_ >= 0;
+  }
+  uint16_t port() const
+  {
+    return port_;
+  }
+
+private:
+  static std::string AcceptKey(std::string_view key)
+  {
+    const std::string concatenated = std::string(key) + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    unsigned char hash[SHA_DIGEST_LENGTH] = {};
+    SHA1(reinterpret_cast<const unsigned char*>(concatenated.data()), concatenated.size(), hash);
+    std::string out;
+    out.resize(4 * ((SHA_DIGEST_LENGTH + 2) / 3));
+    const int len =
+        EVP_EncodeBlock(reinterpret_cast<unsigned char*>(out.data()), hash, SHA_DIGEST_LENGTH);
+    out.resize(static_cast<std::size_t>(len));
+    return out;
+  }
+
+  static bool Receive(int fd, std::size_t want, std::string* buffer)
+  {
+    while (buffer->size() < want) {
+      char chunk[4096];
+      const ssize_t n = ::recv(fd, chunk, sizeof(chunk), 0);
+      if (n <= 0) {
+        return false;
+      }
+      buffer->append(chunk, static_cast<std::size_t>(n));
+    }
+    return true;
+  }
+
+  void Run()
+  {
+    const int fd = ::accept(listen_fd_, nullptr, nullptr);
+    if (fd < 0) {
+      return;
+    }
+    std::string buffer;
+    if (!Receive(fd, 4, &buffer)) {
+      ::close(fd);
+      return;
+    }
+    while (buffer.find("\r\n\r\n") == std::string::npos) {
+      if (!Receive(fd, buffer.size() + 1, &buffer)) {
+        ::close(fd);
+        return;
+      }
+    }
+
+    std::string lower = buffer;
+    for (char& c : lower) {
+      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    const auto key_pos = lower.find("sec-websocket-key:");
+    if (key_pos == std::string::npos) {
+      ::close(fd);
+      return;
+    }
+    auto key_start = key_pos + std::string("sec-websocket-key:").size();
+    while (key_start < buffer.size() && (buffer[key_start] == ' ' || buffer[key_start] == '\t')) {
+      ++key_start;
+    }
+    const auto key_end = buffer.find("\r\n", key_start);
+    const std::string key = buffer.substr(key_start, key_end - key_start);
+
+    const std::string response = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+                                 "Connection: Upgrade\r\nSec-WebSocket-Accept: " +
+                                 AcceptKey(key) + "\r\n\r\n";
+    ::send(fd, response.data(), response.size(), 0);
+
+    // Echo loop: decode masked client frames, reply unmasked.
+    buffer.clear();
+    while (true) {
+      if (!Receive(fd, buffer.size() + 2, &buffer)) {
+        break;
+      }
+      const auto byte0 = static_cast<uint8_t>(buffer[0]);
+      const auto byte1 = static_cast<uint8_t>(buffer[1]);
+      const uint8_t opcode = byte0 & 0x0F;
+      const bool masked = (byte1 & 0x80) != 0;
+      std::size_t payload_len = byte1 & 0x7F;
+      std::size_t header_len = 2;
+      if (payload_len == 126) {
+        if (!Receive(fd, 4, &buffer)) {
+          break;
+        }
+        payload_len = (static_cast<std::size_t>(static_cast<uint8_t>(buffer[2])) << 8) |
+                      static_cast<std::size_t>(static_cast<uint8_t>(buffer[3]));
+        header_len = 4;
+      }
+      const std::size_t mask_len = masked ? 4 : 0;
+      if (!Receive(fd, header_len + mask_len + payload_len, &buffer)) {
+        break;
+      }
+      std::string payload = buffer.substr(header_len + mask_len, payload_len);
+      if (masked) {
+        for (std::size_t i = 0; i < payload.size(); ++i) {
+          payload[i] = static_cast<char>(static_cast<uint8_t>(payload[i]) ^
+                                         static_cast<uint8_t>(buffer[header_len + (i % 4)]));
+        }
+      }
+      buffer.erase(0, header_len + mask_len + payload_len);
+
+      if (opcode == 0x8) { // close: echo the code and finish
+        std::string close_frame;
+        close_frame.push_back(static_cast<char>(0x88));
+        close_frame.push_back(static_cast<char>(payload.size() >= 2 ? 2 : 0));
+        close_frame.append(payload.substr(0, 2));
+        ::send(fd, close_frame.data(), close_frame.size(), 0);
+        break;
+      }
+      if (opcode == 0x1 || opcode == 0x2) {
+        std::string frame;
+        frame.push_back(static_cast<char>(0x80u | opcode));
+        if (payload.size() <= 125) {
+          frame.push_back(static_cast<char>(payload.size()));
+        } else {
+          frame.push_back(static_cast<char>(126));
+          frame.push_back(static_cast<char>((payload.size() >> 8) & 0xFF));
+          frame.push_back(static_cast<char>(payload.size() & 0xFF));
+        }
+        frame.append(payload);
+        ::send(fd, frame.data(), frame.size(), 0);
+      }
+    }
+    ::close(fd);
+  }
+
+  int listen_fd_ = -1;
+  uint16_t port_ = 0;
+  std::thread thread_;
+};
+
+// Drives the binder's pump until |predicate| (evaluated in the page) is true.
+bool PumpUntil(DomBinder& binder, const std::string& expression, int timeout_ms = 5000)
+{
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  while (std::chrono::steady_clock::now() < deadline) {
+    binder.RunPendingTimers();
+    auto value = binder.Evaluate(expression);
+    if (value.has_value() && value.value().ToBoolean().value_or(false)) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return false;
+}
+
+#endif // !_WIN32
+
+} // namespace
+
+#ifndef _WIN32
+
+TEST(DomBinderWebSocketTest, EchoRoundTripDeliversOpenMessageAndClose)
+{
+  WsEchoServer server;
+  ASSERT_TRUE(server.valid());
+
+  dom::Document doc;
+  PageApis apis;
+  DomBinder binder(doc, apis);
+  binder.SetConsoleSink([](std::string_view, std::string_view) {});
+
+  const std::string url = "ws://127.0.0.1:" + std::to_string(server.port()) + "/echo";
+  const auto run = binder.Evaluate(
+      "globalThis.log = '';"
+      "globalThis.ws = new WebSocket('" +
+      url + "');" +
+      "globalThis.ws.onopen = function() { globalThis.log += 'open;';"
+      "  globalThis.ws.send('ping'); };"
+      "globalThis.ws.onmessage = function(e) { globalThis.log += 'msg:' + e.data + ';'; "
+      "  globalThis.ws.close(); };"
+      "globalThis.ws.onclose = function(e) { globalThis.log += 'close:' + e.code; };");
+  ASSERT_TRUE(run.has_value()) << run.error().message();
+
+  ASSERT_TRUE(PumpUntil(binder, "globalThis.log.indexOf('open;') >= 0"));
+  ASSERT_TRUE(PumpUntil(binder, "globalThis.log.indexOf('msg:ping') >= 0"));
+  ASSERT_TRUE(PumpUntil(binder, "globalThis.log.indexOf('close:') >= 0"));
+
+  auto log = binder.Evaluate("globalThis.log");
+  ASSERT_TRUE(log.has_value());
+  const auto text = log.value().ToString();
+  ASSERT_TRUE(text.has_value());
+  EXPECT_NE(text.value().find("open;"), std::string::npos);
+  EXPECT_NE(text.value().find("msg:ping;"), std::string::npos);
+}
+
+TEST(DomBinderWebSocketTest, ReadyStateTransitions)
+{
+  WsEchoServer server;
+  ASSERT_TRUE(server.valid());
+
+  dom::Document doc;
+  PageApis apis;
+  DomBinder binder(doc, apis);
+  binder.SetConsoleSink([](std::string_view, std::string_view) {});
+
+  const std::string url = "ws://127.0.0.1:" + std::to_string(server.port()) + "/state";
+  const auto run = binder.Evaluate(
+      "globalThis.states = [];"
+      "globalThis.ws = new WebSocket('" +
+      url + "');" +
+      "globalThis.states.push(globalThis.ws.readyState);"
+      "globalThis.ws.onopen = function() { globalThis.states.push(globalThis.ws.readyState); };");
+  ASSERT_TRUE(run.has_value()) << run.error().message();
+
+  ASSERT_TRUE(PumpUntil(binder, "globalThis.states.length >= 2"));
+  auto states = binder.Evaluate("globalThis.states.join(',')");
+  ASSERT_TRUE(states.has_value());
+  // CONNECTING (0) at construction, OPEN (1) once the handshake completes.
+  EXPECT_EQ(states.value().ToString().value(), "0,1");
+}
+
+TEST(DomBinderWebSocketTest, AddEventListenerReceivesMessage)
+{
+  WsEchoServer server;
+  ASSERT_TRUE(server.valid());
+
+  dom::Document doc;
+  PageApis apis;
+  DomBinder binder(doc, apis);
+  binder.SetConsoleSink([](std::string_view, std::string_view) {});
+
+  const std::string url = "ws://127.0.0.1:" + std::to_string(server.port()) + "/listen";
+  const auto run = binder.Evaluate(
+      "globalThis.got = '';"
+      "globalThis.ws = new WebSocket('" +
+      url + "');" +
+      "globalThis.ws.addEventListener('message', function(e) { globalThis.got = e.data; });"
+      "globalThis.ws.addEventListener('open', function() { globalThis.ws.send('via-listener'); "
+      "});");
+  ASSERT_TRUE(run.has_value()) << run.error().message();
+
+  ASSERT_TRUE(PumpUntil(binder, "globalThis.got === 'via-listener'"));
+}
+
+TEST(DomBinderWebSocketTest, ConnectionFailureFiresErrorAndClose)
+{
+  // Nothing listens on this port: the handshake must fail asynchronously with
+  // error + close(1006), not throw from the constructor.
+  dom::Document doc;
+  PageApis apis;
+  DomBinder binder(doc, apis);
+  binder.SetConsoleSink([](std::string_view, std::string_view) {});
+
+  // Pick a port that is almost certainly closed (above the ephemeral range is
+  // not safe either; use a just-closed listener's port via port 1 on loopback).
+  const auto run = binder.Evaluate(
+      "globalThis.out = '';"
+      "globalThis.ws = new WebSocket('ws://127.0.0.1:1/nope');"
+      "globalThis.ws.onerror = function() { globalThis.out += 'error;'; };"
+      "globalThis.ws.onclose = function(e) { globalThis.out += 'close:' + e.code; };");
+  ASSERT_TRUE(run.has_value()) << run.error().message();
+  EXPECT_EQ(binder.Evaluate("globalThis.ws.readyState").value().ToNumber().value_or(-1), 0.0);
+
+  ASSERT_TRUE(PumpUntil(binder, "globalThis.out.indexOf('close:') >= 0", 10000));
+  auto out = binder.Evaluate("globalThis.out");
+  ASSERT_TRUE(out.has_value());
+  const auto text = out.value().ToString();
+  ASSERT_TRUE(text.has_value());
+  EXPECT_NE(text.value().find("error;"), std::string::npos);
+  EXPECT_NE(text.value().find("close:1006"), std::string::npos);
+  EXPECT_EQ(binder.Evaluate("globalThis.ws.readyState").value().ToNumber().value_or(-1), 3.0);
+}
+
+TEST(DomBinderWebSocketTest, SendBeforeOpenIsQueuedUntilOpen)
+{
+  WsEchoServer server;
+  ASSERT_TRUE(server.valid());
+
+  dom::Document doc;
+  PageApis apis;
+  DomBinder binder(doc, apis);
+  binder.SetConsoleSink([](std::string_view, std::string_view) {});
+
+  const std::string url = "ws://127.0.0.1:" + std::to_string(server.port()) + "/queue";
+  // CONNECTING: send() throws InvalidStateError per WHATWG (HTML §9.3).
+  const auto run = binder.Evaluate(
+      "globalThis.got = '';"
+      "globalThis.ws = new WebSocket('" +
+      url + "');" +
+      "globalThis.ws.onmessage = function(e) { globalThis.got = e.data; };"
+      "globalThis.threw = false;"
+      "try { globalThis.ws.send('early'); } catch (err) { globalThis.threw = err.name; }");
+  ASSERT_TRUE(run.has_value()) << run.error().message();
+
+  auto threw = binder.Evaluate("globalThis.threw");
+  ASSERT_TRUE(threw.has_value());
+  EXPECT_EQ(threw.value().ToString().value(), "InvalidStateError");
+
+  // Once open, a send round-trips.
+  ASSERT_TRUE(PumpUntil(binder, "globalThis.ws.readyState === 1"));
+  const auto send_run = binder.Evaluate("globalThis.ws.send('after-open');");
+  ASSERT_TRUE(send_run.has_value()) << send_run.error().message();
+  ASSERT_TRUE(PumpUntil(binder, "globalThis.got === 'after-open'"));
+}
+
+TEST(DomBinderWebSocketTest, InvalidUrlFiresErrorClose)
+{
+  dom::Document doc;
+  PageApis apis;
+  DomBinder binder(doc, apis);
+  binder.SetConsoleSink([](std::string_view, std::string_view) {});
+
+  const auto run = binder.Evaluate(
+      "globalThis.out = '';"
+      "globalThis.ws = new WebSocket('ftp://example.com/socket');"
+      "globalThis.ws.onerror = function() { globalThis.out += 'error;'; };"
+      "globalThis.ws.onclose = function(e) { globalThis.out += 'close:' + e.code; };");
+  ASSERT_TRUE(run.has_value()) << run.error().message();
+  ASSERT_TRUE(PumpUntil(binder, "globalThis.out.indexOf('close:') >= 0"));
+  auto out = binder.Evaluate("globalThis.out");
+  ASSERT_TRUE(out.has_value());
+  EXPECT_NE(out.value().ToString().value().find("close:1006"), std::string::npos);
+}
+
+#endif // !_WIN32
+
+// ---------------------------------------------------------------------------
 // AbortController / AbortSignal (DOM Standard §4.1 subset).  Sites use the
 // controller to time out fetch() calls (acxun.github.io's daily-quote fetch);
 // a missing global kills the whole inline script at the first reference.
@@ -3196,11 +3588,11 @@ TEST_F(DomBinderTest, AbortControllerConstructsSignal)
 
 TEST_F(DomBinderTest, AbortFiresAbortEventOnce)
 {
-  EXPECT_TRUE(EvalBool(
-      "(function(){ var c = new AbortController(); var calls = 0; var type = ''; "
-      "c.signal.addEventListener('abort', function(e){ calls++; type = e.type; }); "
-      "c.abort(); c.abort(); "
-      "return calls === 1 && type === 'abort' && c.signal.aborted === true; })()"));
+  EXPECT_TRUE(
+      EvalBool("(function(){ var c = new AbortController(); var calls = 0; var type = ''; "
+               "c.signal.addEventListener('abort', function(e){ calls++; type = e.type; }); "
+               "c.abort(); c.abort(); "
+               "return calls === 1 && type === 'abort' && c.signal.aborted === true; })()"));
 }
 
 TEST_F(DomBinderTest, AbortReasonDefaultsAndCustom)
@@ -3215,13 +3607,12 @@ TEST_F(DomBinderTest, AbortReasonDefaultsAndCustom)
 
 TEST_F(DomBinderTest, ThrowIfAbortedThrowsOnlyAfterAbort)
 {
-  EXPECT_TRUE(EvalBool(
-      "(function(){ var c = new AbortController(); var name = 'no-throw'; "
-      "try { c.signal.throwIfAborted(); } catch(e) { name = e.name; } "
-      "if (name !== 'no-throw') { return false; } "
-      "c.abort(); "
-      "try { c.signal.throwIfAborted(); } catch(e) { name = e.name; } "
-      "return name === 'AbortError'; })()"));
+  EXPECT_TRUE(EvalBool("(function(){ var c = new AbortController(); var name = 'no-throw'; "
+                       "try { c.signal.throwIfAborted(); } catch(e) { name = e.name; } "
+                       "if (name !== 'no-throw') { return false; } "
+                       "c.abort(); "
+                       "try { c.signal.throwIfAborted(); } catch(e) { name = e.name; } "
+                       "return name === 'AbortError'; })()"));
 }
 
 // ---------------------------------------------------------------------------
@@ -3236,11 +3627,11 @@ TEST_F(DomBinderTest, ThrowIfAbortedThrowsOnlyAfterAbort)
 TEST_F(DomBinderTest, IntersectionObserverExposedAndValidates)
 {
   EXPECT_EQ(EvalString("typeof IntersectionObserver"), "function");
-  EXPECT_TRUE(EvalBool(
-      "(function(){ var o = new IntersectionObserver(function(){}); "
-      "return typeof o.observe === 'function' && typeof o.unobserve === 'function' "
-      "    && typeof o.disconnect === 'function' && typeof o.takeRecords === 'function' "
-      "    && o instanceof IntersectionObserver; })()"));
+  EXPECT_TRUE(
+      EvalBool("(function(){ var o = new IntersectionObserver(function(){}); "
+               "return typeof o.observe === 'function' && typeof o.unobserve === 'function' "
+               "    && typeof o.disconnect === 'function' && typeof o.takeRecords === 'function' "
+               "    && o instanceof IntersectionObserver; })()"));
   // Constructor requires a callable callback.
   EXPECT_TRUE(EvalBool("(function(){ var threw = false; try { new IntersectionObserver(); } "
                        "catch(e) { threw = (e instanceof TypeError); } return threw; })()"));
@@ -3263,8 +3654,7 @@ public:
     </body></html>)")
                     .Parse();
     PageApis apis;
-    apis.element_geometry =
-        [](const dom::Element& element) -> std::optional<ElementGeometry> {
+    apis.element_geometry = [](const dom::Element& element) -> std::optional<ElementGeometry> {
       const std::string id = std::string(element.GetAttribute("id").value_or(""));
       ElementGeometry g;
       g.x = 0;
@@ -3328,8 +3718,8 @@ TEST(IntersectionObserverTest, ObserveDeliversIntersectionEntry)
   // Observe an in-viewport element; the callback runs once the Evaluate that
   // scheduled it drains the job queue.
   h.Run("window.__seen = []; var obs = new IntersectionObserver(function(entries){ "
-                   "window.__seen = window.__seen.concat(entries); }); "
-                   "obs.observe(document.getElementById('box'));");
+        "window.__seen = window.__seen.concat(entries); }); "
+        "obs.observe(document.getElementById('box'));");
   EXPECT_EQ(h.Num("window.__seen.length"), 1.0);
   EXPECT_EQ(h.Eval("window.__seen[0].target.id"), "box");
   EXPECT_TRUE(h.Bool("window.__seen[0].isIntersecting"));
@@ -3342,8 +3732,8 @@ TEST(IntersectionObserverTest, FirstReportFiresForNonIntersectingTarget)
 {
   IntersectionTestHarness h;
   h.Run("window.__seen = []; var obs = new IntersectionObserver(function(entries){ "
-                   "window.__seen = window.__seen.concat(entries); }); "
-                   "obs.observe(document.getElementById('low'));");
+        "window.__seen = window.__seen.concat(entries); }); "
+        "obs.observe(document.getElementById('low'));");
   // The initial observation always reports the target, even when it is outside
   // the viewport (spec behavior) — isIntersecting is false.
   EXPECT_EQ(h.Num("window.__seen.length"), 1.0);
@@ -3356,11 +3746,11 @@ TEST(IntersectionObserverTest, RootMarginShrinksTheRootBand)
 {
   IntersectionTestHarness h;
   h.Run("window.__seen = []; "
-                   "var obs = new IntersectionObserver(function(entries){ "
-                   "window.__seen = window.__seen.concat(entries); }, "
-                   "{ rootMargin: '-35% 0px -55% 0px' }); "
-                   "obs.observe(document.getElementById('box')); "
-                   "obs.observe(document.getElementById('mid'));");
+        "var obs = new IntersectionObserver(function(entries){ "
+        "window.__seen = window.__seen.concat(entries); }, "
+        "{ rootMargin: '-35% 0px -55% 0px' }); "
+        "obs.observe(document.getElementById('box')); "
+        "obs.observe(document.getElementById('mid'));");
   // The root band is [210, 270] for the 800x600 viewport: `box` (y=12..32) is
   // above the band (not intersecting), `mid` (y=220..240) is inside it.
   EXPECT_EQ(h.Num("window.__seen.length"), 2.0);
@@ -3372,8 +3762,8 @@ TEST(IntersectionObserverTest, DisconnectClearsPendingAndStopsReports)
 {
   IntersectionTestHarness h;
   h.Run("window.__seen = []; var obs = new IntersectionObserver(function(entries){ "
-                   "window.__seen = window.__seen.concat(entries); }); "
-                   "obs.observe(document.getElementById('box')); obs.disconnect();");
+        "window.__seen = window.__seen.concat(entries); }); "
+        "obs.observe(document.getElementById('box')); obs.disconnect();");
   // disconnect() cleared the queued entry before the job could deliver it.
   EXPECT_EQ(h.Num("window.__seen.length"), 0.0);
 }
@@ -3382,8 +3772,8 @@ TEST(IntersectionObserverTest, TakeRecordsDrainsQueuedEntries)
 {
   IntersectionTestHarness h;
   h.Run("window.__taken = []; var obs = new IntersectionObserver(function(){}); "
-                   "obs.observe(document.getElementById('box')); "
-                   "window.__taken = obs.takeRecords();");
+        "obs.observe(document.getElementById('box')); "
+        "window.__taken = obs.takeRecords();");
   EXPECT_EQ(h.Num("window.__taken.length"), 1.0);
 }
 

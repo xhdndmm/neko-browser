@@ -568,6 +568,14 @@ XhrWrapper* UnwrapXhr(JSValueConst value);
 
 void InstallXhrGlobal(JSContext* ctx, Impl& impl);
 
+// websocket_binding.cpp — WebSocket (RFC 6455) global.  The receive thread
+// only enqueues events; PumpWebSocketEvents (called from RunPendingTimers)
+// drains them on the JS thread.  ShutdownWebSockets stops the I/O threads
+// before the binder is torn down.
+void InstallWebSocketGlobal(JSContext* ctx, Impl& impl);
+int PumpWebSocketEvents(Impl& impl);
+void ShutdownWebSockets(Impl& impl);
+
 // canvas_binding.cpp — minimal HTML Canvas 2D context.
 extern std::mutex g_canvas_class_mutex;
 extern std::unordered_set<JSRuntime*> g_canvas_class_registered;

@@ -984,6 +984,110 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   JS_SetPropertyStr(
       ctx, mime_types, "namedItem", JS_NewCFunction(ctx, return_null, "namedItem", 1));
   JS_SetPropertyStr(ctx, navigator, "mimeTypes", mime_types);
+
+  // navigator.sendBeacon: minimal stub (returns true without sending).
+  auto send_beacon = [](JSContext* /*inner_ctx*/,
+                        JSValueConst /*this_val*/,
+                        int /*argc*/,
+                        JSValueConst* /*argv*/) -> JSValue { return JS_TRUE; };
+  JS_SetPropertyStr(ctx, navigator, "sendBeacon", JS_NewCFunction(ctx, send_beacon, "sendBeacon", 2));
+
+  // navigator.clipboard: stub object with writeText/readText returning resolved promises.
+  JSValue clipboard = JS_NewObject(ctx);
+  auto clipboard_write_text = [](JSContext* inner_ctx,
+                                  JSValueConst /*this_val*/,
+                                  int /*argc*/,
+                                  JSValueConst* /*argv*/) -> JSValue {
+    JSValue resolve_fn = JS_NewCFunction(
+        inner_ctx,
+        [](JSContext* c, JSValueConst /*t*/, int /*a*/, JSValueConst* /*v*/) -> JSValue {
+          return JS_UNDEFINED;
+        },
+        "",
+        0);
+    JSValue promise = JS_Call(inner_ctx, resolve_fn, JS_UNDEFINED, 0, nullptr);
+    JS_FreeValue(inner_ctx, resolve_fn);
+    return promise;
+  };
+  JS_SetPropertyStr(
+      ctx, clipboard, "writeText", JS_NewCFunction(ctx, clipboard_write_text, "writeText", 1));
+  JS_SetPropertyStr(
+      ctx, clipboard, "readText", JS_NewCFunction(ctx, clipboard_write_text, "readText", 0));
+  JS_SetPropertyStr(ctx, navigator, "clipboard", clipboard);
+
+  // navigator.geolocation: stub with getCurrentPosition/watchPosition that never invoke callbacks.
+  JSValue geolocation = JS_NewObject(ctx);
+  auto geo_noop = [](JSContext* /*inner_ctx*/,
+                     JSValueConst /*this_val*/,
+                     int /*argc*/,
+                     JSValueConst* /*argv*/) -> JSValue { return JS_UNDEFINED; };
+  JS_SetPropertyStr(
+      ctx, geolocation, "getCurrentPosition", JS_NewCFunction(ctx, geo_noop, "getCurrentPosition", 1));
+  JS_SetPropertyStr(
+      ctx, geolocation, "watchPosition", JS_NewCFunction(ctx, geo_noop, "watchPosition", 1));
+  JS_SetPropertyStr(
+      ctx, geolocation, "clearWatch", JS_NewCFunction(ctx, geo_noop, "clearWatch", 1));
+  JS_SetPropertyStr(ctx, navigator, "geolocation", geolocation);
+
+  // navigator.mediaDevices: stub returning empty enumerateDevices().
+  JSValue media_devices = JS_NewObject(ctx);
+  auto enumerate_devices = [](JSContext* inner_ctx,
+                               JSValueConst /*this_val*/,
+                               int /*argc*/,
+                               JSValueConst* /*argv*/) -> JSValue {
+    JSValue arr = JS_NewArray(inner_ctx);
+    JSValue resolve_fn = JS_NewCFunction(
+        inner_ctx,
+        [](JSContext* c, JSValueConst /*t*/, int a, JSValueConst* v) -> JSValue {
+          return a > 0 ? JS_DupValue(c, v[0]) : JS_UNDEFINED;
+        },
+        "",
+        1);
+    JSValueConst args[] = {arr};
+    JSValue promise = JS_Call(inner_ctx, resolve_fn, JS_UNDEFINED, 1, args);
+    JS_FreeValue(inner_ctx, resolve_fn);
+    JS_FreeValue(inner_ctx, arr);
+    return promise;
+  };
+  JS_SetPropertyStr(ctx,
+                    media_devices,
+                    "enumerateDevices",
+                    JS_NewCFunction(ctx, enumerate_devices, "enumerateDevices", 0));
+  JS_SetPropertyStr(ctx, navigator, "mediaDevices", media_devices);
+
+  // navigator.permissions: stub query() returning { state: "granted" }.
+  JSValue permissions = JS_NewObject(ctx);
+  auto permissions_query = [](JSContext* inner_ctx,
+                              JSValueConst /*this_val*/,
+                              int /*argc*/,
+                              JSValueConst* /*argv*/) -> JSValue {
+    JSValue status = JS_NewObject(inner_ctx);
+    JS_SetPropertyStr(inner_ctx, status, "state", JS_NewString(inner_ctx, "granted"));
+    JSValue resolve_fn = JS_NewCFunction(
+        inner_ctx,
+        [](JSContext* c, JSValueConst /*t*/, int a, JSValueConst* v) -> JSValue {
+          return a > 0 ? JS_DupValue(c, v[0]) : JS_UNDEFINED;
+        },
+        "",
+        1);
+    JSValueConst args[] = {status};
+    JSValue promise = JS_Call(inner_ctx, resolve_fn, JS_UNDEFINED, 1, args);
+    JS_FreeValue(inner_ctx, resolve_fn);
+    JS_FreeValue(inner_ctx, status);
+    return promise;
+  };
+  JS_SetPropertyStr(
+      ctx, permissions, "query", JS_NewCFunction(ctx, permissions_query, "query", 1));
+  JS_SetPropertyStr(ctx, navigator, "permissions", permissions);
+
+  // navigator.connection: stub NetworkInformation object.
+  JSValue connection = JS_NewObject(ctx);
+  JS_SetPropertyStr(ctx, connection, "effectiveType", JS_NewString(ctx, "4g"));
+  JS_SetPropertyStr(ctx, connection, "downlink", JS_NewFloat64(ctx, 10.0));
+  JS_SetPropertyStr(ctx, connection, "rtt", JS_NewInt32(ctx, 50));
+  JS_SetPropertyStr(ctx, connection, "saveData", JS_FALSE);
+  JS_SetPropertyStr(ctx, navigator, "connection", connection);
+
   JS_SetPropertyStr(ctx, window, "navigator", JS_DupValue(ctx, navigator)); // steals dup
   JS_SetPropertyStr(ctx, global, "navigator", navigator);                   // steals
 
@@ -1047,6 +1151,10 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
       JS_CFUNC_constructor,
       0);
   JS_SetPropertyStr(ctx, performance_observer_ctor, "prototype", perf_observer_proto); // steals
+  // PerformanceObserver.supportedEntryTypes: the engine implements no
+  // performance entry types today, so the honest list is empty (feature
+  // detection then skips the observer path; see the compatibility matrix).
+  JS_SetPropertyStr(ctx, performance_observer_ctor, "supportedEntryTypes", JS_NewArray(ctx));
   JS_SetPropertyStr(
       ctx, window, "PerformanceObserver", JS_DupValue(ctx, performance_observer_ctor));
   JS_SetPropertyStr(ctx, global, "PerformanceObserver", performance_observer_ctor);
@@ -1194,6 +1302,8 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   if (apis.xhr_request) {
     InstallXhrGlobal(ctx, *this);
   }
+  // WebSocket is always available (connects directly via neko::network).
+  InstallWebSocketGlobal(ctx, *this);
   JSValue blob_ctor = JS_NewCFunction2(ctx, BlobConstructor, "Blob", 2, JS_CFUNC_constructor, 0);
   JS_SetPropertyStr(ctx, window, "Blob", JS_DupValue(ctx, blob_ctor));
   JS_SetPropertyStr(ctx, global, "Blob", blob_ctor);
@@ -1225,6 +1335,8 @@ Impl::~Impl()
   if (ctx == nullptr) {
     return;
   }
+  // Stop WebSocket I/O threads first: they must not outlive the binder.
+  ShutdownWebSockets(*this);
   CloseMessagePorts(*this);
   JSRuntime* rt = JS_GetRuntime(ctx);
 
@@ -1914,6 +2026,7 @@ int Impl::RunPendingTimers()
     }
   }
   int ran = RunPendingMessagePortTasks(*this);
+  ran += PumpWebSocketEvents(*this);
   for (Timer& timer : due) {
     JSValue result = JS_Call(ctx, timer.callback, JS_UNDEFINED, 0, nullptr);
     if (JS_IsException(result)) {

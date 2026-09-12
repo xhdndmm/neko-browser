@@ -140,6 +140,7 @@ gtest_discover_tests(neko_graphics_tests DISCOVERY_MODE PRE_TEST)
 # -----------------------------------------------------------------------------
 add_executable(neko_network_tests
   network/network_test.cpp
+  network/websocket_test.cpp
 )
 target_link_libraries(neko_network_tests PRIVATE neko::network ZLIB::ZLIB
   OpenSSL::SSL OpenSSL::Crypto gtest_main)
@@ -246,7 +247,10 @@ add_executable(neko_javascript_tests
   javascript/event_test.cpp
   javascript/import_map_test.cpp
 )
-target_link_libraries(neko_javascript_tests PRIVATE neko::javascript neko::storage gtest_main)
+# The WebSocket binding tests run a local echo server, which needs OpenSSL for
+# the handshake accept-key computation.
+target_link_libraries(neko_javascript_tests PRIVATE neko::javascript neko::storage
+  OpenSSL::SSL OpenSSL::Crypto gtest_main)
 apply_compiler_warnings(neko_javascript_tests)
 gtest_discover_tests(neko_javascript_tests DISCOVERY_MODE PRE_TEST)
 
