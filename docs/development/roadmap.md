@@ -40,6 +40,7 @@ graph LR
 - [x] CLI 可执行文件（--help/--version/--headless/--url 等）
 - [x] 8 个构建 preset（debug/release/relwithdebinfo/asan/ubsan/tsan/coverage）
 - [x] GitHub Actions CI（5 平台/编译器矩阵 + sanitizer + coverage + 格式）
+- [x] 发布工作流（tag 触发：Linux/Windows/macOS × x86_64/arm64 生产版本 + checksums）
 - [x] 文档体系（README/BUILDING/TESTING/CONTRIBUTING/SECURITY/architecture/docs）
 
 ## Phase 1 — Core ✅（已完成）

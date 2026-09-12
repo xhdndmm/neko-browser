@@ -202,7 +202,7 @@ tests/
   unit/                 GoogleTest 单元测试（按模块）
 docs/                   架构、设计、开发、测试文档
 tools/                  开发脚本（format / check）
-.github/workflows/      CI
+.github/workflows/      CI 与发布工作流（tag → 三平台 × 双架构生产版本）
 ```
 
 ## 许可证

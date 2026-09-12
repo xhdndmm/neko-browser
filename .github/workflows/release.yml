@@ -1,0 +1,453 @@
+name: release
+
+# -----------------------------------------------------------------------------
+# 生产版本构建与发布。
+#
+# 触发方式：
+#   1. 推送 vX.Y.Z（或 vX.Y.Z-<prerelease>）标签
+#      → 构建三平台 × 双架构产物，创建 GitHub Release 并附加产物 + SHA256SUMS；
+#   2. workflow_dispatch（手动触发）
+#      → 执行同样的完整生产构建与测试，但只上传 workflow artifact，
+#        不创建 Release（用于在真正打标签之前演练发布流程）。
+#
+# 构建配置（"生产版本"的明确定义）：
+#   - CMake preset `release`：CMAKE_BUILD_TYPE=Release + LTO（NEKO_ENABLE_LTO=ON）
+#   - NEKO_WARNINGS_AS_ERRORS=ON（与 CI 一致，见 AGENTS.md §13）
+#   - 目标平台上运行完整 ctest 套件；测试不通过则不会产出 Release
+#
+# 平台矩阵（全部使用 GitHub 托管 runner 的原生架构，不做交叉编译）：
+#   linux   x86_64  ubuntu-24.04
+#   linux   arm64   ubuntu-24.04-arm
+#   windows x86_64  windows-2025      （MSVC + vcpkg，CLI；Windows 上不构建 Qt GUI）
+#   windows arm64   windows-11-arm    （MSVC + vcpkg，CLI；Windows 上不构建 Qt GUI）
+#   macos   x86_64  macos-15-intel
+#   macos   arm64   macos-15
+#
+# 已知限制（同步记录在 docs/releases/README.md）：
+#   - Windows 不构建 Qt6 GUI（vcpkg 从源码构建 Qt 代价过高，见 ci.yml 同款说明）；
+#   - 产物为动态链接：Linux/macOS 的 GUI 需要目标机器提供 Qt6 运行库，
+#     其余动态库见 BUILDING.md「依赖获取」；
+#   - 未做代码签名 / 公证 / 独立调试符号包（计划随 Phase 12+ 的发布工程落地）。
+# -----------------------------------------------------------------------------
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+# 发布流程不允许被后续提交取消：中途取消会留下不完整的 Release。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 版本解析 + 标签/CMakeLists 一致性校验（尽早失败，避免白跑 6 个构建任务）
+  # ---------------------------------------------------------------------------
+  prepare:
+    name: prepare
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve version
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake_version=$(grep -m1 -E '^[[:space:]]*VERSION[[:space:]]+[0-9]+\.[0-9]+\.[0-9]+' CMakeLists.txt | awk '{print $2}')
+          if [ -z "$cmake_version" ]; then
+            echo "::error::无法从 CMakeLists.txt 解析 project(VERSION ...)"
+            exit 1
+          fi
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+            if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+              echo "::error::标签 '$tag' 不是 vX.Y.Z 或 vX.Y.Z-<prerelease> 形式"
+              exit 1
+            fi
+            version="${tag#v}"
+            base_version="${version%%-*}"
+            if [ "$base_version" != "$cmake_version" ]; then
+              echo "::error::标签版本（$base_version）与 CMakeLists.txt project(VERSION $cmake_version) 不一致"
+              exit 1
+            fi
+            prerelease=false
+            if [ "$version" != "$base_version" ]; then
+              prerelease=true
+            fi
+          else
+            tag=""
+            version="$cmake_version"
+            prerelease=false
+            echo "::notice::workflow_dispatch 演练运行：使用 CMakeLists.txt 版本 $version，不创建 Release"
+          fi
+
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  # 生产构建矩阵：Release + LTO，构建后跑测试，再打包为平台产物
+  # ---------------------------------------------------------------------------
+  build:
+    name: ${{ matrix.name }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-24.04
+            platform: linux
+            arch: x86_64
+            archive_ext: tar.gz
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            archive_ext: tar.gz
+          - name: windows-x86_64
+            os: windows-2025
+            platform: windows
+            arch: x86_64
+            archive_ext: zip
+            # VS 生成器默认平台不一定是目标架构，必须显式指定（见 CMAKE_GENERATOR_PLATFORM）。
+            generator_platform: x64
+            vcpkg_triplet: x64-windows
+          - name: windows-arm64
+            os: windows-11-arm
+            platform: windows
+            arch: arm64
+            archive_ext: zip
+            generator_platform: ARM64
+            vcpkg_triplet: arm64-windows
+          - name: macos-x86_64
+            os: macos-15-intel
+            platform: macos
+            arch: x86_64
+            archive_ext: tar.gz
+          - name: macos-arm64
+            os: macos-15
+            platform: macos
+            arch: arm64
+            archive_ext: tar.gz
+    env:
+      PACKAGE: neko-browser-${{ needs.prepare.outputs.version }}-${{ matrix.platform }}-${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # --- 依赖安装 -----------------------------------------------------------
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            zlib1g-dev libjpeg-dev libwebp-dev libfreetype-dev libssl-dev qt6-base-dev \
+            libavcodec-dev libavformat-dev libavutil-dev libavdevice-dev libswscale-dev libavif-dev
+
+      - name: Install system dependencies (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install jpeg webp qt freetype openssl ffmpeg libavif
+          # Homebrew 的 qt / openssl 是 keg-only，不会符号链接进 prefix，
+          # 需要显式告知 CMake 与 pkg-config（Intel runner 的 prefix 为 /usr/local）。
+          {
+            echo "CMAKE_PREFIX_PATH=$(brew --prefix);$(brew --prefix qt)"
+            echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl)"
+            echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig"
+          } >> "$GITHUB_ENV"
+
+      # Windows 使用镜像自带的 vcpkg（VCPKG_INSTALLATION_ROOT）；镜像未提供时回退到 clone。
+      - name: Set up vcpkg (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $root = $env:VCPKG_INSTALLATION_ROOT
+          if (-not $root -or -not (Test-Path "$root/scripts/buildsystems/vcpkg.cmake")) {
+            $root = "$env:RUNNER_TEMP/vcpkg"
+            if (-not (Test-Path "$root/bootstrap-vcpkg.bat")) {
+              git clone --depth 1 https://github.com/microsoft/vcpkg.git $root
+            }
+            & "$root/bootstrap-vcpkg.bat" -disableMetrics
+          }
+          "VCPKG_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "$root" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      # 依赖的二进制缓存：vcpkg 从源码构建 FFmpeg / OpenSSL / libavif 很慢，
+      # 缓存命中后同一 triplet 的二次构建只需链接。
+      - name: Restore vcpkg binary cache (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v6
+        continue-on-error: true
+        with:
+          path: ${{ github.workspace }}/vcpkg-cache
+          key: vcpkg-${{ matrix.vcpkg_triplet }}-2026-09
+          restore-keys: vcpkg-${{ matrix.vcpkg_triplet }}-
+
+      - name: Install vcpkg dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VCPKG_DEFAULT_TRIPLET: ${{ matrix.vcpkg_triplet }}
+          VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vcpkg-cache,readwrite
+        run: vcpkg install zlib libjpeg-turbo libwebp freetype openssl ffmpeg libavif
+
+      # --- 配置 ---------------------------------------------------------------
+      - name: Configure (Linux / macOS)
+        if: runner.os != 'Windows'
+        run: cmake --preset release -DNEKO_WARNINGS_AS_ERRORS=ON
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          # 文档化的 VS 目标架构指定方式；空值在非 VS 生成器上无影响。
+          CMAKE_GENERATOR_PLATFORM: ${{ matrix.generator_platform }}
+        run: |
+          set -euo pipefail
+          # Git Bash 下 VCPKG_ROOT 是 C:\... 形式；转成 CMake 同样接受的 C:/... 形式。
+          vcpkg_root=$(cygpath -m "$VCPKG_ROOT")
+          cmake --preset release \
+            -DNEKO_WARNINGS_AS_ERRORS=ON \
+            -DNEKO_BUILD_UI=OFF \
+            -DCMAKE_TOOLCHAIN_FILE="$vcpkg_root/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=${{ matrix.vcpkg_triplet }}
+
+      # --- 构建与测试 ---------------------------------------------------------
+      - name: Build
+        run: cmake --build --preset release --parallel
+
+      - name: Test
+        run: ctest --preset release
+
+      - name: Upload ctest logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ctest-logs-${{ matrix.name }}
+          path: build/release/Testing/
+          if-no-files-found: ignore
+
+      # --- 架构校验 -----------------------------------------------------------
+      # 双架构是本次发布的核心诉求：产物架构与矩阵不一致时必须失败，
+      # 而不是悄悄发出一个 x86_64 二进制（Windows arm64 runner 上 x64 也能“跑起来”）。
+      - name: Verify artifact architecture (Linux / macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.arch }}" in
+            x86_64) pattern='x86[-_]64' ;;
+            arm64)  pattern='aarch64|arm64' ;;
+            *) echo "::error::未知架构：${{ matrix.arch }}"; exit 1 ;;
+          esac
+
+          found=0
+          for binary in build/release/bin/neko_browser build/release/bin/neko_browser_gui; do
+            [ -f "$binary" ] || continue
+            description=$(file -b "$binary")
+            echo "$binary: $description"
+            if ! grep -Eq "$pattern" <<<"$description"; then
+              echo "::error::$binary 的架构不是 ${{ matrix.arch }}"
+              exit 1
+            fi
+            found=$((found + 1))
+          done
+
+          if [ "$found" -eq 0 ]; then
+            echo "::error::build/release/bin 下没有可执行文件"
+            exit 1
+          fi
+
+      - name: Verify artifact architecture (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $expected = @{ 'x86_64' = 0x8664; 'arm64' = 0xAA64 }['${{ matrix.arch }}']
+          if (-not $expected) { throw "未知架构：${{ matrix.arch }}" }
+
+          $binaries = Get-ChildItem 'build/release/bin/*.exe'
+          if (-not $binaries) { throw 'build/release/bin 下没有可执行文件' }
+
+          foreach ($exe in $binaries) {
+            $fs = [System.IO.File]::OpenRead($exe.FullName)
+            try {
+              $reader = [System.IO.BinaryReader]::new($fs)
+              $fs.Position = 0x3C
+              $peOffset = $reader.ReadInt32()
+              $fs.Position = $peOffset + 4
+              $machine = $reader.ReadUInt16()
+            } finally {
+              $fs.Dispose()
+            }
+
+            if ($machine -ne $expected) {
+              throw "$($exe.Name) 的 PE Machine 为 0x$('{0:X4}' -f $machine)，期望 ${{ matrix.arch }}"
+            }
+            Write-Host "$($exe.Name): ${{ matrix.arch }}"
+          }
+
+      # --- 打包 ---------------------------------------------------------------
+      - name: Package (Linux / macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$PACKAGE"
+          mkdir -p "$PACKAGE/bin"
+
+          cp build/release/bin/neko_browser "$PACKAGE/bin/"
+          if [ -f build/release/bin/neko_browser_gui ]; then
+            cp build/release/bin/neko_browser_gui "$PACKAGE/bin/"
+          fi
+          cp LICENSE README.md "$PACKAGE/"
+
+          tar -czf "$PACKAGE.tar.gz" "$PACKAGE"
+          sha256sum "$PACKAGE.tar.gz" > "$PACKAGE.tar.gz.sha256"
+          cat "$PACKAGE.tar.gz.sha256"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force $env:PACKAGE -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force "$env:PACKAGE/bin" | Out-Null
+
+          Copy-Item 'build/release/bin/neko_browser.exe' "$env:PACKAGE/bin/"
+          foreach ($gui in @('build/release/bin/neko_browser_gui.exe')) {
+            if (Test-Path $gui) { Copy-Item $gui "$env:PACKAGE/bin/" }
+          }
+          Copy-Item 'LICENSE', 'README.md' "$env:PACKAGE/"
+
+          $zip = "$env:PACKAGE.zip"
+          Compress-Archive -Path $env:PACKAGE -DestinationPath $zip -CompressionLevel Optimal
+
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  $env:PACKAGE.zip" | Out-File -FilePath "$zip.sha256" -Encoding ascii
+          Get-Content "$zip.sha256"
+
+      - name: Upload package
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            ${{ env.PACKAGE }}.${{ matrix.archive_ext }}
+            ${{ env.PACKAGE }}.${{ matrix.archive_ext }}.sha256
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 发布：合并全部产物 → 校验 SHA256 → 创建（或更新）GitHub Release
+  # ---------------------------------------------------------------------------
+  release:
+    name: publish
+    needs: [prepare, build]
+    # 只在标签推送时发布；workflow_dispatch 仅做演练构建。
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd dist
+          cat ./*.sha256 > SHA256SUMS
+          sha256sum --check SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Write release notes
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > RELEASE-NOTES.md <<EOF
+          ## neko-browser ${VERSION}
+
+          由标签 \`${TAG}\` 触发 \`release\` workflow 构建：**Release + LTO**，
+          构建前在目标平台上运行完整 CTest 套件。
+
+          | 平台 | 架构 | 产物 | GUI |
+          | --- | --- | --- | --- |
+          | Linux | x86_64 | \`neko-browser-${VERSION}-linux-x86_64.tar.gz\` | 含 \`neko_browser_gui\` |
+          | Linux | arm64 | \`neko-browser-${VERSION}-linux-arm64.tar.gz\` | 含 \`neko_browser_gui\` |
+          | Windows | x86_64 | \`neko-browser-${VERSION}-windows-x86_64.zip\` | 仅 CLI |
+          | Windows | arm64 | \`neko-browser-${VERSION}-windows-arm64.zip\` | 仅 CLI |
+          | macOS | x86_64 | \`neko-browser-${VERSION}-macos-x86_64.tar.gz\` | 含 \`neko_browser_gui\` |
+          | macOS | arm64 | \`neko-browser-${VERSION}-macos-arm64.tar.gz\` | 含 \`neko_browser_gui\` |
+
+          ### 运行前提
+
+          - 产物为**动态链接**，目标机器需提供运行时依赖
+            （zlib / libjpeg / libwebp / FreeType / OpenSSL / FFmpeg / libavif），
+            见 [BUILDING.md](https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/BUILDING.md)。
+          - Linux / macOS 的 \`neko_browser_gui\` 还需要 Qt6 运行库
+            （Debian/Ubuntu：\`qt6-base\`；macOS：\`brew install qt\`）。
+          - Windows 产物为 MSVC 构建，需要 VS 2022 运行库。
+          - \`SHA256SUMS\` 列出全部产物的 SHA-256；\`sha256sum --check SHA256SUMS\` 可校验。
+
+          ### 已知限制
+
+          - Windows 不构建 Qt6 GUI（vcpkg 从源码构建 Qt 代价过高）。
+          - 二进制未签名、未公证；macOS 首次运行可能需要
+            \`xattr -d com.apple.quarantine\`。
+          - 未提供独立调试符号包。
+          EOF
+
+          previous_tag=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+          if [ -n "$previous_tag" ]; then
+            printf '\n**完整变更**：%s/%s/compare/%s...%s\n' \
+              "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$previous_tag" "$TAG" >> RELEASE-NOTES.md
+          fi
+
+          cat RELEASE-NOTES.md
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          flags=()
+          if [ "$PRERELEASE" = "true" ]; then
+            flags+=(--prerelease)
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # 重新运行工作流时覆盖已有产物，而不是让上传失败。
+            gh release upload "$TAG" dist/*.tar.gz dist/*.zip dist/SHA256SUMS --clobber
+          else
+            gh release create "$TAG" \
+              --verify-tag \
+              --title "neko-browser $TAG" \
+              --notes-file RELEASE-NOTES.md \
+              "${flags[@]}" \
+              dist/*.tar.gz dist/*.zip dist/SHA256SUMS
+          fi
