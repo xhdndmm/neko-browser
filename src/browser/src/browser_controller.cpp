@@ -882,6 +882,22 @@ base::Result<void> BrowserController::NavigateActive(const std::string& input)
   return Navigate(tab->id, input);
 }
 
+base::Result<void> BrowserController::LoadDocument(int tab_id,
+                                                   std::string_view bytes,
+                                                   std::string_view content_type,
+                                                   const std::string& final_url)
+{
+  Tab* tab = FindTab(tab_id);
+  if (tab == nullptr) {
+    return base::Err(base::Error::InvalidArgument("no such tab"));
+  }
+  LoadBytes(*tab, bytes, content_type, final_url);
+  if (tab->content_type == ContentType::kError && tab->error != nullptr) {
+    return base::Err(base::Error::Unknown(*tab->error));
+  }
+  return base::Ok();
+}
+
 void BrowserController::Back()
 {
   Tab* tab = ActiveTab();

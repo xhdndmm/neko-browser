@@ -15,6 +15,7 @@
 #include "neko/browser/page_scripts.h"
 #include "neko/browser/renderer_host.h"
 #include "neko/browser/renderer_protocol.h"
+#include "neko/browser/renderer_session_host.h"
 #include "neko/image/image.h"
 #include "neko/ipc/channel.h"
 #include "neko/javascript/script_engine.h"
@@ -399,6 +400,12 @@ int main(int argc, char** argv)
   // (spawned by browser::RendererHost; ADR 0016 M1).
   if (parsed.options.renderer_child) {
     return RunRendererChild();
+  }
+
+  // Renderer session mode: serve interaction ops for a live page until the
+  // browser closes the pipe (spawned by RendererSession; ADR 0016 M2).
+  if (parsed.options.renderer_session) {
+    return neko::browser::RunRendererSession();
   }
 
   const std::string profile_dir = parsed.options.profile_name.has_value()

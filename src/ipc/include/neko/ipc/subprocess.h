@@ -38,6 +38,10 @@ public:
   // number on POSIX when killed by a signal).
   int Wait();
 
+  // The child's process id (0 when not running).  Useful for diagnostics and
+  // for tests that need to address the child process directly.
+  long ProcessId() const;
+
   // Asks the child to terminate (SIGTERM / TerminateProcess).  No-op when
   // not running.
   void Terminate();

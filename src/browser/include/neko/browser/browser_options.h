@@ -31,6 +31,9 @@ struct BrowserOptions
   // --renderer-child: internal mode — run as a renderer child serving
   // LoadRequest frames on stdin/stdout (spawned by RendererHost).
   bool renderer_child = false;
+  // --renderer-session: internal mode — serve a live renderer session on
+  // stdin/stdout (ADR 0016 M2; spawned by RendererSession).
+  bool renderer_session = false;
   // --verbose / --log-level <level>.
   base::LogLevel log_level = base::LogLevel::kInfo;
 

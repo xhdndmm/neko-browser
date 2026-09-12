@@ -139,5 +139,220 @@ TEST(RendererProtocolTest, RendererChildLoadsPageOutOfProcess)
   EXPECT_FALSE(result.value().title.empty());
 }
 
+// ---------------------------------------------------------------------------
+// Session protocol (ADR 0016 M2)
+// ---------------------------------------------------------------------------
+
+TEST(RendererSessionProtocolTest, LoadRequestRoundTrip)
+{
+  RendererSessionRequest request;
+  request.op = SessionOp::kLoad;
+  request.document = "<html><body>hello</body></html>";
+  request.content_type = "text/html; charset=utf-8";
+  request.url = "https://example.com/page";
+  request.viewport_width = 1024;
+  request.viewport_height = 768;
+  const auto encoded = EncodeSessionRequest(request);
+  ASSERT_TRUE(encoded.has_value());
+  const auto decoded = DecodeSessionRequest(encoded.value());
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_EQ(decoded.value().op, SessionOp::kLoad);
+  EXPECT_EQ(decoded.value().document, request.document);
+  EXPECT_EQ(decoded.value().content_type, request.content_type);
+  EXPECT_EQ(decoded.value().url, request.url);
+  EXPECT_EQ(decoded.value().viewport_width, 1024);
+  EXPECT_EQ(decoded.value().viewport_height, 768);
+}
+
+TEST(RendererSessionProtocolTest, PointerRequestsRoundTrip)
+{
+  RendererSessionRequest click;
+  click.op = SessionOp::kClick;
+  click.x = 12.5f;
+  click.y = -3.25f;
+  auto encoded = EncodeSessionRequest(click);
+  ASSERT_TRUE(encoded.has_value());
+  auto decoded = DecodeSessionRequest(encoded.value());
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_EQ(decoded.value().op, SessionOp::kClick);
+  EXPECT_FLOAT_EQ(decoded.value().x, 12.5f);
+  EXPECT_FLOAT_EQ(decoded.value().y, -3.25f);
+
+  RendererSessionRequest wheel;
+  wheel.op = SessionOp::kWheel;
+  wheel.delta_y = 123.75;
+  encoded = EncodeSessionRequest(wheel);
+  ASSERT_TRUE(encoded.has_value());
+  decoded = DecodeSessionRequest(encoded.value());
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_DOUBLE_EQ(decoded.value().delta_y, 123.75);
+
+  RendererSessionRequest snapshot;
+  snapshot.op = SessionOp::kSnapshot;
+  snapshot.viewport_width = 800;
+  snapshot.viewport_height = 600;
+  snapshot.scroll_y = 42.0f;
+  encoded = EncodeSessionRequest(snapshot);
+  ASSERT_TRUE(encoded.has_value());
+  decoded = DecodeSessionRequest(encoded.value());
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_EQ(decoded.value().viewport_width, 800);
+  EXPECT_FLOAT_EQ(decoded.value().scroll_y, 42.0f);
+}
+
+TEST(RendererSessionProtocolTest, KeyRequestRoundTrip)
+{
+  RendererSessionRequest request;
+  request.op = SessionOp::kKey;
+  request.key_type = "keydown";
+  request.key = "Enter";
+  request.code = "Enter";
+  const auto encoded = EncodeSessionRequest(request);
+  ASSERT_TRUE(encoded.has_value());
+  const auto decoded = DecodeSessionRequest(encoded.value());
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_EQ(decoded.value().op, SessionOp::kKey);
+  EXPECT_EQ(decoded.value().key_type, "keydown");
+  EXPECT_EQ(decoded.value().key, "Enter");
+  EXPECT_EQ(decoded.value().code, "Enter");
+}
+
+TEST(RendererSessionProtocolTest, SimpleOpsRoundTrip)
+{
+  for (const SessionOp op : {SessionOp::kHoverClear, SessionOp::kPump, SessionOp::kShutdown}) {
+    RendererSessionRequest request;
+    request.op = op;
+    const auto encoded = EncodeSessionRequest(request);
+    ASSERT_TRUE(encoded.has_value());
+    const auto decoded = DecodeSessionRequest(encoded.value());
+    ASSERT_TRUE(decoded.has_value());
+    EXPECT_EQ(decoded.value().op, op);
+  }
+}
+
+TEST(RendererSessionProtocolTest, ReplyWithoutFrameRoundTrip)
+{
+  RendererSessionReply reply;
+  reply.ok = true;
+  reply.handled = true;
+  reply.changed = false;
+  reply.url = "https://example.com/after";
+  reply.title = "After";
+  reply.content_height = 1234.5f;
+  reply.scroll_y = 50.0f;
+  reply.pending_scroll_y = 75.0f;
+  reply.scroll_request_id = 7;
+  reply.hover_link = "https://example.com/link";
+  reply.redirect_url = "https://example.com/child-nav";
+  const auto encoded = EncodeSessionReply(reply);
+  ASSERT_TRUE(encoded.has_value());
+  const auto decoded = DecodeSessionReply(encoded.value());
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_TRUE(decoded.value().ok);
+  EXPECT_TRUE(decoded.value().handled);
+  EXPECT_FALSE(decoded.value().changed);
+  EXPECT_FALSE(decoded.value().has_frame);
+  EXPECT_EQ(decoded.value().url, reply.url);
+  EXPECT_EQ(decoded.value().title, reply.title);
+  EXPECT_FLOAT_EQ(decoded.value().content_height, 1234.5f);
+  EXPECT_FLOAT_EQ(decoded.value().scroll_y, 50.0f);
+  EXPECT_FLOAT_EQ(decoded.value().pending_scroll_y, 75.0f);
+  EXPECT_EQ(decoded.value().scroll_request_id, 7u);
+  EXPECT_EQ(decoded.value().hover_link, reply.hover_link);
+  EXPECT_EQ(decoded.value().redirect_url, reply.redirect_url);
+}
+
+TEST(RendererSessionProtocolTest, ReplyWithFrameRoundTrip)
+{
+  RendererSessionReply reply;
+  reply.ok = true;
+  reply.changed = true;
+  reply.has_frame = true;
+  reply.width = 4;
+  reply.height = 2;
+  reply.rgba.assign(4u * 2u * 4u, 0x11);
+  reply.rgba[3] = 0xff;
+  const auto encoded = EncodeSessionReply(reply);
+  ASSERT_TRUE(encoded.has_value());
+  const auto decoded = DecodeSessionReply(encoded.value());
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_TRUE(decoded.value().has_frame);
+  EXPECT_EQ(decoded.value().width, 4);
+  EXPECT_EQ(decoded.value().height, 2);
+  EXPECT_EQ(decoded.value().rgba, reply.rgba);
+}
+
+TEST(RendererSessionProtocolTest, ErrorReplyRoundTrip)
+{
+  RendererSessionReply reply;
+  reply.ok = false;
+  reply.error = "no document to rasterize";
+  const auto encoded = EncodeSessionReply(reply);
+  ASSERT_TRUE(encoded.has_value());
+  const auto decoded = DecodeSessionReply(encoded.value());
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_FALSE(decoded.value().ok);
+  EXPECT_EQ(decoded.value().error, reply.error);
+}
+
+TEST(RendererSessionProtocolTest, RejectsUnknownOp)
+{
+  std::string payload;
+  payload.push_back(static_cast<char>(kRendererSessionProtocolVersion));
+  payload.push_back(static_cast<char>(99));
+  const auto decoded = DecodeSessionRequest(payload);
+  ASSERT_FALSE(decoded.has_value());
+  EXPECT_EQ(decoded.error().category(), base::ErrorCategory::kInvalidArgument);
+}
+
+TEST(RendererSessionProtocolTest, RejectsWrongSessionVersion)
+{
+  std::string payload;
+  payload.push_back(static_cast<char>(kRendererSessionProtocolVersion + 1));
+  payload.push_back(static_cast<char>(SessionOp::kPump));
+  const auto decoded = DecodeSessionRequest(payload);
+  ASSERT_FALSE(decoded.has_value());
+  EXPECT_EQ(decoded.error().category(), base::ErrorCategory::kInvalidArgument);
+}
+
+TEST(RendererSessionProtocolTest, RejectsTrailingBytes)
+{
+  RendererSessionRequest request;
+  request.op = SessionOp::kPump;
+  const auto encoded = EncodeSessionRequest(request);
+  ASSERT_TRUE(encoded.has_value());
+  std::string padded = encoded.value();
+  padded.push_back('x');
+  const auto decoded = DecodeSessionRequest(padded);
+  ASSERT_FALSE(decoded.has_value());
+}
+
+TEST(RendererSessionProtocolTest, RejectsFrameSizeMismatch)
+{
+  // A reply claiming a frame whose byte count does not match its dimensions
+  // must be rejected, not read past.
+  RendererSessionReply reply;
+  reply.ok = true;
+  reply.has_frame = true;
+  reply.width = 4;
+  reply.height = 2;
+  reply.rgba.assign(4, 0); // 4 bytes instead of 32
+  const auto encoded = EncodeSessionReply(reply);
+  ASSERT_TRUE(encoded.has_value());
+  const auto decoded = DecodeSessionReply(encoded.value());
+  ASSERT_FALSE(decoded.has_value());
+  EXPECT_EQ(decoded.error().category(), base::ErrorCategory::kInvalidArgument);
+}
+
+TEST(RendererSessionProtocolTest, RejectsOversizedDocument)
+{
+  RendererSessionRequest request;
+  request.op = SessionOp::kLoad;
+  request.document.assign(32u * 1024u * 1024u + 1, 'x');
+  const auto encoded = EncodeSessionRequest(request);
+  ASSERT_FALSE(encoded.has_value());
+  EXPECT_EQ(encoded.error().category(), base::ErrorCategory::kInvalidArgument);
+}
+
 } // namespace
 } // namespace neko::browser

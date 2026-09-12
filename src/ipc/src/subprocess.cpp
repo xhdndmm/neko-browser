@@ -251,6 +251,18 @@ base::Result<Subprocess> Subprocess::Spawn(const std::vector<std::string>& argv)
 #endif
 }
 
+long Subprocess::ProcessId() const
+{
+#ifdef _WIN32
+  if (process_handle_ == nullptr) {
+    return 0;
+  }
+  return static_cast<long>(GetProcessId(process_handle_));
+#else
+  return pid_ < 0 ? 0 : static_cast<long>(pid_);
+#endif
+}
+
 int Subprocess::Wait()
 {
 #ifdef _WIN32

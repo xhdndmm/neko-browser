@@ -269,6 +269,17 @@ public:
   void Forward();
   void Reload();
 
+  // Loads already-fetched document bytes into |tab_id| through the normal
+  // content routing (HTML → engine pipeline with page scripts; images / PDF /
+  // audio / text → their viewers) using |final_url| as the document URL.
+  // Used by the renderer session host — where the browser process fetches and
+  // the renderer child parses/renders — and by tests that load bytes directly.
+  // Returns the document error when the load failed (parse error, ...).
+  base::Result<void> LoadDocument(int tab_id,
+                                  std::string_view bytes,
+                                  std::string_view content_type,
+                                  const std::string& final_url);
+
   // Runs the active tab's pending script timers (setTimeout/setInterval) and
   // re-applies the page styles so DOM mutations made by timers are reflected.
   // Worker thread only (thread-confined like the JS runtime).

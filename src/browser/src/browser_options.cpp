@@ -37,7 +37,9 @@ std::string UsageText()
          "                            child (ADR 0016 M1; headless CLI).\n"
          "      --renderer-child      Internal: serve renderer protocol on\n"
          "                            stdin/stdout (spawned by --renderer-process).\n"
-         "      --verbose              Enable debug logging.\n"
+         "      --renderer-session    Internal: serve a live renderer session on\n"
+         "                            stdin/stdout (spawned by the GUI in\n"
+         "                            --renderer-process mode).\n"         "      --verbose              Enable debug logging.\n"
          "      --log-level <level>    One of trace, debug, info, warning, error, fatal.\n"
          "\n"
          "Phase 6 status: http:// fetching, HTML parsing, styling, layout and\n"
@@ -78,6 +80,10 @@ ParseResult ParseCommandLine(int argc, char** argv)
     }
     if (arg == "--renderer-child") {
       result.options.renderer_child = true;
+      continue;
+    }
+    if (arg == "--renderer-session") {
+      result.options.renderer_session = true;
       continue;
     }
     if (arg == "--verbose") {

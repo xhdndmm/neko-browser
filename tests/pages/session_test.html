@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Session Fixture</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  #btn { display: block; width: 200px; height: 60px; font-size: 16px; }
+  #log { height: 24px; }
+  #next { display: block; width: 200px; height: 40px; }
+</style>
+</head>
+<body>
+<button id="btn">Press</button>
+<div id="log">idle</div>
+<a id="next" href="https://127.0.0.1:9/next">next</a>
+<script>
+  var btn = document.getElementById('btn');
+  btn.addEventListener('click', function () {
+    document.title = 'clicked';
+    var log = document.getElementById('log');
+    log.textContent = 'clicked';
+    // A solid colour change guarantees a visible raster difference.
+    log.style.setProperty('background-color', '#ff0000');
+  });
+  // Fires at most once, so "changed" stays deterministic after the initial
+  // pump (used to verify that Pump advances the child's timers).
+  var fired = false;
+  setTimeout(function () {
+    if (!fired) {
+      fired = true;
+      document.getElementById('log').textContent = 'tick';
+    }
+  }, 30);
+</script>
+</body>
+</html>
