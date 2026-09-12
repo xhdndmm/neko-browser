@@ -55,7 +55,7 @@
 | `<video>` 元素 | Partial | 2 渲染器测试 + 1 浏览器集成测试 + 1 JS 绑定测试 | `<video src>` 子资源抓取+FFmpeg 解码，首帧作为替换内容渲染（固有 300×150 缺省）；autoplay/loop 属性驱动帧时钟播放（与 GIF/定时器同泵）；JS 子集：play()/pause()/currentTime/duration/paused；无 controls/音轨/缓冲/seek 到未解码区间 |
 | Canvas 2D | Partial | 1 JS 绑定测试 + 1 renderer 像素测试 + CCTV13 直播页实测 | `HTMLCanvasElement.getContext("2d")` 返回稳定 context；支持 `fillStyle` 与 `fillRect()`，默认 300×150 透明 backing store，source-over RGBA 合成；canvas 作为 replaced element 进入布局、绘制和最终光栅。CCTV13 的 71×71 二维码 canvas 已生成且 `jquery.qrcode.min.js` 错误清零。无尺寸属性重置语义、路径、文字、变换、渐变、图像绘制、像素读写与 WebGL。 |
 | PDF 文本提取 | Partial | 13 文本提取测试 | xref（含 /Prev）与 xref stream、FlateDecode、内容流文本操作符；无 CMap/加密 |
-| PDF 页面渲染 | Partial | 8 渲染测试（含 xref stream/ObjStm） | 矢量路径（非零/奇偶填充、描边）、q-Q/cm、文本（FreeType + /Widths）、/ObjStm、/MediaBox 继承与实数值；无图像 XObject/裁剪/pattern/CMap |
+| PDF 页面渲染 | Partial | 18 渲染测试（含 xref stream/ObjStm、图像、裁剪） | 矢量路径（非零/奇偶填充、描边）、q-Q/cm、文本（FreeType + /Widths）、/ObjStm、/MediaBox 继承与实数值、图像 XObject（Flate/未压缩 1/2/4/8 位，DeviceGray/RGB/CMYK 与 Indexed 调色板，DCTDecode 走引擎自有 JPEG 解码器）、W/W* 裁剪矩形；无 JPX/CCITT/LZW、16 位样本、/SMask、Form XObject、pattern、CMap |
 | Cookie（RFC 6265 子集） | Tested | 29 存储单元测试 | Set-Cookie、域/路径匹配、Max-Age、Secure/HttpOnly/SameSite；PSL 与 SameSite 强制标注为限制 |
 | LocalStorage | Tested | 6 存储单元测试 + JS 绑定测试 + 浏览器生命周期接线 + 百度首页实测 | 按 origin 分区的键值存储，行式文件 + 百分号编码 + 原子写入，已接入 Profile Load/Save/ClearAll 和 JS `Storage` 接口；无配额、无 storage 事件、无 sessionStorage |
 | 历史记录 | Tested | 29 存储单元测试 | 去重访问、搜索、持久化 |

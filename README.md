@@ -67,7 +67,7 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
   autoplay/loop 帧时钟播放、JS 子集 play()/pause()/currentTime/duration/
   paused）—— **PARTIAL**（无 controls/音轨/缓冲）
 - **PDF**：文本提取 + **页面渲染**（矢量图形/描边/填充/文本、q-Q/cm 变换、xref
-  stream 与对象流、/MediaBox 继承）—— **PARTIAL**
+  stream 与对象流、/MediaBox 继承、图像 XObject 与 W/W* 裁剪）—— **PARTIAL**
 - **JavaScript**：QuickJS（quickjs-ng）runtime 封装 —— 核心语言 + console
   + 执行时限/内存上限 + **DOM 绑定与页内脚本执行**（`window === globalThis`、
   事件/CustomEvent、setTimeout 事件循环、fetch/**XMLHttpRequest**/localStorage/
@@ -96,7 +96,9 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
 > JavaScript 为 QuickJS runtime + 常用 DOM 绑定子集（无完整 Web IDL、WebSocket/XHR 等；
 > ES 模块已支持静态与动态 import() 与 import maps 子集）；
 > IndexedDB 为子集（无游标/索引；值走 JSON 克隆，无 Date/BinaryData）；
-> PDF 渲染为子集（矢量路径填充/描边、变换、文本；无图像 XObject/裁剪/pattern/CMap）；
+> PDF 渲染为子集（矢量路径填充/描边、变换、文本、图像 XObject（1/2/4/8 位、
+> Gray/RGB/CMYK/Indexed、DCTDecode）、裁剪矩形；无 JPX/CCITT/LZW、Form XObject、
+> /SMask、pattern、CMap）；
 > flexbox 已支持 order/min-max/auto 外边距；
 > grid 已支持 minmax()/命名线/命名区域/auto-flow/inline-grid；
 > GIF 已支持动画（直接导航到 .gif 仍显示首帧）。

@@ -699,6 +699,36 @@ std::string ExtractTextFromContent(std::string_view content)
 // Parser state
 // ---------------------------------------------------------------------------
 
+// PDF number -> float (int or real), for the Parser-level image decoder.
+inline float PdfNumber(const PdfObject& obj, float fallback)
+{
+  if (const auto* v = GetIf<double>(obj)) {
+    return static_cast<float>(*v);
+  }
+  if (const auto* v = GetIf<int64_t>(obj)) {
+    return static_cast<float>(*v);
+  }
+  return fallback;
+}
+
+// Device CMYK -> RGB, the same approximation the content interpreter uses
+// (kept at file scope so image decoding can share it).
+inline void CmykToRgbShared(float c, float m, float y, float k, float& r, float& g, float& b)
+{
+  r = (1.0f - std::min(1.0f, c)) * (1.0f - std::min(1.0f, k));
+  g = (1.0f - std::min(1.0f, m)) * (1.0f - std::min(1.0f, k));
+  b = (1.0f - std::min(1.0f, y)) * (1.0f - std::min(1.0f, k));
+}
+
+// A decoded image XObject: RGBA pixels ready to be drawn by `Do`.
+struct ImageXObject
+{
+  image::Image image;
+};
+
+// What an interpreter without image resources binds to.
+const std::map<std::string, ImageXObject> kNoImages;
+
 // Simple 2D affine transform in PDF form [a b c d e f]: x' = a*x + c*y + e,
 // y' = b*x + d*y + f.
 struct PdfMatrix
@@ -749,8 +779,10 @@ public:
                   int width,
                   int height,
                   float scale,
-                  const graphics::FontRegistry* registry)
-      : fonts_(fonts), width_(width), height_(height), scale_(scale), registry_(registry)
+                  const graphics::FontRegistry* registry,
+                  const std::map<std::string, ImageXObject>* images = nullptr)
+      : fonts_(fonts), images_(images != nullptr ? *images : kNoImages), width_(width),
+        height_(height), scale_(scale), registry_(registry)
   {}
 
   base::Result<image::Image> Run(std::string_view content)
@@ -779,6 +811,11 @@ private:
     float fill_r = 0, fill_g = 0, fill_b = 0; // initial fill = black
     float stroke_r = 0, stroke_g = 0, stroke_b = 0;
     float line_width = 1;
+    // Device-space clip rectangle (PDF `W` / `W*`).  The path's bounding box
+    // stands in for the exact region: exact for rectangle clips (what
+    // practically every PDF uses) and a documented approximation otherwise.
+    bool clipped = false;
+    float clip_x0 = 0, clip_y0 = 0, clip_x1 = 0, clip_y1 = 0;
     // Text state.
     float font_size = 12;
     const PdfFontMetrics* font = nullptr;
@@ -792,6 +829,7 @@ private:
   };
 
   const std::map<std::string, PdfFontMetrics>& fonts_;
+  const std::map<std::string, ImageXObject>& images_;
   int width_ = 0;
   int height_ = 0;
   float scale_ = 1;
@@ -845,9 +883,156 @@ private:
   // -------------------------------------------------------------------------
   // Pixel helpers (screen space: y grows downward).
   // -------------------------------------------------------------------------
+
+  // ---- Image XObjects (Do) ------------------------------------------------
+  //
+  // The unit square of image space is mapped through the CTM; every device
+  // pixel inside the transformed quad is inverse-mapped and sampled with
+  // nearest-neighbour lookup, so scaling, translation, flips and rotations all
+  // work without special cases.  The clip rectangle still applies.
+  void DrawImage(const ImageXObject& source)
+  {
+    if (source.image.width <= 0 || source.image.height <= 0) {
+      return;
+    }
+    // Device-space quad of the image's unit square.
+    const PdfPt corners[4] = {
+        ToPixel(0.0f, 0.0f), ToPixel(1.0f, 0.0f), ToPixel(0.0f, 1.0f), ToPixel(1.0f, 1.0f)};
+    float x0 = corners[0].x, x1 = corners[0].x, y0 = corners[0].y, y1 = corners[0].y;
+    for (const PdfPt& corner : corners) {
+      x0 = std::min(x0, corner.x);
+      x1 = std::max(x1, corner.x);
+      y0 = std::min(y0, corner.y);
+      y1 = std::max(y1, corner.y);
+    }
+    if (state_.clipped) {
+      x0 = std::max(x0, state_.clip_x0);
+      y0 = std::max(y0, state_.clip_y0);
+      x1 = std::min(x1, state_.clip_x1);
+      y1 = std::min(y1, state_.clip_y1);
+    }
+    const int px0 = std::max(0, static_cast<int>(std::floor(x0)));
+    const int px1 = std::min(width_, static_cast<int>(std::ceil(x1)));
+    const int py0 = std::max(0, static_cast<int>(std::floor(y0)));
+    const int py1 = std::min(height_, static_cast<int>(std::ceil(y1)));
+
+    // Inverse of the composed transform (user -> device pixels): screen_x =
+    // (a*x + c*y + e) * scale, screen_y = height - (b*x + d*y + f) * scale.
+    const float det = state_.ctm.a * state_.ctm.d - state_.ctm.b * state_.ctm.c;
+    if (std::fabs(det) < 1e-6f) {
+      return;
+    }
+    const float inv_a = state_.ctm.d / det;
+    const float inv_b = -state_.ctm.b / det;
+    const float inv_c = -state_.ctm.c / det;
+    const float inv_d = state_.ctm.a / det;
+    const float inv_e = (state_.ctm.c * state_.ctm.f - state_.ctm.d * state_.ctm.e) / det;
+    const float inv_f = (state_.ctm.b * state_.ctm.e - state_.ctm.a * state_.ctm.f) / det;
+
+    for (int y = py0; y < py1; ++y) {
+      for (int x = px0; x < px1; ++x) {
+        if (!InsideClip(x, y)) {
+          continue;
+        }
+        // Device pixel centre -> PDF user space (undo the scale and the y flip
+        // first, then the inverse CTM).
+        const float dx = (static_cast<float>(x) + 0.5f) / scale_;
+        const float dy = (static_cast<float>(height_) - (static_cast<float>(y) + 0.5f)) / scale_;
+        const float ux = inv_a * dx + inv_c * dy + inv_e;
+        const float uy = inv_b * dx + inv_d * dy + inv_f;
+        if (ux < 0.0f || ux >= 1.0f || uy < 0.0f || uy >= 1.0f) {
+          continue;
+        }
+        // Image space: v grows downward, the unit square's origin is bottom-left.
+        const int sx = std::min(source.image.width - 1,
+                                static_cast<int>(ux * static_cast<float>(source.image.width)));
+        const int sy =
+            std::min(source.image.height - 1,
+                     static_cast<int>((1.0f - uy) * static_cast<float>(source.image.height)));
+        const std::size_t offset =
+            (static_cast<std::size_t>(sy) * static_cast<std::size_t>(source.image.width) +
+             static_cast<std::size_t>(sx)) *
+            4;
+        if (offset + 3 >= source.image.rgba.size()) {
+          continue;
+        }
+        const std::uint8_t r = source.image.rgba[offset + 0];
+        const std::uint8_t g = source.image.rgba[offset + 1];
+        const std::uint8_t b = source.image.rgba[offset + 2];
+        const std::uint8_t alpha = source.image.rgba[offset + 3];
+        if (alpha == 255) {
+          SetPixel(x, y, r, g, b);
+        } else if (alpha > 0) {
+          BlendGlyphPixel(x, y, alpha, r, g, b);
+        }
+      }
+    }
+  }
+
+  // The `W`/`W*` operators mark the current path as the clip for the next
+  // painting operator (or `n`), per PDF 32000-1 §8.5.4.
+  bool pending_clip_ = false;
+
+  // Applies the pending clip: the path's device-space bounding box intersected
+  // with the current clip.  Exact for rectangle clips; a bounding box stands in
+  // for curved/multi-subpath clips (documented approximation).  Multi-subpath
+  // paths are unioned, so a clip that *should* be the intersection of several
+  // subpaths is approximated by their union bounding box.
+  void ApplyPendingClip()
+  {
+    if (!pending_clip_) {
+      return;
+    }
+    pending_clip_ = false;
+    if (path_.empty()) {
+      return;
+    }
+    float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+    bool first = true;
+    for (const SubPath& sub : path_) {
+      for (const PdfPt& point : sub.points) {
+        const PdfPt device = ToPixel(point.x, point.y);
+        if (first) {
+          x0 = x1 = device.x;
+          y0 = y1 = device.y;
+          first = false;
+          continue;
+        }
+        x0 = std::min(x0, device.x);
+        x1 = std::max(x1, device.x);
+        y0 = std::min(y0, device.y);
+        y1 = std::max(y1, device.y);
+      }
+    }
+    if (first) {
+      return;
+    }
+    if (state_.clipped) {
+      x0 = std::max(x0, state_.clip_x0);
+      y0 = std::max(y0, state_.clip_y0);
+      x1 = std::min(x1, state_.clip_x1);
+      y1 = std::min(y1, state_.clip_y1);
+    }
+    state_.clipped = true;
+    state_.clip_x0 = x0;
+    state_.clip_y0 = y0;
+    state_.clip_x1 = x1;
+    state_.clip_y1 = y1;
+  }
+
+  // True when the device-space point is inside the current clip rectangle.
+  bool InsideClip(int x, int y) const
+  {
+    if (!state_.clipped) {
+      return true;
+    }
+    return static_cast<float>(x) >= state_.clip_x0 && static_cast<float>(x) < state_.clip_x1 &&
+           static_cast<float>(y) >= state_.clip_y0 && static_cast<float>(y) < state_.clip_y1;
+  }
+
   void SetPixel(int x, int y, uint8_t r, uint8_t g, uint8_t b)
   {
-    if (x < 0 || y < 0 || x >= width_ || y >= height_) {
+    if (x < 0 || y < 0 || x >= width_ || y >= height_ || !InsideClip(x, y)) {
       return;
     }
     const std::size_t o = (static_cast<std::size_t>(y) * static_cast<std::size_t>(width_) +
@@ -862,7 +1047,7 @@ private:
   // Alpha-blends a glyph pixel (premultiplied gray) over the buffer.
   void BlendGlyphPixel(int x, int y, uint8_t alpha, uint8_t r, uint8_t g, uint8_t b)
   {
-    if (x < 0 || y < 0 || x >= width_ || y >= height_) {
+    if (x < 0 || y < 0 || x >= width_ || y >= height_ || !InsideClip(x, y)) {
       return;
     }
     const std::size_t o = (static_cast<std::size_t>(y) * static_cast<std::size_t>(width_) +
@@ -1231,36 +1416,60 @@ private:
       FillPath(/*even_odd=*/false);
       BeginPath();
     } else if (op == "f*") {
+      ApplyPendingClip();
       FillPath(/*even_odd=*/true);
       BeginPath();
     } else if (op == "S") {
+      ApplyPendingClip();
       StrokePath();
       BeginPath();
     } else if (op == "s") {
+      ApplyPendingClip();
       if (!path_.empty()) {
         CloseLast();
       }
       StrokePath();
       BeginPath();
     } else if (op == "B") {
+      ApplyPendingClip();
       FillPath(false);
       StrokePath();
       BeginPath();
     } else if (op == "B*") {
+      ApplyPendingClip();
       FillPath(true);
       StrokePath();
       BeginPath();
     } else if (op == "b") {
+      ApplyPendingClip();
       CloseLast();
       FillPath(false);
       StrokePath();
       BeginPath();
     } else if (op == "b*") {
       CloseLast();
+      ApplyPendingClip();
       FillPath(true);
       StrokePath();
       BeginPath();
+    } else if (op == "Do") {
+      // Invoke an image XObject; other XObject subtypes are not implemented.
+      if (!operands_.empty()) {
+        const PdfObjectPtr name = operands_.back();
+        operands_.pop_back();
+        if (const auto* pdf_name = GetIf<PdfName>(*name)) {
+          const auto it = images_.find(pdf_name->value);
+          if (it != images_.end()) {
+            DrawImage(it->second);
+          }
+        }
+      }
+    } else if (op == "W" || op == "W*") {
+      // Mark the current path as the clip; applied by the next painting
+      // operator (or `n`).
+      pending_clip_ = true;
     } else if (op == "n") {
+      ApplyPendingClip();
       BeginPath();
     } else if (op == "w") {
       if (PopNums(1, v)) {
@@ -1444,6 +1653,223 @@ public:
     return ExtractPages(root);
   }
 
+  // Decodes one image XObject into RGBA pixels.  The stream dictionary has
+  // already been through DecodeStream, so |__stream__| holds the *decoded*
+  // bytes for Flate/uncompressed data (filters and predictors applied) and the
+  // still-compressed JPEG bytes for DCTDecode.
+  //
+  // Supported: 1/2/4/8 bits per component in DeviceGray, DeviceRGB, DeviceCMYK
+  // and Indexed colour spaces, plus DCTDecode via the engine's own JPEG
+  // decoder.  NOT IMPLEMENTED (streams are skipped rather than approximated):
+  // JPXDecode/CCITTFaxDecode/LZWDecode, 16-bit samples, soft masks (/SMask) and
+  // image masks (/ImageMask).
+  base::Result<ImageXObject> DecodeImageXObject(const PdfDict& dict)
+  {
+    const auto* width_obj = dict.Find("Width");
+    const auto* height_obj = dict.Find("Height");
+    const int width = width_obj != nullptr ? static_cast<int>(PdfNumber(*width_obj, 0)) : 0;
+    const int height = height_obj != nullptr ? static_cast<int>(PdfNumber(*height_obj, 0)) : 0;
+    if (width <= 0 || height <= 0 || width > 20000 || height > 20000) {
+      return base::Error::Parse("pdf: bad image dimensions");
+    }
+    const PdfObject* stream_entry = dict.Find("__stream__");
+    const auto* bytes = stream_entry != nullptr ? GetIf<PdfString>(*stream_entry) : nullptr;
+    if (bytes == nullptr) {
+      return base::Error::Parse("pdf: image stream has no decoded bytes");
+    }
+
+    // Filter list (DCTDecode keeps the bytes compressed).
+    std::vector<std::string> filters;
+    if (const PdfObject* filter = dict.Find("Filter"); filter != nullptr) {
+      if (const auto* name = GetIf<PdfName>(*filter); name != nullptr) {
+        filters.push_back(name->value);
+      } else if (const auto* array = GetIf<PdfArray>(*filter); array != nullptr) {
+        for (const PdfObjectPtr& item : array->items) {
+          if (const auto* filter_name = GetIf<PdfName>(*item); filter_name != nullptr) {
+            filters.push_back(filter_name->value);
+          }
+        }
+      }
+    }
+    const bool is_dct = filters.size() == 1 && filters[0] == "DCTDecode";
+    if (!filters.empty() && !is_dct && !(filters.size() == 1 && filters[0] == "FlateDecode")) {
+      return base::Error::NotImplemented("pdf: image filter '" + filters[0] +
+                                         "' is not implemented");
+    }
+    if (is_dct) {
+      auto decoded = image::DecodeJpeg(bytes->value);
+      if (!decoded.has_value()) {
+        return base::Err(decoded.error());
+      }
+      ImageXObject out;
+      out.image = std::move(decoded.value());
+      return base::Ok(std::move(out));
+    }
+
+    int bits = 8;
+    if (const auto* bpc = dict.Find("BitsPerComponent"); bpc != nullptr) {
+      bits = static_cast<int>(PdfNumber(*bpc, 8));
+    }
+    if (bits != 1 && bits != 2 && bits != 4 && bits != 8) {
+      return base::Error::NotImplemented("pdf: image bit depth " + std::to_string(bits) +
+                                         " is not implemented");
+    }
+
+    // Colour space: components per pixel plus an optional Indexed palette.
+    int components = 3;
+    std::vector<std::uint8_t> palette;
+    if (const auto* cs = dict.Find("ColorSpace"); cs != nullptr) {
+      const PdfObject resolved = Resolve(*cs);
+      if (const auto* name = GetIf<PdfName>(resolved); name != nullptr) {
+        if (name->value == "DeviceGray" || name->value == "G") {
+          components = 1;
+        } else if (name->value == "DeviceRGB" || name->value == "RGB") {
+          components = 3;
+        } else if (name->value == "DeviceCMYK" || name->value == "CMYK") {
+          components = 4;
+        } else {
+          return base::Error::NotImplemented("pdf: colour space '" + name->value +
+                                             "' is not implemented");
+        }
+      } else if (const auto* array = GetIf<PdfArray>(resolved);
+                 array != nullptr && array->items.size() >= 4) {
+        const auto* space_name = GetIf<PdfName>(*array->items[0]);
+        if (space_name == nullptr || space_name->value != "Indexed") {
+          return base::Error::NotImplemented("pdf: array colour spaces other than Indexed are not "
+                                             "implemented");
+        }
+        components = 1;
+        const int palette_entries = static_cast<int>(PdfNumber(*array->items[2], 0)) + 1;
+        const PdfObject lookup = Resolve(*array->items[3]);
+        const PdfString* lookup_bytes = GetIf<PdfString>(lookup);
+        if (lookup_bytes == nullptr) {
+          return base::Error::Parse("pdf: Indexed palette lookup is not a byte string");
+        }
+        const std::size_t count =
+            std::min(static_cast<std::size_t>(std::max(0, palette_entries)) * 3u,
+                     lookup_bytes->value.size());
+        palette.resize(count);
+        for (std::size_t i = 0; i < count; ++i) {
+          palette[i] = static_cast<std::uint8_t>(lookup_bytes->value[i]);
+        }
+      } else {
+        return base::Error::NotImplemented("pdf: unsupported colour space object");
+      }
+    }
+
+    const std::size_t component_bits = static_cast<std::size_t>(std::max(0, bits));
+    const std::size_t row_bytes =
+        (static_cast<std::size_t>(width) * static_cast<std::size_t>(components) * component_bits +
+         7) /
+        8;
+    if (bytes->value.size() < row_bytes * static_cast<std::size_t>(height)) {
+      return base::Error::Parse("pdf: image data is shorter than its dimensions require");
+    }
+    ImageXObject out;
+    out.image.width = width;
+    out.image.height = height;
+    out.image.rgba.assign(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4,
+                          255);
+    const int mask = (1 << bits) - 1;
+    const auto sample_at = [&](std::size_t bit_offset) -> int {
+      const std::size_t byte_index = bit_offset / 8;
+      const int shift = 8 - bits - static_cast<int>(bit_offset % 8);
+      const auto byte = static_cast<std::uint8_t>(bytes->value[byte_index]);
+      int value = 0;
+      if (shift >= 0) {
+        value = (byte >> shift) & mask;
+      } else {
+        const auto next = byte_index + 1 < bytes->value.size()
+                              ? static_cast<std::uint8_t>(bytes->value[byte_index + 1])
+                              : 0;
+        value = ((byte << (-shift)) | (next >> (8 + shift))) & mask;
+      }
+      return bits == 8 ? value : (value * 255) / mask;
+    };
+    for (int y = 0; y < height; ++y) {
+      for (int x = 0; x < width; ++x) {
+        const std::size_t base_bit =
+            static_cast<std::size_t>(y) * row_bytes * 8 +
+            static_cast<std::size_t>(x) * static_cast<std::size_t>(components) * component_bits;
+        int r = 0;
+        int g = 0;
+        int b = 0;
+        if (!palette.empty()) {
+          const int index = sample_at(base_bit);
+          const std::size_t entry = static_cast<std::size_t>(index) * 3;
+          if (entry + 2 < palette.size()) {
+            r = palette[entry];
+            g = palette[entry + 1];
+            b = palette[entry + 2];
+          }
+        } else if (components == 1) {
+          r = g = b = sample_at(base_bit);
+        } else if (components == 3) {
+          r = sample_at(base_bit);
+          g = sample_at(base_bit + component_bits);
+          b = sample_at(base_bit + 2 * component_bits);
+        } else {
+          const float c = static_cast<float>(sample_at(base_bit)) / 255.0f;
+          const float m = static_cast<float>(sample_at(base_bit + component_bits)) / 255.0f;
+          const float yy = static_cast<float>(sample_at(base_bit + 2 * component_bits)) / 255.0f;
+          const float k = static_cast<float>(sample_at(base_bit + 3 * component_bits)) / 255.0f;
+          float rr = 0;
+          float gg = 0;
+          float bb = 0;
+          CmykToRgbShared(c, m, yy, k, rr, gg, bb);
+          r = static_cast<int>(rr * 255.0f);
+          g = static_cast<int>(gg * 255.0f);
+          b = static_cast<int>(bb * 255.0f);
+        }
+        const std::size_t offset = (static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
+                                    static_cast<std::size_t>(x)) *
+                                   4;
+        out.image.rgba[offset + 0] = static_cast<std::uint8_t>(std::clamp(r, 0, 255));
+        out.image.rgba[offset + 1] = static_cast<std::uint8_t>(std::clamp(g, 0, 255));
+        out.image.rgba[offset + 2] = static_cast<std::uint8_t>(std::clamp(b, 0, 255));
+      }
+    }
+    return base::Ok(std::move(out));
+  }
+
+  // Every /Resources /XObject entry whose /Subtype is /Image, decoded.  Entries
+  // that cannot be decoded are skipped (a broken image must not fail the page).
+  std::map<std::string, ImageXObject> CollectImageXObjects(const PdfDict& page_dict)
+  {
+    std::map<std::string, ImageXObject> images;
+    const PdfObject resources_obj = Resolve(FindInheritedAttribute(&page_dict, "Resources"));
+    const auto* resources = GetIf<std::shared_ptr<PdfDict>>(resources_obj);
+    if (resources == nullptr) {
+      return images;
+    }
+    const auto* xobjects = (*resources)->Find("XObject");
+    if (xobjects == nullptr) {
+      return images;
+    }
+    const PdfObject resolved = Resolve(*xobjects);
+    const auto* dictionary = GetIf<std::shared_ptr<PdfDict>>(resolved);
+    if (dictionary == nullptr) {
+      return images;
+    }
+    for (const auto& [name, value] : (*dictionary)->entries) {
+      const PdfObject stream = Resolve(*value);
+      const auto* dictionary_of_stream = GetIf<std::shared_ptr<PdfDict>>(stream);
+      if (dictionary_of_stream == nullptr) {
+        continue;
+      }
+      const auto* subtype = (*dictionary_of_stream)->Find("Subtype");
+      const auto* subtype_name = subtype != nullptr ? GetIf<PdfName>(*subtype) : nullptr;
+      if (subtype_name == nullptr || subtype_name->value != "Image") {
+        continue; // form/PS XObjects are not implemented
+      }
+      auto decoded = DecodeImageXObject(**dictionary_of_stream);
+      if (decoded.has_value()) {
+        images.emplace(name, std::move(decoded.value()));
+      }
+    }
+    return images;
+  }
+
   // Loads the document and renders one page (the public RenderPage wrapper).
   base::Result<image::Image> RenderPageEntry(std::string_view data, int page_index, float scale)
   {
@@ -1506,7 +1932,8 @@ public:
     }
 
     const std::map<std::string, PdfFontMetrics> fonts = CollectFontMetrics(*page_dict);
-    PdfPageRenderer renderer(fonts, px_w, px_h, scale, &fonts_registry_);
+    const std::map<std::string, ImageXObject> images = CollectImageXObjects(*page_dict);
+    PdfPageRenderer renderer(fonts, px_w, px_h, scale, &fonts_registry_, &images);
     return renderer.Run(CollectPageContent(*page_dict));
   }
 

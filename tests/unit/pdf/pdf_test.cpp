@@ -539,4 +539,122 @@ TEST(PdfRenderTest, RendersXrefStreamDocument)
 }
 
 } // namespace
+
+// ---------------------------------------------------------------------------
+// Image XObjects and clipping
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// A one-page PDF whose page resource dictionary maps /Im1 to an image XObject
+// built from raw 8-bit samples (FlateDecode by default), plus the given content
+// stream.  A non-Flate |filter| is written through untouched so that tests can
+// exercise streams whose bytes stay compressed (or are plain garbage).
+std::string BuildImagePdf(const std::string& pixels,
+                          int width,
+                          int height,
+                          const std::string& colorspace,
+                          const std::string& content,
+                          const std::string& filter = "FlateDecode")
+{
+  PdfBuilder b;
+  b.Add(1, "<< /Type /Catalog /Pages 2 0 R >>");
+  b.Add(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+  b.Add(3,
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /XObject << /Im1 5 0 R "
+        ">> >> /Contents 4 0 R >>");
+  b.AddStream(4, content, "FlateDecode");
+  const std::string body = filter == "FlateDecode" ? Deflate(pixels) : pixels;
+  const std::string dict = "<< /Type /XObject /Subtype /Image /Width " + std::to_string(width) +
+                           " /Height " + std::to_string(height) + " /ColorSpace " + colorspace +
+                           " /BitsPerComponent 8 /Filter /" + filter + " /Length " +
+                           std::to_string(body.size()) + " >>";
+  b.Add(5, dict + "\nstream\n" + body + "\nendstream");
+  return b.Finish("");
+}
+
+} // namespace
+
+TEST(PdfRenderTest, DrawsImageXObjects)
+{
+  // 2x2 RGB: red, green / blue, white.  Stretched over the whole 200x200 page.
+  const std::string pixels = std::string("\xff\x00\x00", 3) + std::string("\x00\xff\x00", 3) +
+                             std::string("\x00\x00\xff", 3) + std::string("\xff\xff\xff", 3);
+  const std::string pdf =
+      BuildImagePdf(pixels, 2, 2, "/DeviceRGB", "q 200 0 0 200 0 0 cm /Im1 Do Q");
+  const auto rendered = RenderPage(pdf, 0, 1.0f);
+  ASSERT_TRUE(rendered.has_value()) << rendered.error().message();
+  const image::Image& page = rendered.value();
+  ASSERT_EQ(page.width, 200);
+  ASSERT_EQ(page.height, 200);
+  // The image's first row is the top of the page (image space v grows down).
+  EXPECT_EQ(PixelAt(page, 50, 50), (std::array<uint8_t, 3>{255, 0, 0}));
+  EXPECT_EQ(PixelAt(page, 150, 50), (std::array<uint8_t, 3>{0, 255, 0}));
+  EXPECT_EQ(PixelAt(page, 50, 150), (std::array<uint8_t, 3>{0, 0, 255}));
+  EXPECT_EQ(PixelAt(page, 150, 150), (std::array<uint8_t, 3>{255, 255, 255}));
+}
+
+TEST(PdfRenderTest, DrawsIndexedImages)
+{
+  // 4x1 Indexed image: red, green, blue, black with a 4-entry palette.
+  const std::string pixels("\x00\x01\x02\x03", 4);
+  // Colour spaces use the standard array form: [ /Indexed base hival lookup ].
+  const std::string palette_str =
+      "[ /Indexed /DeviceRGB 3 (" +
+      std::string("\xff\x00\x00\x00\xff\x00\x00\x00\xff\x00\x00\x00", 12) + ") ]";
+  const std::string pdf =
+      BuildImagePdf(pixels, 4, 1, palette_str, "q 200 0 0 200 0 0 cm /Im1 Do Q");
+  const auto rendered = RenderPage(pdf, 0, 1.0f);
+  ASSERT_TRUE(rendered.has_value()) << rendered.error().message();
+  const image::Image& page = rendered.value();
+  EXPECT_EQ(PixelAt(page, 25, 100), (std::array<uint8_t, 3>{255, 0, 0}));
+  EXPECT_EQ(PixelAt(page, 75, 100), (std::array<uint8_t, 3>{0, 255, 0}));
+  EXPECT_EQ(PixelAt(page, 125, 100), (std::array<uint8_t, 3>{0, 0, 255}));
+  EXPECT_EQ(PixelAt(page, 175, 100), (std::array<uint8_t, 3>{0, 0, 0}));
+}
+
+TEST(PdfRenderTest, AppliesClipRectangles)
+{
+  // A clip to the bottom-left 100x100 (PDF y up) then a page-filling blue fill.
+  const auto rendered =
+      RenderPage(BuildSimplePdf({"0 0 100 100 re W n 0 0 1 rg 0 0 200 200 re f"}), 0, 1.0f);
+  ASSERT_TRUE(rendered.has_value()) << rendered.error().message();
+  const image::Image& page = rendered.value();
+  ASSERT_EQ(page.width, 612);
+  ASSERT_EQ(page.height, 792);
+  // The clip rect covers device y in [792-100, 792) (the top-left region).
+  EXPECT_EQ(PixelAt(page, 20, 700), (std::array<uint8_t, 3>{0, 0, 255}));  // inside
+  EXPECT_NE(PixelAt(page, 300, 300), (std::array<uint8_t, 3>{0, 0, 255})); // outside (page centre)
+  EXPECT_NE(PixelAt(page, 20, 200), (std::array<uint8_t, 3>{0, 0, 255}));  // below the clip
+}
+
+TEST(PdfRenderTest, ClipAppliesToImagesAndIsRestoredByQ)
+{
+  // Clip to the left half, draw the image, then restore: the right half must
+  // stay white even though the image's transforms cover it.
+  const std::string pixels = std::string("\xff\x00\x00", 3) + std::string("\xff\x00\x00", 3);
+  const std::string content = "q 0 0 100 200 re W n q 200 0 0 200 0 0 cm /Im1 Do Q Q";
+  const auto rendered = RenderPage(BuildImagePdf(pixels, 2, 1, "/DeviceRGB", content), 0, 1.0f);
+  ASSERT_TRUE(rendered.has_value()) << rendered.error().message();
+  const image::Image& page = rendered.value();
+  EXPECT_EQ(PixelAt(page, 50, 100), (std::array<uint8_t, 3>{255, 0, 0}));      // inside the clip
+  EXPECT_EQ(PixelAt(page, 150, 100), (std::array<uint8_t, 3>{255, 255, 255})); // clipped away
+}
+
+TEST(PdfRenderTest, SkipsUndecodableImagesInsteadOfFailingThePage)
+{
+  // A DCTDecode stream whose bytes are not a JPEG, plus a /Do naming a missing
+  // XObject, must both leave the page blank but rendered: a broken image is
+  // never allowed to fail the whole page (and never faked).
+  const std::string pdf = BuildImagePdf("this is not a jpeg",
+                                        2,
+                                        1,
+                                        "/DeviceRGB",
+                                        "q 200 0 0 200 0 0 cm /Im1 Do /Missing Do Q",
+                                        "DCTDecode");
+  const auto rendered = RenderPage(pdf, 0, 1.0f);
+  ASSERT_TRUE(rendered.has_value()) << rendered.error().message();
+  EXPECT_EQ(PixelAt(rendered.value(), 100, 100), (std::array<uint8_t, 3>{255, 255, 255}));
+}
+
 } // namespace neko::pdf
