@@ -1802,7 +1802,10 @@ void BrowserController::LoadBytes(Tab& tab,
   }
 
   if (is_image) {
-    auto decoded = neko::image::DecodeImage(bytes);
+    // Direct SVG navigation: decode with the tab's font stack so <text> draws.
+    const image::SvgTextShaper shaper =
+        tab.page != nullptr ? tab.page->MakeSvgTextShaper() : image::SvgTextShaper{};
+    auto decoded = neko::image::DecodeImage(bytes, shaper);
     if (!decoded) {
       std::lock_guard<std::mutex> lock(mutex_);
       tab.content_type = ContentType::kError;
@@ -2341,8 +2344,12 @@ void FetchPageImages(renderer::Page& page,
     image::Image image;
     std::shared_ptr<image::GifAnimation> animation;
   };
+  // SVG <text> needs glyph outlines; the renderer's font stack is the same one
+  // the page uses (including @font-face web fonts), so page SVG images get real
+  // text instead of nothing.
+  const image::SvgTextShaper svg_shaper = page.MakeSvgTextShaper();
   // Decodes an image from raw bytes (shared by the network and data: paths).
-  auto decode_bytes = [](const std::string& body) -> base::Result<DecodedImage> {
+  auto decode_bytes = [&svg_shaper](const std::string& body) -> base::Result<DecodedImage> {
     DecodedImage out;
     if (image::IsGif(body)) {
       // Animated GIF: decode every frame; keep them for playback when the
@@ -2360,7 +2367,7 @@ void FetchPageImages(renderer::Page& page,
       }
       // Single-frame GIF: fall back to the plain decode path below.
     }
-    auto decoded = image::DecodeImage(body);
+    auto decoded = image::DecodeImage(body, svg_shaper);
     if (!decoded.has_value()) {
       return base::Err(decoded.error());
     }

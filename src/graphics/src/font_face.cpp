@@ -4,6 +4,7 @@
 #include <ft2build.h>
 #include <vector>
 #include FT_FREETYPE_H
+#include FT_OUTLINE_H
 
 #include "neko/graphics/glyph_cache.h"
 #include "neko/graphics/utf8.h"
@@ -21,6 +22,64 @@ bool SetPixelSize(FT_Face face, float px_size)
   }
   const FT_UInt px = static_cast<FT_UInt>(px_size + 0.5f);
   return FT_Set_Pixel_Sizes(face, 0, px) == 0;
+}
+
+// FT_Outline_Decompose callbacks: they convert FreeType's y-up font units into
+// the y-down pixel space used by GlyphBitmap bearers and by SVG.
+struct OutlineSink
+{
+  std::vector<OutlineEdge>* edges = nullptr;
+  double scale = 0; // pixels per font unit
+};
+
+int MoveTo(const FT_Vector* to, void* user)
+{
+  auto* sink = static_cast<OutlineSink*>(user);
+  OutlineEdge edge;
+  edge.kind = OutlineKind::kMove;
+  edge.p[0] = static_cast<float>(static_cast<double>(to->x) * sink->scale);
+  edge.p[1] = static_cast<float>(-static_cast<double>(to->y) * sink->scale);
+  sink->edges->push_back(edge);
+  return 0;
+}
+
+int LineTo(const FT_Vector* to, void* user)
+{
+  auto* sink = static_cast<OutlineSink*>(user);
+  OutlineEdge edge;
+  edge.kind = OutlineKind::kLine;
+  edge.p[0] = static_cast<float>(static_cast<double>(to->x) * sink->scale);
+  edge.p[1] = static_cast<float>(-static_cast<double>(to->y) * sink->scale);
+  sink->edges->push_back(edge);
+  return 0;
+}
+
+int ConicTo(const FT_Vector* control, const FT_Vector* to, void* user)
+{
+  auto* sink = static_cast<OutlineSink*>(user);
+  OutlineEdge edge;
+  edge.kind = OutlineKind::kQuadratic;
+  edge.p[0] = static_cast<float>(static_cast<double>(control->x) * sink->scale);
+  edge.p[1] = static_cast<float>(-static_cast<double>(control->y) * sink->scale);
+  edge.p[2] = static_cast<float>(static_cast<double>(to->x) * sink->scale);
+  edge.p[3] = static_cast<float>(-static_cast<double>(to->y) * sink->scale);
+  sink->edges->push_back(edge);
+  return 0;
+}
+
+int CubicTo(const FT_Vector* control1, const FT_Vector* control2, const FT_Vector* to, void* user)
+{
+  auto* sink = static_cast<OutlineSink*>(user);
+  OutlineEdge edge;
+  edge.kind = OutlineKind::kCubic;
+  edge.p[0] = static_cast<float>(static_cast<double>(control1->x) * sink->scale);
+  edge.p[1] = static_cast<float>(-static_cast<double>(control1->y) * sink->scale);
+  edge.p[2] = static_cast<float>(static_cast<double>(control2->x) * sink->scale);
+  edge.p[3] = static_cast<float>(-static_cast<double>(control2->y) * sink->scale);
+  edge.p[4] = static_cast<float>(static_cast<double>(to->x) * sink->scale);
+  edge.p[5] = static_cast<float>(-static_cast<double>(to->y) * sink->scale);
+  sink->edges->push_back(edge);
+  return 0;
 }
 
 } // namespace
@@ -172,6 +231,50 @@ std::optional<RasterizedGlyph> FontFace::RenderGlyph(uint32_t code_point, float 
   // Store a copy in the cache (the cache fixes up its own data pointer) and
   // return the caller's owned copy; no pointer into the cache escapes.
   cache.Insert(*this, code_point, px, out.glyph, out.storage);
+  return out;
+}
+
+std::optional<GlyphOutline> FontFace::OutlineGlyph(uint32_t code_point, float px_size) const
+{
+  if (!valid() || px_size <= 0.0f) {
+    return std::nullopt;
+  }
+  std::lock_guard<std::mutex> lock(impl_->ft_mutex);
+  if (!SetPixelSize(impl_->face, px_size) || impl_->face->size == nullptr) {
+    return std::nullopt;
+  }
+  const FT_UInt glyph_index = FT_Get_Char_Index(impl_->face, static_cast<FT_ULong>(code_point));
+  // FT_LOAD_NO_SCALE keeps the outline in font units (design shape, no hinting
+  // and no rounding), which the sink scales by px_size / units_per_EM.  Relying
+  // on the slot's own scaling is not enough: with hinting off the outline is
+  // not guaranteed to be in 26.6 pixels, which silently mis-sized SVG text.
+  if (FT_Load_Glyph(impl_->face, glyph_index, FT_LOAD_NO_SCALE | FT_LOAD_NO_HINTING) != 0) {
+    return std::nullopt;
+  }
+  const FT_GlyphSlot slot = impl_->face->glyph;
+  const double units_per_em =
+      impl_->face->units_per_EM != 0 ? static_cast<double>(impl_->face->units_per_EM) : 0.0;
+  if (units_per_em <= 0.0) {
+    return std::nullopt;
+  }
+  const double unit_scale = static_cast<double>(px_size) / units_per_em;
+  GlyphOutline out;
+  out.advance = static_cast<float>(static_cast<double>(slot->advance.x) * unit_scale);
+  if (slot->format != FT_GLYPH_FORMAT_OUTLINE || slot->outline.n_points == 0) {
+    return out; // whitespace (or a bitmap-only glyph): advance, no shape
+  }
+  // Font units -> pixels.
+  OutlineSink sink;
+  sink.edges = &out.edges;
+  sink.scale = unit_scale;
+  FT_Outline_Funcs funcs{};
+  funcs.move_to = MoveTo;
+  funcs.line_to = LineTo;
+  funcs.conic_to = ConicTo;
+  funcs.cubic_to = CubicTo;
+  if (FT_Outline_Decompose(&slot->outline, &funcs, &sink) != 0) {
+    return std::nullopt;
+  }
   return out;
 }
 

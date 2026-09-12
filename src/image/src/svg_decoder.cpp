@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <map>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -228,6 +229,10 @@ struct Element
   std::string name; // lowercased
   std::vector<std::pair<std::string, std::string>> attrs;
   std::vector<Element> children;
+  // Character data of this element (SVG text content).  Children named
+  // "#text" carry the character data that sits between child elements, so
+  // <text>a<tspan>b</tspan>c</text> keeps the "a", "b", "c" order.
+  std::string text;
 
   const std::string* Attr(std::string_view key) const
   {
@@ -374,8 +379,16 @@ bool ParseElement(std::string_view data, std::size_t pos, Element& out, std::siz
     return true;
   }
   for (;;) {
+    const std::size_t text_start = i;
     while (i < data.size() && data[i] != '<') {
       ++i;
+    }
+    if (i > text_start) {
+      // Character data between child elements (kept for <text>/<tspan>).
+      Element text_node;
+      text_node.name = "#text";
+      text_node.text = std::string(data.substr(text_start, i - text_start));
+      out.children.push_back(std::move(text_node));
     }
     if (i >= data.size()) {
       return false;
@@ -860,6 +873,325 @@ bool ParseTransform(std::string_view value, Mat& out)
 }
 
 // ---------------------------------------------------------------------------
+// Paint: solid colours and gradients
+// ---------------------------------------------------------------------------
+
+struct GradientStop
+{
+  double offset = 0;
+  Color color;
+};
+
+// A gradient whose coordinates are already in device space (the rasterizer
+// always works on device pixels).  Linear gradients use the two-point form,
+// radial gradients the SVG focal-cone form (centre + radius + focal point).
+struct Gradient
+{
+  bool radial = false;
+  double x1 = 0, y1 = 0, x2 = 0, y2 = 0;        // linear
+  double cx = 0, cy = 0, r = 0, fx = 0, fy = 0; // radial
+  std::vector<GradientStop> stops;
+};
+
+// What a fill/stroke resolves to: either a solid colour or a device-space
+// gradient whose stops provide the colour.
+struct Paint
+{
+  Color color;
+  bool has_gradient = false;
+  Gradient gradient;
+};
+
+// Gradient definitions by id (linear/radial elements anywhere in the document;
+// SVG allows <defs> to appear after the shapes that use it).
+using GradientDefs = std::map<std::string, const Element*>;
+
+void CollectGradientDefs(const Element& element, GradientDefs& defs)
+{
+  if (element.name == "lineargradient" || element.name == "radialgradient") {
+    if (const std::string* id = element.Attr("id"); id != nullptr && !id->empty()) {
+      defs.emplace(ToLower(*id), &element);
+    }
+  }
+  for (const Element& child : element.children) {
+    CollectGradientDefs(child, defs);
+  }
+}
+
+double Clamp01(double v)
+{
+  return std::max(0.0, std::min(1.0, v));
+}
+
+// A gradient attribute value: plain number or percentage.  Percentages are
+// fractions of |extent| (the viewport size for userSpaceOnUse, or 1 for the
+// objectBoundingBox unit square, where the caller passes 1.0).
+double ParseGradientCoordinate(std::string_view text, double extent, double dflt)
+{
+  std::string s(text);
+  while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
+    s.erase(s.begin());
+  }
+  while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
+    s.pop_back();
+  }
+  if (s.empty()) {
+    return dflt;
+  }
+  const bool percent = s.back() == '%';
+  if (percent) {
+    s.pop_back();
+  }
+  char* end = nullptr;
+  const double v = std::strtod(s.c_str(), &end);
+  if (end == s.c_str() || !std::isfinite(v)) {
+    return dflt;
+  }
+  return percent ? v / 100.0 * extent : v;
+}
+
+Color LerpColor(const Color& a, const Color& b, double t)
+{
+  return {
+      a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, a.a + (b.a - a.a) * t};
+}
+
+// Colour of a gradient at a device pixel.  Offsets outside [0,1] extend the
+// nearest stop, which is the default "pad" spread method (other spread methods
+// and colour interpolation hints are NOT IMPLEMENTED).
+Color GradientColorAt(const Gradient& g, double px, double py)
+{
+  if (g.stops.empty()) {
+    return Color{};
+  }
+  if (g.stops.size() == 1) {
+    return g.stops.front().color;
+  }
+  double t = 0;
+  if (!g.radial) {
+    const double dx = g.x2 - g.x1;
+    const double dy = g.y2 - g.y1;
+    const double len2 = dx * dx + dy * dy;
+    t = len2 <= 1e-12 ? 0.0 : ((px - g.x1) * dx + (py - g.y1) * dy) / len2;
+  } else {
+    // Solve |P - (F + t*(C-F))| = t*R for the largest t >= 0.
+    const double dx = g.cx - g.fx;
+    const double dy = g.cy - g.fy;
+    const double c2 = dx * dx + dy * dy;
+    const double r2 = g.r * g.r;
+    const double ux = px - g.fx;
+    const double uy = py - g.fy;
+    if (c2 <= 1e-12) {
+      t = g.r <= 1e-12 ? 0.0 : std::sqrt(ux * ux + uy * uy) / g.r;
+    } else {
+      const double dot = ux * dx + uy * dy;
+      const double p2 = ux * ux + uy * uy;
+      const double disc = dot * dot - (c2 - r2) * p2;
+      if (c2 < r2) {
+        t = disc <= 0 ? 0.0 : (dot - std::sqrt(disc)) / (c2 - r2);
+      } else {
+        t = (dot + (disc <= 0 ? 0.0 : std::sqrt(disc))) / (c2 - r2);
+      }
+    }
+  }
+  if (!(t > 0)) {
+    return g.stops.front().color;
+  }
+  if (t >= 1) {
+    return g.stops.back().color;
+  }
+  for (std::size_t i = 1; i < g.stops.size(); ++i) {
+    const GradientStop& hi = g.stops[i];
+    if (t <= hi.offset) {
+      const GradientStop& lo = g.stops[i - 1];
+      const double span = hi.offset - lo.offset;
+      const double local = span <= 1e-9 ? 0.0 : (t - lo.offset) / span;
+      return LerpColor(lo.color, hi.color, local);
+    }
+  }
+  return g.stops.back().color;
+}
+
+Color PaintAt(const Paint& paint, double px, double py)
+{
+  return paint.has_gradient ? GradientColorAt(paint.gradient, px, py) : paint.color;
+}
+
+// Average uniform scale of an affine transform (used to size radial gradients
+// when the CTM is anisotropic: SVG would draw an ellipse, this renders the
+// mean-radius circle and is documented as a limitation).
+double AverageScale(const Mat& m)
+{
+  const double sx = std::sqrt(m.a * m.a + m.b * m.b);
+  const double sy = std::sqrt(m.c * m.c + m.d * m.d);
+  return (sx + sy) / 2.0;
+}
+
+// Resolves fill/stroke into a Paint.  |gradient_id| is the id of a url(#id)
+// reference (empty for solid paints); |bbox| is the shape's object bounding box
+// in user space ([x, y, w, h]) and is required by objectBoundingBox gradients.
+Paint MakePaint(const Color& fallback,
+                const std::string& gradient_id,
+                bool none_if_unresolved,
+                double alpha,
+                const GradientDefs& defs,
+                const double* bbox,
+                double viewport_w,
+                double viewport_h,
+                const Mat& to_device)
+{
+  Paint paint;
+  paint.color = fallback;
+  if (gradient_id.empty()) {
+    return paint;
+  }
+  const auto it = defs.find(ToLower(gradient_id));
+  if (it == defs.end()) {
+    // Unresolvable reference: no paint, unless a fallback colour was given.
+    if (none_if_unresolved) {
+      paint.color = Color{0, 0, 0, 0};
+    }
+    return paint;
+  }
+
+  // Attribute / stop inheritance through href (SVG 1.1 §13.2.3): the first
+  // element in the chain that defines an attribute or has <stop> children wins.
+  const Element* chain[8] = {};
+  int chain_len = 0;
+  const Element* current = it->second;
+  while (current != nullptr && chain_len < 8) {
+    chain[chain_len++] = current;
+    const std::string* href = current->Attr("href");
+    if (href == nullptr) {
+      href = current->Attr("xlink:href");
+    }
+    if (href == nullptr || href->size() < 2 || (*href)[0] != '#') {
+      break;
+    }
+    const auto parent = defs.find(ToLower(href->substr(1)));
+    current = parent == defs.end() ? nullptr : parent->second;
+  }
+  const auto chain_attr = [&](const char* key) -> const std::string* {
+    for (int i = 0; i < chain_len; ++i) {
+      if (const std::string* v = chain[i]->Attr(key); v != nullptr) {
+        return v;
+      }
+    }
+    return nullptr;
+  };
+
+  std::vector<GradientStop> stops;
+  for (int i = 0; i < chain_len && stops.empty(); ++i) {
+    for (const Element& child : chain[i]->children) {
+      if (child.name != "stop") {
+        continue;
+      }
+      GradientStop stop;
+      if (const std::string* off = child.Attr("offset")) {
+        stop.offset = Clamp01(ParseGradientCoordinate(*off, 1.0, 0.0));
+      }
+      Color color{0, 0, 0, 1};
+      if (const std::string* sc = child.Attr("stop-color")) {
+        bool none = false;
+        Color parsed;
+        if (ParseColor(*sc, parsed, none) && !none) {
+          color = parsed;
+        }
+      }
+      if (const std::string* so = child.Attr("stop-opacity")) {
+        color.a = Clamp01(std::strtod(so->c_str(), nullptr));
+      }
+      stop.color = color;
+      // Later stops must not move backwards (SVG 1.1 §13.2.4, "if the offsets
+      // are not monotonic, use the previous offset").
+      if (!stops.empty() && stop.offset < stops.back().offset) {
+        stop.offset = stops.back().offset;
+      }
+      stops.push_back(stop);
+    }
+  }
+  if (stops.size() < 2) {
+    if (stops.size() == 1) {
+      paint.color = stops.front().color;
+    }
+    return paint;
+  }
+  for (GradientStop& stop : stops) {
+    stop.color.a *= alpha;
+  }
+
+  const std::string* units = chain_attr("gradientunits");
+  const bool object_bounding_box = units == nullptr || ToLower(*units) != "userspaceonuse";
+  const double unit_w = object_bounding_box ? 1.0 : viewport_w;
+  const double unit_h = object_bounding_box ? 1.0 : viewport_h;
+  Mat gradient_transform;
+  if (const std::string* gt = chain_attr("gradienttransform")) {
+    if (!ParseTransform(*gt, gradient_transform)) {
+      gradient_transform = Mat{};
+    }
+  }
+  const double bw = bbox != nullptr ? bbox[2] : 1.0;
+  const double bh = bbox != nullptr ? bbox[3] : 1.0;
+  const double bx = bbox != nullptr ? bbox[0] : 0.0;
+  const double by = bbox != nullptr ? bbox[1] : 0.0;
+  // Gradient space -> user space -> device space.
+  const auto to_device_point = [&](double gx, double gy) -> Point {
+    Point p = gradient_transform.Apply({gx, gy});
+    if (object_bounding_box) {
+      p = {bx + p.x * bw, by + p.y * bh};
+    }
+    return to_device.Apply(p);
+  };
+
+  Gradient gradient;
+  gradient.radial = it->second->name == "radialgradient";
+  if (!gradient.radial) {
+    const double x1 = ParseGradientCoordinate(
+        chain_attr("x1") != nullptr ? *chain_attr("x1") : std::string(), unit_w, 0.0);
+    const double y1 = ParseGradientCoordinate(
+        chain_attr("y1") != nullptr ? *chain_attr("y1") : std::string(), unit_h, 0.0);
+    const double x2 = ParseGradientCoordinate(
+        chain_attr("x2") != nullptr ? *chain_attr("x2") : std::string(), unit_w, 1.0);
+    const double y2 = ParseGradientCoordinate(
+        chain_attr("y2") != nullptr ? *chain_attr("y2") : std::string(), unit_h, 0.0);
+    const Point p1 = to_device_point(x1, y1);
+    const Point p2 = to_device_point(x2, y2);
+    gradient.x1 = p1.x;
+    gradient.y1 = p1.y;
+    gradient.x2 = p2.x;
+    gradient.y2 = p2.y;
+  } else {
+    const double cx = ParseGradientCoordinate(
+        chain_attr("cx") != nullptr ? *chain_attr("cx") : std::string(), unit_w, 0.5);
+    const double cy = ParseGradientCoordinate(
+        chain_attr("cy") != nullptr ? *chain_attr("cy") : std::string(), unit_h, 0.5);
+    const double r =
+        ParseGradientCoordinate(chain_attr("r") != nullptr ? *chain_attr("r") : std::string(),
+                                (unit_w + unit_h) / 2.0,
+                                0.5);
+    const double fx = ParseGradientCoordinate(
+        chain_attr("fx") != nullptr ? *chain_attr("fx") : std::string(), unit_w, cx);
+    const double fy = ParseGradientCoordinate(
+        chain_attr("fy") != nullptr ? *chain_attr("fy") : std::string(), unit_h, cy);
+    const Point centre = to_device_point(cx, cy);
+    const Point focus = to_device_point(fx, fy);
+    gradient.cx = centre.x;
+    gradient.cy = centre.y;
+    gradient.fx = focus.x;
+    gradient.fy = focus.y;
+    // The radius is a length in gradient space: scale it by the composite
+    // transform (mean scale; see AverageScale).
+    const double local_scale = object_bounding_box ? (std::abs(bw) + std::abs(bh)) / 2.0
+                                                   : AverageScale(gradient_transform);
+    gradient.r = std::max(0.0, r * local_scale * AverageScale(to_device));
+  }
+  gradient.stops = std::move(stops);
+  paint.has_gradient = true;
+  paint.gradient = std::move(gradient);
+  return paint;
+}
+
+// ---------------------------------------------------------------------------
 // Rasterizer (2x supersampled RGBA accumulation)
 // ---------------------------------------------------------------------------
 
@@ -890,11 +1222,12 @@ struct RasterBuffer
   }
 };
 
-void FillPolygon(RasterBuffer& buf, const std::vector<Point>& poly, const Color& color)
+void FillPolygon(RasterBuffer& buf, const std::vector<Point>& poly, const Paint& paint)
 {
   if (poly.size() < 3) {
     return;
   }
+  const Color color = paint.color;
   std::vector<double> xs;
   xs.reserve(poly.size());
   for (int y = 0; y < buf.height; ++y) {
@@ -923,16 +1256,19 @@ void FillPolygon(RasterBuffer& buf, const std::vector<Point>& poly, const Color&
         }
         const double covered = std::min(
             1.0, std::min(static_cast<double>(x) + 1.0, x1) - std::max(static_cast<double>(x), x0));
+        // Gradients are evaluated per device pixel; solid paints reuse |color|.
         buf.Blend(static_cast<std::size_t>(y) * static_cast<std::size_t>(buf.width) +
                       static_cast<std::size_t>(x),
-                  color,
+                  paint.has_gradient
+                      ? PaintAt(paint, static_cast<double>(x) + 0.5, static_cast<double>(y) + 0.5)
+                      : color,
                   covered);
       }
     }
   }
 }
 
-void StrokeSegment(RasterBuffer& buf, Point p0, Point p1, double half_width, const Color& color)
+void StrokeSegment(RasterBuffer& buf, Point p0, Point p1, double half_width, const Paint& paint)
 {
   double dx = p1.x - p0.x;
   double dy = p1.y - p0.y;
@@ -943,7 +1279,7 @@ void StrokeSegment(RasterBuffer& buf, Point p0, Point p1, double half_width, con
                  {p0.x + half_width, p0.y - half_width},
                  {p0.x + half_width, p0.y + half_width},
                  {p0.x - half_width, p0.y + half_width}},
-                color);
+                paint);
     return;
   }
   dx /= len;
@@ -955,7 +1291,7 @@ void StrokeSegment(RasterBuffer& buf, Point p0, Point p1, double half_width, con
                {p1.x + nx, p1.y + ny},
                {p1.x - nx, p1.y - ny},
                {p0.x - nx, p0.y - ny}},
-              color);
+              paint);
   auto cap = [&](Point c) {
     const int steps = 16;
     std::vector<Point> circle;
@@ -964,7 +1300,7 @@ void StrokeSegment(RasterBuffer& buf, Point p0, Point p1, double half_width, con
       const double a = 2.0 * kPi * static_cast<double>(i) / static_cast<double>(steps);
       circle.push_back({c.x + half_width * std::cos(a), c.y + half_width * std::sin(a)});
     }
-    FillPolygon(buf, circle, color);
+    FillPolygon(buf, circle, paint);
   };
   cap(p0);
   cap(p1);
@@ -977,8 +1313,8 @@ void RenderShape(RasterBuffer& buf,
                  bool fill,
                  bool stroke,
                  double stroke_width,
-                 const Color& fill_color,
-                 const Color& stroke_color)
+                 const Paint& fill_paint,
+                 const Paint& stroke_paint)
 {
   if (points.empty()) {
     return;
@@ -989,7 +1325,7 @@ void RenderShape(RasterBuffer& buf,
     device.push_back(transform.Apply(p));
   }
   if (fill && device.size() >= 3) {
-    FillPolygon(buf, device, fill_color);
+    FillPolygon(buf, device, fill_paint);
   }
   if (stroke && stroke_width > 0) {
     // stroke-width is in user units; the points were already transformed into
@@ -999,65 +1335,139 @@ void RenderShape(RasterBuffer& buf,
                          2.0;
     const double half = stroke_width / 2.0 * scale;
     for (std::size_t i = 0; i + 1 < device.size(); ++i) {
-      StrokeSegment(buf, device[i], device[i + 1], half, stroke_color);
+      StrokeSegment(buf, device[i], device[i + 1], half, stroke_paint);
     }
     if (closed && device.size() >= 3) {
-      StrokeSegment(buf, device.back(), device.front(), half, stroke_color);
+      StrokeSegment(buf, device.back(), device.front(), half, stroke_paint);
     }
   }
 }
 
+// Bounding box ([x, y, w, h]) of a set of user-space polygons; empty input
+// yields the unit square so that objectBoundingBox gradients stay well defined.
+void BoundingBox(const std::vector<std::vector<Point>>& polygons, double* out)
+{
+  bool any = false;
+  double min_x = 0, min_y = 0, max_x = 0, max_y = 0;
+  for (const std::vector<Point>& poly : polygons) {
+    for (const Point& p : poly) {
+      if (!any) {
+        min_x = max_x = p.x;
+        min_y = max_y = p.y;
+        any = true;
+      } else {
+        min_x = std::min(min_x, p.x);
+        max_x = std::max(max_x, p.x);
+        min_y = std::min(min_y, p.y);
+        max_y = std::max(max_y, p.y);
+      }
+    }
+  }
+  if (!any) {
+    out[0] = 0;
+    out[1] = 0;
+    out[2] = 1;
+    out[3] = 1;
+    return;
+  }
+  out[0] = min_x;
+  out[1] = min_y;
+  out[2] = std::max(0.0, max_x - min_x);
+  out[3] = std::max(0.0, max_y - min_y);
+}
+
+struct PaintState
+{
+  bool has_fill = true;
+  Color fill{0, 0, 0, 1};    // solid colour (or the fallback after url(#id))
+  std::string fill_gradient; // url(#id) reference, empty for solid fills
+  bool fill_none = false;    // url() without a fallback: paints nothing if unresolved
+  double fill_alpha = 1.0;   // fill-opacity * opacity, also applied to gradients
+  bool has_stroke = false;
+  Color stroke{0, 0, 0, 1};
+  std::string stroke_gradient;
+  bool stroke_none = false;
+  double stroke_alpha = 1.0;
+  double stroke_width = 1;
+};
+
+// Flattens one path (a sequence of curves/arcs) into closed/open polygons.
+// The whole element is flattened before drawing so that objectBoundingBox
+// gradients can use the path's bounding box.
 void RenderPath(RasterBuffer& buf,
                 const Mat& transform,
                 std::string_view d,
                 bool fill,
                 bool stroke,
                 double stroke_width,
-                const Color& fill_color,
-                const Color& stroke_color)
+                const PaintState& state,
+                const GradientDefs& defs,
+                double viewport_w,
+                double viewport_h)
 {
   const std::vector<PathCmd> commands = ParsePathData(d);
   Point current{0, 0};
   Point start{0, 0};
-  std::vector<Point> poly;
+  std::vector<std::vector<Point>> subpaths;
+  std::vector<bool> closed;
 
-  auto flush = [&]() {
-    if (poly.size() >= 2) {
-      RenderShape(buf,
-                  transform,
-                  poly,
-                  /*closed=*/false,
-                  fill,
-                  stroke,
-                  stroke_width,
-                  fill_color,
-                  stroke_color);
+  auto begin_subpath = [&](const Point& p) {
+    subpaths.push_back({p});
+    closed.push_back(false);
+  };
+  auto add_point = [&](const Point& p) {
+    if (subpaths.empty()) {
+      begin_subpath(p);
+    } else {
+      subpaths.back().push_back(p);
     }
-    poly.clear();
+    current = p;
+  };
+  auto add_flat = [&](const std::vector<Point>& flat) {
+    for (const Point& p : flat) {
+      add_point(p);
+    }
+  };
+  auto close_subpath = [&]() {
+    if (!subpaths.empty() && subpaths.back().size() >= 2) {
+      closed.back() = true;
+    }
+    subpaths.push_back({start});
+    closed.push_back(false);
+    current = start;
+  };
+  const auto last_point = [&]() -> Point {
+    return subpaths.empty() || subpaths.back().size() < 2
+               ? current
+               : subpaths.back()[subpaths.back().size() - 2];
   };
 
   for (const PathCmd& cmd : commands) {
     const std::vector<double>& a = cmd.args;
     switch (cmd.cmd) {
     case 'M':
-      flush();
       current = {a[0], a[1]};
       start = current;
-      poly = {current};
+      // Further coordinate pairs after M are implicit L (SVG 1.1 §8.3.2).
+      begin_subpath(current);
+      for (std::size_t k = 2; k + 1 < a.size(); k += 2) {
+        add_point({a[k], a[k + 1]});
+      }
       break;
     case 'L':
       for (std::size_t k = 0; k + 1 < a.size(); k += 2) {
-        current = {a[k], a[k + 1]};
-        poly.push_back(current);
+        add_point({a[k], a[k + 1]});
       }
       break;
     case 'H':
-      current.x = a[0];
-      poly.push_back(current);
+      for (const double x : a) {
+        add_point({x, current.y});
+      }
       break;
     case 'V':
-      current.y = a[0];
-      poly.push_back(current);
+      for (const double y : a) {
+        add_point({current.x, y});
+      }
       break;
     case 'C':
       for (std::size_t k = 0; k + 5 < a.size(); k += 6) {
@@ -1067,20 +1477,18 @@ void RenderPath(RasterBuffer& buf,
         const Point p3{a[k + 4], a[k + 5]};
         std::vector<Point> flat;
         FlattenCubic(flat, p0, p1, p2, p3, 8);
-        poly.insert(poly.end(), flat.begin(), flat.end());
-        current = p3;
+        add_flat(flat);
       }
       break;
     case 'S':
       for (std::size_t k = 0; k + 3 < a.size(); k += 4) {
         const Point p0 = current;
-        const Point p1 = poly.size() >= 2 ? poly[poly.size() - 2] : current;
+        const Point p1 = last_point();
         const Point p2{a[k], a[k + 1]};
         const Point p3{a[k + 2], a[k + 3]};
         std::vector<Point> flat;
         FlattenCubic(flat, p0, p1, p2, p3, 8);
-        poly.insert(poly.end(), flat.begin(), flat.end());
-        current = p3;
+        add_flat(flat);
       }
       break;
     case 'Q':
@@ -1090,19 +1498,17 @@ void RenderPath(RasterBuffer& buf,
         const Point p2{a[k + 2], a[k + 3]};
         std::vector<Point> flat;
         FlattenQuadratic(flat, p0, p1, p2, 8);
-        poly.insert(poly.end(), flat.begin(), flat.end());
-        current = p2;
+        add_flat(flat);
       }
       break;
     case 'T':
       for (std::size_t k = 0; k + 1 < a.size(); k += 2) {
         const Point p0 = current;
-        const Point p1 = poly.size() >= 2 ? poly[poly.size() - 2] : current;
+        const Point p1 = last_point();
         const Point p2{a[k], a[k + 1]};
         std::vector<Point> flat;
         FlattenQuadratic(flat, p0, p1, p2, 8);
-        poly.insert(poly.end(), flat.begin(), flat.end());
-        current = p2;
+        add_flat(flat);
       }
       break;
     case 'A':
@@ -1111,47 +1517,130 @@ void RenderPath(RasterBuffer& buf,
         const Point p1{a[k + 5], a[k + 6]};
         std::vector<Point> flat;
         FlattenArc(flat, p0, a[k], a[k + 1], a[k + 2], a[k + 3] != 0, a[k + 4] != 0, p1);
-        poly.insert(poly.end(), flat.begin(), flat.end());
-        current = p1;
+        add_flat(flat);
       }
       break;
     case 'Z':
-      if (poly.size() >= 2) {
-        RenderShape(buf,
-                    transform,
-                    poly,
-                    /*closed=*/true,
-                    fill,
-                    stroke,
-                    stroke_width,
-                    fill_color,
-                    stroke_color);
-      }
-      poly.clear();
-      current = start;
+      close_subpath();
       break;
     default:
       break;
     }
   }
-  flush();
+  double bbox[4] = {0, 0, 1, 1};
+  BoundingBox(subpaths, bbox);
+  const Paint fill_paint = MakePaint(state.fill,
+                                     state.fill_gradient,
+                                     state.fill_none,
+                                     state.fill_alpha,
+                                     defs,
+                                     bbox,
+                                     viewport_w,
+                                     viewport_h,
+                                     transform);
+  const Paint stroke_paint = MakePaint(state.stroke,
+                                       state.stroke_gradient,
+                                       state.stroke_none,
+                                       state.stroke_alpha,
+                                       defs,
+                                       bbox,
+                                       viewport_w,
+                                       viewport_h,
+                                       transform);
+  for (std::size_t i = 0; i < subpaths.size(); ++i) {
+    RenderShape(buf,
+                transform,
+                subpaths[i],
+                closed[i],
+                fill,
+                stroke,
+                stroke_width,
+                fill_paint,
+                stroke_paint);
+  }
 }
 
-// ---------------------------------------------------------------------------
-// Tree rendering
-// ---------------------------------------------------------------------------
-
-struct PaintState
+// Extracts the id out of a url(#id) paint reference; returns false when the
+// value is not a URL reference.  A CSS fallback colour after the reference
+// ("url(#g) red") is parsed into |fallback|.
+bool ParsePaintUrl(std::string_view value, std::string& id, std::string& fallback)
 {
-  bool has_fill = true;
-  Color fill{0, 0, 0, 1};
-  bool has_stroke = false;
-  Color stroke{0, 0, 0, 1};
-  double stroke_width = 1;
-};
+  std::string s(value);
+  const std::size_t open = s.find("url(");
+  if (open == std::string::npos) {
+    return false;
+  }
+  std::size_t i = open + 4;
+  while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) {
+    ++i;
+  }
+  std::string ref;
+  if (i < s.size() && (s[i] == '#' || s[i] == '"' || s[i] == '\'')) {
+    const char quote = s[i] == '#' ? '\0' : s[i];
+    if (quote != '\0') {
+      ++i;
+    }
+    const std::size_t start = i;
+    while (i < s.size() && ((quote == '\0' && s[i] != ')') || (quote != '\0' && s[i] != quote))) {
+      ++i;
+    }
+    ref = s.substr(start, i - start);
+  }
+  const std::size_t close = s.find(')', i);
+  if (close == std::string::npos) {
+    return false;
+  }
+  while (!ref.empty() && std::isspace(static_cast<unsigned char>(ref.back()))) {
+    ref.pop_back();
+  }
+  if (ref.empty() || ref[0] != '#') {
+    return false;
+  }
+  id = ref.substr(1);
+  fallback = s.substr(close + 1);
+  // Trim the fallback.
+  std::size_t begin = 0;
+  while (begin < fallback.size() && std::isspace(static_cast<unsigned char>(fallback[begin]))) {
+    ++begin;
+  }
+  fallback = fallback.substr(begin);
+  return true;
+}
 
 void ApplyPaintAttr(PaintState& state, std::string_view attr, std::string_view value)
 {
+  // Paint references ("url(#id)") are resolved at draw time, when the painted
+  // shape's bounding box is known.  An optional fallback colour follows the
+  // reference (CSS <paint> syntax).
+  if (attr == "fill" || attr == "stroke") {
+    std::string id;
+    std::string fallback;
+    if (ParsePaintUrl(value, id, fallback)) {
+      // An unresolvable reference paints nothing (SVG 1.1 §13.2.2); a CSS
+      // fallback colour after the reference is used instead when present.
+      if (attr == "fill") {
+        state.has_fill = true;
+        state.fill_gradient = id;
+        state.fill_none = fallback.empty();
+      } else {
+        state.has_stroke = true;
+        state.stroke_gradient = id;
+        state.stroke_none = fallback.empty();
+      }
+      if (fallback.empty()) {
+        return;
+      }
+      value = fallback; // fall through to parse the fallback colour
+    } else {
+      if (attr == "fill") {
+        state.fill_gradient.clear();
+        state.fill_none = false;
+      } else {
+        state.stroke_gradient.clear();
+        state.stroke_none = false;
+      }
+    }
+  }
   Color color;
   bool none = false;
   const bool ok = ParseColor(value, color, none);
@@ -1172,15 +1661,469 @@ void ApplyPaintAttr(PaintState& state, std::string_view attr, std::string_view v
   } else if (attr == "stroke-width") {
     state.stroke_width = std::max(0.0, std::strtod(std::string(value).c_str(), nullptr));
   } else if (attr == "fill-opacity") {
-    state.fill.a = std::max(0.0, std::min(1.0, std::strtod(std::string(value).c_str(), nullptr)));
+    const double o = std::max(0.0, std::min(1.0, std::strtod(std::string(value).c_str(), nullptr)));
+    state.fill.a = o;
+    state.fill_alpha = o;
   } else if (attr == "stroke-opacity") {
-    state.stroke.a = std::max(0.0, std::min(1.0, std::strtod(std::string(value).c_str(), nullptr)));
+    const double o = std::max(0.0, std::min(1.0, std::strtod(std::string(value).c_str(), nullptr)));
+    state.stroke.a = o;
+    state.stroke_alpha = o;
   } else if (attr == "opacity") {
     const double o = std::max(0.0, std::min(1.0, std::strtod(std::string(value).c_str(), nullptr)));
     state.fill.a *= o;
     state.stroke.a *= o;
+    state.fill_alpha *= o;
+    state.stroke_alpha *= o;
   }
 }
+
+// Applies the declarations of a style="a:b;c:d" attribute (the SVG/CSS style
+// attribute outranks presentation attributes on the same element).
+void ApplyStyleDeclarations(PaintState& state, std::string_view style)
+{
+  std::size_t pos = 0;
+  while (pos < style.size()) {
+    const std::size_t end = style.find(';', pos);
+    const std::string_view decl =
+        style.substr(pos, end == std::string_view::npos ? std::string_view::npos : end - pos);
+    const std::size_t colon = decl.find(':');
+    if (colon != std::string_view::npos) {
+      std::string name(ToLower(decl.substr(0, colon)));
+      std::string_view value = decl.substr(colon + 1);
+      while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
+        value.remove_prefix(1);
+      }
+      while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) {
+        value.remove_suffix(1);
+      }
+      if (name == "fill" || name == "stroke" || name == "stroke-width" || name == "fill-opacity" ||
+          name == "stroke-opacity" || name == "opacity") {
+        ApplyPaintAttr(state, name, value);
+      }
+    }
+    if (end == std::string_view::npos) {
+      break;
+    }
+    pos = end + 1;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Text (<text>, <tspan>) through an injected glyph-outline shaper
+// ---------------------------------------------------------------------------
+
+// Fills a set of closed contours with the even-odd rule, which is what glyph
+// outlines need: the inner contour of "o" subtracts the counter.  Edges are
+// wrapped within each contour only (never between contours).
+void FillContours(RasterBuffer& buf,
+                  const std::vector<std::vector<Point>>& contours,
+                  const Paint& paint)
+{
+  if (contours.empty()) {
+    return;
+  }
+  const Color color = paint.color;
+  std::vector<double> xs;
+  for (int y = 0; y < buf.height; ++y) {
+    const double yc = static_cast<double>(y) + 0.5;
+    xs.clear();
+    for (const std::vector<Point>& contour : contours) {
+      if (contour.size() < 2) {
+        continue;
+      }
+      for (std::size_t i = 0; i < contour.size(); ++i) {
+        const Point& pa = contour[i];
+        const Point& pb = contour[(i + 1) % contour.size()];
+        if ((pa.y <= yc && pb.y > yc) || (pb.y <= yc && pa.y > yc)) {
+          const double t = (yc - pa.y) / (pb.y - pa.y);
+          xs.push_back(pa.x + t * (pb.x - pa.x));
+        }
+      }
+    }
+    std::sort(xs.begin(), xs.end());
+    for (std::size_t i = 0; i + 1 < xs.size(); i += 2) {
+      const double x0 = std::max(0.0, xs[i]);
+      const double x1 = std::min(static_cast<double>(buf.width), xs[i + 1]);
+      if (x1 <= x0) {
+        continue;
+      }
+      const int ix0 = static_cast<int>(x0);
+      const int ix1 = std::min(buf.width, static_cast<int>(std::ceil(x1)));
+      for (int x = ix0; x < ix1; ++x) {
+        if (x < 0) {
+          continue;
+        }
+        const double covered = std::min(
+            1.0, std::min(static_cast<double>(x) + 1.0, x1) - std::max(static_cast<double>(x), x0));
+        buf.Blend(static_cast<std::size_t>(y) * static_cast<std::size_t>(buf.width) +
+                      static_cast<std::size_t>(x),
+                  paint.has_gradient
+                      ? PaintAt(paint, static_cast<double>(x) + 0.5, static_cast<double>(y) + 0.5)
+                      : color,
+                  covered);
+      }
+    }
+  }
+}
+
+struct TextStyle
+{
+  double font_size = 16; // SVG's initial font-size
+  std::string family = "sans-serif";
+  bool bold = false;
+  bool italic = false;
+  double letter_spacing = 0;
+  int anchor = 0; // 0 = start, 1 = middle, 2 = end
+};
+
+// Trims leading/trailing whitespace and collapses runs of spaces+newlines into
+// a single space (SVG's default xml:space="default" handling).
+std::string CollapseWhitespace(std::string_view text)
+{
+  std::string out;
+  bool pending_space = false;
+  for (const char c : text) {
+    if (std::isspace(static_cast<unsigned char>(c))) {
+      pending_space = !out.empty();
+      continue;
+    }
+    if (pending_space) {
+      out.push_back(' ');
+      pending_space = false;
+    }
+    out.push_back(c);
+  }
+  return out;
+}
+
+double ParseFontSize(std::string_view value, double parent_size)
+{
+  std::string s(value);
+  while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
+    s.erase(s.begin());
+  }
+  while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
+    s.pop_back();
+  }
+  if (s.empty()) {
+    return parent_size;
+  }
+  // Named absolute sizes (CSS 2.1 font-size keywords).
+  static const std::pair<const char*, double> kNamed[] = {{"xx-small", 9},
+                                                          {"x-small", 10},
+                                                          {"small", 13},
+                                                          {"medium", 16},
+                                                          {"large", 18},
+                                                          {"x-large", 24},
+                                                          {"xx-large", 32},
+                                                          {"smaller", 13},
+                                                          {"larger", 19},
+                                                          {"inherit", -1}};
+  for (const auto& [name, size] : kNamed) {
+    if (s == name) {
+      return size < 0 ? parent_size : size;
+    }
+  }
+  const bool percent = s.back() == '%';
+  if (percent || (s.size() >= 2 && s.substr(s.size() - 2) == "em")) {
+    const std::string number = percent ? s.substr(0, s.size() - 1) : s.substr(0, s.size() - 2);
+    const double factor = std::strtod(number.c_str(), nullptr);
+    return factor > 0 ? parent_size * (percent ? factor / 100.0 : factor) : parent_size;
+  }
+  const double px = std::strtod(s.c_str(), nullptr);
+  return px > 0 ? px : parent_size;
+}
+
+void ApplyTextAttr(TextStyle& style, std::string_view attr, std::string_view value)
+{
+  if (attr == "font-size") {
+    style.font_size = ParseFontSize(value, style.font_size);
+  } else if (attr == "font-family") {
+    // Keep the author's list; the shaper resolves it (quotes are stripped).
+    std::string family(value);
+    if (family.size() >= 2 && (family.front() == '\'' || family.front() == '"')) {
+      family = family.substr(1, family.size() - 2);
+    }
+    if (!family.empty()) {
+      style.family = family;
+    }
+  } else if (attr == "font-weight") {
+    const std::string v = ToLower(value);
+    style.bold = v == "bold" || v == "bolder" || std::strtod(v.c_str(), nullptr) >= 600;
+  } else if (attr == "font-style") {
+    const std::string v = ToLower(value);
+    style.italic = v == "italic" || v == "oblique";
+  } else if (attr == "letter-spacing") {
+    const std::string v = ToLower(value);
+    style.letter_spacing = v == "normal" ? 0.0 : std::strtod(v.c_str(), nullptr);
+  } else if (attr == "text-anchor") {
+    const std::string v = ToLower(value);
+    style.anchor = v == "middle" ? 1 : (v == "end" ? 2 : 0);
+  }
+}
+
+// Shapes one string and appends its flattened outlines (in *user* space, after
+// |transform|) to |contours|.  Returns the advance width in user units.
+double ShapeRun(const SvgTextShaper& shaper,
+                const TextStyle& style,
+                std::string_view text,
+                double pen_x,
+                double pen_y,
+                const Mat& transform,
+                std::vector<std::vector<Point>>& contours)
+{
+  std::vector<SvgGlyphOutline> glyphs;
+  if (!shaper(style.family, style.bold, style.italic, style.font_size, text, glyphs)) {
+    return 0;
+  }
+  double pen = pen_x;
+  for (const SvgGlyphOutline& glyph : glyphs) {
+    std::vector<Point> current;
+    Point cursor{0, 0};
+    const auto flush = [&]() {
+      if (current.size() >= 3) {
+        std::vector<Point> device;
+        device.reserve(current.size());
+        for (const Point& p : current) {
+          device.push_back(transform.Apply({p.x + pen, p.y + pen_y}));
+        }
+        contours.push_back(std::move(device));
+      }
+      current.clear();
+    };
+    for (const SvgOutlineEdge& edge : glyph.edges) {
+      switch (edge.kind) {
+      case SvgOutlineEdge::kMove:
+        flush();
+        cursor = {edge.p[0], edge.p[1]};
+        current.push_back(cursor);
+        break;
+      case SvgOutlineEdge::kLine:
+        cursor = {edge.p[0], edge.p[1]};
+        current.push_back(cursor);
+        break;
+      case SvgOutlineEdge::kQuadratic: {
+        const Point control{edge.p[0], edge.p[1]};
+        const Point end{edge.p[2], edge.p[3]};
+        FlattenQuadratic(current, cursor, control, end, 6);
+        cursor = end;
+        break;
+      }
+      case SvgOutlineEdge::kCubic: {
+        const Point c1{edge.p[0], edge.p[1]};
+        const Point c2{edge.p[2], edge.p[3]};
+        const Point end{edge.p[4], edge.p[5]};
+        FlattenCubic(current, cursor, c1, c2, end, 6);
+        cursor = end;
+        break;
+      }
+      case SvgOutlineEdge::kClose:
+        flush();
+        break;
+      }
+    }
+    flush();
+    pen += glyph.advance + style.letter_spacing;
+  }
+  return pen - pen_x;
+}
+
+struct TextCursor
+{
+  double x = 0;
+  double y = 0;
+};
+
+void RenderTextNode(RasterBuffer& buf,
+                    const Element& element,
+                    const Mat& transform,
+                    const PaintState& parent_state,
+                    const GradientDefs& defs,
+                    double viewport_w,
+                    double viewport_h,
+                    const SvgTextShaper& shaper,
+                    TextStyle style,
+                    TextCursor cursor,
+                    bool apply_anchor);
+
+// Renders one shaped string at |cursor| and advances it (used for both direct
+// character data and the string inside a <tspan>).
+void RenderTextString(RasterBuffer& buf,
+                      std::string_view raw_text,
+                      const Mat& transform,
+                      const PaintState& state,
+                      const GradientDefs& defs,
+                      double viewport_w,
+                      double viewport_h,
+                      const SvgTextShaper& shaper,
+                      const TextStyle& style,
+                      TextCursor& cursor,
+                      bool apply_anchor)
+{
+  const std::string text = CollapseWhitespace(raw_text);
+  if (text.empty()) {
+    return;
+  }
+  // Measure first: text-anchor shifts the run by its own width.
+  std::vector<SvgGlyphOutline> glyphs;
+  if (!shaper(style.family, style.bold, style.italic, style.font_size, text, glyphs)) {
+    return;
+  }
+  double width = 0;
+  for (const SvgGlyphOutline& glyph : glyphs) {
+    width += glyph.advance + style.letter_spacing;
+  }
+  if (apply_anchor && style.anchor == 1) {
+    cursor.x -= width / 2.0;
+  } else if (apply_anchor && style.anchor == 2) {
+    cursor.x -= width;
+  }
+  std::vector<std::vector<Point>> contours;
+  ShapeRun(shaper, style, text, cursor.x, cursor.y, transform, contours);
+  cursor.x += width;
+  if (contours.empty()) {
+    return;
+  }
+  // objectBoundingBox gradients use the text run's bounding box (SVG 1.1
+  // §13.2.2).  The contours are already in device space, so the box must be
+  // mapped back through the inverse transform -- instead, compute the box from
+  // the device contours and let MakePaint work with a device-space box by
+  // passing the identity transform.
+  double bbox[4] = {0, 0, 0, 0};
+  BoundingBox(contours, bbox);
+  const Paint fill_paint = MakePaint(state.fill,
+                                     state.fill_gradient,
+                                     state.fill_none,
+                                     state.fill_alpha,
+                                     defs,
+                                     nullptr,
+                                     viewport_w,
+                                     viewport_h,
+                                     Mat{});
+  Paint paint = fill_paint;
+  if (paint.has_gradient) {
+    // Rebuild the gradient so its coordinates follow the device-space box.
+    paint = MakePaint(state.fill,
+                      state.fill_gradient,
+                      state.fill_none,
+                      state.fill_alpha,
+                      defs,
+                      bbox,
+                      0,
+                      0,
+                      Mat{});
+  }
+  if (state.has_fill) {
+    FillContours(buf, contours, paint);
+  }
+}
+
+void RenderTextNode(RasterBuffer& buf,
+                    const Element& element,
+                    const Mat& transform,
+                    const PaintState& parent_state,
+                    const GradientDefs& defs,
+                    double viewport_w,
+                    double viewport_h,
+                    const SvgTextShaper& shaper,
+                    TextStyle style,
+                    TextCursor cursor,
+                    bool apply_anchor)
+{
+  PaintState state = parent_state;
+  for (const auto& attr : element.attrs) {
+    if (attr.first == "fill" || attr.first == "stroke" || attr.first == "stroke-width" ||
+        attr.first == "fill-opacity" || attr.first == "stroke-opacity" || attr.first == "opacity") {
+      ApplyPaintAttr(state, attr.first, attr.second);
+    } else if (attr.first == "font-size" || attr.first == "font-family" ||
+               attr.first == "font-weight" || attr.first == "font-style" ||
+               attr.first == "letter-spacing" || attr.first == "text-anchor" ||
+               attr.first == "xml:space") {
+      ApplyTextAttr(style, attr.first, attr.second);
+    }
+  }
+  if (const std::string* style_attr = element.Attr("style")) {
+    ApplyStyleDeclarations(state, *style_attr);
+    std::size_t pos = 0;
+    while (pos < style_attr->size()) {
+      const std::size_t end = style_attr->find(';', pos);
+      const std::string_view decl =
+          std::string_view(*style_attr)
+              .substr(pos, end == std::string::npos ? std::string::npos : end - pos);
+      const std::size_t colon = decl.find(':');
+      if (colon != std::string_view::npos) {
+        std::string name(ToLower(decl.substr(0, colon)));
+        std::string_view value = decl.substr(colon + 1);
+        while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
+          value.remove_prefix(1);
+        }
+        while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) {
+          value.remove_suffix(1);
+        }
+        ApplyTextAttr(style, name, value);
+      }
+      if (end == std::string::npos) {
+        break;
+      }
+      pos = end + 1;
+    }
+  }
+
+  // Position: absolute x/y replace the current pen, dx/dy offset it.
+  bool explicit_position = false;
+  if (const std::string* x = element.Attr("x")) {
+    cursor.x = ParseGradientCoordinate(*x, viewport_w, cursor.x);
+    explicit_position = true;
+  }
+  if (const std::string* y = element.Attr("y")) {
+    cursor.y = ParseGradientCoordinate(*y, viewport_h, cursor.y);
+    explicit_position = true;
+  }
+  if (const std::string* dx = element.Attr("dx")) {
+    cursor.x += ParseGradientCoordinate(*dx, viewport_w, 0.0);
+  }
+  if (const std::string* dy = element.Attr("dy")) {
+    cursor.y += ParseGradientCoordinate(*dy, viewport_h, 0.0);
+  }
+
+  // Characters and child elements are rendered in document order.
+  for (const Element& child : element.children) {
+    if (child.name == "#text") {
+      RenderTextString(buf,
+                       child.text,
+                       transform,
+                       state,
+                       defs,
+                       viewport_w,
+                       viewport_h,
+                       shaper,
+                       style,
+                       cursor,
+                       apply_anchor && explicit_position);
+      continue;
+    }
+    if (child.name == "tspan") {
+      RenderTextNode(buf,
+                     child,
+                     transform,
+                     state,
+                     defs,
+                     viewport_w,
+                     viewport_h,
+                     shaper,
+                     style,
+                     cursor,
+                     /*apply_anchor=*/true);
+      continue;
+    }
+    // Unknown child elements inside <text> are ignored (also true for the
+    // browser: they simply contribute nothing to the run).
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tree rendering
+// ---------------------------------------------------------------------------
 
 double AttrNumber(const Element& element, std::string_view key, double dflt)
 {
@@ -1188,13 +2131,25 @@ double AttrNumber(const Element& element, std::string_view key, double dflt)
   return v == nullptr || v->empty() ? dflt : std::strtod(v->c_str(), nullptr);
 }
 
-void RenderElement(RasterBuffer& buf, const Element& element, const Mat& parent, PaintState state)
+// |viewport_w| / |viewport_h| are the current user-space viewport dimensions
+// (needed to resolve percentage coordinates of userSpaceOnUse gradients).
+void RenderElement(RasterBuffer& buf,
+                   const Element& element,
+                   const Mat& parent,
+                   PaintState state,
+                   const GradientDefs& defs,
+                   double viewport_w,
+                   double viewport_h,
+                   const SvgTextShaper& shaper)
 {
   for (const auto& attr : element.attrs) {
     if (attr.first == "fill" || attr.first == "stroke" || attr.first == "stroke-width" ||
         attr.first == "fill-opacity" || attr.first == "stroke-opacity" || attr.first == "opacity") {
       ApplyPaintAttr(state, attr.first, attr.second);
     }
+  }
+  if (const std::string* style = element.Attr("style")) {
+    ApplyStyleDeclarations(state, *style);
   }
   Mat local = parent;
   if (const std::string* t = element.Attr("transform")) {
@@ -1203,10 +2158,45 @@ void RenderElement(RasterBuffer& buf, const Element& element, const Mat& parent,
       local = parent * m;
     }
   }
+  // Paint factories: a gradient is built lazily per shape because
+  // objectBoundingBox coordinates depend on that shape's bounding box.
+  const auto fill_paint = [&](const double* bbox) {
+    return MakePaint(state.fill,
+                     state.fill_gradient,
+                     state.fill_none,
+                     state.fill_alpha,
+                     defs,
+                     bbox,
+                     viewport_w,
+                     viewport_h,
+                     local);
+  };
+  const auto stroke_paint = [&](const double* bbox) {
+    return MakePaint(state.stroke,
+                     state.stroke_gradient,
+                     state.stroke_none,
+                     state.stroke_alpha,
+                     defs,
+                     bbox,
+                     viewport_w,
+                     viewport_h,
+                     local);
+  };
 
   if (element.name == "svg" || element.name == "g" || element.name == "a") {
+    double vw = viewport_w;
+    double vh = viewport_h;
+    if (element.name == "svg") {
+      // A nested <svg> re-establishes the viewport for percentage lengths.
+      if (const std::string* w = element.Attr("width")) {
+        vw = std::strtod(w->c_str(), nullptr);
+      }
+      if (const std::string* h = element.Attr("height")) {
+        vh = std::strtod(h->c_str(), nullptr);
+      }
+    }
     for (const Element& child : element.children) {
-      RenderElement(buf, child, local, state);
+      RenderElement(buf, child, local, state, defs, vw, vh, shaper);
     }
     return;
   }
@@ -1238,6 +2228,7 @@ void RenderElement(RasterBuffer& buf, const Element& element, const Mat& parent,
       FlattenCubic(smooth, c3, {x + w, y + h - ryy / 2}, {x + w - rxx / 2, y + h}, c4, 6);
       smooth.push_back(c5);
       FlattenCubic(smooth, c5, {x + rxx / 2, y + h}, {x, y + h - ryy / 2}, c6, 6);
+      const double bbox[4] = {x, y, w, h};
       RenderShape(buf,
                   local,
                   smooth,
@@ -1245,10 +2236,11 @@ void RenderElement(RasterBuffer& buf, const Element& element, const Mat& parent,
                   state.has_fill,
                   state.has_stroke,
                   state.stroke_width,
-                  state.fill,
-                  state.stroke);
+                  fill_paint(bbox),
+                  stroke_paint(bbox));
       return;
     }
+    const double bbox[4] = {x, y, w, h};
     RenderShape(buf,
                 local,
                 {{x, y}, {x + w, y}, {x + w, y + h}, {x, y + h}},
@@ -1256,8 +2248,8 @@ void RenderElement(RasterBuffer& buf, const Element& element, const Mat& parent,
                 state.has_fill,
                 state.has_stroke,
                 state.stroke_width,
-                state.fill,
-                state.stroke);
+                fill_paint(bbox),
+                stroke_paint(bbox));
     return;
   }
   if (element.name == "circle" || element.name == "ellipse") {
@@ -1273,6 +2265,7 @@ void RenderElement(RasterBuffer& buf, const Element& element, const Mat& parent,
       const double a = 2.0 * kPi * static_cast<double>(i) / static_cast<double>(steps);
       pts.push_back({cx + rx * std::cos(a), cy + ry * std::sin(a)});
     }
+    const double bbox[4] = {cx - rx, cy - ry, 2 * rx, 2 * ry};
     RenderShape(buf,
                 local,
                 pts,
@@ -1280,21 +2273,24 @@ void RenderElement(RasterBuffer& buf, const Element& element, const Mat& parent,
                 state.has_fill,
                 state.has_stroke,
                 state.stroke_width,
-                state.fill,
-                state.stroke);
+                fill_paint(bbox),
+                stroke_paint(bbox));
     return;
   }
   if (element.name == "line") {
+    const Point p1{AttrNumber(element, "x1", 0), AttrNumber(element, "y1", 0)};
+    const Point p2{AttrNumber(element, "x2", 0), AttrNumber(element, "y2", 0)};
+    const double bbox[4] = {
+        std::min(p1.x, p2.x), std::min(p1.y, p2.y), std::abs(p2.x - p1.x), std::abs(p2.y - p1.y)};
     RenderShape(buf,
                 local,
-                {{AttrNumber(element, "x1", 0), AttrNumber(element, "y1", 0)},
-                 {AttrNumber(element, "x2", 0), AttrNumber(element, "y2", 0)}},
+                {p1, p2},
                 false,
                 false,
                 state.has_stroke,
                 state.stroke_width,
-                state.fill,
-                state.stroke);
+                fill_paint(bbox),
+                stroke_paint(bbox));
     return;
   }
   if (element.name == "polyline" || element.name == "polygon") {
@@ -1308,6 +2304,8 @@ void RenderElement(RasterBuffer& buf, const Element& element, const Mat& parent,
       }
       pts.push_back({x, y});
     }
+    double bbox[4] = {0, 0, 1, 1};
+    BoundingBox({pts}, bbox);
     RenderShape(buf,
                 local,
                 pts,
@@ -1315,8 +2313,8 @@ void RenderElement(RasterBuffer& buf, const Element& element, const Mat& parent,
                 state.has_fill,
                 state.has_stroke,
                 state.stroke_width,
-                state.fill,
-                state.stroke);
+                fill_paint(bbox),
+                stroke_paint(bbox));
     return;
   }
   if (element.name == "path") {
@@ -1327,17 +2325,41 @@ void RenderElement(RasterBuffer& buf, const Element& element, const Mat& parent,
                  state.has_fill,
                  state.has_stroke,
                  state.stroke_width,
-                 state.fill,
-                 state.stroke);
+                 state,
+                 defs,
+                 viewport_w,
+                 viewport_h);
     }
     return;
   }
+  if (element.name == "text") {
+    if (!shaper) {
+      return; // no glyph provider: text is skipped, never faked
+    }
+    TextStyle style;
+    TextCursor cursor;
+    RenderTextNode(buf,
+                   element,
+                   local,
+                   state,
+                   defs,
+                   viewport_w,
+                   viewport_h,
+                   shaper,
+                   style,
+                   cursor,
+                   /*apply_anchor=*/true);
+    return;
+  }
   if (element.name == "defs" || element.name == "symbol" || element.name == "marker" ||
-      element.name == "clippath" || element.name == "mask" || element.name == "pattern") {
+      element.name == "clippath" || element.name == "mask" || element.name == "pattern" ||
+      element.name == "lineargradient" || element.name == "radialgradient" ||
+      element.name == "style" || element.name == "title" || element.name == "desc" ||
+      element.name == "#text") {
     return; // skipped content
   }
   for (const Element& child : element.children) {
-    RenderElement(buf, child, local, state);
+    RenderElement(buf, child, local, state, defs, viewport_w, viewport_h, shaper);
   }
 }
 
@@ -1349,7 +2371,7 @@ bool IsSvg(std::string_view data)
   return pos + 4 <= data.size() && data.substr(pos, 4) == "<svg";
 }
 
-base::Result<Image> DecodeSvg(std::string_view data)
+base::Result<Image> DecodeSvg(std::string_view data, const SvgTextShaper& shaper)
 {
   std::size_t pos = SkipXmlProlog(data, 0);
   Element root;
@@ -1410,8 +2432,17 @@ base::Result<Image> DecodeSvg(std::string_view data)
     to_device = Mat::Translate(-vbx * 2.0, -vby * 2.0) * Mat::Scale(2.0, 2.0);
   }
 
+  // Gradient definitions may live anywhere in the document (including after the
+  // shapes that reference them), so collect them before rendering.
+  GradientDefs defs;
+  CollectGradientDefs(root, defs);
+
+  // User-space viewport for percentage lengths inside userSpaceOnUse gradients.
+  const double viewport_w = has_viewbox && vbw > 0 ? vbw : width;
+  const double viewport_h = has_viewbox && vbh > 0 ? vbh : height;
+
   PaintState state;
-  RenderElement(buf, root, to_device, state);
+  RenderElement(buf, root, to_device, state, defs, viewport_w, viewport_h, shaper);
 
   // Downsample 2x2 and unpremultiply.
   Image image;
@@ -1432,7 +2463,10 @@ base::Result<Image> DecodeSvg(std::string_view data)
           aa += buf.a[idx];
         }
       }
-      const double inv = aa > 0 ? 4.0 / aa : 0;
+      // |ar| and |aa| are both sums over the same four samples, so the
+      // unpremultiplied colour is their ratio (dividing by 4 twice cancels).
+      // Using 4/aa here made every non-saturated colour ~4x too bright.
+      const double inv = aa > 0 ? 1.0 / aa : 0;
       const std::size_t idx = (static_cast<std::size_t>(y) * static_cast<std::size_t>(out_w) +
                                static_cast<std::size_t>(x)) *
                               4;

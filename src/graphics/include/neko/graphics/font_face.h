@@ -35,6 +35,34 @@ struct RasterizedGlyph
   std::vector<uint8_t> storage;
 };
 
+// One edge of a glyph outline, in a y-down pixel coordinate system with the
+// origin at the pen position on the baseline (the same convention as
+// GlyphBitmap's bearings, and the one SVG needs).  |p| holds the control and
+// end points: 1 point for move/line, 2 for a quadratic, 3 for a cubic.
+enum class OutlineKind : uint8_t
+{
+  kMove,
+  kLine,
+  kQuadratic,
+  kCubic,
+  kClose,
+};
+
+struct OutlineEdge
+{
+  OutlineKind kind = OutlineKind::kMove;
+  float p[6] = {0, 0, 0, 0, 0, 0};
+};
+
+// Vector outline of a glyph, decomposed into move/line/quadratic/cubic/close
+// edges.  FreeType's conic curves are kept as quadratics, so consumers can
+// flatten them at their own tolerance.
+struct GlyphOutline
+{
+  std::vector<OutlineEdge> edges;
+  float advance = 0; // horizontal advance in px
+};
+
 // One font file (TrueType/OpenType), loaded through the shared FreeType
 // library.  Glyph rasterization is memoized by (pixel size, code point) in the
 // process-wide glyph cache.  All FreeType access is serialized per face (the
@@ -71,6 +99,12 @@ public:
   // Rasterized glyph for |code_point| at |px_size| (cached), returned as an
   // owned copy.  Returns nullopt for an unusable face or invalid input.
   std::optional<RasterizedGlyph> RenderGlyph(uint32_t code_point, float px_size) const;
+
+  // Vector outline for |code_point| at |px_size| (hinted off, so the outline is
+  // the design shape).  Returns nullopt when the face is unusable or FreeType
+  // cannot load the glyph.  Whitespace glyphs yield an empty edge list plus
+  // their advance.
+  std::optional<GlyphOutline> OutlineGlyph(uint32_t code_point, float px_size) const;
 
   // Ascent above the baseline (px) at |px_size|.
   float Ascent(float px_size) const;

@@ -7,6 +7,7 @@
 #include "neko/graphics/font_selector.h"
 #include "neko/html/parser.h"
 #include "neko/paint/painter.h"
+#include "neko/paint/svg_text_shaper.h"
 
 #include <algorithm>
 #include <chrono>
@@ -598,6 +599,11 @@ void Page::LayoutLocked(float viewport_width, float viewport_height, bool apply_
       engine.BuildLayoutTree(*document_, viewport_width / page_zoom_, viewport_height / page_zoom_);
   display_list_.reset();
   BumpVersion();
+}
+
+image::SvgTextShaper Page::MakeSvgTextShaper() const
+{
+  return paint::CreateSvgTextShaper(fonts_);
 }
 
 void Page::SetElementImage(const dom::Element* element,

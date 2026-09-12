@@ -12,6 +12,7 @@
 #include "neko/graphics/glyph_cache.h"
 #include "neko/graphics/system_fonts.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <gtest/gtest.h>
 #include <optional>
@@ -105,6 +106,51 @@ TEST(FontSelectorTest, CjkFallbackRendersHanGlyphs)
   const auto glyph = selector->RenderGlyph(0x4E2D, 16);
   ASSERT_TRUE(glyph.has_value());
   EXPECT_GT(glyph->glyph.width, 0);
+}
+
+TEST(FontFaceTest, OutlineGlyphExtractsVectorContours)
+{
+  const auto candidates = FindSystemFonts(GenericFamily::kSansSerif);
+  if (candidates.empty()) {
+    GTEST_SKIP() << "no system sans-serif font available";
+  }
+  FontFace face(candidates.front());
+  ASSERT_TRUE(face.valid());
+  const auto outline = face.OutlineGlyph('A', 20);
+  ASSERT_TRUE(outline.has_value());
+  EXPECT_GT(outline->advance, 0.0f);
+  ASSERT_FALSE(outline->edges.empty());
+  bool has_curve_or_line = false;
+  float min_y = 1e9f;
+  float max_y = -1e9f;
+  for (const OutlineEdge& edge : outline->edges) {
+    if (edge.kind == OutlineKind::kLine || edge.kind == OutlineKind::kQuadratic ||
+        edge.kind == OutlineKind::kCubic) {
+      has_curve_or_line = true;
+    }
+    if (edge.kind != OutlineKind::kClose) {
+      // y is negated so the baseline sits at 0 and ascenders are negative.
+      min_y = std::min(min_y, edge.p[1]);
+      max_y = std::max(max_y, edge.p[1]);
+    }
+  }
+  EXPECT_TRUE(has_curve_or_line);
+  EXPECT_LT(min_y, 0.0f); // 'A' rises above the baseline
+  EXPECT_LE(max_y, 1.5f); // and sits on it (small hinting-free tolerance)
+}
+
+TEST(FontFaceTest, OutlineGlyphKeepsAdvanceForWhitespace)
+{
+  const auto candidates = FindSystemFonts(GenericFamily::kSansSerif);
+  if (candidates.empty()) {
+    GTEST_SKIP() << "no system sans-serif font available";
+  }
+  FontFace face(candidates.front());
+  ASSERT_TRUE(face.valid());
+  const auto outline = face.OutlineGlyph(' ', 16);
+  ASSERT_TRUE(outline.has_value());
+  EXPECT_GT(outline->advance, 0.0f);
+  EXPECT_TRUE(outline->edges.empty());
 }
 
 TEST(FontSelectorTest, ResolveFamilyNameFindsCjk)

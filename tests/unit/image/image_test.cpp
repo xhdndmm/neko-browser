@@ -1271,6 +1271,229 @@ TEST(SvgTest, RendersStrokeAndHexColor)
   EXPECT_LT(img.rgba[above + 3], 10);
 }
 
+TEST(SvgTest, RendersLinearGradientWithObjectBoundingBoxUnits)
+{
+  // Left-to-right red -> blue gradient over a 20x10 rect (the default
+  // gradientUnits="objectBoundingBox" maps (0,0)-(1,0) onto that rect).
+  const std::string svg =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"10\">"
+      "<defs><linearGradient id=\"g\"><stop offset=\"0\" stop-color=\"#ff0000\"/>"
+      "<stop offset=\"1\" stop-color=\"#0000ff\"/></linearGradient></defs>"
+      "<rect x=\"0\" y=\"0\" width=\"20\" height=\"10\" fill=\"url(#g)\"/>"
+      "</svg>";
+  const auto result = DecodeSvg(svg);
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  const Image& img = result.value();
+  const auto pixel = [&](int x, int y) {
+    const size_t idx = (static_cast<size_t>(y) * 20 + static_cast<size_t>(x)) * 4;
+    return std::array<int, 3>{img.rgba[idx], img.rgba[idx + 1], img.rgba[idx + 2]};
+  };
+  EXPECT_GT(pixel(2, 5)[0], 200); // left edge: red
+  EXPECT_LT(pixel(2, 5)[2], 60);
+  EXPECT_GT(pixel(17, 5)[2], 200); // right edge: blue
+  EXPECT_LT(pixel(17, 5)[0], 60);
+  // Both edges dominate at the horizontal midpoint.
+  const auto mid = pixel(10, 5);
+  EXPECT_NEAR(mid[0], mid[2], 60);
+}
+
+TEST(SvgTest, RendersRadialGradientFocalPointAndStops)
+{
+  // A userSpaceOnUse radial gradient centred in a 40x40 viewport: the centre is
+  // the last stop's colour, the outside the first stop's colour.
+  const std::string svg =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"40\">"
+      "<radialGradient id=\"r\" gradientUnits=\"userSpaceOnUse\" cx=\"20\" cy=\"20\" r=\"15\">"
+      "<stop offset=\"0\" stop-color=\"#ffffff\"/><stop offset=\"1\" stop-color=\"#000000\"/>"
+      "</radialGradient>"
+      "<rect width=\"40\" height=\"40\" fill=\"url(#r)\"/>"
+      "</svg>";
+  const auto result = DecodeSvg(svg);
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  const Image& img = result.value();
+  const auto pixel = [&](int x, int y) {
+    const size_t idx = (static_cast<size_t>(y) * 40 + static_cast<size_t>(x)) * 4;
+    return std::array<int, 3>{img.rgba[idx], img.rgba[idx + 1], img.rgba[idx + 2]};
+  };
+  EXPECT_GT(pixel(20, 20)[0], 200); // centre: white
+  EXPECT_LT(pixel(2, 2)[0], 40);    // corner (beyond r): black
+  const auto mid_ring = pixel(28, 20);
+  EXPECT_GT(mid_ring[0], 40); // inside the radius, partially shaded
+  EXPECT_LT(mid_ring[0], 220);
+}
+
+TEST(SvgTest, GradientHrefInheritsStopsAndPresentationStyleWins)
+{
+  // The gradient inherits its stops through xlink:href, and the element's
+  // style="fill:..." overrides the presentation attribute.
+  const std::string svg =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" "
+      "width=\"20\" height=\"10\">"
+      "<defs>"
+      "<linearGradient id=\"base\"><stop offset=\"0\" stop-color=\"#00ff00\"/>"
+      "<stop offset=\"1\" stop-color=\"#00ff00\"/></linearGradient>"
+      "<linearGradient id=\"derived\" xlink:href=\"#base\" x1=\"0\" y1=\"0\" x2=\"1\" y2=\"0\"/>"
+      "</defs>"
+      "<rect width=\"20\" height=\"10\" fill=\"#ff0000\" style=\"fill:url(#derived)\"/>"
+      "</svg>";
+  const auto result = DecodeSvg(svg);
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  const Image& img = result.value();
+  const size_t idx = (5 * 20 + 10) * 4;
+  EXPECT_GT(img.rgba[idx + 1], 200); // green from the inherited stop
+  EXPECT_LT(img.rgba[idx + 0], 60);  // not the overridden red fallback attribute
+}
+
+TEST(SvgTest, UnknownGradientReferenceFallsBackToNone)
+{
+  // An unresolvable url(#...) reference means "no paint" (SVG 1.1 §13.2.2):
+  // the shape is not filled, and the document still renders.
+  const std::string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">"
+                          "<rect width=\"10\" height=\"10\" fill=\"url(#missing)\"/>"
+                          "</svg>";
+  const auto result = DecodeSvg(svg);
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  const Image& img = result.value();
+  EXPECT_EQ(img.rgba[3], 0); // transparent
+}
+
+TEST(SvgTest, RendersNonSaturatedColoursAtTheirExactValue)
+{
+  // Regression: the 2x supersampled downsample used to multiply the
+  // accumulated colour by 4/aa instead of 1/aa, so mid-grey came out as
+  // (clamped) white.  A #404040 rect must be ~64, not 255.
+  const std::string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\">"
+                          "<rect width=\"8\" height=\"8\" fill=\"#404040\"/>"
+                          "</svg>";
+  const auto result = DecodeSvg(svg);
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  const Image& img = result.value();
+  const size_t idx = (4 * 8 + 4) * 4;
+  EXPECT_EQ(img.rgba[idx + 0], 64);
+  EXPECT_EQ(img.rgba[idx + 1], 64);
+  EXPECT_EQ(img.rgba[idx + 2], 64);
+  EXPECT_EQ(img.rgba[idx + 3], 255);
+}
+
+// A deterministic glyph shaper: every character is a solid square of
+// |pixel_size| size whose advance is exactly |pixel_size|, so tests can assert
+// text placement without depending on system fonts.
+image::SvgTextShaper SquareGlyphShaper(int* calls = nullptr)
+{
+  return [calls](std::string_view family,
+                 bool bold,
+                 bool italic,
+                 double pixel_size,
+                 std::string_view text,
+                 std::vector<image::SvgGlyphOutline>& out) {
+    (void)family;
+    (void)bold;
+    (void)italic;
+    if (calls != nullptr) {
+      ++*calls;
+    }
+    out.clear();
+    for (std::size_t i = 0; i < text.size(); ++i) {
+      image::SvgGlyphOutline glyph;
+      glyph.advance = pixel_size;
+      const double s = pixel_size;
+      const auto edge = [](int kind, double x, double y) {
+        image::SvgOutlineEdge e;
+        e.kind = kind;
+        e.p = {x, y, 0, 0, 0, 0};
+        return e;
+      };
+      glyph.edges.push_back(edge(image::SvgOutlineEdge::kMove, 0, -s));
+      glyph.edges.push_back(edge(image::SvgOutlineEdge::kLine, s, -s));
+      glyph.edges.push_back(edge(image::SvgOutlineEdge::kLine, s, 0));
+      glyph.edges.push_back(edge(image::SvgOutlineEdge::kLine, 0, 0));
+      glyph.edges.push_back(edge(image::SvgOutlineEdge::kClose, 0, 0));
+      out.push_back(std::move(glyph));
+    }
+    return true; // one glyph per byte: the shaper sees only ASCII in these tests
+  };
+}
+
+TEST(SvgTest, RendersTextWithAnInjectedShaper)
+{
+  // Two 10x10 squares at the baseline: glyph 1 at x=0, glyph 2 at x=10.
+  const std::string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"30\" height=\"20\">"
+                          "<text x=\"2\" y=\"15\" font-size=\"10\" fill=\"#00ff00\">ab</text>"
+                          "</svg>";
+  const auto result = DecodeSvg(svg, SquareGlyphShaper());
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  const Image& img = result.value();
+  const auto pixel = [&](int x, int y) {
+    const size_t idx = (static_cast<size_t>(y) * 30 + static_cast<size_t>(x)) * 4;
+    return std::array<int, 4>{
+        img.rgba[idx], img.rgba[idx + 1], img.rgba[idx + 2], img.rgba[idx + 3]};
+  };
+  EXPECT_GT(pixel(5, 12)[1], 200);  // inside the first square
+  EXPECT_GT(pixel(15, 12)[1], 200); // inside the second square (advance = 10)
+  EXPECT_EQ(pixel(25, 12)[3], 0);   // past the run: nothing
+  EXPECT_EQ(pixel(5, 3)[3], 0);     // above the glyph box (baseline - size): nothing
+  EXPECT_GT(pixel(5, 6)[3], 200);   // top row of the box is filled
+}
+
+TEST(SvgTest, TextAnchorAndTspanPositionsTheRun)
+{
+  // text-anchor="middle" centres the 20px run on x=30; the tspan switches
+  // colour and moves the pen up by 10.
+  const std::string svg =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"60\" height=\"40\">"
+      "<text x=\"30\" y=\"25\" font-size=\"10\" text-anchor=\"middle\" fill=\"#ff0000\">ab"
+      "<tspan dy=\"-10\" fill=\"#0000ff\">c</tspan></text>"
+      "</svg>";
+  const auto result = DecodeSvg(svg, SquareGlyphShaper());
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  const Image& img = result.value();
+  const auto pixel = [&](int x, int y) {
+    const size_t idx = (static_cast<size_t>(y) * 60 + static_cast<size_t>(x)) * 4;
+    return std::array<int, 4>{
+        img.rgba[idx], img.rgba[idx + 1], img.rgba[idx + 2], img.rgba[idx + 3]};
+  };
+  // "ab" spans x in [20,40) at the baseline: centred on 30.
+  EXPECT_GT(pixel(22, 20)[0], 200);
+  EXPECT_GT(pixel(38, 20)[0], 200);
+  // "c" follows at x=40 (not centred on its own: it continues the run) one
+  // line up.
+  EXPECT_GT(pixel(45, 10)[2], 200);
+  EXPECT_EQ(pixel(45, 20)[2], 0);
+}
+
+TEST(SvgTest, TextGradientAndSingleNodeAreHonoured)
+{
+  const std::string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"30\" height=\"20\">"
+                          "<linearGradient id=\"g\"><stop offset=\"0\" stop-color=\"#ff0000\"/>"
+                          "<stop offset=\"1\" stop-color=\"#0000ff\"/></linearGradient>"
+                          "<text x=\"0\" y=\"15\" font-size=\"10\" fill=\"url(#g)\">ab</text>"
+                          "</svg>";
+  const auto result = DecodeSvg(svg, SquareGlyphShaper());
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  const Image& img = result.value();
+  const auto red_at = [&](int x) {
+    const size_t idx = (12 * 30 + static_cast<size_t>(x)) * 4;
+    return std::array<int, 3>{img.rgba[idx], img.rgba[idx + 1], img.rgba[idx + 2]};
+  };
+  EXPECT_GT(red_at(2)[0], 120);  // left half: red dominant
+  EXPECT_GT(red_at(18)[2], 120); // right half: blue dominant
+}
+
+TEST(SvgTest, TextWithoutShaperIsSkippedNotFaked)
+{
+  // No provider: <text> must not invent glyphs, and the rest still renders.
+  const std::string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"20\">"
+                          "<rect width=\"20\" height=\"20\" fill=\"#ffffff\"/>"
+                          "<text x=\"2\" y=\"15\" font-size=\"10\">ab</text>"
+                          "</svg>";
+  const auto result = DecodeSvg(svg);
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  const Image& img = result.value();
+  const size_t idx = (12 * 20 + 5) * 4;
+  EXPECT_EQ(img.rgba[idx + 0], 255); // plain white: no glyphs were drawn
+  EXPECT_EQ(img.rgba[idx + 3], 255);
+}
+
 TEST(SvgTest, RejectsInvalidInput)
 {
   EXPECT_FALSE(DecodeSvg("not svg at all").has_value());

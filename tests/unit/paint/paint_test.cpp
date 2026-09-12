@@ -1,12 +1,15 @@
 #include "neko/base/thread_pool.h"
 #include "neko/dom/query.h"
 #include "neko/graphics/font_registry.h"
+#include "neko/graphics/font_selector.h"
 #include "neko/graphics/system_fonts.h"
 #include "neko/html/parser.h"
 #include "neko/image/image.h"
+#include "neko/image/svg_decoder.h"
 #include "neko/layout/layout_tree.h"
 #include "neko/paint/painter.h"
 #include "neko/paint/rasterizer.h"
+#include "neko/paint/svg_text_shaper.h"
 #include "neko/style/style_engine.h"
 
 #include <cmath>
@@ -476,6 +479,64 @@ TEST(RasterizerTest, IntegerBlendMatchesReferenceAlpha)
   EXPECT_LE(std::abs(static_cast<int>(out.a) -
                      static_cast<int>(static_cast<uint8_t>(out_a * 255.0f + 0.5f))),
             1);
+}
+
+TEST(SvgTextShaperTest, RendersRealGlyphsThroughTheFontRegistry)
+{
+  if (graphics::FindSystemFonts(graphics::GenericFamily::kSansSerif).empty()) {
+    GTEST_SKIP() << "no system sans-serif font available";
+  }
+  graphics::FontRegistry fonts;
+  const image::SvgTextShaper shaper = CreateSvgTextShaper(fonts);
+  const std::string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"40\">"
+                          "<text x=\"4\" y=\"30\" font-size=\"24\" fill=\"#000000\">H</text>"
+                          "</svg>";
+  const auto decoded = image::DecodeSvg(svg, shaper);
+  ASSERT_TRUE(decoded.has_value()) << decoded.error().message();
+  const image::Image& img = decoded.value();
+  ASSERT_EQ(img.width, 80);
+  ASSERT_EQ(img.height, 40);
+  int dark_pixels = 0;
+  int left_edge_dark = 0;
+  for (int y = 0; y < img.height; ++y) {
+    for (int x = 0; x < img.width; ++x) {
+      const std::size_t idx = (static_cast<std::size_t>(y) * static_cast<std::size_t>(img.width) +
+                               static_cast<std::size_t>(x)) *
+                              4;
+      if (img.rgba[idx + 3] > 128 && img.rgba[idx] < 64) {
+        ++dark_pixels;
+        if (x < 3) {
+          ++left_edge_dark;
+        }
+      }
+    }
+  }
+  // A 24px "H" covers a few hundred pixels; nothing may bleed above the
+  // baseline box (SVG coordinates are not flipped here).
+  EXPECT_GT(dark_pixels, 100);
+  EXPECT_EQ(left_edge_dark, 0);
+  const std::size_t above =
+      (static_cast<std::size_t>(2) * static_cast<std::size_t>(img.width) + 40) * 4;
+  EXPECT_EQ(img.rgba[above + 3], 0);
+}
+
+TEST(SvgTextShaperTest, MeasuresTheSameAdvanceTheFontReports)
+{
+  if (graphics::FindSystemFonts(graphics::GenericFamily::kSansSerif).empty()) {
+    GTEST_SKIP() << "no system sans-serif font available";
+  }
+  graphics::FontRegistry fonts;
+  const graphics::FontSelector* selector = fonts.SelectorFor("sans-serif");
+  ASSERT_NE(selector, nullptr);
+  const image::SvgTextShaper shaper = CreateSvgTextShaper(fonts);
+  std::vector<image::SvgGlyphOutline> glyphs;
+  ASSERT_TRUE(shaper("sans-serif", false, false, 20.0, "Hello", glyphs));
+  ASSERT_EQ(glyphs.size(), 5u);
+  double total = 0;
+  for (const image::SvgGlyphOutline& glyph : glyphs) {
+    total += glyph.advance;
+  }
+  EXPECT_NEAR(total, static_cast<double>(selector->TextWidth("Hello", 20.0f)), 0.6);
 }
 
 } // namespace

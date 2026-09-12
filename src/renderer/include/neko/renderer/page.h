@@ -5,6 +5,7 @@
 #include "neko/dom/element.h"
 #include "neko/graphics/font_registry.h"
 #include "neko/image/image.h"
+#include "neko/image/svg_decoder.h"
 #include "neko/layout/layout_tree.h"
 #include "neko/paint/rasterizer.h"
 #include "neko/style/style_engine.h"
@@ -202,6 +203,14 @@ public:
 
   // Total content height in px after Layout(); 0 before Layout().
   float ContentHeight() const;
+
+  // Glyph-outline provider for SVG <text>/<tspan>: the image decoder has no
+  // font stack, so the renderer supplies one built from its own FontRegistry
+  // (the same stack the page uses, including @font-face web fonts).  Callers
+  // that decode SVG images use this when handing bytes to image::DecodeImage.
+  // Thread-safe: the underlying registry is, and the returned shaper caches
+  // selectors behind its own mutex.
+  image::SvgTextShaper MakeSvgTextShaper() const;
 
   // Attaches a decoded image to an <img> element (or any element whose
   // computed style has a background-image, which layout resolves through the

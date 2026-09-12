@@ -10,6 +10,7 @@ add_library(neko_paint
   src/display_list.cpp
   src/rasterizer.cpp
   src/painter.cpp
+  src/svg_text_shaper.cpp
 )
 add_library(neko::paint ALIAS neko_paint)
 
