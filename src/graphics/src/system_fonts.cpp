@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -97,6 +98,44 @@ bool NameMatches(std::string_view filename, std::string_view needle)
   return f.find(n) != std::string::npos;
 }
 
+#if !defined(_WIN32) && !defined(__APPLE__)
+// Per-user font directories.  Fonts installed for one user (the common way to
+// add CJK support without root) live here, not under /usr/share/fonts, so the
+// system list alone misses them.  Mirrors fontconfig's user directories.
+std::vector<std::string> UserFontDirs()
+{
+  std::vector<std::string> dirs;
+  if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg != nullptr && xdg[0] != '\0') {
+    dirs.emplace_back(std::string(xdg) + "/fonts/");
+  }
+  if (const char* home = std::getenv("HOME"); home != nullptr && home[0] != '\0') {
+    dirs.emplace_back(std::string(home) + "/.local/share/fonts/");
+    dirs.emplace_back(std::string(home) + "/.fonts/");
+  }
+  return dirs;
+}
+
+// File names probed inside each user font directory, per generic family.
+std::vector<std::string> UserFontFileNames(GenericFamily family)
+{
+  switch (family) {
+  case GenericFamily::kSansSerif:
+    return {"DejaVuSans.ttf", "LiberationSans-Regular.ttf", "NotoSans-Regular.ttf"};
+  case GenericFamily::kSerif:
+    return {"DejaVuSerif.ttf", "LiberationSerif-Regular.ttf", "NotoSerif-Regular.ttf"};
+  case GenericFamily::kMonospace:
+    return {"DejaVuSansMono.ttf", "LiberationMono-Regular.ttf", "NotoSansMono-Regular.ttf"};
+  case GenericFamily::kCjkSans:
+    return {"NotoSansCJK-Regular.ttc",
+            "NotoSansCJK-Regular.ttf",
+            "NotoSansSC-Regular.otf",
+            "wqy-microhei.ttc",
+            "DroidSansFallbackFull.ttf"};
+  }
+  return {};
+}
+#endif
+
 } // namespace
 
 std::vector<std::string> FindSystemFonts(GenericFamily family)
@@ -107,6 +146,18 @@ std::vector<std::string> FindSystemFonts(GenericFamily family)
       found.push_back(path);
     }
   }
+#if !defined(_WIN32) && !defined(__APPLE__)
+  // User-installed fonts are a first-class source on Linux: a per-user CJK
+  // font must be usable even though it is not under /usr/share/fonts.
+  for (const std::string& dir : UserFontDirs()) {
+    for (const std::string& name : UserFontFileNames(family)) {
+      const std::string path = dir + name;
+      if (FileExists(path)) {
+        found.push_back(path);
+      }
+    }
+  }
+#endif
   return found;
 }
 
