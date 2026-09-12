@@ -198,7 +198,12 @@ bool ParseDnsResponse(std::string_view message, DnsAnswer* out)
 
   // Answer records plus the authority/additional sections (skipped, but their
   // records must be walked so a malformed message is still rejected).
-  const std::uint32_t record_count = ancount + nscount + arcount;
+  // The three counts are summed in an unsigned type so the usual arithmetic
+  // conversions cannot produce a negative value (they are promoted to int
+  // otherwise, which -Wsign-conversion rejects).
+  const std::uint32_t record_count = static_cast<std::uint32_t>(ancount) +
+                                     static_cast<std::uint32_t>(nscount) +
+                                     static_cast<std::uint32_t>(arcount);
   bool first_ttl = true;
   for (std::uint32_t i = 0; i < record_count; ++i) {
     std::string name;

@@ -6,6 +6,8 @@ neko-browser 的文档体系。文档是项目的一等公民 —— 改动架�
 ## 架构
 
 - [总体架构](architecture/architecture.md) —— 模块划分、依赖方向、数据流
+- [线程、进程与异步 I/O 模型](architecture/threading-model.md) —— 线程归属、
+  同步机制、进程隔离与 I/O 现状（新增后台线程前必须登记于此）
 - [架构决策记录（ADR）](architecture/adr/)
   - [0001：使用 CMake 构建系统](architecture/adr/0001-cmake-build-system.md)
   - [0002：C++20 标准基线](architecture/adr/0002-cpp20-baseline.md)

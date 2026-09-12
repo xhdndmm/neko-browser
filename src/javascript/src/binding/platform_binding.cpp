@@ -121,7 +121,7 @@ void TextEncoderFinalizer(JSRuntime* /*rt*/, JSValue /*obj*/)
   // No owned state.
 }
 
-void TextDecoderFinalizer(JSRuntime* rt, JSValue obj)
+void TextDecoderFinalizer(JSRuntime* /*rt*/, JSValue obj)
 {
   delete static_cast<TextDecoderState*>(JS_GetOpaque(obj, g_text_decoder_class_id));
 }
@@ -601,13 +601,22 @@ JSValue CloneObject(CloneContext& cx, JSValueConst value)
   for (std::uint32_t i = 0; i < count; ++i) {
     JSValue property = JS_GetProperty(ctx, value, props[i].atom);
     if (JS_IsException(property)) {
+      // The partially built clone must be released here: it is still in
+      // |cx.seen| (which the caller frees), but the local reference would
+      // otherwise leak the object for the runtime's whole lifetime (and trip
+      // QuickJS's "gc_obj_list is empty" assertion at teardown).
       JS_FreePropertyEnum(ctx, props, count);
+      JS_FreeValue(ctx, cloned);
       return property;
     }
     JSValue cloned_property = CloneValue(cx, property);
     JS_FreeValue(ctx, property);
     if (JS_IsException(cloned_property)) {
       JS_FreePropertyEnum(ctx, props, count);
+      // Release the partial clone: its local reference would otherwise keep
+      // the object alive for the runtime's whole lifetime (and trip QuickJS's
+      // "gc_obj_list is empty" assertion at teardown).
+      JS_FreeValue(ctx, cloned);
       return cloned_property;
     }
     if (is_array) {

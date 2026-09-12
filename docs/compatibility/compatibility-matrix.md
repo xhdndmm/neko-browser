@@ -46,7 +46,7 @@
 | 图像解码 PNG | Tested | 16 图像单元测试 | 自研解码器（chunk/CRC/滤波/Adam7/全部颜色类型） |
 | 图像解码 JPEG | Tested | 16 图像单元测试 | 封装 libjpeg，接口统一为 neko::image |
 | 图像解码 GIF | Tested | 17 图像单元测试（含测试内 LZW 编码器）+ 2 渲染器动画测试 | 自研解码器（GIF87a/89a、全局/局部色表、LZW 变长码宽、交错、GCE 透明/disposal/延迟、NETSCAPE2.0/ANIMEXTS1.0 循环次数）；**动画**：全帧预合成（disposal 0-3，4 归一化为 3）、≤2cs 延迟按浏览器惯例钳制为 10cs（100ms）、无循环扩展时默认无限循环（同 Blink/Gecko）；GUI 50ms 帧时钟驱动页面内 `<img>`/背景图动画（帧推进原地更新像素并失效显示列表）；解码内存有界（画布 128 MiB、帧合计 64 MiB/2048 帧封顶，超预算截断）；**直接导航到 .gif 也会播放**（浏览器层与页面共享同一帧调度 AdvanceGifFrame） |
-| 图像解码 SVG | Partial | 6 图像单元测试 + 端到端截图 | 自研最小栅格化器：svg/g/a/rect(含圆角)/circle/ellipse/line/polyline/polygon/path（M/L/H/V/C/S/Q/T/A/Z + 相对）、fill/stroke/stroke-width/透明度、transform（translate/scale/rotate/matrix）、viewBox meet 居中、2× 超采样抗锯齿；无 <text>/渐变/图案/滤镜/use/clip-path 蒙版 |
+| 图像解码 SVG | Partial | 18 图像单元测试 + 4 渲染/字体接线测试 + 端到端截图 | 自研最小栅格化器：svg/g/a/rect(含圆角)/circle/ellipse/line/polyline/polygon/path（M/L/H/V/C/S/Q/T/A/Z + 相对）、fill/stroke/stroke-width/透明度、transform（translate/scale/rotate/matrix）、viewBox meet 居中、2× 超采样抗锯齿；**渐变**（linearGradient/radialGradient，objectBoundingBox 与 userSpaceOnUse、gradientTransform、xlink:href 继承、焦点锥径向）；**<text>/<tspan>**（x/y/dx/dy、font-size/family/weight/style、letter-spacing、text-anchor；字形轮廓由注入的 SvgTextShaper 提供，paint 模块用 FontRegistry 字体栈实现，含 @font-face 与逐字符回退）；fill/stroke 的 style 声明；无 pattern/滤镜/use/clip-path 蒙版、无 spreadMethod≠pad、无 textLength/textPath |
 | 图像解码 WebP | Implemented | 3 WebP 单元测试（无损 VP8L 色块、magic 检测、拒绝坏 magic） | libwebp 封装 |
 | 图像解码 AVIF | Implemented | 4 AVIF 单元测试（真实 AV1 无损夹具、magic 检测、分发） | libavif 封装（ISO-BMFF ftypavif/avis 检测，8 位 RGBA，画布 128 MiB 上限）；动画 AVIF（avis）仅首帧 |
 | 页面内 `<img>` 渲染 | Partial | Renderer + Layout + Paint 套件 | 子资源抓取+解码注入、行内原子盒（与文字同行）、replaced 尺寸（固有/显式/比例、presentational width/height）、object-fit fill/contain/cover/none/scale-down、vertical-align baseline/middle/top/bottom |
@@ -90,6 +90,7 @@
 | 日志系统 | Tested | 单元测试 | — |
 | Error/Result 模型 | Tested | 单元测试 | — |
 | CLI 参数解析 | Tested | 单元测试 | — |
-| 真实网页渲染 | Tested | 端到端手工验证 | http://example.com/ 与 https://example.com/ 截图 |
+| 真实网页渲染 | Tested | 端到端手工验证（截图 + 命令行 DOM 导出） | 常用站点实测（2026-09）：
+www.w3.org、www.mozilla.org、cn.bing.com、www.baidu.com、www.cctv.com、www.huawei.com、www.cloudflare.com、www.sina.com.cn、www.jd.com、www.csdn.net、github.com、www.zhihu.com、www.bilibili.com 渲染真实内容；www.qq.com / www.163.com / www.taobao.com 之前会在退出时触发 QuickJS 断言（structuredClone 错误路径泄漏，已修复并加回归测试），修复后这三个站点可正常加载（QQ/163 为 React SPA，页面脚本在引擎 JS 子集下未完成水合，页面区域接近空白——如实记录，非渲染器错误）|
 
 更新规则：任何特性状态变化必须同步更新本矩阵与对应模块文档。

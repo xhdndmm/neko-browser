@@ -144,6 +144,35 @@ TEST_F(PlatformApiTest, QueueMicrotaskRunsAfterTheCurrentScript)
   EXPECT_NE(console_.back().find("boom"), std::string::npos);
 }
 
+TEST_F(PlatformApiTest, StructuredCloneReleasesThePartialCloneWhenCloningFails)
+{
+  // Regression: a failing property clone (uncloneable value or a throwing
+  // getter) used to abandon the partially built clone object, leaking one
+  // object per call for the whole runtime lifetime.  QuickJS reports that at
+  // runtime teardown ("gc_obj_list is empty" assertion), which this fixture
+  // triggers after every test.
+  EXPECT_TRUE(EvalBool("(function(){"
+                       "  try { structuredClone({ a: function(){} }); return false; }"
+                       "  catch (e) { return e.name === 'DataCloneError'; }"
+                       "})()"));
+  EXPECT_TRUE(EvalBool("(function(){"
+                       "  try { structuredClone({ get a() { throw new Error('boom'); } });"
+                       "        return false; }"
+                       "  catch (e) { return e.message === 'boom'; }"
+                       "})()"));
+  // Nested failures release the whole in-progress graph, not just the root.
+  EXPECT_TRUE(EvalBool("(function(){"
+                       "  try { structuredClone({ ok: {}, bad: { deep: new WeakMap() } });"
+                       "        return false; }"
+                       "  catch (e) { return e.name === 'DataCloneError'; }"
+                       "})()"));
+  // And successful clones still work afterwards (no dangling state).
+  EXPECT_TRUE(EvalBool("(function(){"
+                       "  var copy = structuredClone({ a: [1, 2] });"
+                       "  return copy.a.length === 2 && copy.a[1] === 2;"
+                       "})()"));
+}
+
 TEST_F(PlatformApiTest, StructuredCloneDeepCopiesValues)
 {
   // Nested objects/arrays are independent copies.
