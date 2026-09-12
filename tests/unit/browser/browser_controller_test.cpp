@@ -769,6 +769,39 @@ TEST(BrowserControllerTest, PumpScriptTimersRunsSetTimeout)
   EXPECT_DOUBLE_EQ(num.value(), 1.0);
 }
 
+// A timer that assigns window.location must navigate the tab.  Regression
+// test: the pending navigation used to be stored in a stack local of
+// LoadBytes, so a timer callback wrote through a dangling pointer — the
+// navigation was lost (release) or the heap was corrupted (debug).
+TEST(BrowserControllerTest, TimerNavigationIsHonored)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>Start</title></head><body>"
+                               "<script>setTimeout(function(){"
+                               "  location.href = 'http://example.com/next';"
+                               "}, 1);</script>"
+                               "</body></html>"});
+  fetch.Add("http://example.com/next",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>Next</title></head><body>next</body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  controller.PumpScriptTimers();
+
+  const TabSnapshot snapshot = controller.SnapshotActiveTab();
+  EXPECT_EQ(snapshot.url, "http://example.com/next");
+  EXPECT_EQ(snapshot.title, "Next");
+}
+
 // External classic <script src> is fetched and executed on load.
 TEST(BrowserControllerTest, ExternalScriptIsFetchedAndRun)
 {

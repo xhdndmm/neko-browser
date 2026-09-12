@@ -2,6 +2,8 @@
 
 #include "neko/base/status.h"
 #include "neko/browser/download_manager.h"
+#include "neko/browser/page_scripts.h"
+#include "neko/browser/renderer_session.h"
 #include "neko/image/image.h"
 #include "neko/javascript/dom_binding.h"
 #include "neko/media/audio.h"
@@ -104,6 +106,14 @@ struct Tab
   // pages without scripts.
   std::shared_ptr<javascript::DomBinder> script_runtime;
 
+  // A navigation requested by the page's script (window.location assignment,
+  // assign()/replace()/reload()).  Owned by the tab — whose address is stable
+  // — because the runtime's navigation callback holds a pointer to it: timers
+  // may request a navigation long after the load finished, so the storage must
+  // outlive RunPageScripts (a stack local used to dangle here).  PumpScriptTimers
+  // and LoadBytes act on the request and clear it.  Worker thread only.
+  ScriptRequestedNavigation pending_script_navigation;
+
   // The security origin of the current page (scheme+host+port, e.g.
   // "https://example.com"), used by the Same-Origin Policy.  "null" for
   // non-URL content and pages whose URL has no origin.  Worker thread only.
@@ -117,6 +127,28 @@ struct Tab
   {
     return history_index >= 0 && history_index + 1 < static_cast<int>(history.size());
   }
+
+  // ---- Renderer-process mode (ADR 0016 M2) --------------------------------
+  // The live renderer child serving this tab's HTML document.  Bound to the
+  // site in |session_origin|; replaced when the tab navigates to another site
+  // or after a crash.  Worker thread only.
+  std::shared_ptr<RendererSession> session;
+  std::string session_origin;
+  // The most recent frame the child produced for this tab (viewport-sized
+  // RGBA8888), shared with the GUI through TabSnapshot.
+  std::shared_ptr<const RemoteFrame> remote_frame;
+  // Content height reported by the child (drives the GUI's scroll bar) and
+  // the geometry the frame was rasterized for.
+  float remote_content_height = 0;
+  int remote_viewport_width = 0;
+  int remote_viewport_height = 0;
+  float remote_frame_scroll_y = 0;
+  // Hyperlink under the pointer as reported by the child (drives the GUI's
+  // pointing-hand cursor; the browser process has no DOM in this mode).
+  std::string remote_hover_link;
+  // The scroll bar moved since the last frame: pull a fresh one (throttled).
+  bool remote_scroll_dirty = false;
+  int64_t remote_last_frame_ms = 0;
 };
 
 // A consistent copy of everything the GUI needs to render one tab.  Produced
@@ -145,6 +177,16 @@ struct TabSnapshot
   // pending_scroll_y to its scroll bar when it observes a changed id.
   uint64_t scroll_request_id = 0;
   float pending_scroll_y = 0;
+
+  // ---- Renderer-process mode (ADR 0016 M2) -------------------------------
+  // True when this tab's HTML is rendered by a child process.  The GUI then
+  // paints |remote_frame| instead of rasterizing |page| (which is null) and
+  // takes the scroll range from |remote_content_height|.
+  bool remote = false;
+  std::shared_ptr<const RemoteFrame> remote_frame;
+  float remote_content_height = 0;
+  // Hyperlink under the pointer ("" = none), reported by the child.
+  std::string remote_hover_link;
 };
 
 // A network request record for DevTools.
@@ -167,6 +209,20 @@ struct ConsoleEntry
   int64_t timestamp = 0;
 };
 
+// Renderer-process mode options (ADR 0016 M2).  When enabled, HTML documents
+// are rendered by a renderer child process ("isolated rendering mode"): the
+// browser fetches the document with its cookies, ships the bytes to the
+// child, forwards user input, and displays the frames the child returns.
+// Crash isolation: a dying child surfaces as an error page and the next
+// navigation spawns a fresh session.
+struct RendererOptions
+{
+  bool enabled = false;
+  // Executable that serves --renderer-session.  Empty resolves the CLI binary
+  // next to the running executable.
+  std::string executable;
+};
+
 // The browser application layer: owns tabs, navigation, and the profile
 // stores, and exposes a DevTools view of what the engine is doing.  The UI
 // (Qt, CLI) talks only to this controller, never to engine internals.
@@ -186,7 +242,11 @@ public:
   using FetchFn = std::function<base::Result<network::HttpResponse>(
       const url::Url&, std::string_view cookie_header)>;
 
-  explicit BrowserController(std::string profile_dir, FetchFn fetch = {});
+  // Renderer-process mode (ADR 0016 M2): see RendererOptions.
+
+  explicit BrowserController(std::string profile_dir,
+                             FetchFn fetch = {},
+                             RendererOptions renderer = RendererOptions());
   ~BrowserController();
 
   BrowserController(const BrowserController&) = delete;
@@ -293,6 +353,11 @@ public:
   void SetTabScrollOffset(int tab_id, float y);
   void SetTabScrollRequest(int tab_id, float y);
 
+  // Renderer mode: records the viewport the child should lay the page out for
+  // (the GUI reports its viewport size) and pulls a fresh frame when it
+  // changed.
+  void SetTabViewport(int tab_id, int width, int height);
+
   // Returns the content-type of the active tab.
   ContentType active_content_type() const;
 
@@ -378,8 +443,29 @@ private:
   void RecordVisit(const std::string& url, const std::string& title);
   void NavigateToUrl(Tab& tab, const std::string& url_string);
 
+  // Renderer-process mode internals (worker thread only).
+  // Ships |bytes| to the tab's renderer session (spawning one for |origin|
+  // when needed), applies the resulting status and stores the first frame.
+  void LoadHtmlInRenderer(Tab& tab,
+                          std::string_view bytes,
+                          std::string_view content_type,
+                          const std::string& final_url,
+                          const std::string& origin);
+  // Applies a status reply: URL/title/scroll latches, redirect re-navigation
+  // and (when the child flagged a change) a frame pull.  Returns false when
+  // the session failed and the caller must stop using |tab|.
+  bool ApplyRendererUpdate(Tab& tab, const RendererUpdate& update);
+  // Pulls a viewport frame from the tab's session and publishes it (throttled
+  // for scroll-driven pulls).
+  void PullRemoteFrame(Tab& tab, bool force);
+  // Tears the tab's session down and reports |error| as the tab's content.
+  void MarkSessionFailed(Tab& tab, std::string_view message);
+
   std::string profile_dir_;
   FetchFn fetch_;
+  RendererOptions renderer_;
+  // Resolved path of the renderer executable (empty when resolution failed).
+  std::string renderer_executable_;
 
   // Guards every member the GUI can observe through the Snapshot* accessors:
   // tabs_/active_tab_/next_tab_id_, network_log_/console_log_ and the store

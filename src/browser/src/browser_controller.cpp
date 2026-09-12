@@ -5,6 +5,7 @@
 #include "neko/base/thread_pool.h"
 #include "neko/browser/hyperlink.h"
 #include "neko/browser/page_scripts.h"
+#include "neko/browser/renderer_host.h"
 #include "neko/css/parser.h"
 #include "neko/dom/element.h"
 #include "neko/dom/query.h"
@@ -19,6 +20,7 @@
 #include <chrono>
 #include <cstdint>
 #include <ctime>
+#include <filesystem>
 #include <future>
 #include <optional>
 #include <string>
@@ -223,6 +225,51 @@ int64_t NowUnix()
   return static_cast<int64_t>(std::time(nullptr));
 }
 
+// Monotonic milliseconds (frame-pull throttling).
+int64_t NowMillis()
+{
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+
+// Viewport used for a renderer session until the GUI reports its own.
+inline constexpr int kDefaultRemoteViewportWidth = 800;
+inline constexpr int kDefaultRemoteViewportHeight = 600;
+// Frames are pulled at most this often for scroll-driven repaints; anything
+// faster is coalesced into the next pump.
+inline constexpr int64_t kRemoteFrameMinIntervalMs = 40;
+
+// True when |tab| renders its document in a renderer child (renderer-process
+// mode showing HTML).  After navigating to non-HTML content or after a
+// session failure the tab falls back to the in-process paths.
+bool IsRemoteTab(const Tab& tab)
+{
+  return tab.session != nullptr && tab.page == nullptr &&
+         tab.content_type == ContentType::kHtml;
+}
+
+// The CLI binary serves --renderer-session and ships next to the GUI
+// executable in the build/install layout.
+std::string DefaultRendererExecutable()
+{
+  const std::string self = SelfExecutablePath();
+  const std::size_t slash = self.find_last_of("/\\");
+  if (self.empty() || slash == std::string::npos) {
+    return {};
+  }
+#ifdef _WIN32
+  const std::string candidate = self.substr(0, slash + 1) + "neko_browser.exe";
+#else
+  const std::string candidate = self.substr(0, slash + 1) + "neko_browser";
+#endif
+  std::error_code ec;
+  if (std::filesystem::exists(candidate, ec) && !ec) {
+    return candidate;
+  }
+  return {};
+}
+
 // Lowercases an ASCII string.
 std::string ToLower(std::string_view s)
 {
@@ -303,6 +350,12 @@ TabSnapshot ToSnapshot(const Tab& tab)
   s.error = tab.error;
   s.scroll_request_id = tab.scroll_request_id;
   s.pending_scroll_y = tab.pending_scroll_y;
+  // "Remote" describes the CURRENT document: a tab whose site session is alive
+  // but that currently shows an image / text / error page renders locally.
+  s.remote = IsRemoteTab(tab);
+  s.remote_frame = tab.remote_frame;
+  s.remote_content_height = tab.remote_content_height;
+  s.remote_hover_link = tab.remote_hover_link;
   return s;
 }
 
@@ -329,11 +382,21 @@ std::string_view ToString(ContentType type)
   return "unknown";
 }
 
-BrowserController::BrowserController(std::string profile_dir, FetchFn fetch)
-    : profile_dir_(std::move(profile_dir)), fetch_(std::move(fetch)), cookies_(profile_dir_),
-      history_(profile_dir_), bookmarks_(profile_dir_), local_storage_(profile_dir_),
-      indexed_db_(profile_dir_), downloads_(profile_dir_ + "/downloads")
+BrowserController::BrowserController(std::string profile_dir, FetchFn fetch, RendererOptions renderer)
+    : profile_dir_(std::move(profile_dir)), fetch_(std::move(fetch)), renderer_(std::move(renderer)),
+      cookies_(profile_dir_), history_(profile_dir_), bookmarks_(profile_dir_),
+      local_storage_(profile_dir_), indexed_db_(profile_dir_),
+      downloads_(profile_dir_ + "/downloads")
 {
+  if (renderer_.enabled) {
+    renderer_executable_ =
+        renderer_.executable.empty() ? DefaultRendererExecutable() : renderer_.executable;
+    if (renderer_executable_.empty()) {
+      NEKO_LOG_WARNING("renderer process mode requested but no renderer executable was found; "
+                       "falling back to in-process rendering");
+      renderer_.enabled = false;
+    }
+  }
   pool_ = std::make_unique<base::ThreadPool>();
   // Default fetch: compute cookies for each redirect hop from the controller's
   // cookie jar.  HttpGet invokes HeaderProvider with the current hop URL.
@@ -392,25 +455,30 @@ void BrowserController::ActivateTab(int id)
 
 void BrowserController::CloseTab(int id)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
-  const auto it =
-      std::find_if(tabs_.begin(), tabs_.end(), [id](const auto& t) { return t->id == id; });
-  if (it == tabs_.end())
-    return;
-  const size_t index = static_cast<size_t>(it - tabs_.begin());
-  tabs_.erase(it);
-  if (tabs_.empty()) {
-    active_tab_ = -1;
-    return;
+  std::shared_ptr<RendererSession> retired;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it =
+        std::find_if(tabs_.begin(), tabs_.end(), [id](const auto& t) { return t->id == id; });
+    if (it == tabs_.end())
+      return;
+    const size_t index = static_cast<size_t>(it - tabs_.begin());
+    // Take the renderer session out of the tab so the child is shut down
+    // after the lock is released (its destructor reaps the process).
+    retired = std::move((*it)->session);
+    tabs_.erase(it);
+    if (tabs_.empty()) {
+      active_tab_ = -1;
+    } else {
+      if (active_tab_ >= static_cast<int>(tabs_.size()))
+        active_tab_--;
+      // Keep the tab at (or after) the closed one active.
+      if (static_cast<int>(index) == active_tab_) {
+        active_tab_ = std::min(static_cast<int>(index), static_cast<int>(tabs_.size()) - 1);
+      }
+    }
   }
-  if (active_tab_ >= static_cast<int>(tabs_.size()))
-    active_tab_--;
-  // Keep the tab at (or after) the closed one active.
-  if (static_cast<int>(index) < active_tab_) {
-    // active index unchanged
-  } else if (static_cast<int>(index) == active_tab_) {
-    active_tab_ = std::min(static_cast<int>(index), static_cast<int>(tabs_.size()) - 1);
-  }
+  retired.reset();
 }
 
 int BrowserController::active_tab() const
@@ -633,7 +701,23 @@ base::Result<void> BrowserController::Navigate(int tab_id, const std::string& in
 bool BrowserController::DispatchPointerClick(int tab_id, float doc_x, float doc_y)
 {
   Tab* tab = FindTab(tab_id);
-  if (tab == nullptr || tab->content_type != ContentType::kHtml || tab->page == nullptr) {
+  if (tab == nullptr) {
+    return false;
+  }
+  // Renderer-process mode: the child owns the DOM, so the click is forwarded
+  // and it runs the same dispatch code (returns whether the default action
+  // ran).
+  if (IsRemoteTab(*tab)) {
+    auto reply = tab->session->Click(doc_x, doc_y);
+    if (!reply.has_value()) {
+      MarkSessionFailed(*tab, reply.error().message());
+      return false;
+    }
+    const bool handled = reply.value().handled;
+    ApplyRendererUpdate(*tab, reply.value());
+    return handled;
+  }
+  if (tab->content_type != ContentType::kHtml || tab->page == nullptr) {
     return false;
   }
   const dom::Element* element = tab->page->ElementAt(doc_x, doc_y);
@@ -701,7 +785,19 @@ bool BrowserController::DispatchPointerClick(int tab_id, float doc_x, float doc_
 void BrowserController::DispatchHover(int tab_id, float doc_x, float doc_y)
 {
   Tab* tab = FindTab(tab_id);
-  if (tab == nullptr || tab->content_type != ContentType::kHtml || tab->page == nullptr) {
+  if (tab == nullptr) {
+    return;
+  }
+  if (IsRemoteTab(*tab)) {
+    auto reply = tab->session->Hover(doc_x, doc_y);
+    if (!reply.has_value()) {
+      MarkSessionFailed(*tab, reply.error().message());
+      return;
+    }
+    ApplyRendererUpdate(*tab, reply.value());
+    return;
+  }
+  if (tab->content_type != ContentType::kHtml || tab->page == nullptr) {
     return;
   }
   const dom::Element* element = tab->page->ElementAt(doc_x, doc_y);
@@ -733,6 +829,15 @@ void BrowserController::DispatchHoverClear(int tab_id)
   if (tab == nullptr) {
     return;
   }
+  if (IsRemoteTab(*tab)) {
+    auto reply = tab->session->HoverClear();
+    if (!reply.has_value()) {
+      MarkSessionFailed(*tab, reply.error().message());
+      return;
+    }
+    ApplyRendererUpdate(*tab, reply.value());
+    return;
+  }
   if (tab->hovered_element != nullptr) {
     if (tab->script_runtime != nullptr) {
       tab->script_runtime->DispatchMouseEvent(*tab->hovered_element, "mouseout", 0, 0, 0);
@@ -744,7 +849,19 @@ void BrowserController::DispatchHoverClear(int tab_id)
 bool BrowserController::DispatchWheel(int tab_id, double delta_y)
 {
   Tab* tab = FindTab(tab_id);
-  if (tab == nullptr || tab->content_type != ContentType::kHtml || tab->page == nullptr) {
+  if (tab == nullptr) {
+    return false;
+  }
+  if (IsRemoteTab(*tab)) {
+    auto reply = tab->session->Wheel(delta_y);
+    if (!reply.has_value()) {
+      MarkSessionFailed(*tab, reply.error().message());
+      return false;
+    }
+    ApplyRendererUpdate(*tab, reply.value());
+    return true;
+  }
+  if (tab->content_type != ContentType::kHtml || tab->page == nullptr) {
     return false;
   }
   dom::Element* target = tab->focused_element;
@@ -771,7 +888,20 @@ bool BrowserController::DispatchKeyboard(int tab_id,
                                          std::string_view code)
 {
   Tab* tab = FindTab(tab_id);
-  if (tab == nullptr || tab->content_type != ContentType::kHtml || tab->page == nullptr) {
+  if (tab == nullptr) {
+    return false;
+  }
+  if (IsRemoteTab(*tab)) {
+    auto reply = tab->session->Key(type, key, code);
+    if (!reply.has_value()) {
+      MarkSessionFailed(*tab, reply.error().message());
+      return false;
+    }
+    const bool not_canceled = reply.value().handled;
+    ApplyRendererUpdate(*tab, reply.value());
+    return not_canceled;
+  }
+  if (tab->content_type != ContentType::kHtml || tab->page == nullptr) {
     return false;
   }
   // Keyboard events target the focused element; without focus, <body>.
@@ -891,6 +1021,15 @@ base::Result<void> BrowserController::LoadDocument(int tab_id,
   if (tab == nullptr) {
     return base::Err(base::Error::InvalidArgument("no such tab"));
   }
+  // The tab now shows this document: its URL is the document's base (relative
+  // hrefs, window.location, form actions) and the old focus/hover state is
+  // stale.  Mirrors the bookkeeping NavigateToUrl does for the fetch path.
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    tab->url = final_url;
+  }
+  tab->focused_element = nullptr;
+  tab->hovered_element = nullptr;
   LoadBytes(*tab, bytes, content_type, final_url);
   if (tab->content_type == ContentType::kError && tab->error != nullptr) {
     return base::Err(base::Error::Unknown(*tab->error));
@@ -932,6 +1071,21 @@ void BrowserController::PumpScriptTimers()
   if (tab == nullptr) {
     return;
   }
+  if (IsRemoteTab(*tab)) {
+    // Renderer mode: the child advances its own timers/animations; a changed
+    // reply repaints, and a scroll performed since the last frame is
+    // coalesced into this pump.
+    auto reply = tab->session->Pump();
+    if (!reply.has_value()) {
+      MarkSessionFailed(*tab, reply.error().message());
+      return;
+    }
+    ApplyRendererUpdate(*tab, reply.value());
+    if (tab->remote_scroll_dirty) {
+      PullRemoteFrame(*tab, /*force=*/false);
+    }
+    return;
+  }
   if (tab->script_runtime != nullptr && tab->script_runtime->RunPendingTimers() > 0 &&
       tab->page != nullptr) {
     // Timers may have mutated the DOM; re-run the cascade so the next
@@ -943,17 +1097,67 @@ void BrowserController::PumpScriptTimers()
   if (tab->page != nullptr) {
     (void)tab->page->AdvanceAnimations();
   }
+  // A timer callback may have requested a navigation (window.location): the
+  // request was written into the tab by the runtime's callback, so act on it
+  // now (and clear it so it fires once).
+  const std::string requested_url = tab->pending_script_navigation.url;
+  const bool requested_reload = tab->pending_script_navigation.is_reload;
+  if (!requested_url.empty() || requested_reload) {
+    tab->pending_script_navigation = {};
+    const std::string target = requested_url.empty() ? tab->url : requested_url;
+    if (!target.empty()) {
+      NavigateToUrl(*tab, target);
+    }
+  }
 }
 
 void BrowserController::SetTabScrollOffset(int tab_id, float y)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
-  for (const auto& tab : tabs_) {
-    if (tab->id == tab_id) {
-      tab->scroll_offset_y = y;
-      return;
+  Tab* tab = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto& candidate : tabs_) {
+      if (candidate->id == tab_id) {
+        candidate->scroll_offset_y = y;
+        tab = candidate.get();
+        break;
+      }
     }
   }
+  if (tab == nullptr || tab->session == nullptr || !IsRemoteTab(*tab)) {
+    return;
+  }
+  // Renderer mode: keep the child's viewport offset (window.scrollY) in sync
+  // and repaint at the new offset (throttled; the pump flushes coalesced
+  // scrolls).
+  auto reply = tab->session->ScrollTo(y);
+  if (!reply.has_value()) {
+    MarkSessionFailed(*tab, reply.error().message());
+    return;
+  }
+  ApplyRendererUpdate(*tab, reply.value());
+  PullRemoteFrame(*tab, /*force=*/false);
+}
+
+void BrowserController::SetTabViewport(int tab_id, int width, int height)
+{
+  Tab* tab = FindTab(tab_id);
+  if (tab == nullptr || !IsRemoteTab(*tab)) {
+    return;
+  }
+  width = std::max(1, width);
+  height = std::max(1, height);
+  if (tab->remote_viewport_width == width && tab->remote_viewport_height == height) {
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    tab->remote_viewport_width = width;
+    tab->remote_viewport_height = height;
+  }
+  // The page is laid out for the new viewport inside the child; the frame it
+  // returns is sized to match.
+  PullRemoteFrame(*tab, /*force=*/true);
 }
 
 void BrowserController::SetTabScrollRequest(int tab_id, float y)
@@ -966,6 +1170,159 @@ void BrowserController::SetTabScrollRequest(int tab_id, float y)
       return;
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Renderer-process mode (ADR 0016 M2)
+// ---------------------------------------------------------------------------
+
+void BrowserController::LoadHtmlInRenderer(Tab& tab,
+                                           std::string_view bytes,
+                                           std::string_view content_type,
+                                           const std::string& final_url,
+                                           const std::string& origin)
+{
+  int viewport_width = kDefaultRemoteViewportWidth;
+  int viewport_height = kDefaultRemoteViewportHeight;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (tab.remote_viewport_width > 0) {
+      viewport_width = tab.remote_viewport_width;
+    }
+    if (tab.remote_viewport_height > 0) {
+      viewport_height = tab.remote_viewport_height;
+    }
+  }
+
+  // Sessions are per site: the tab's child is reused while it serves the same
+  // origin (same-site navigation reuses the process, per ADR 0016 M2) and
+  // replaced when the site changes or the previous child died.
+  std::shared_ptr<RendererSession> session;
+  if (tab.session != nullptr && tab.session->alive() && tab.session_origin == origin) {
+    session = tab.session;
+  } else {
+    // Shut the old child down before starting the new one (outside the lock:
+    // the destructor reaps the process).
+    std::shared_ptr<RendererSession> retired = std::move(tab.session);
+    auto spawned = RendererSession::Spawn(renderer_executable_, origin);
+    retired.reset();
+    if (!spawned.has_value()) {
+      MarkSessionFailed(tab, spawned.error().message());
+      return;
+    }
+    session = spawned.value();
+    std::lock_guard<std::mutex> lock(mutex_);
+    tab.session = session;
+    tab.session_origin = origin;
+    tab.remote_frame.reset();
+    tab.remote_content_height = 0;
+    tab.remote_scroll_dirty = false;
+    tab.remote_last_frame_ms = 0;
+    tab.scroll_offset_y = 0;
+    tab.pending_scroll_y = 0;
+  }
+
+  auto reply = session->Load(bytes, content_type, final_url, viewport_width, viewport_height);
+  if (!reply.has_value()) {
+    MarkSessionFailed(tab, reply.error().message());
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    tab.content_type = ContentType::kHtml;
+    tab.error.reset();
+    // The document lives in the child: no in-process page or script runtime.
+    tab.page.reset();
+    tab.script_runtime.reset();
+    tab.title = reply.value().title.empty() ? std::string("Untitled") : reply.value().title;
+    tab.remote_content_height = reply.value().content_height;
+    tab.remote_hover_link = reply.value().hover_link;
+  }
+  // The first frame of the new document.
+  PullRemoteFrame(tab, /*force=*/true);
+  RecordVisit(final_url, tab.title);
+}
+
+bool BrowserController::ApplyRendererUpdate(Tab& tab, const RendererUpdate& update)
+{
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!update.title.empty()) {
+      tab.title = update.title;
+    }
+    tab.remote_content_height = update.content_height;
+    tab.remote_hover_link = update.hover_link;
+    // The child's script-requested scroll latch drives the GUI scroll bar
+    // through the same code path the in-process latch uses.
+    if (update.scroll_request_id != 0) {
+      tab.scroll_request_id = update.scroll_request_id;
+      tab.pending_scroll_y = update.pending_scroll_y;
+    }
+  }
+  // A navigation that happened inside the page is re-run here, so cookies,
+  // history and content routing stay browser-side.
+  if (!update.redirect_url.empty()) {
+    (void)Navigate(tab.id, update.redirect_url);
+    return true;
+  }
+  if (update.changed) {
+    // Interaction-driven changes repaint immediately; only scroll-driven
+    // pulls are throttled and coalesced (see PullRemoteFrame callers).
+    PullRemoteFrame(tab, /*force=*/true);
+  }
+  return true;
+}
+
+void BrowserController::PullRemoteFrame(Tab& tab, bool force)
+{
+  if (tab.session == nullptr || !tab.session->alive()) {
+    return;
+  }
+  const int64_t now = NowMillis();
+  if (!force && now - tab.remote_last_frame_ms < kRemoteFrameMinIntervalMs) {
+    // Coalesce: the next pump pulls the frame at the latest offset.
+    tab.remote_scroll_dirty = true;
+    return;
+  }
+  const int width = std::max(1, tab.remote_viewport_width);
+  const int height = std::max(1, tab.remote_viewport_height);
+  RemoteFrame frame;
+  auto reply = tab.session->Snapshot(width, height, tab.scroll_offset_y, &frame);
+  if (!reply.has_value()) {
+    MarkSessionFailed(tab, reply.error().message());
+    return;
+  }
+  tab.remote_last_frame_ms = now;
+  tab.remote_scroll_dirty = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    tab.remote_content_height = reply.value().content_height;
+    tab.remote_frame_scroll_y = reply.value().scroll_y;
+    tab.remote_hover_link = reply.value().hover_link;
+    if (frame.width > 0 && frame.height > 0 && !frame.rgba.empty()) {
+      tab.remote_frame = std::make_shared<const RemoteFrame>(std::move(frame));
+    }
+  }
+}
+
+void BrowserController::MarkSessionFailed(Tab& tab, std::string_view message)
+{
+  std::shared_ptr<RendererSession> dead;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    dead = std::move(tab.session);
+    tab.remote_frame.reset();
+    tab.remote_content_height = 0;
+    tab.remote_hover_link.clear();
+    tab.content_type = ContentType::kError;
+    tab.error = std::make_shared<std::string>("renderer process unavailable: " +
+                                              std::string(message));
+    tab.title = "Renderer error";
+    tab.loading = false;
+  }
+  // Reap the child outside the lock (the destructor waits for it).
+  dead.reset();
+  LogConsole("error", "renderer session failed: " + std::string(message));
 }
 
 // ---------------------------------------------------------------------------
@@ -1075,6 +1432,13 @@ void BrowserController::LoadBytes(Tab& tab,
                        (ct.empty() && !is_image && !is_pdf && !is_audio && LooksLikeHtml(bytes));
 
   if (is_html) {
+    // Renderer-process mode (ADR 0016 M2): the document is parsed, styled,
+    // laid out, painted and scripted in a child process.  The browser fetched
+    // it (cookies are browser-side) and ships the bytes over the session.
+    if (renderer_.enabled) {
+      LoadHtmlInRenderer(tab, bytes, content_type, final_url, origin);
+      return;
+    }
     // Build the new page entirely on the worker thread and publish it in one
     // atomic step: a published Page (and its payload) is never mutated by the
     // worker afterwards, so the GUI can safely hold a shared handle and
@@ -1123,7 +1487,9 @@ void BrowserController::LoadBytes(Tab& tab,
     // Fetch and apply the page's external <link rel=stylesheet> sheets before
     // scripts run, so scripts see the fully styled cascade.
     FetchExternalStylesheets(*new_page, final_url, fetch_subresource, *pool_);
-    browser::ScriptRequestedNavigation requested;
+    // The navigation request lives in the tab (stable address): the runtime's
+    // callback keeps writing into it when a timer navigates later.
+    tab.pending_script_navigation = {};
     tab.script_runtime = RunPageScripts(
         *new_page,
         final_url,
@@ -1132,17 +1498,20 @@ void BrowserController::LoadBytes(Tab& tab,
         },
         [this](std::string_view level, std::string_view text) { LogConsole(level, text); },
         services,
-        &requested);
+        &tab.pending_script_navigation);
 
     // A script may have requested a navigation (window.location.href=,
     // assign()/replace(), or reload()) — e.g. Baidu's anti-bot page replaces
     // the URL.  Act on it instead of publishing the script's own document;
     // the requested navigation is already resolved to an absolute URL.
-    if (!requested.url.empty()) {
-      NavigateToUrl(tab, requested.url);
+    const std::string requested_url = tab.pending_script_navigation.url;
+    const bool requested_reload = tab.pending_script_navigation.is_reload;
+    tab.pending_script_navigation = {};
+    if (!requested_url.empty()) {
+      NavigateToUrl(tab, requested_url);
       return;
     }
-    if (requested.is_reload && !tab.url.empty()) {
+    if (requested_reload && !tab.url.empty()) {
       NavigateToUrl(tab, tab.url);
       return;
     }

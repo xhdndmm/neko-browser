@@ -218,6 +218,7 @@ add_executable(neko_browser_tests
   browser/options_test.cpp
   browser/browser_controller_test.cpp
   browser/hyperlink_test.cpp
+  browser/renderer_mode_test.cpp
   browser/renderer_protocol_test.cpp
   browser/renderer_session_test.cpp
 )
