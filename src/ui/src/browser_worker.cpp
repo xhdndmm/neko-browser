@@ -8,8 +8,10 @@
 
 namespace neko::ui {
 
-BrowserWorker::BrowserWorker(QString profile_dir, QObject* parent)
-    : QObject(parent), controller_(profile_dir.toStdString())
+BrowserWorker::BrowserWorker(QString profile_dir,
+                             QObject* parent,
+                             browser::RendererOptions renderer)
+    : QObject(parent), controller_(profile_dir.toStdString(), {}, std::move(renderer))
 {
   raster_pool_ = std::make_unique<base::ThreadPool>(2);
   // Load persisted profile data on the caller (GUI) thread at startup.
@@ -167,6 +169,15 @@ void BrowserWorker::DispatchWheel(int tab_id, double delta_y)
 void BrowserWorker::SetScrollOffset(int tab_id, int y)
 {
   Post([this, tab_id, y] { controller_.SetTabScrollOffset(tab_id, static_cast<float>(y)); });
+}
+
+void BrowserWorker::SetViewportSize(int tab_id, int width, int height)
+{
+  Post([this, tab_id, width, height] {
+    controller_.SetTabViewport(tab_id, width, height);
+    // A changed viewport produces a fresh frame; let the GUI pick it up.
+    emit StateChanged();
+  });
 }
 
 void BrowserWorker::SetScrollRequest(int tab_id, int y)

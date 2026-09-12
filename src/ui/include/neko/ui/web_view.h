@@ -54,6 +54,8 @@ protected:
 
 private:
   void PaintHtml(QPainter& painter);
+  // Renderer-process mode: paints the frame the child produced.
+  void PaintRemote(QPainter& painter);
   void PaintImage(QPainter& painter);
   // Recomputes the caret overlay layer (layer 1) from the focused element
   // and the current scroll.  Returns true when the caret's screen rect or
@@ -69,7 +71,10 @@ private:
   void HandleActive(const QPointF& viewport_pos);
   void HandleActiveClear();
   float ScrollY() const;
-
+  // Renderer mode: reports the viewport size to the worker (the child lays the
+  // page out for it) and applies the child-reported hover cursor.
+  void ReportViewport();
+  void ApplyRemoteCursor();
   BrowserWorker* worker_;
   int tab_id_ = -1;
   // Last consistent copy of the tab's renderable state; GUI-thread only.
@@ -88,6 +93,19 @@ private:
   // Last applied script-requested scroll latch id.  A fresh value (worker bumped
   // scroll_request_id) moves the scroll bar to the requested offset exactly once.
   std::uint64_t applied_scroll_request_id_ = 0;
+
+  // Renderer mode (ADR 0016 M2): the last frame's document URL (a change means
+  // a navigation, which resets the local scroll), the viewport size already
+  // reported to the worker, and whether a hover has been forwarded (so the
+  // matching hover-clear is sent exactly once).
+  std::string remote_url_;
+  int reported_viewport_w_ = -1;
+  int reported_viewport_h_ = -1;
+  // True once the viewport has been reported for the tab's current renderer
+  // session.  Reset when the tab leaves remote mode so the next session gets
+  // the current size (a report sent before the session existed is ignored).
+  bool reported_remote_viewport_ = false;
+  bool remote_hover_active_ = false;
 
   // Blinking caret for the focused element (GUI thread).  The blink timer
   // flips visibility only while a control holds focus, so an idle page never

@@ -59,31 +59,15 @@ void RemoveLastUtf8CodePoint(std::string& value)
 
 // Resolves a possibly-relative reference against a base page URL.  Handles
 // file:// / bare local path bases (which the URL parser rejects) by string
-// concatenation, mirroring HyperlinkTarget.
+// concatenation, and leaves absolute references (those carrying a scheme)
+// unchanged — see browser::ResolveReference.
 std::string ResolveUrlAgainstBase(std::string_view ref, std::string_view base_url)
 {
   if (ref.empty()) {
     return std::string(base_url);
   }
-  const bool is_file = base_url.rfind("file://", 0) == 0;
-  const bool is_bare_path = base_url.find(':') == std::string_view::npos;
-  if (is_file || is_bare_path) {
-    if (ref[0] == '/') {
-      return is_file ? "file://" + std::string(ref) : std::string(ref);
-    }
-    const std::size_t slash = base_url.find_last_of('/');
-    return std::string(
-               base_url.substr(0, slash != std::string_view::npos ? slash + 1 : base_url.size())) +
-           std::string(ref);
-  }
-  const auto base = url::Url::Parse(base_url);
-  if (base.has_value()) {
-    const auto resolved = url::Url::Parse(ref, base.value());
-    if (resolved.has_value()) {
-      return resolved.value().Serialize(/*include_fragment=*/true);
-    }
-  }
-  return std::string(ref);
+  const std::optional<std::string> resolved = ResolveReference(ref, base_url);
+  return resolved.has_value() ? resolved.value() : std::string(ref);
 }
 
 // Collects the named, enabled form controls of |form| and encodes them as an
@@ -621,10 +605,11 @@ void BrowserController::NavigateToUrl(Tab& tab, const std::string& url_string)
   // Local paths (and file:// URLs) are handled directly without the URL
   // parser (which does not support opaque file: URLs yet).
   if (StartsWith(url_string, "file://")) {
-    std::string path = url_string.substr(7);
-    if (!path.empty() && path[0] == '/')
-      path.erase(path.begin());
-    LoadLocalPath(tab, path);
+    // "file://<host>/<path>": only the empty-host form ("file:///path", the
+    // form links and bookmarks produce) is supported, and the path is absolute
+    // — stripping the leading slash here used to turn it into a relative path
+    // that never resolved.
+    LoadLocalPath(tab, url_string.substr(7));
     return;
   }
   auto parsed = url::Url::Parse(url_string);
@@ -1284,8 +1269,10 @@ void BrowserController::PullRemoteFrame(Tab& tab, bool force)
     tab.remote_scroll_dirty = true;
     return;
   }
-  const int width = std::max(1, tab.remote_viewport_width);
-  const int height = std::max(1, tab.remote_viewport_height);
+  const int width = tab.remote_viewport_width > 0 ? tab.remote_viewport_width
+                                                  : kDefaultRemoteViewportWidth;
+  const int height = tab.remote_viewport_height > 0 ? tab.remote_viewport_height
+                                                    : kDefaultRemoteViewportHeight;
   RemoteFrame frame;
   auto reply = tab.session->Snapshot(width, height, tab.scroll_offset_y, &frame);
   if (!reply.has_value()) {

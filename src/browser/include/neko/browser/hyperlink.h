@@ -19,4 +19,17 @@ namespace neko::browser {
 // href, or the href cannot be resolved (e.g. an empty href with no base).
 std::optional<std::string> HyperlinkTarget(const dom::Node* node, std::string_view base_url);
 
+// Resolves a possibly-relative URL reference (a hyperlink href, a form action,
+// a redirect location) against |base_url| — the document's URL.
+//
+// An absolute reference is one that carries its own scheme (https:, file:,
+// data:, ...) and is returned unchanged: resolving it against the base used to
+// corrupt it (a file:// href on a file:// page was concatenated onto the
+// base's directory).  For file:// and bare-path bases, which the URL parser
+// cannot resolve against, references are joined by string concatenation —
+// root-relative references keep the base's root.  An empty reference resolves
+// to the base itself.  Returns nullopt when the reference cannot be resolved
+// at all (no usable base and no scheme of its own).
+std::optional<std::string> ResolveReference(std::string_view ref, std::string_view base_url);
+
 } // namespace neko::browser

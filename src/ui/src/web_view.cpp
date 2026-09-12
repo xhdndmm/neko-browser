@@ -52,18 +52,38 @@ WebView::WebView(BrowserWorker* worker, int tab_id, QWidget* parent)
 void WebView::Refresh()
 {
   snapshot_ = worker_->SnapshotTab(tab_id_);
-  // A navigation replaces the page's document; only then must the hover/active
-  // pointers be dropped and the scroll reset to the top. Script-driven refresh
-  // keeps the same document generation and preserves those states.
-  const std::uint64_t document_version =
-      (snapshot_.content_type == browser::ContentType::kHtml && snapshot_.page != nullptr)
-          ? snapshot_.page->DocumentVersion()
-          : 0;
-  if (document_version != cached_document_version_) {
-    cached_document_version_ = document_version;
-    hovered_element_ = nullptr;
-    active_element_ = nullptr;
-    verticalScrollBar()->setValue(0);
+  const bool remote = snapshot_.remote;
+  if (remote) {
+    // Renderer-process mode: a navigation resets the local scroll position
+    // (the child re-renders at the new offset after SetScrollOffset).  The
+    // hover/active pointers belong to the in-process document, so they are
+    // dropped as well.
+    if (snapshot_.url != remote_url_) {
+      remote_url_ = snapshot_.url;
+      hovered_element_ = nullptr;
+      active_element_ = nullptr;
+      verticalScrollBar()->setValue(0);
+    }
+    // Report our viewport so the child lays the page out for the real size
+    // (the load itself uses the controller's default until then).
+    ReportViewport();
+  } else {
+    // Leaving renderer mode (or not in it): the next session must be told the
+    // viewport again.
+    reported_remote_viewport_ = false;
+    // A navigation replaces the page's document; only then must the hover/active
+    // pointers be dropped and the scroll reset to the top. Script-driven refresh
+    // keeps the same document generation and preserves those states.
+    const std::uint64_t document_version =
+        (snapshot_.content_type == browser::ContentType::kHtml && snapshot_.page != nullptr)
+            ? snapshot_.page->DocumentVersion()
+            : 0;
+    if (document_version != cached_document_version_) {
+      cached_document_version_ = document_version;
+      hovered_element_ = nullptr;
+      active_element_ = nullptr;
+      verticalScrollBar()->setValue(0);
+    }
   }
   UpdateTextOverlay();
   UpdateScrollRange();
@@ -71,15 +91,39 @@ void WebView::Refresh()
   // assignment): the worker bumped scroll_request_id.  Apply it once when the
   // id advances past the last-applied value (after the scroll range is set so
   // the bar actually permits the value), then record it so later refreshes
-  // don't re-apply the same request.
+  // don't re-apply the same request.  In renderer mode the child reports the
+  // latch instead of the in-process runtime.
   if (snapshot_.scroll_request_id != applied_scroll_request_id_) {
     applied_scroll_request_id_ = snapshot_.scroll_request_id;
-    if (snapshot_.content_type == browser::ContentType::kHtml && snapshot_.page != nullptr &&
-        verticalScrollBar()->maximum() > 0) {
+    if (snapshot_.content_type == browser::ContentType::kHtml &&
+        (snapshot_.page != nullptr || remote) && verticalScrollBar()->maximum() > 0) {
       verticalScrollBar()->setValue(static_cast<int>(snapshot_.pending_scroll_y));
     }
   }
+  if (remote) {
+    ApplyRemoteCursor();
+  }
   viewport()->update();
+}
+
+void WebView::ReportViewport()
+{
+  const int width = std::max(1, viewport()->width());
+  const int height = std::max(1, viewport()->height());
+  if (reported_remote_viewport_ && width == reported_viewport_w_ &&
+      height == reported_viewport_h_) {
+    return;
+  }
+  reported_viewport_w_ = width;
+  reported_viewport_h_ = height;
+  reported_remote_viewport_ = true;
+  worker_->SetViewportSize(tab_id_, width, height);
+}
+
+void WebView::ApplyRemoteCursor()
+{
+  viewport()->setCursor(snapshot_.remote_hover_link.empty() ? Qt::ArrowCursor
+                                                            : Qt::PointingHandCursor);
 }
 
 void WebView::resizeEvent(QResizeEvent* event)
@@ -87,6 +131,9 @@ void WebView::resizeEvent(QResizeEvent* event)
   QAbstractScrollArea::resizeEvent(event);
   UpdateScrollRange();
   text_view_->setGeometry(viewport()->rect());
+  if (snapshot_.remote) {
+    ReportViewport();
+  }
   viewport()->update();
 }
 
@@ -275,12 +322,21 @@ void WebView::HandleLinkClick(const QPointF& viewport_pos)
 
 void WebView::HandleHover(const QPointF& viewport_pos)
 {
-  if (snapshot_.id < 0 || snapshot_.content_type != browser::ContentType::kHtml ||
-      snapshot_.page == nullptr) {
+  if (snapshot_.id < 0 || snapshot_.content_type != browser::ContentType::kHtml) {
     return;
   }
   const float doc_x = static_cast<float>(viewport_pos.x());
   const float doc_y = static_cast<float>(viewport_pos.y()) + ScrollY();
+  if (snapshot_.remote) {
+    // Renderer mode: the DOM lives in the child, which dedups hover changes
+    // and reports the link under the pointer; the cursor follows the snapshot.
+    remote_hover_active_ = true;
+    worker_->DispatchHover(tab_id_, doc_x, doc_y);
+    return;
+  }
+  if (snapshot_.page == nullptr) {
+    return;
+  }
   const dom::Element* element = snapshot_.page->ElementAt(doc_x, doc_y);
   if (element == hovered_element_) {
     return;
@@ -299,6 +355,14 @@ void WebView::HandleHover(const QPointF& viewport_pos)
 
 void WebView::HandleHoverClear()
 {
+  if (snapshot_.remote) {
+    if (remote_hover_active_) {
+      remote_hover_active_ = false;
+      worker_->DispatchHoverClear(tab_id_);
+    }
+    viewport()->setCursor(Qt::ArrowCursor);
+    return;
+  }
   if (hovered_element_ == nullptr) {
     return;
   }
@@ -359,13 +423,18 @@ void WebView::EnsureLayout(int width)
 void WebView::UpdateScrollRange()
 {
   if (snapshot_.id < 0 || snapshot_.content_type != browser::ContentType::kHtml ||
-      snapshot_.page == nullptr) {
+      (snapshot_.page == nullptr && !snapshot_.remote)) {
     verticalScrollBar()->setRange(0, 0);
     return;
   }
   const int viewport_width = std::max(1, viewport()->width());
-  EnsureLayout(viewport_width);
-  const int content_height = static_cast<int>(snapshot_.page->ContentHeight());
+  int content_height = 0;
+  if (snapshot_.remote) {
+    content_height = static_cast<int>(snapshot_.remote_content_height);
+  } else {
+    EnsureLayout(viewport_width);
+    content_height = static_cast<int>(snapshot_.page->ContentHeight());
+  }
   const int viewport_height = std::max(1, viewport()->height());
   verticalScrollBar()->setRange(0, std::max(0, content_height - viewport_height));
 }
@@ -453,6 +522,10 @@ void WebView::paintEvent(QPaintEvent*)
 
 void WebView::PaintHtml(QPainter& painter)
 {
+  if (snapshot_.remote) {
+    PaintRemote(painter);
+    return;
+  }
   if (snapshot_.page == nullptr)
     return;
   const int viewport_width = std::max(1, viewport()->width());
@@ -598,6 +671,22 @@ void WebView::OnCaretBlink()
   }
   caret_visible_ = !caret_visible_;
   viewport()->update();
+}
+
+void WebView::PaintRemote(QPainter& painter)
+{
+  const std::shared_ptr<const browser::RemoteFrame>& frame = snapshot_.remote_frame;
+  if (frame == nullptr || frame->rgba.empty() || frame->width <= 0 || frame->height <= 0) {
+    return; // Navigation in flight: the previous frame stays until the new one.
+  }
+  // The frame is the viewport the child rasterized at the current scroll
+  // offset, so it is drawn at the origin.  QImage does not copy the pixels and
+  // never writes through them; the const_cast only satisfies its API.
+  const QImage image(const_cast<std::uint8_t*>(frame->rgba.data()),
+                     frame->width,
+                     frame->height,
+                     QImage::Format_RGBA8888);
+  painter.drawImage(0, 0, image);
 }
 
 void WebView::PaintImage(QPainter& painter)

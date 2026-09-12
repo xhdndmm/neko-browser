@@ -1051,4 +1051,154 @@ TEST(UiSmokeTest, ScriptScrollMovesViewportScrollBar)
   EXPECT_GT(window.ActiveView()->verticalScrollBar()->maximum(), 150);
 }
 
+// ---------------------------------------------------------------------------
+// Renderer-process mode (ADR 0016 M2): the GUI paints the frames the child
+// process produced, and input is forwarded to it.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+neko::browser::RendererOptions RendererModeOptions()
+{
+  neko::browser::RendererOptions renderer;
+  renderer.enabled = true;
+  renderer.executable = NEKO_BROWSER_BIN;
+  return renderer;
+}
+
+// True when the grabbed viewport contains a dark pixel, i.e. the page's text
+// was actually painted (a blank view is all white).
+bool ViewportHasDarkPixel(neko::ui::WebView* view)
+{
+  if (view == nullptr) {
+    return false;
+  }
+  const QImage image = view->viewport()->grab().toImage();
+  for (int y = 0; y < image.height(); y += 2) {
+    for (int x = 0; x < image.width(); x += 2) {
+      const QRgb pixel = image.pixel(x, y);
+      if (qRed(pixel) < 160 && qGreen(pixel) < 160 && qBlue(pixel) < 160) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+} // namespace
+
+TEST(UiSmokeTest, RendererProcessModePaintsChildFrames)
+{
+  TempProfile tp;
+  const std::string html_file = tp.path() + "/remote.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(html_file,
+                                             "<html><head><title>Remote UI</title></head>"
+                                             "<body><h1>Hello Remote</h1></body></html>")
+                  .has_value());
+
+  neko::ui::BrowserWorker worker(
+      QString::fromStdString(tp.path()), nullptr, RendererModeOptions());
+  neko::ui::MainWindow window(&worker);
+  window.resize(800, 600);
+  window.show();
+
+  worker.NavigateActive(QString::fromStdString(html_file));
+  window.AddressBar()->clearFocus();
+
+  // The title is reported by the child through the session.
+  ASSERT_TRUE(WaitFor([&] {
+    for (int i = 0; i < window.TabBarWidget()->count(); ++i) {
+      if (window.TabBarWidget()->tabText(i).contains("Remote UI")) {
+        return true;
+      }
+    }
+    return false;
+  }));
+
+  // The frame is painted: the heading's dark text must appear in the viewport.
+  neko::ui::WebView* view = window.ActiveView();
+  ASSERT_NE(view, nullptr);
+  EXPECT_TRUE(WaitFor([&] { return ViewportHasDarkPixel(view); }, 10000));
+
+  // The document lives in the child: no in-process page is published.
+  const neko::browser::TabSnapshot snapshot = worker.SnapshotActiveTab();
+  EXPECT_TRUE(snapshot.remote);
+  EXPECT_EQ(snapshot.page, nullptr);
+  ASSERT_NE(snapshot.remote_frame, nullptr);
+}
+
+TEST(UiSmokeTest, RendererProcessModeClickAndHoverReachTheChild)
+{
+  TempProfile tp;
+  const std::string first = tp.path() + "/first.html";
+  const std::string second = tp.path() + "/second.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(
+                  second,
+                  "<html><head><title>Second Remote</title></head><body>second</body></html>")
+                  .has_value());
+  const std::string first_html = "<html><head><title>First Remote</title></head>"
+                                 "<body><a id=\"next\" href=\"file://" +
+                                 second + "\">go</a></body></html>";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(first, first_html).has_value());
+
+  neko::ui::BrowserWorker worker(
+      QString::fromStdString(tp.path()), nullptr, RendererModeOptions());
+  neko::ui::MainWindow window(&worker);
+  window.resize(800, 600);
+  window.show();
+
+  worker.NavigateActive(QString::fromStdString(first));
+  window.AddressBar()->clearFocus();
+  ASSERT_TRUE(WaitFor([&] {
+    for (int i = 0; i < window.TabBarWidget()->count(); ++i) {
+      if (window.TabBarWidget()->tabText(i).contains("First Remote")) {
+        return true;
+      }
+    }
+    return false;
+  }));
+
+  neko::ui::WebView* view = window.ActiveView();
+  ASSERT_NE(view, nullptr);
+  // Click/hover coordinates from the same engine (the frame is 1:1 with
+  // document pixels at scroll offset 0).
+  neko::renderer::Page probe;
+  ASSERT_TRUE(probe.LoadHtml(first_html).has_value());
+  probe.Layout(static_cast<float>(view->viewport()->width()),
+               static_cast<float>(view->viewport()->height()));
+  neko::dom::Element* link = neko::dom::QuerySelector(*probe.document(), "#next");
+  ASSERT_NE(link, nullptr);
+  const auto geometry = probe.ElementBoxGeometry(*link);
+  ASSERT_TRUE(geometry.has_value());
+  const QPoint point(static_cast<int>(geometry->x + geometry->width / 2.0f),
+                     static_cast<int>(geometry->y + geometry->height / 2.0f));
+
+  // Hovering the link: the child reports the target and the cursor follows.
+  {
+    const QPointF local(point);
+    QMouseEvent move(QEvent::MouseMove,
+                     local,
+                     view->viewport()->mapToGlobal(local),
+                     Qt::NoButton,
+                     Qt::NoButton,
+                     Qt::NoModifier);
+    QApplication::sendEvent(view->viewport(), &move);
+  }
+  EXPECT_TRUE(
+      WaitFor([&] { return view->viewport()->cursor().shape() == Qt::PointingHandCursor; }));
+
+  // Clicking it: the child performs the navigation and reports it back, the
+  // browser re-runs it (file read) and the tab lands on the second page.
+  QTest::mousePress(view->viewport(), Qt::LeftButton, Qt::NoModifier, point);
+  QTest::mouseRelease(view->viewport(), Qt::LeftButton, Qt::NoModifier, point);
+  EXPECT_TRUE(WaitFor([&] {
+    for (int i = 0; i < window.TabBarWidget()->count(); ++i) {
+      if (window.TabBarWidget()->tabText(i).contains("Second Remote")) {
+        return true;
+      }
+    }
+    return false;
+  }, 10000));
+}
+
 } // namespace

@@ -769,6 +769,27 @@ TEST(BrowserControllerTest, PumpScriptTimersRunsSetTimeout)
   EXPECT_DOUBLE_EQ(num.value(), 1.0);
 }
 
+// A "file:///abs/path" URL (the form hyperlinks and bookmarks produce) loads
+// the absolute path.  Regression test: the leading slash used to be stripped,
+// turning it into a relative path that failed to read.
+TEST(BrowserControllerTest, FileUrlLoadsAbsolutePath)
+{
+  TempProfile tp;
+  const std::string file = tp.path() + "/file_url.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(
+                  file,
+                  "<html><head><title>File URL</title></head><body>file body</body></html>")
+                  .has_value());
+
+  BrowserController controller(tp.path());
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("file://" + file).has_value());
+  const TabSnapshot snapshot = controller.SnapshotActiveTab();
+  EXPECT_EQ(snapshot.content_type, ContentType::kHtml);
+  ASSERT_TRUE(snapshot.page != nullptr);
+  EXPECT_EQ(snapshot.title, "File URL");
+}
+
 // A timer that assigns window.location must navigate the tab.  Regression
 // test: the pending navigation used to be stored in a stack local of
 // LoadBytes, so a timer callback wrote through a dangling pointer — the

@@ -33,7 +33,9 @@ class BrowserWorker : public QObject
 {
   Q_OBJECT
 public:
-  explicit BrowserWorker(QString profile_dir, QObject* parent = nullptr);
+  explicit BrowserWorker(QString profile_dir,
+                         QObject* parent = nullptr,
+                         browser::RendererOptions renderer = {});
   ~BrowserWorker() override;
 
   // -------------------------------------------------------------------------
@@ -86,6 +88,9 @@ public:
   // Post the tab's current vertical scroll offset to the worker (the GUI scroll
   // bar's value); the worker records it so window.scrollY reads it live.
   void SetScrollOffset(int tab_id, int y);
+  // Renderer mode: the viewport the child should lay the page out for (the
+  // WebView reports its size; a fresh frame is pulled when it changes).
+  void SetViewportSize(int tab_id, int width, int height);
   // Post a script-requested scroll (window.scrollTo / element.scrollTop).
   void SetScrollRequest(int tab_id, int y);
   // Dispatches a keyboard event (keydown/keyup) to the page's script runtime.
