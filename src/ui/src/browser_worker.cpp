@@ -50,8 +50,12 @@ void BrowserWorker::Run()
     {
       std::unique_lock<std::mutex> lock(mutex_);
       cv_.wait(lock, [this] { return quit_ || !queue_.empty(); });
-      if (quit_ && queue_.empty())
+      if (quit_) {
+        // Shutdown: drop anything still queued.  A renderer round-trip or a
+        // heavy restyle can take seconds, and the GUI must not wait for a
+        // backlog of actions it is about to discard anyway.
         break;
+      }
       fn = std::move(queue_.front());
       queue_.pop_front();
     }
@@ -200,7 +204,24 @@ void BrowserWorker::DispatchKeyboard(int tab_id,
 
 void BrowserWorker::PumpScriptTimers()
 {
-  Post([this] { controller_.PumpScriptTimers(); });
+  // Coalesce: the GUI pumps on a 50 ms timer, but a heavy page (large restyle
+  // or renderer round-trip) can take longer than that per pump.  Queueing one
+  // per tick would grow the queue without bound, starve every other action and
+  // block shutdown; one pending pump is enough (it sees the latest state).
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (pump_queued_) {
+      return;
+    }
+    pump_queued_ = true;
+  }
+  Post([this] {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      pump_queued_ = false;
+    }
+    controller_.PumpScriptTimers();
+  });
 }
 
 void BrowserWorker::NewTab(const QString& url, bool activate)

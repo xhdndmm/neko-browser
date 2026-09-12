@@ -84,22 +84,22 @@ private:
     return tab->page.get();
   }
 
-  // Lays the page out when it has no layout yet or changed since the last
-  // layout (DOM/style mutation, new document, viewport resize).
+  // Lays the page out when it has no layout yet or the child's viewport
+  // changed.  DOM and style mutations rebuild the layout tree inside the page
+  // itself (Page::ReapplyStyles), so the page version is deliberately not used
+  // here: re-laying out on every version bump would run a full restyle plus
+  // layout — on a heavy page that dominated every pump (seconds per frame).
   void EnsureLayout()
   {
     renderer::Page* p = page();
     if (p == nullptr) {
       return;
     }
-    if (p->HasLayout() && p->layout_version() == laid_out_layout_version_ &&
-        p->DocumentVersion() == laid_out_document_version_ && laid_out_width_ == viewport_width_ &&
+    if (p->HasLayout() && laid_out_width_ == viewport_width_ &&
         laid_out_height_ == viewport_height_) {
       return;
     }
     p->Layout(static_cast<float>(viewport_width_), static_cast<float>(viewport_height_));
-    laid_out_layout_version_ = p->layout_version();
-    laid_out_document_version_ = p->DocumentVersion();
     laid_out_width_ = viewport_width_;
     laid_out_height_ = viewport_height_;
   }
@@ -264,9 +264,7 @@ private:
   int viewport_width_ = 800;
   int viewport_height_ = 600;
 
-  // Bookkeeping for EnsureLayout (last laid-out versions and size).
-  std::uint64_t laid_out_layout_version_ = 0;
-  std::uint64_t laid_out_document_version_ = 0;
+  // Bookkeeping for EnsureLayout (last laid-out viewport); -1 = never.
   int laid_out_width_ = -1;
   int laid_out_height_ = -1;
 

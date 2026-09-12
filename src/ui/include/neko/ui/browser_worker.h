@@ -135,6 +135,9 @@ private:
   std::condition_variable cv_;
   std::deque<std::function<void()>> queue_;
   bool quit_ = false;
+  // True while a script-timer pump is queued but not yet run (coalescing: see
+  // BrowserWorker::PumpScriptTimers).
+  bool pump_queued_ = false;
   // DevTools console engine; only touched on the worker thread.
   std::unique_ptr<javascript::ScriptEngine> js_engine_;
 };
