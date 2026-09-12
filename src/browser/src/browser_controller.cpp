@@ -327,6 +327,7 @@ TabSnapshot ToSnapshot(const Tab& tab)
   s.origin = tab.origin;
   s.page = tab.page;
   s.image = tab.image;
+  s.image_frame = tab.image_frame;
   s.pdf = tab.pdf;
   s.audio = tab.audio;
   s.raw_text = tab.raw_text;
@@ -1087,6 +1088,32 @@ void BrowserController::PumpScriptTimers()
   if (tab->page != nullptr) {
     (void)tab->page->AdvanceAnimations();
   }
+  // A directly navigated animated GIF plays on the same clock.  Frames are
+  // swapped by replacing the shared Image (the GUI re-reads the snapshot on
+  // every pump) and image_frame lets it tell a repaint is due.
+  if (tab->gif_animation != nullptr && tab->content_type == ContentType::kImage) {
+    const double now_ms = static_cast<double>(NowMillis());
+    if (!tab->gif_started) {
+      // Defensive: an animation without a published start time begins now.
+      tab->gif_started = true;
+      tab->gif_start_ms = now_ms;
+    }
+    const image::GifAnimation& animation = *tab->gif_animation;
+    if (image::AdvanceGifFrame(animation,
+                               now_ms - tab->gif_start_ms,
+                               tab->gif_frame,
+                               tab->gif_loops,
+                               tab->gif_finished) &&
+        tab->gif_frame < animation.frames.size()) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      auto next = std::make_shared<image::Image>();
+      next->width = animation.width;
+      next->height = animation.height;
+      next->rgba = animation.frames[tab->gif_frame].rgba;
+      tab->image = std::move(next);
+      ++tab->image_frame;
+    }
+  }
   // A timer callback may have requested a navigation (window.location): the
   // request was written into the tab by the runtime's callback, so act on it
   // now (and clear it so it fires once).
@@ -1802,21 +1829,49 @@ void BrowserController::LoadBytes(Tab& tab,
   }
 
   if (is_image) {
-    // Direct SVG navigation: decode with the tab's font stack so <text> draws.
-    const image::SvgTextShaper shaper =
-        tab.page != nullptr ? tab.page->MakeSvgTextShaper() : image::SvgTextShaper{};
-    auto decoded = neko::image::DecodeImage(bytes, shaper);
-    if (!decoded) {
-      std::lock_guard<std::mutex> lock(mutex_);
-      tab.content_type = ContentType::kError;
-      tab.error = std::make_shared<std::string>("image decode error: " + decoded.error().message());
-      tab.title = "Image error";
-      return;
+    // An animated GIF navigated to directly plays like any other image in a
+    // browser: decode every frame and let the frame clock advance the display.
+    std::shared_ptr<image::GifAnimation> animation;
+    if (image::IsGif(bytes)) {
+      auto decoded_animation = image::DecodeGifAnimation(bytes);
+      if (decoded_animation.has_value() && decoded_animation.value().frames.size() > 1) {
+        animation = std::make_shared<image::GifAnimation>(std::move(decoded_animation.value()));
+      }
+    }
+    image::Image decoded;
+    if (animation != nullptr) {
+      decoded.width = animation->width;
+      decoded.height = animation->height;
+      decoded.rgba = animation->frames[0].rgba;
+    } else {
+      // Direct SVG navigation: decode with the tab's font stack so <text>
+      // draws.  (A single-frame GIF falls through here.)
+      const image::SvgTextShaper shaper =
+          tab.page != nullptr ? tab.page->MakeSvgTextShaper() : image::SvgTextShaper{};
+      auto result = neko::image::DecodeImage(bytes, shaper);
+      if (!result) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        tab.content_type = ContentType::kError;
+        tab.error =
+            std::make_shared<std::string>("image decode error: " + result.error().message());
+        tab.title = "Image error";
+        return;
+      }
+      decoded = std::move(result.value());
     }
     {
       std::lock_guard<std::mutex> lock(mutex_);
       tab.content_type = ContentType::kImage;
-      tab.image = std::make_shared<image::Image>(std::move(decoded.value()));
+      tab.image = std::make_shared<image::Image>(std::move(decoded));
+      tab.gif_animation = std::move(animation);
+      tab.gif_frame = 0;
+      tab.gif_loops = 0;
+      tab.gif_finished = false;
+      // Playback starts when the image is published (not on the first pump):
+      // the first frame's delay must elapse in real time.
+      tab.gif_started = true;
+      tab.gif_start_ms = static_cast<double>(NowMillis());
+      tab.image_frame = 0;
       tab.title = final_url;
     }
     RecordVisit(final_url, tab.title);

@@ -1191,6 +1191,59 @@ TEST(SvgTest, IsSvgDetectsXmlDeclarationAndBareSvg)
   EXPECT_FALSE(IsSvg(""));
 }
 
+TEST(GifTest, AdvanceGifFrameFollowsTheScheduleAndLoopCount)
+{
+  image::GifAnimation animation;
+  animation.width = 1;
+  animation.height = 1;
+  animation.loop_count = 2; // two passes, then stop
+  for (const int delay : {5, 10}) {
+    image::GifFrame frame;
+    frame.rgba = {0, 0, 0, 255};
+    frame.delay_cs = delay;
+    animation.frames.push_back(std::move(frame));
+  }
+
+  // The frame at a given elapsed time: 50 ms first frame, then 100 ms second.
+  struct State
+  {
+    std::size_t frame = 0;
+    std::size_t loops = 0;
+    bool finished = false;
+  };
+  const auto frame_at = [&](double elapsed) {
+    State state;
+    (void)image::AdvanceGifFrame(animation, elapsed, state.frame, state.loops, state.finished);
+    return state;
+  };
+  EXPECT_EQ(frame_at(10.0).frame, 0u);  // inside the first frame
+  EXPECT_EQ(frame_at(60.0).frame, 1u);  // first frame elapsed
+  EXPECT_EQ(frame_at(200.0).frame, 1u); // second pass, second frame
+  EXPECT_EQ(frame_at(200.0).loops, 1u); // ... and the display wrapped once
+  const State last = frame_at(400.0);
+  EXPECT_EQ(last.frame, 1u); // loop count reached: the last frame sticks
+  EXPECT_EQ(last.loops, 2u);
+  EXPECT_TRUE(last.finished);
+  EXPECT_EQ(frame_at(10000.0).frame, 1u); // finished: never moves again
+  EXPECT_EQ(frame_at(10000.0).loops, 2u);
+
+  // The return value reports a *change* of the displayed frame, which is what
+  // the browser's frame clock uses to decide whether a repaint is due.
+  std::size_t frame = 0;
+  std::size_t loops = 0;
+  bool finished = false;
+  EXPECT_FALSE(image::AdvanceGifFrame(animation, 10.0, frame, loops, finished));
+  EXPECT_TRUE(image::AdvanceGifFrame(animation, 60.0, frame, loops, finished));
+  EXPECT_EQ(frame, 1u);
+  EXPECT_FALSE(image::AdvanceGifFrame(animation, 60.0, frame, loops, finished));
+
+  // A single-frame GIF has nothing to advance.
+  image::GifAnimation still;
+  still.frames.push_back(image::GifFrame{});
+  std::size_t still_frame = 0;
+  EXPECT_FALSE(image::AdvanceGifFrame(still, 1000.0, still_frame, loops, finished));
+}
+
 TEST(SvgTest, RendersSolidRect)
 {
   const std::string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"10\">"

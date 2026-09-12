@@ -2212,6 +2212,56 @@ TEST(BrowserControllerTest, PercentEncodedSvgDataUrlIsDecodedWithoutNetwork)
   EXPECT_EQ(decoded->height, 2);
 }
 
+// A 1x1, two-frame animated GIF (red 5cs, green 10cs, looping forever),
+// written out byte by byte: the browser tests must not depend on an encoder.
+// The bytes are hex-escaped individually because C++ hex escapes are greedy
+// (a raw 0x00 byte would also terminate the literal).
+std::string AnimatedGifBytes()
+{
+  // |size| is explicit: the GIF contains NUL bytes, so the literal cannot be
+  // treated as a C string.
+  return std::string("\x47\x49\x46\x38\x39\x61\x01\x00\x01\x00\xf0\x00"
+                     "\x00\xff\x00\x00\x00\xff\x00\x21\xff\x0b\x4e\x45"
+                     "\x54\x53\x43\x41\x50\x45\x32\x2e\x30\x03\x01\x00"
+                     "\x00\x00\x21\xf9\x04\x04\x05\x00\x00\x00\x2c\x00"
+                     "\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01"
+                     "\x00\x21\xf9\x04\x04\x0a\x00\x00\x00\x2c\x00\x00"
+                     "\x00\x00\x01\x00\x01\x00\x00\x02\x02\x4c\x01\x00"
+                     "\x3b",
+                     85);
+}
+
+TEST(BrowserControllerTest, DirectGifNavigationPlaysFrames)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  const std::string gif = AnimatedGifBytes();
+  ASSERT_GT(gif.size(), 60u);
+  fetch.Add("http://example.com/anim.gif",
+            FakeFetcher::Route{200, {{"content-type", "image/gif"}}, gif});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/anim.gif").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  ASSERT_NE(tab->image, nullptr);
+  EXPECT_EQ(tab->content_type, ContentType::kImage);
+  ASSERT_NE(tab->gif_animation, nullptr);
+  EXPECT_GE(tab->gif_animation->frames.size(), 2u);
+  // First frame: red.
+  EXPECT_EQ(tab->image->rgba[0], 255);
+  EXPECT_EQ(tab->image->rgba[1], 0);
+
+  // The frame clock drives playback: after the first frame's 50 ms the display
+  // switches to the green frame.
+  std::this_thread::sleep_for(std::chrono::milliseconds(120));
+  controller.PumpScriptTimers();
+  ASSERT_NE(tab->image, nullptr);
+  EXPECT_EQ(tab->image->rgba[0], 0);
+  EXPECT_EQ(tab->image->rgba[1], 255);
+  EXPECT_GT(tab->image_frame, 0u);
+}
+
 // External <link rel=stylesheet> sheets are fetched, parsed and applied before
 // the page is published (real pages put most of their CSS in external files).
 TEST(BrowserControllerTest, FetchesAndAppliesExternalStylesheets)

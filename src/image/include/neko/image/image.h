@@ -54,6 +54,19 @@ struct GifAnimation
   }
 };
 
+// Advances an animated GIF's playback state by |elapsed_ms| since playback
+// started.  |frame| is the currently displayed frame (updated in place),
+// |loops| counts completed passes and |finished| is set when a finite loop
+// count has been reached.  Returns true when the displayed frame changed.
+//
+// Shared by the page's <img> animation (renderer) and by a directly navigated
+// GIF (browser) so both use exactly the same schedule.
+bool AdvanceGifFrame(const GifAnimation& animation,
+                     double elapsed_ms,
+                     std::size_t& frame,
+                     std::size_t& loops,
+                     bool& finished);
+
 // True when the buffer begins with the respective format's magic bytes.
 bool IsPng(std::string_view data);
 bool IsJpeg(std::string_view data);

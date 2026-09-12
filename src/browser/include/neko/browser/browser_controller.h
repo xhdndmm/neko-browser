@@ -63,11 +63,24 @@ struct Tab
   // kHtml.  Replaced wholesale by each navigation (never mutated in place
   // after publishing), so a held handle is safe to Layout/Rasterize/read.
   std::shared_ptr<renderer::Page> page;
-  std::shared_ptr<image::Image> image;     // kImage
+  std::shared_ptr<image::Image> image;     // kImage (the displayed frame)
   std::shared_ptr<pdf::PdfDocument> pdf;   // kPdf
   std::shared_ptr<media::AudioData> audio; // kAudio
   std::shared_ptr<std::string> raw_text;   // kText / kOther
   std::shared_ptr<std::string> error;      // kError
+
+  // Direct navigation to an animated GIF: the full frame set plus the playback
+  // position, advanced on the same frame clock as page animations
+  // (PumpScriptTimers).  |image| above always holds the frame to display, and
+  // |image_frame| counts changes so the GUI can tell a repaint is due.  Worker
+  // thread only.  A still GIF (or any other image) leaves |gif_animation| null.
+  std::shared_ptr<image::GifAnimation> gif_animation;
+  double gif_start_ms = 0;
+  std::size_t gif_frame = 0;
+  std::size_t gif_loops = 0;
+  bool gif_finished = false;
+  bool gif_started = false;
+  uint64_t image_frame = 0;
 
   // Back/forward stack; worker-thread only (not exposed to the GUI).
   std::vector<std::string> history;
@@ -184,8 +197,11 @@ struct TabSnapshot
   // Security origin of the current page ("null" when it has none).
   std::string origin;
 
-  std::shared_ptr<renderer::Page> page;    // kHtml
-  std::shared_ptr<image::Image> image;     // kImage
+  std::shared_ptr<renderer::Page> page; // kHtml
+  std::shared_ptr<image::Image> image;  // kImage: the frame to display
+  // Bumped whenever a directly navigated animated GIF switches frames, so the
+  // GUI knows its cached image is stale (0 for every other content type).
+  uint64_t image_frame = 0;
   std::shared_ptr<pdf::PdfDocument> pdf;   // kPdf
   std::shared_ptr<media::AudioData> audio; // kAudio
   std::shared_ptr<std::string> raw_text;   // kText / kOther

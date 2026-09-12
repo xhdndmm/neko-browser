@@ -101,7 +101,7 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
 > /SMask、pattern、CMap）；
 > flexbox 已支持 order/min-max/auto 外边距；
 > grid 已支持 minmax()/命名线/命名区域/auto-flow/inline-grid；
-> GIF 已支持动画（直接导航到 .gif 仍显示首帧）。
+> GIF 已支持动画（页面内 <img>/背景图与直接导航 .gif 均播放）。
 
 ---
 
