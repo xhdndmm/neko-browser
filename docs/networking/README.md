@@ -4,7 +4,8 @@
 
 ## 已实现
 
-- TCP Socket 抽象（POSIX；连接超时、完整收发）
+- TCP Socket 抽象（POSIX + Windows/Winsock；平台差异集中在模块内
+  `src/socket_platform.{h,cpp}`；连接超时、完整收发）
 - **DNS 客户端（ADR 0018）**：自研 RFC 1035 报文编解码（A/AAAA/CNAME、
   压缩指针、边界检查）、TTL 缓存 + 负缓存、`/etc/hosts`、
   `/etc/resolv.conf` 服务器列表、随机 id 防伪造、CNAME 链跟随；
@@ -25,6 +26,8 @@
 
 - keep-alive 连接复用、HTTP/2、HTTP/3、brotli
 - 超时/取消的完整生命周期管理
+- Windows 网络路径由 CI 编译验证，但网络测试仍是 POSIX 守卫（未在 Windows 运行）；
+  DNS 服务器列表在 Windows 上回退到公共解析器（`/etc/resolv.conf` 不存在）
 
 ## 分层
 

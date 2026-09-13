@@ -4,7 +4,8 @@
 
 #include "neko/network/socket.h"
 
-#include <cerrno>
+#include "socket_platform.h"
+
 #include <cstring>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
@@ -12,13 +13,6 @@
 #include <string>
 #include <string_view>
 #include <utility>
-
-#ifndef _WIN32
-#include <poll.h>
-#include <sys/socket.h>
-#else
-#include <winsock2.h>
-#endif
 
 namespace neko::network {
 namespace {
@@ -40,31 +34,6 @@ std::string SslErrorString()
     msg += ERR_error_string(code, nullptr);
   }
   return msg.empty() ? "unknown TLS error" : msg;
-}
-
-// Bounds the socket's blocking operations (used by the TLS BIO during the
-// handshake and by SSL_read/SSL_write) so a stalled peer cannot hang the
-// caller beyond |timeout_ms|.
-base::Result<void> SetSocketTimeouts(int fd, int timeout_ms)
-{
-#ifdef _WIN32
-  DWORD tv = static_cast<DWORD>(timeout_ms);
-  if (::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&tv), sizeof(tv)) !=
-          0 ||
-      ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&tv), sizeof(tv)) !=
-          0) {
-    return base::Err(base::Error::Network("cannot set socket timeouts"));
-  }
-#else
-  struct timeval tv = {};
-  tv.tv_sec = timeout_ms / 1000;
-  tv.tv_usec = (timeout_ms % 1000) * 1000;
-  if (::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) != 0 ||
-      ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) != 0) {
-    return base::Err(base::Error::Network("cannot set socket timeouts"));
-  }
-#endif
-  return base::Error();
 }
 
 } // namespace
@@ -138,9 +107,11 @@ TlsSocket::Connect(std::string_view host, uint16_t port, const TlsOptions& optio
     }
   }
 
-  const base::Result<void> timeouts = SetSocketTimeouts(socket.impl_->tcp.fd(), options.timeout_ms);
-  if (!timeouts) {
-    return base::Err(timeouts.error());
+  // Bound the socket's blocking operations (used by the TLS BIO during the
+  // handshake and by SSL_read/SSL_write) so a stalled peer cannot hang the
+  // caller beyond |options.timeout_ms|.
+  if (!platform::SetSocketTimeouts(socket.impl_->tcp.fd(), options.timeout_ms)) {
+    return base::Err(base::Error::Network("cannot set socket timeouts"));
   }
 
   SslCtxPtr ctx(SSL_CTX_new(TLS_client_method()), SSL_CTX_free);
@@ -245,26 +216,18 @@ base::Result<std::string> TlsSocket::Receive(std::size_t max_bytes, int timeout_
     // Hand back any data that is already buffered inside the TLS layer
     // before waiting on the socket.
     if (SSL_pending(impl_->ssl.get()) <= 0) {
-#ifdef _WIN32
-      fd_set readfds;
-      FD_ZERO(&readfds);
-      FD_SET(impl_->tcp.fd(), &readfds);
-      timeval tv = {};
-      tv.tv_sec = timeout_ms / 1000;
-      tv.tv_usec = (timeout_ms % 1000) * 1000;
-      const int pr = ::select(impl_->tcp.fd() + 1, &readfds, nullptr, nullptr, &tv);
-#else
-      struct pollfd pfd = {impl_->tcp.fd(), static_cast<short>(POLLIN), 0};
-      const int pr = ::poll(&pfd, 1, timeout_ms);
-#endif
+      const int pr = platform::WaitSocket(impl_->tcp.fd(),
+                                          /*want_read=*/true,
+                                          /*want_write=*/false,
+                                          timeout_ms);
       if (pr == 0) {
         return out; // timeout: hand back what we have
       }
       if (pr < 0) {
-        if (errno == EINTR) {
+        if (platform::IsInterrupted(platform::LastError())) {
           continue;
         }
-        return base::Err(base::Error::Network("TLS poll failed"));
+        return base::Err(base::Error::Network("TLS wait for readable failed"));
       }
     }
     const std::size_t want = std::min<std::size_t>(max_bytes - out.size(), sizeof(buffer));
@@ -306,27 +269,19 @@ base::Result<TlsSocket::ReceiveOutcome> TlsSocket::ReceiveWithOutcome(std::size_
     // Hand back any data that is already buffered inside the TLS layer
     // before waiting on the socket.
     if (SSL_pending(impl_->ssl.get()) <= 0) {
-#ifdef _WIN32
-      fd_set readfds;
-      FD_ZERO(&readfds);
-      FD_SET(impl_->tcp.fd(), &readfds);
-      timeval tv = {};
-      tv.tv_sec = timeout_ms / 1000;
-      tv.tv_usec = (timeout_ms % 1000) * 1000;
-      const int pr = ::select(impl_->tcp.fd() + 1, &readfds, nullptr, nullptr, &tv);
-#else
-      struct pollfd pfd = {impl_->tcp.fd(), static_cast<short>(POLLIN), 0};
-      const int pr = ::poll(&pfd, 1, timeout_ms);
-#endif
+      const int pr = platform::WaitSocket(impl_->tcp.fd(),
+                                          /*want_read=*/true,
+                                          /*want_write=*/false,
+                                          timeout_ms);
       if (pr == 0) {
         outcome.timed_out = true;
         return outcome;
       }
       if (pr < 0) {
-        if (errno == EINTR) {
+        if (platform::IsInterrupted(platform::LastError())) {
           continue;
         }
-        return base::Err(base::Error::Network("TLS poll failed"));
+        return base::Err(base::Error::Network("TLS wait for readable failed"));
       }
     }
     const std::size_t want = std::min<std::size_t>(max_bytes - outcome.data.size(), sizeof(buffer));

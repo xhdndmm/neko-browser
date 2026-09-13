@@ -53,4 +53,8 @@ AAAA）：
   事务，浏览器 fetch 池上的并发解析互不共享 socket。
 - 已实现限制（诚实标注，写在头文件与兼容性矩阵）：仅 A/AAAA/CNAME，
   无 DNSSEC、无 EDNS0、截断应答不做 TCP 重试、resolv.conf 不区分网卡。
-- Windows 路径返回 NOT IMPLEMENTED（与 socket 其余部分一致，CI 覆盖后再接）。
+- Windows 与 POSIX 共用同一份 UDP 查询实现（Winsock/POSIX 差异集中在模块内
+  `src/network/src/socket_platform.{h,cpp}`）；Windows 上 `/etc/resolv.conf` 与
+  `/etc/hosts` 不存在，解析器回退到公共解析器列表，`Socket::Connect` 仍有
+  getaddrinfo（系统解析器）回退。网络测试目前仍为 POSIX 守卫，Windows 路径由
+  CI 编译验证、未在 CI 运行。

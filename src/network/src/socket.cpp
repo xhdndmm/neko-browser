@@ -2,22 +2,12 @@
 
 #include "neko/network/dns.h"
 
-#include <cerrno>
+#include "socket_platform.h"
+
+#include <algorithm>
 #include <cstring>
 #include <string>
 #include <utility>
-
-#ifndef _WIN32
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#else
-#include <winsock2.h>
-#endif
 
 namespace neko::network {
 
@@ -47,20 +37,93 @@ Socket& Socket::operator=(Socket&& other) noexcept
 
 void Socket::Close()
 {
-#ifdef _WIN32
-  if (fd_ >= 0) {
-    closesocket(fd_);
-    fd_ = -1;
-  }
-#else
-  if (fd_ >= 0) {
-    ::close(fd_);
-    fd_ = -1;
-  }
-#endif
+  platform::CloseSocket(fd_);
+  fd_ = -1;
 }
 
 namespace {
+
+// Appends |reason| to the "; "-separated failure list built while trying the
+// resolved addresses.
+void AppendFailure(std::string* failures, std::string reason)
+{
+  if (!failures->empty()) {
+    *failures += "; ";
+  }
+  *failures += std::move(reason);
+}
+
+std::string DescribeFamily(int family)
+{
+  if (family == AF_INET) {
+    return "IPv4";
+  }
+  if (family == AF_INET6) {
+    return "IPv6";
+  }
+  return "family " + std::to_string(family);
+}
+
+// The numeric text of a resolved address, for error messages.
+std::string DescribeAddress(const struct sockaddr* address)
+{
+  if (address->sa_family == AF_INET) {
+    const auto* v4 = reinterpret_cast<const struct sockaddr_in*>(address);
+    std::uint8_t bytes[4] = {};
+    std::memcpy(bytes, &v4->sin_addr, sizeof(bytes));
+    return platform::FormatIpv4(bytes);
+  }
+  if (address->sa_family == AF_INET6) {
+    const auto* v6 = reinterpret_cast<const struct sockaddr_in6*>(address);
+    std::uint8_t bytes[16] = {};
+    std::memcpy(bytes, &v6->sin6_addr, sizeof(bytes));
+    return platform::FormatIpv6(bytes);
+  }
+  return "unknown address";
+}
+
+// Connects |fd| to one resolved address, applying |timeout_ms| to the
+// non-blocking connect and restoring blocking mode afterwards.  Returns true
+// when connected; otherwise |failure| describes the reason.
+bool ConnectWithTimeout(int fd,
+                        const struct addrinfo& resolved,
+                        int timeout_ms,
+                        std::string* failure)
+{
+  if (!platform::SetNonBlocking(fd, true)) {
+    *failure = "set non-blocking mode: " + platform::ErrorText(platform::LastError());
+    return false;
+  }
+  bool connected = false;
+  if (platform::ConnectSocket(
+          fd, resolved.ai_addr, static_cast<platform::SockLen>(resolved.ai_addrlen)) == 0) {
+    connected = true;
+  } else {
+    const int error = platform::LastError();
+    if (platform::IsInProgress(error)) {
+      const int ready =
+          platform::WaitSocket(fd, /*want_read=*/false, /*want_write=*/true, timeout_ms);
+      if (ready > 0) {
+        const int pending = platform::PendingSocketError(fd);
+        if (pending < 0) {
+          *failure = "getsockopt: " + platform::ErrorText(platform::LastError());
+        } else if (pending != 0) {
+          *failure = "connect: " + platform::ErrorText(pending);
+        } else {
+          connected = true;
+        }
+      } else if (ready == 0) {
+        *failure = "connect timed out";
+      } else {
+        *failure = "wait: " + platform::ErrorText(platform::LastError());
+      }
+    } else {
+      *failure = "connect: " + platform::ErrorText(error);
+    }
+  }
+  (void)platform::SetNonBlocking(fd, false); // restore blocking mode
+  return connected;
+}
 
 // Connects to one numeric address ("1.2.3.4" or "::1") over TCP.  Returns the
 // connected descriptor, or -1 with |failures| extended with the reason.
@@ -74,68 +137,26 @@ int ConnectToAddress(std::string_view address, uint16_t port, int timeout_ms, st
   const std::string service = std::to_string(port);
   const int rc = ::getaddrinfo(host_text.c_str(), service.c_str(), &hints, &results);
   if (rc != 0) {
-    if (!failures->empty()) {
-      *failures += "; ";
-    }
-    *failures += host_text + ": " + ::gai_strerror(rc);
+    AppendFailure(failures, host_text + ": " + platform::GaiErrorText(rc));
     return -1;
   }
   int fd = -1;
   for (struct addrinfo* ai = results; ai != nullptr; ai = ai->ai_next) {
-    const std::string family = ai->ai_family == AF_INET ? "IPv4"
-                               : ai->ai_family == AF_INET6
-                                   ? "IPv6"
-                                   : "family " + std::to_string(ai->ai_family);
-    const auto record_failure = [failures, &family, &host_text](std::string reason) {
-      if (!failures->empty()) {
-        *failures += "; ";
-      }
-      *failures += family + " " + host_text + ": " + std::move(reason);
-    };
-    fd = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-    if (fd < 0) {
-      record_failure("socket: " + std::string(std::strerror(errno)));
+    const std::string family = DescribeFamily(ai->ai_family);
+    const int candidate = platform::CreateSocket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+    if (candidate < 0) {
+      AppendFailure(failures,
+                    family + " " + host_text +
+                        ": socket: " + platform::ErrorText(platform::LastError()));
       continue;
     }
-    const int flags = ::fcntl(fd, F_GETFL, 0);
-    if (flags < 0 || ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
-      record_failure("fcntl: " + std::string(std::strerror(errno)));
-      ::close(fd);
-      fd = -1;
-      continue;
-    }
-    bool connected = false;
-    const int c = ::connect(fd, ai->ai_addr, static_cast<socklen_t>(ai->ai_addrlen));
-    if (c == 0) {
-      connected = true;
-    } else if (errno == EINPROGRESS) {
-      struct pollfd pfd = {fd, static_cast<short>(POLLOUT), 0};
-      const int pr = ::poll(&pfd, 1, timeout_ms);
-      if (pr > 0) {
-        int so_error = 0;
-        socklen_t error_len = sizeof(so_error);
-        if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &error_len) == 0) {
-          connected = so_error == 0;
-          if (!connected) {
-            record_failure("connect: " + std::string(std::strerror(so_error)));
-          }
-        } else {
-          record_failure("getsockopt: " + std::string(std::strerror(errno)));
-        }
-      } else if (pr == 0) {
-        record_failure("connect timed out");
-      } else {
-        record_failure("poll: " + std::string(std::strerror(errno)));
-      }
-    } else {
-      record_failure("connect: " + std::string(std::strerror(errno)));
-    }
-    ::fcntl(fd, F_SETFL, flags); // restore blocking mode
-    if (connected) {
+    std::string failure;
+    if (ConnectWithTimeout(candidate, *ai, timeout_ms, &failure)) {
+      fd = candidate;
       break;
     }
-    ::close(fd);
-    fd = -1;
+    AppendFailure(failures, family + " " + host_text + ": " + failure);
+    platform::CloseSocket(candidate);
   }
   ::freeaddrinfo(results);
   return fd;
@@ -143,27 +164,17 @@ int ConnectToAddress(std::string_view address, uint16_t port, int timeout_ms, st
 
 bool LooksNumericHost(std::string_view host)
 {
-  struct in_addr v4
-  {
-  };
-  struct in6_addr v6
-  {
-  };
-  const std::string text(host);
-  return ::inet_pton(AF_INET, text.c_str(), &v4) == 1 ||
-         ::inet_pton(AF_INET6, text.c_str(), &v6) == 1;
+  std::uint8_t bytes[16] = {};
+  return platform::ParseIpv4(host, bytes) || platform::ParseIpv6(host, bytes);
 }
 
 } // namespace
 
 base::Result<Socket> Socket::Connect(std::string_view host, uint16_t port, int timeout_ms)
 {
-#ifdef _WIN32
-  (void)host;
-  (void)port;
-  (void)timeout_ms;
-  return base::Err(base::Error::NotImplemented("Windows sockets are not implemented yet"));
-#else
+  if (!platform::EnsureInitialized()) {
+    return base::Err(base::Error::Network("cannot initialize the platform socket stack"));
+  }
   const std::string host_str(host);
   // Built-in DNS first (project-owned client with TTL caching and /etc/hosts
   // support, see neko/network/dns.h), then getaddrinfo as the fallback so
@@ -204,70 +215,23 @@ base::Result<Socket> Socket::Connect(std::string_view host, uint16_t port, int t
   int fd = -1;
   std::string failures;
   for (struct addrinfo* ai = results; ai != nullptr; ai = ai->ai_next) {
-    char numeric_host[NI_MAXHOST] = {};
-    const int name_rc = ::getnameinfo(ai->ai_addr,
-                                      static_cast<socklen_t>(ai->ai_addrlen),
-                                      numeric_host,
-                                      sizeof(numeric_host),
-                                      nullptr,
-                                      0,
-                                      NI_NUMERICHOST);
-    const std::string address = name_rc == 0 ? numeric_host : "unknown address";
-    const std::string family = ai->ai_family == AF_INET ? "IPv4"
-                               : ai->ai_family == AF_INET6
-                                   ? "IPv6"
-                                   : "family " + std::to_string(ai->ai_family);
+    const std::string address = DescribeAddress(ai->ai_addr);
+    const std::string family = DescribeFamily(ai->ai_family);
     const auto record_failure = [&failures, &family, &address](std::string reason) {
-      if (!failures.empty()) {
-        failures += "; ";
-      }
-      failures += family + " " + address + ": " + std::move(reason);
+      AppendFailure(&failures, family + " " + address + ": " + std::move(reason));
     };
-    fd = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-    if (fd < 0) {
-      record_failure("socket: " + std::string(std::strerror(errno)));
+    const int candidate = platform::CreateSocket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+    if (candidate < 0) {
+      record_failure("socket: " + platform::ErrorText(platform::LastError()));
       continue;
     }
-    // Non-blocking connect so the caller's timeout applies.
-    const int flags = ::fcntl(fd, F_GETFL, 0);
-    if (flags < 0 || ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
-      record_failure("fcntl: " + std::string(std::strerror(errno)));
-      ::close(fd);
-      fd = -1;
-      continue;
-    }
-    bool connected = false;
-    const int c = ::connect(fd, ai->ai_addr, static_cast<socklen_t>(ai->ai_addrlen));
-    if (c == 0) {
-      connected = true;
-    } else if (errno == EINPROGRESS) {
-      struct pollfd pfd = {fd, static_cast<short>(POLLOUT), 0};
-      const int pr = ::poll(&pfd, 1, timeout_ms);
-      if (pr > 0) {
-        int so_error = 0;
-        socklen_t error_len = sizeof(so_error);
-        if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &error_len) == 0) {
-          connected = (so_error == 0);
-          if (!connected) {
-            record_failure("connect: " + std::string(std::strerror(so_error)));
-          }
-        } else {
-          record_failure("getsockopt: " + std::string(std::strerror(errno)));
-        }
-      } else if (pr == 0) {
-        record_failure("connect timed out");
-      } else {
-        record_failure("poll: " + std::string(std::strerror(errno)));
-      }
-    } else {
-      record_failure("connect: " + std::string(std::strerror(errno)));
-    }
-    ::fcntl(fd, F_SETFL, flags); // restore blocking mode
-    if (connected) {
+    std::string failure;
+    if (ConnectWithTimeout(candidate, *ai, timeout_ms, &failure)) {
+      fd = candidate;
       break;
     }
-    ::close(fd);
-    fd = -1;
+    record_failure(std::move(failure));
+    platform::CloseSocket(candidate);
   }
   ::freeaddrinfo(results);
   if (fd < 0) {
@@ -278,20 +242,18 @@ base::Result<Socket> Socket::Connect(std::string_view host, uint16_t port, int t
     return base::Err(base::Error::Network(std::move(message)));
   }
   return Socket(fd);
-#endif
 }
 
 base::Result<std::size_t> Socket::Send(std::string_view data)
 {
-#ifdef _WIN32
-  (void)data;
-  return base::Err(base::Error::NotImplemented("Windows sockets are not implemented yet"));
-#else
+  if (!platform::EnsureInitialized()) {
+    return base::Err(base::Error::Network("cannot initialize the platform socket stack"));
+  }
   std::size_t sent = 0;
   while (sent < data.size()) {
-    const ssize_t n = ::send(fd_, data.data() + sent, data.size() - sent, 0);
-    if (n < 0) {
-      if (errno == EINTR) {
+    const int n = platform::SendBytes(fd_, data.data() + sent, data.size() - sent);
+    if (n <= 0) {
+      if (n < 0 && platform::IsInterrupted(platform::LastError())) {
         continue;
       }
       return base::Err(base::Error::Network("send failed"));
@@ -299,37 +261,31 @@ base::Result<std::size_t> Socket::Send(std::string_view data)
     sent += static_cast<std::size_t>(n);
   }
   return sent;
-#endif
 }
 
 base::Result<std::string> Socket::Receive(std::size_t max_bytes, int timeout_ms)
 {
-#ifdef _WIN32
-  (void)max_bytes;
-  (void)timeout_ms;
-  return base::Err(base::Error::NotImplemented("Windows sockets are not implemented yet"));
-#else
   std::string out;
   char buffer[16384];
   while (out.size() < max_bytes) {
-    struct pollfd pfd = {fd_, static_cast<short>(POLLIN), 0};
-    const int pr = ::poll(&pfd, 1, timeout_ms);
-    if (pr == 0) {
+    const int ready =
+        platform::WaitSocket(fd_, /*want_read=*/true, /*want_write=*/false, timeout_ms);
+    if (ready == 0) {
       return out; // timeout: hand back what we have
     }
-    if (pr < 0) {
-      if (errno == EINTR) {
+    if (ready < 0) {
+      if (platform::IsInterrupted(platform::LastError())) {
         continue;
       }
-      return base::Err(base::Error::Network("poll failed"));
+      return base::Err(base::Error::Network("wait for readable failed"));
     }
     const std::size_t want = std::min<std::size_t>(max_bytes - out.size(), sizeof(buffer));
-    const ssize_t n = ::recv(fd_, buffer, want, 0);
+    const int n = platform::ReceiveBytes(fd_, buffer, want);
     if (n == 0) {
       return out; // EOF
     }
     if (n < 0) {
-      if (errno == EINTR) {
+      if (platform::IsInterrupted(platform::LastError())) {
         continue;
       }
       return base::Err(base::Error::Network("recv failed"));
@@ -337,39 +293,33 @@ base::Result<std::string> Socket::Receive(std::size_t max_bytes, int timeout_ms)
     out.append(buffer, static_cast<std::size_t>(n));
   }
   return out;
-#endif
 }
 
 base::Result<Socket::ReceiveOutcome> Socket::ReceiveWithOutcome(std::size_t max_bytes,
                                                                 int timeout_ms)
 {
-#ifdef _WIN32
-  (void)max_bytes;
-  (void)timeout_ms;
-  return base::Err(base::Error::NotImplemented("Windows sockets are not implemented yet"));
-#else
   ReceiveOutcome outcome;
   char buffer[16384];
   while (outcome.data.size() < max_bytes) {
-    struct pollfd pfd = {fd_, static_cast<short>(POLLIN), 0};
-    const int pr = ::poll(&pfd, 1, timeout_ms);
-    if (pr == 0) {
+    const int ready =
+        platform::WaitSocket(fd_, /*want_read=*/true, /*want_write=*/false, timeout_ms);
+    if (ready == 0) {
       outcome.timed_out = true;
       return outcome;
     }
-    if (pr < 0) {
-      if (errno == EINTR) {
+    if (ready < 0) {
+      if (platform::IsInterrupted(platform::LastError())) {
         continue;
       }
-      return base::Err(base::Error::Network("poll failed"));
+      return base::Err(base::Error::Network("wait for readable failed"));
     }
     const std::size_t want = std::min<std::size_t>(max_bytes - outcome.data.size(), sizeof(buffer));
-    const ssize_t n = ::recv(fd_, buffer, want, 0);
+    const int n = platform::ReceiveBytes(fd_, buffer, want);
     if (n == 0) {
       return outcome; // EOF (timed_out stays false)
     }
     if (n < 0) {
-      if (errno == EINTR) {
+      if (platform::IsInterrupted(platform::LastError())) {
         continue;
       }
       return base::Err(base::Error::Network("recv failed"));
@@ -377,15 +327,10 @@ base::Result<Socket::ReceiveOutcome> Socket::ReceiveWithOutcome(std::size_t max_
     outcome.data.append(buffer, static_cast<std::size_t>(n));
   }
   return outcome;
-#endif
 }
 
 base::Result<std::string> Socket::ReceiveAll(int timeout_ms)
 {
-#ifdef _WIN32
-  (void)timeout_ms;
-  return base::Err(base::Error::NotImplemented("Windows sockets are not implemented yet"));
-#else
   std::string out;
   for (;;) {
     const base::Result<std::string> chunk = Receive(16384, timeout_ms);
@@ -397,7 +342,6 @@ base::Result<std::string> Socket::ReceiveAll(int timeout_ms)
     }
     out += chunk.value();
   }
-#endif
 }
 
 } // namespace neko::network

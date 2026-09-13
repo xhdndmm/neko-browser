@@ -10,6 +10,8 @@
 
 #include "neko/base/logging.h"
 
+#include "socket_platform.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -18,14 +20,6 @@
 #include <random>
 #include <sstream>
 #include <thread>
-
-#ifndef _WIN32
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <unistd.h>
-#endif
 
 namespace neko::network {
 namespace {
@@ -229,14 +223,16 @@ bool ParseDnsResponse(std::string_view message, DnsAnswer* out)
         first_ttl = false;
       }
       if (type == kTypeA && rdlength == 4) {
-        char text[INET_ADDRSTRLEN] = {};
-        if (::inet_ntop(AF_INET, rdata.data(), text, sizeof(text)) != nullptr) {
-          out->ipv4.emplace_back(text);
+        const std::string text =
+            platform::FormatIpv4(reinterpret_cast<const std::uint8_t*>(rdata.data()));
+        if (!text.empty()) {
+          out->ipv4.push_back(text);
         }
       } else if (type == kTypeAAAA && rdlength == 16) {
-        char text[INET6_ADDRSTRLEN] = {};
-        if (::inet_ntop(AF_INET6, rdata.data(), text, sizeof(text)) != nullptr) {
-          out->ipv6.emplace_back(text);
+        const std::string text =
+            platform::FormatIpv6(reinterpret_cast<const std::uint8_t*>(rdata.data()));
+        if (!text.empty()) {
+          out->ipv6.push_back(text);
         }
       } else if (type == kTypeCNAME) {
         std::size_t cname_offset = offset;
@@ -258,13 +254,6 @@ bool ParseDnsResponse(std::string_view message, DnsAnswer* out)
 
 namespace {
 
-#ifdef _WIN32
-base::Result<std::vector<std::string>>
-QueryServer(const DnsResolver::Options&, std::string_view, std::uint16_t, std::uint16_t, DnsAnswer*)
-{
-  return base::Err(base::Error::NotImplemented("DNS over UDP is not implemented on Windows yet"));
-}
-#else
 // Sends one query to |server| and returns the parsed answer.  The socket is
 // connected to the server, so the kernel filters datagrams from other peers
 // (plus the id and question checks in the caller).
@@ -274,11 +263,14 @@ base::Result<DnsAnswer> QueryServer(const DnsResolver::Options& options,
                                     std::uint16_t qtype,
                                     std::uint16_t id)
 {
+  if (!platform::EnsureInitialized()) {
+    return base::Err(base::Error::Network("DNS: cannot initialize the socket stack"));
+  }
   const std::string query = EncodeDnsQuery(id, host, qtype);
   if (query.empty()) {
     return base::Err(base::Error::InvalidArgument("DNS query could not be encoded"));
   }
-  const int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
+  const int fd = platform::CreateSocket(AF_INET, SOCK_DGRAM, 0);
   if (fd < 0) {
     return base::Err(base::Error::Io("DNS: socket() failed"));
   }
@@ -287,38 +279,39 @@ base::Result<DnsAnswer> QueryServer(const DnsResolver::Options& options,
     int fd;
     ~CloseFd()
     {
-      ::close(fd);
+      platform::CloseSocket(fd);
     }
   } closer{fd};
 
-  struct sockaddr_in address
-  {
-  };
+  // Bound each attempt with send/receive timeouts.
+  if (!platform::SetSocketTimeouts(fd, options.timeout_ms)) {
+    return base::Err(base::Error::Io("DNS: cannot set socket timeouts"));
+  }
+
+  // Resolver addresses are IPv4 literals: the list comes from resolv.conf or
+  // the Options override, and IPv6 resolvers are a documented limitation.
+  struct sockaddr_in address = {};
   address.sin_family = AF_INET;
   address.sin_port = htons(static_cast<std::uint16_t>(options.port));
-  if (::inet_pton(AF_INET, std::string(server).c_str(), &address.sin_addr) != 1) {
+  std::uint8_t server_bytes[4] = {};
+  if (!platform::ParseIpv4(server, server_bytes)) {
     return base::Err(base::Error::InvalidArgument("DNS: invalid resolver address '" +
                                                   std::string(server) + "'"));
   }
-  if (::connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+  std::memcpy(&address.sin_addr, server_bytes, sizeof(server_bytes));
+  if (platform::ConnectSocket(fd,
+                              reinterpret_cast<const sockaddr*>(&address),
+                              static_cast<platform::SockLen>(sizeof(address))) != 0) {
     return base::Err(base::Error::Io("DNS: connect() to " + std::string(server) + " failed"));
   }
-  // Bound each attempt with a receive timeout.
-  struct timeval timeout
-  {
-  };
-  timeout.tv_sec = options.timeout_ms / 1000;
-  timeout.tv_usec = (options.timeout_ms % 1000) * 1000;
-  ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-  ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 
-  const ssize_t sent = ::send(fd, query.data(), query.size(), 0);
-  if (sent != static_cast<ssize_t>(query.size())) {
+  const int sent = platform::SendBytes(fd, query.data(), query.size());
+  if (sent != static_cast<int>(query.size())) {
     return base::Err(base::Error::Io("DNS: send() failed"));
   }
 
   std::array<char, 4096> buffer{};
-  const ssize_t received = ::recv(fd, buffer.data(), buffer.size(), 0);
+  const int received = platform::ReceiveBytes(fd, buffer.data(), buffer.size());
   if (received <= 0) {
     return base::Err(base::Error::Network("DNS: no response from " + std::string(server)));
   }
@@ -329,20 +322,14 @@ base::Result<DnsAnswer> QueryServer(const DnsResolver::Options& options,
   }
   return base::Ok(std::move(answer));
 }
-#endif
 
 bool LooksNumeric(std::string_view host)
 {
+  std::uint8_t bytes[16] = {};
   if (host.find(':') != std::string_view::npos) {
-    struct in6_addr v6
-    {
-    };
-    return ::inet_pton(AF_INET6, std::string(host).c_str(), &v6) == 1;
+    return platform::ParseIpv6(host, bytes);
   }
-  struct in_addr v4
-  {
-  };
-  return ::inet_pton(AF_INET, std::string(host).c_str(), &v4) == 1;
+  return platform::ParseIpv4(host, bytes);
 }
 
 std::string LowerAscii(std::string_view text)

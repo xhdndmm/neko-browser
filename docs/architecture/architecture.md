@@ -235,7 +235,9 @@ tests/unit/<module>/      单元测试
 2. **线程模型显式化**：每个并发子系统必须文档化所属线程、同步机制、线程安全
    API、生命周期保证。不随意引入后台线程。
 3. **平台无关**：核心引擎不得直接依赖 Win32/X11/Wayland/Cocoa/AppKit；平台代码
-   集中在 `src/platform/{linux,windows,macos}/`。
+   集中在 `src/platform/{linux,windows,macos}/`。当前特例：网络模块的 Winsock/POSIX
+   差异集中在模块内 `src/network/src/socket_platform.{h,cpp}`（一个小的平台层），
+   待 `src/platform/` 落地后迁入。
 4. **无伪实现**：`return true;` 充当实现、硬编码输出、空函数都是禁止的。
    未完成的功能必须明确标注 `NOT IMPLEMENTED` / `PARTIALLY IMPLEMENTED`。
 5. **依赖方向**：`UI → Browser → Engine → Rendering/Layout/DOM/Network → Core/Platform`。
