@@ -1267,6 +1267,13 @@ TEST(UiSmokeTest, RendererProcessModeZoomReachesTheChild)
 
   SendKey(&window, Qt::Key_Equal, Qt::ControlModifier);
   ASSERT_TRUE(WaitFor([&] { return window.ZoomIndicator()->text() == "110%"; }, 10000));
+  // The indicator tracks the browser-side zoom immediately, but the child
+  // re-lays out asynchronously and reports the new content height a round trip
+  // later: wait for it instead of racing the first snapshot.
+  const auto height_grew = [&] {
+    return worker.SnapshotActiveTab().remote_content_height > height_100 * 1.05F;
+  };
+  ASSERT_TRUE(WaitFor(height_grew, 10000));
   const neko::browser::TabSnapshot zoomed = worker.SnapshotActiveTab();
   EXPECT_FLOAT_EQ(zoomed.zoom, 1.1F);
   EXPECT_TRUE(zoomed.remote);

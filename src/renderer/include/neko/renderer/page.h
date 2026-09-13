@@ -12,6 +12,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -295,6 +296,13 @@ public:
   // headless screenshots show the first frame.
   bool AdvanceAnimations();
 
+  // Test seam: replaces the monotonic clock (milliseconds) that drives
+  // animated images and video playback, so tests can step frame timing
+  // deterministically instead of sleeping on the wall clock.  Must be set
+  // before the first SetElementImage/SetElementVideo call whose timing is
+  // asserted (existing states keep the time they recorded).
+  void SetAnimationClockForTesting(std::function<double()> now_ms);
+
   // layout::ImageProvider.
   const image::Image* Find(const dom::Element& element) const override;
 
@@ -405,6 +413,11 @@ private:
   // Bumped on every content mutation (load, style, layout, image).
   std::uint64_t version_ = 0;
   std::uint64_t document_version_ = 0;
+
+  // Animation time source (monotonic milliseconds); the steady clock unless a
+  // test replaced it.  Guards: mutex_.  Caller of NowMs() must hold mutex_.
+  std::function<double()> animation_clock_;
+  double NowMs() const;
 
   // Element with keyboard focus; the UI paints the caret at the end of its
   // text.  Guards: mutex_ (written by the worker, read by the UI).

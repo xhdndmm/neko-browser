@@ -22,8 +22,9 @@
 namespace neko::renderer {
 namespace {
 
-// Monotonic clock in milliseconds (drives animated-image frame advance).
-double NowMs()
+// Monotonic clock in milliseconds; the default source of animation time
+// (overridable per page for tests via SetAnimationClockForTesting).
+double SteadyNowMs()
 {
   return std::chrono::duration<double, std::milli>(
              std::chrono::steady_clock::now().time_since_epoch())
@@ -212,6 +213,19 @@ const dom::Element* ElementAt(const layout::LayoutBox& box, float x, float y)
 }
 
 } // namespace
+
+// The clock driving animated images and video playback; caller must hold
+// mutex_.  Tests replace it so frame timing does not depend on the wall clock.
+double Page::NowMs() const
+{
+  return animation_clock_ ? animation_clock_() : SteadyNowMs();
+}
+
+void Page::SetAnimationClockForTesting(std::function<double()> now_ms)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  animation_clock_ = std::move(now_ms);
+}
 
 Page::Page()
 {

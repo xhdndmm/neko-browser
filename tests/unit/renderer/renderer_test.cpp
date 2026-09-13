@@ -324,6 +324,11 @@ TEST(PageTest, NoBackgroundStaysWhite)
 TEST(PageTest, GifAnimationAdvancesFrames)
 {
   Page page;
+  // Deterministic frame clock: the assertions below are about the frame
+  // schedule, so they must not depend on how long a wall-clock sleep really
+  // took on a loaded CI machine.
+  double now_ms = 0;
+  page.SetAnimationClockForTesting([&now_ms] { return now_ms; });
   ASSERT_TRUE(page.LoadHtml("<body><img id=\"i\" src=\"a.gif\" width=\"1\" height=\"1\"></body>")
                   .has_value());
   page.Layout(400);
@@ -360,10 +365,10 @@ TEST(PageTest, GifAnimationAdvancesFrames)
   current = page.Find(*img);
   EXPECT_EQ(current->rgba[0], 255);
 
-  // At t≈120 ms the 50 ms first frame has elapsed and the 100 ms second frame
+  // At t=120 ms the 50 ms first frame has elapsed and the 100 ms second frame
   // is current: the tick advances to frame 1 (green) and bumps the page
   // version so the UI repaints.
-  std::this_thread::sleep_for(std::chrono::milliseconds(120));
+  now_ms = 120;
   const std::uint64_t before = page.layout_version();
   EXPECT_TRUE(page.AdvanceAnimations());
   EXPECT_NE(page.layout_version(), before);
@@ -375,6 +380,8 @@ TEST(PageTest, GifAnimationAdvancesFrames)
 TEST(PageTest, GifAnimationFiniteLoopStopsOnLastFrame)
 {
   Page page;
+  double now_ms = 0;
+  page.SetAnimationClockForTesting([&now_ms] { return now_ms; });
   ASSERT_TRUE(page.LoadHtml("<body><img id=\"i\" src=\"a.gif\"></body>").has_value());
   dom::Element* img = dom::QuerySelector(*page.document(), "#i");
   ASSERT_NE(img, nullptr);
@@ -400,7 +407,7 @@ TEST(PageTest, GifAnimationFiniteLoopStopsOnLastFrame)
 
   // Both 50 ms frames have elapsed: the single allowed pass is over and the
   // animation rests on its last frame.
-  std::this_thread::sleep_for(std::chrono::milliseconds(150));
+  now_ms = 150;
   EXPECT_TRUE(page.AdvanceAnimations());
   const image::Image* current = page.Find(*img);
   ASSERT_NE(current, nullptr);
@@ -445,6 +452,8 @@ renderer::Page::VideoStrip MakeTestVideoStrip()
 TEST(PageTest, VideoAutoplayAdvancesFrames)
 {
   Page page;
+  double now_ms = 0;
+  page.SetAnimationClockForTesting([&now_ms] { return now_ms; });
   ASSERT_TRUE(page.LoadHtml("<body><video id=\"v\" src=\"a.mp4\"></video></body>").has_value());
   page.Layout(400);
   dom::Element* video = dom::QuerySelector(*page.document(), "#v");
@@ -461,7 +470,7 @@ TEST(PageTest, VideoAutoplayAdvancesFrames)
   // The first tick starts autoplay at the current frame (no change yet).
   EXPECT_FALSE(page.AdvanceAnimations());
   // After well over one frame duration the next tick advances to frame 2.
-  std::this_thread::sleep_for(std::chrono::milliseconds(120));
+  now_ms = 120;
   const std::uint64_t before = page.layout_version();
   EXPECT_TRUE(page.AdvanceAnimations());
   EXPECT_NE(page.layout_version(), before);
@@ -473,6 +482,8 @@ TEST(PageTest, VideoAutoplayAdvancesFrames)
 TEST(PageTest, VideoPlayPauseSeekAndDuration)
 {
   Page page;
+  double now_ms = 0;
+  page.SetAnimationClockForTesting([&now_ms] { return now_ms; });
   ASSERT_TRUE(page.LoadHtml("<body><video id=\"v\" src=\"a.mp4\"></video></body>").has_value());
   page.Layout(400);
   dom::Element* video = dom::QuerySelector(*page.document(), "#v");
@@ -488,7 +499,7 @@ TEST(PageTest, VideoPlayPauseSeekAndDuration)
 
   page.PlayVideo(*video);
   EXPECT_TRUE(page.IsVideoPlaying(*video));
-  std::this_thread::sleep_for(std::chrono::milliseconds(120));
+  now_ms = 120;
   page.AdvanceAnimations();
   const image::Image* current = page.Find(*video);
   ASSERT_NE(current, nullptr);

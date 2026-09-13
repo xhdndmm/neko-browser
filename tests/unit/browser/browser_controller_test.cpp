@@ -2252,10 +2252,18 @@ TEST(BrowserControllerTest, DirectGifNavigationPlaysFrames)
   EXPECT_EQ(tab->image->rgba[0], 255);
   EXPECT_EQ(tab->image->rgba[1], 0);
 
-  // The frame clock drives playback: after the first frame's 50 ms the display
-  // switches to the green frame.
-  std::this_thread::sleep_for(std::chrono::milliseconds(120));
-  controller.PumpScriptTimers();
+  // The frame clock drives playback, but the wall-clock instant a pump lands on
+  // is not deterministic on a loaded CI machine: the 50 ms/100 ms frames loop
+  // every 150 ms, so a late pump can land back on the red frame.  Poll until
+  // the display reaches the green frame instead of assuming the sleep lands
+  // inside its window.
+  bool turned_green = false;
+  for (int i = 0; i < 400 && !turned_green; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    controller.PumpScriptTimers();
+    turned_green = tab->image != nullptr && tab->image->rgba[1] == 255;
+  }
+  ASSERT_TRUE(turned_green);
   ASSERT_NE(tab->image, nullptr);
   EXPECT_EQ(tab->image->rgba[0], 0);
   EXPECT_EQ(tab->image->rgba[1], 255);
