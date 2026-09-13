@@ -533,10 +533,13 @@ void WebView::PaintFindHighlight(QPainter& painter)
   if (match.width <= 0.0F || match.height <= 0.0F) {
     return;
   }
-  const QRectF rect(match.x,
-                    match.y - static_cast<float>(verticalScrollBar()->value()),
-                    match.width,
-                    match.height);
+  // FindMatch holds float (device px); QRectF is qreal (double on some
+  // platforms).  Convert explicitly: an implicit float -> double conversion
+  // would trip -Wdouble-promotion, which is an error in CI.
+  const QRectF rect(static_cast<qreal>(match.x),
+                    static_cast<qreal>(match.y) - static_cast<qreal>(verticalScrollBar()->value()),
+                    static_cast<qreal>(match.width),
+                    static_cast<qreal>(match.height));
   painter.fillRect(rect, QColor(255, 214, 0, 128));
   painter.setPen(QColor(180, 140, 0, 200));
   painter.drawRect(rect.adjusted(0, 0, -1, -1));
