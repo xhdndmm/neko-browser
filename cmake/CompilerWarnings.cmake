@@ -10,11 +10,63 @@
 # =============================================================================
 
 # -----------------------------------------------------------------------------
+# neko_filter_third_party_include_dirs(<out_var> <in_var>)
+#
+# Splits the dependency include directories in <in_var> (the directories
+# reported by find_package()) into the subset that
+# neko_third_party_system_includes() may re-declare with -isystem, and writes
+# that subset to <out_var>.
+#
+# Directories that provide the C standard library's own headers are dropped.  A
+# *user* -isystem directory is searched ahead of everything the toolchain
+# provides -- `-isystem /usr/include` moves /usr/include above <c++/v1> in
+# clang's search list -- so re-declaring such a directory hides the C++
+# standard library's C compatibility headers (<c++/v1/stddef.h>,
+# <c++/v1/stdint.h>) and <cstddef> / <cstdint> fail to compile:
+#
+#   <cstddef> tried including <stddef.h> but didn't find libc++'s <stddef.h>
+#   header.
+#
+# That is how the macOS CI build broke: the failure needs a directory holding
+# stddef.h / stdint.h in the -isystem list, and on macOS the only candidate is
+# the SDK's own C header directory (<sysroot>/usr/include), which a
+# find_package() call returns when a keg-only dependency (Homebrew's openssl,
+# for instance) or the SDK itself satisfies it.  The configure log names every
+# directory that was dropped, so the offending dependency stays identifiable.
+#
+# Nothing is lost by leaving a toolchain directory alone -- the compiler already
+# searches it as a system directory -- while a dependency prefix such as
+# /opt/homebrew/include is a *user* directory that genuinely needs the marker.
+# -----------------------------------------------------------------------------
+function(neko_filter_third_party_include_dirs out_var in_var)
+  set(_kept "")
+  set(_dropped "")
+  foreach(dir IN LISTS ${in_var})
+    if(NOT dir OR NOT IS_DIRECTORY "${dir}")
+      continue()
+    endif()
+    if(EXISTS "${dir}/stddef.h" OR EXISTS "${dir}/stdint.h")
+      list(APPEND _dropped "${dir}")
+      continue()
+    endif()
+    list(APPEND _kept "${dir}")
+  endforeach()
+  # Only Apple platforms consume the filtered list; keep other configures quiet.
+  if(_dropped AND APPLE)
+    message(STATUS
+      "neko: not re-marking these directories as system includes; they provide "
+      "the C standard library headers: ${_dropped}")
+  endif()
+  set(${out_var} "${_kept}" PARENT_SCOPE)
+endfunction()
+
+# -----------------------------------------------------------------------------
 # neko_third_party_system_includes(<target>)
 #
 # Adds the dependency include directories listed in
-# NEKO_THIRD_PARTY_INCLUDE_DIRS (set by the top-level CMakeLists.txt) to
-# <target> as explicit system include directories.
+# NEKO_THIRD_PARTY_SYSTEM_INCLUDE_DIRS (the filtered list produced by the
+# top-level CMakeLists.txt) to <target> as explicit system include
+# directories.
 #
 # CMake already marks include directories that come from imported targets
 # (JPEG::JPEG, OpenSSL::Crypto, ...) as SYSTEM, but it *drops* the -isystem flag
@@ -39,18 +91,22 @@
 #
 # On other platforms the compiler already treats its default directories
 # (/usr/include, ...) as system directories, so this is a no-op there.
+#
+# The list is pre-filtered by neko_filter_third_party_include_dirs() above, so
+# no directory that provides the C standard library headers can end up here.
 # -----------------------------------------------------------------------------
 function(neko_third_party_system_includes target)
   if(NOT APPLE)
     return()
   endif()
-  if(NOT DEFINED NEKO_THIRD_PARTY_INCLUDE_DIRS)
+  if(NOT DEFINED NEKO_THIRD_PARTY_SYSTEM_INCLUDE_DIRS)
     message(FATAL_ERROR
-      "NEKO_THIRD_PARTY_INCLUDE_DIRS is not defined; it is set by the top-level "
-      "CMakeLists.txt and is required to keep third-party headers out of the "
-      "project's warning set on Apple platforms.")
+      "NEKO_THIRD_PARTY_SYSTEM_INCLUDE_DIRS is not defined; it is produced by "
+      "the top-level CMakeLists.txt from NEKO_THIRD_PARTY_INCLUDE_DIRS and is "
+      "required to keep third-party headers out of the project's warning set on "
+      "Apple platforms.")
   endif()
-  foreach(dir IN LISTS NEKO_THIRD_PARTY_INCLUDE_DIRS)
+  foreach(dir IN LISTS NEKO_THIRD_PARTY_SYSTEM_INCLUDE_DIRS)
     if(dir AND IS_DIRECTORY "${dir}")
       target_compile_options(${target} PRIVATE "SHELL:-isystem ${dir}")
     endif()

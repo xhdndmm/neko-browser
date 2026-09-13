@@ -62,10 +62,30 @@ CMake 会把导入目标（`JPEG::JPEG`、`OpenSSL::Crypto`、`PkgConfig::FFMPEG
 `-Werror` 下报错（macOS CI 实际出现过该失败）。
 
 处理方式：顶层 `CMakeLists.txt` 汇总 `NEKO_THIRD_PARTY_INCLUDE_DIRS`，
-`apply_compiler_warnings()`（`cmake/CompilerWarnings.cmake`）在 Apple 平台为每个目标
-显式补回 `-isystem <依赖目录>`；其他平台上编译器本就将其默认目录视为系统目录，
-因此该处理为空操作。同一目录即使同时以 `-I` 与 `-isystem` 出现（如 `CPATH` 或
-工具链内置用户目录），GCC/Clang 也按系统目录处理，故该机制是稳健的。
+`neko_filter_third_party_include_dirs()`（`cmake/CompilerWarnings.cmake`）筛出
+`NEKO_THIRD_PARTY_SYSTEM_INCLUDE_DIRS`，`apply_compiler_warnings()` 在 Apple 平台
+为每个目标显式补回 `-isystem <依赖目录>`；其他平台上编译器本就将其默认目录视为
+系统目录，因此该处理为空操作。实测（clang 18）：`CPATH` 目录会被 CMake 判为“隐式
+目录”而丢掉 SYSTEM 标记，同时被 clang 当作普通用户目录搜索（宏展开的
+`-Wold-style-cast` 因此落到我们的翻译单元），此时补回的 `-isystem` 确实能压住它。
+
+**例外（绝不补回）**：提供 C 标准库头文件的目录（含 `stddef.h` 或 `stdint.h`）。
+用户 `-isystem` 目录排在**所有**搜索路径之前（实测 clang 18：`-isystem /usr/include`
+把 `/usr/include` 提到 `<c++/v1>` 之前），重新标记这类目录会让 libc++ 的 C 兼容头
+（`<c++/v1/stddef.h>`、`<c++/v1/stdint.h>`）被遮蔽，`<cstddef>` / `<cstdint>` 以
+
+```text
+<cstddef> tried including <stddef.h> but didn't find libc++'s <stddef.h> header.
+```
+
+直接失败——macOS CI 就是这样挂掉的。该失败要求 `-isystem` 名单里存在一个提供
+`stddef.h`/`stdint.h` 的目录，而 macOS 上唯一可能是 SDK 自带的 C 头目录
+（`<sysroot>/usr/include`）：某个 `find_package()` 在 keg-only 依赖（例如 Homebrew 的
+openssl，不在 `/opt/homebrew/include` 里）或 SDK 自身满足它时会返回该目录。这类目录
+本就由编译器以系统方式搜索，跳过它没有任何损失。配置阶段会打印每一个被剔除的目录，
+因此具体是哪个依赖可以直接从日志确认；规则由 ctest 用例
+`build_system.third_party_include_filter`
+（`tests/cmake/third_party_include_filter_test.cmake`）锁定。
 
 注意：用 `#pragma clang diagnostic ignored` 包裹 `#include` 只能屏蔽头文件自身的代码，
 **无法**屏蔽落到我们翻译单元调用点的宏展开（已用 clang 实验验证），因此不得以

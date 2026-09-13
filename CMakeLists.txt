@@ -82,7 +82,9 @@ find_package(WebP REQUIRED)
 find_package(AVIF REQUIRED)
 find_package(FFmpeg REQUIRED)
 
-# Directory roots of third-party headers, consumed by apply_compiler_warnings().
+# Directory roots of third-party headers, as reported by find_package().  They
+# are filtered by neko_filter_third_party_include_dirs() before
+# apply_compiler_warnings() consumes them.
 #
 # CMake emits -isystem for the include directories of imported targets, but it
 # drops that flag when the directory is also a compiler default search path --
@@ -137,6 +139,13 @@ endif()
 # -----------------------------------------------------------------------------
 include(cmake/CompilerWarnings.cmake)
 include(cmake/Sanitizers.cmake)
+
+# Directories that provide the C standard library headers must not be
+# re-declared as system include directories (see
+# neko_filter_third_party_include_dirs()); everything else is passed on to
+# apply_compiler_warnings().
+neko_filter_third_party_include_dirs(
+  NEKO_THIRD_PARTY_SYSTEM_INCLUDE_DIRS NEKO_THIRD_PARTY_INCLUDE_DIRS)
 
 # ctest entry point; test suites register via add_test().
 enable_testing()

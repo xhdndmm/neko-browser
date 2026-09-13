@@ -14,3 +14,17 @@
 # =============================================================================
 
 add_subdirectory(unit)
+
+# -----------------------------------------------------------------------------
+# Build-system regression test (no compiled target): the third-party include
+# filter must keep directories that provide the C standard library headers out
+# of the list apply_compiler_warnings() re-declares with -isystem -- doing so
+# put them ahead of the C++ standard library and broke <cstddef>/<cstdint> on
+# macOS CI.  See cmake/CompilerWarnings.cmake.
+# -----------------------------------------------------------------------------
+add_test(
+  NAME build_system.third_party_include_filter
+  COMMAND ${CMAKE_COMMAND}
+    -DNEKO_MODULE_DIR=${PROJECT_SOURCE_DIR}/cmake
+    -DNEKO_TEST_SCRATCH_DIR=${CMAKE_CURRENT_BINARY_DIR}/third_party_include_filter
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/third_party_include_filter_test.cmake)
