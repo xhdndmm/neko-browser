@@ -73,6 +73,35 @@ find_package(Freetype REQUIRED)
 # neko::network::TlsSocket.  See docs/development/dependency-policy.md and
 # docs/architecture/adr/0010-tls-openssl.md.
 find_package(OpenSSL REQUIRED)
+# Remaining dependencies, all wrapped behind project interfaces (WebP/AVIF in
+# neko::image, FFmpeg in neko::media; see docs/development/dependency-policy.md).
+# Discovery is centralised here so that the strict warning configuration can
+# treat every third-party include directory consistently (see
+# NEKO_THIRD_PARTY_INCLUDE_DIRS below).
+find_package(WebP REQUIRED)
+find_package(AVIF REQUIRED)
+find_package(FFmpeg REQUIRED)
+
+# Directory roots of third-party headers, consumed by apply_compiler_warnings().
+#
+# CMake emits -isystem for the include directories of imported targets, but it
+# drops that flag when the directory is also a compiler default search path --
+# on macOS the Homebrew prefixes (/usr/local/include on Intel,
+# /opt/homebrew/include on Apple Silicon) are such directories.  Their headers
+# would then be found through the compiler's default search path, which some
+# toolchains classify as a *user* directory, and third-party C headers would be
+# compiled with the project's -Werror set (observed in macOS CI: libjpeg's
+# jpeg_create_decompress macro and OpenSSL's safestack.h, both expanding
+# old-style casts).  See cmake/CompilerWarnings.cmake for the treatment.
+set(NEKO_THIRD_PARTY_INCLUDE_DIRS
+  ${ZLIB_INCLUDE_DIRS}
+  ${JPEG_INCLUDE_DIRS}
+  ${FREETYPE_INCLUDE_DIRS}
+  ${OPENSSL_INCLUDE_DIR}
+  ${WebP_INCLUDE_DIR}
+  ${AVIF_INCLUDE_DIR}
+  ${FFMPEG_INCLUDE_DIRS}
+)
 
 # JavaScript runtime: QuickJS (quickjs-ng v0.16.1), pinned by content hash and
 # built from source as a static library.  It is wrapped behind neko::javascript's

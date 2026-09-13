@@ -48,6 +48,32 @@
 > 如未来需静态链接，须随发行提供重链接目标文件（LGPL §4）。FFmpeg 头文件
 > 不越过 `src/media/src/video.cpp`。
 
+## 三方头文件与警告
+
+项目的严格警告集（`-Wall -Wextra -Wpedantic -Wconversion -Wold-style-cast …`，
+CI 中配合 `-Werror`）只适用于项目自身代码，绝不作用于三方头文件。
+
+CMake 会把导入目标（`JPEG::JPEG`、`OpenSSL::Crypto`、`PkgConfig::FFMPEG` 等）
+的包含目录标记为 SYSTEM，但对**编译器默认搜索目录**会丢掉该标记
+（`CMAKE_<LANG>_IMPLICIT_INCLUDE_DIRECTORIES`）。macOS 上 Homebrew 前缀
+`/usr/local/include`（Intel）与 `/opt/homebrew/include`（Apple Silicon）即属于此类：
+三方头文件会经由编译器默认搜索路径被找到，某些工具链将其归为“用户目录”，
+于是 libjpeg 的 `jpeg_create_decompress` 宏、OpenSSL 的 `safestack.h` 等会在
+`-Werror` 下报错（macOS CI 实际出现过该失败）。
+
+处理方式：顶层 `CMakeLists.txt` 汇总 `NEKO_THIRD_PARTY_INCLUDE_DIRS`，
+`apply_compiler_warnings()`（`cmake/CompilerWarnings.cmake`）在 Apple 平台为每个目标
+显式补回 `-isystem <依赖目录>`；其他平台上编译器本就将其默认目录视为系统目录，
+因此该处理为空操作。同一目录即使同时以 `-I` 与 `-isystem` 出现（如 `CPATH` 或
+工具链内置用户目录），GCC/Clang 也按系统目录处理，故该机制是稳健的。
+
+注意：用 `#pragma clang diagnostic ignored` 包裹 `#include` 只能屏蔽头文件自身的代码，
+**无法**屏蔽落到我们翻译单元调用点的宏展开（已用 clang 实验验证），因此不得以
+pragma 替代该机制。
+
+新增三方依赖时：目录发现集中在顶层 `CMakeLists.txt`，请同步把新的包含目录
+加入 `NEKO_THIRD_PARTY_INCLUDE_DIRS`。
+
 ## 未来候选依赖（引入时逐个评估）
 
 - ICU（Unicode）

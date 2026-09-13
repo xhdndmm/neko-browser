@@ -8,8 +8,6 @@
 # headers stay inside video.cpp.
 # =============================================================================
 
-find_package(FFmpeg REQUIRED)
-
 add_library(neko_media
   src/audio.cpp
   src/video.cpp
