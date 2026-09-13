@@ -15,18 +15,19 @@ name: release
 #   - NEKO_WARNINGS_AS_ERRORS=ON（与 CI 一致，见 AGENTS.md §13）
 #   - 目标平台上运行完整 ctest 套件；测试不通过则不会产出 Release
 #
-# 平台矩阵（全部使用 GitHub 托管 runner 的原生架构，不做交叉编译）：
+# 平台矩阵（Windows 全部使用 x64 runner；arm64 用 MSVC 交叉编译到 ARM64）：
 #   linux   x86_64  ubuntu-24.04
 #   linux   arm64   ubuntu-24.04-arm
-#   windows x86_64  windows-2025      （MSVC + vcpkg，CLI；Windows 上不构建 Qt GUI）
-#   windows arm64   windows-11-arm    （MSVC + vcpkg，CLI；Windows 上不构建 Qt GUI）
+#   windows x86_64  windows-2025      （MSVC + vcpkg + Qt6 GUI，原生 x64）
+#   windows arm64   windows-2025      （MSVC 交叉编译到 ARM64 + Qt6 交叉编译包）
 #   macos   x86_64  macos-15-intel
 #   macos   arm64   macos-15
 #
 # 已知限制（同步记录在 docs/releases/README.md）：
-#   - Windows 不构建 Qt6 GUI（vcpkg 从源码构建 Qt 代价过高，见 ci.yml 同款说明）；
+#   - Windows ARM64 产物由 x64 runner 交叉编译，无法在 x64 上执行，故该任务
+#     只构建打包、不运行 ctest（同一源码的测试由 windows x86_64 任务完整运行）；
 #   - 产物为动态链接：Linux/macOS 的 GUI 需要目标机器提供 Qt6 运行库，
-#     其余动态库见 BUILDING.md「依赖获取」；
+#     Windows 产物已自带 Qt 运行库；其余动态库见 BUILDING.md「依赖获取」；
 #   - 未做代码签名 / 公证 / 独立调试符号包（计划随 Phase 12+ 的发布工程落地）。
 # -----------------------------------------------------------------------------
 
@@ -126,13 +127,24 @@ jobs:
             # VS 生成器默认平台不一定是目标架构，必须显式指定（见 CMAKE_GENERATOR_PLATFORM）。
             generator_platform: x64
             vcpkg_triplet: x64-windows
+            # Qt6：官方 MSVC 预编译包（原生 x64）。
+            qt_arch: win64_msvc2022_64
+            qt_dir: msvc2022_64
+            qt_host_arch: win64_msvc2022_64
+            qt_host_dir: msvc2022_64
           - name: windows-arm64
-            os: windows-11-arm
+            # Windows ARM64 没有官方原生宿主工具包：在 x64 runner 上交叉编译到 ARM64，
+            # 目标库用 Qt 交叉编译包，宿主工具（moc/rcc/uic）用同版本 x64 包。
+            os: windows-2025
             platform: windows
             arch: arm64
             archive_ext: zip
             generator_platform: ARM64
             vcpkg_triplet: arm64-windows
+            qt_arch: win64_msvc2022_arm64_cross_compiled
+            qt_dir: msvc2022_arm64
+            qt_host_arch: win64_msvc2022_64
+            qt_host_dir: msvc2022_64
           - name: macos-x86_64
             os: macos-15-intel
             platform: macos
@@ -206,6 +218,37 @@ jobs:
           VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vcpkg-cache,readwrite
         run: vcpkg install zlib libjpeg-turbo libwebp freetype openssl ffmpeg libavif
 
+      # Qt6 GUI：Qt 官方 MSVC 预编译包（aqtinstall 从 download.qt.io 下载，不依赖
+      # 第三方 action；vcpkg 从源码编译 Qt 代价过高）。arm64 目标用 Qt 的交叉编译
+      # 包（只含目标库与目标 cmake 配置），宿主工具来自同版本 x64 包，配置时用
+      # QT_HOST_PATH 指定。
+      - name: Install Qt (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check --quiet aqtinstall
+          $qtRoot = "$env:GITHUB_WORKSPACE\.qt"
+          python -m aqt install-qt windows desktop 6.8.3 ${{ matrix.qt_arch }} --outputdir $qtRoot --archives qtbase
+          if ('${{ matrix.qt_arch }}' -ne '${{ matrix.qt_host_arch }}') {
+            python -m aqt install-qt windows desktop 6.8.3 ${{ matrix.qt_host_arch }} --outputdir $qtRoot --archives qtbase
+          }
+          $qtPrefix = "$qtRoot\6.8.3\${{ matrix.qt_dir }}"
+          $qtHostPrefix = "$qtRoot\6.8.3\${{ matrix.qt_host_dir }}"
+          if (-not (Test-Path "$qtPrefix\lib\cmake\Qt6\Qt6Config.cmake")) {
+            throw "Qt 目标安装不完整：$qtPrefix"
+          }
+          if (-not (Test-Path "$qtHostPrefix\lib\cmake\Qt6CoreTools\Qt6CoreToolsConfig.cmake")) {
+            throw "Qt 宿主工具安装不完整：$qtHostPrefix"
+          }
+          # 交叉编译时把目标前缀排在宿主前缀之前：目标模块（Widgets/Gui/Core）
+          # 取 arm64，Qt*Tools（moc/rcc/uic）只存在于 x64 前缀。
+          $prefixPath = $qtPrefix
+          if ($qtHostPrefix -ne $qtPrefix) { $prefixPath = "$qtPrefix;$qtHostPrefix" }
+          "QT_PREFIX=$qtPrefix" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "QT_HOST_PREFIX=$qtHostPrefix" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "CMAKE_PREFIX_PATH=$prefixPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "$qtHostPrefix\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
       # --- 配置 ---------------------------------------------------------------
       - name: Configure (Linux / macOS)
         if: runner.os != 'Windows'
@@ -219,19 +262,27 @@ jobs:
           CMAKE_GENERATOR_PLATFORM: ${{ matrix.generator_platform }}
         run: |
           set -euo pipefail
-          # Git Bash 下 VCPKG_ROOT 是 C:\... 形式；转成 CMake 同样接受的 C:/... 形式。
+          # Git Bash 下 VCPKG_ROOT / QT_HOST_PREFIX 是 C:\... 形式；转成 CMake
+          # 同样接受的 C:/... 形式。
           vcpkg_root=$(cygpath -m "$VCPKG_ROOT")
+          EXTRA_ARGS=""
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            EXTRA_ARGS="-DQT_HOST_PATH=$(cygpath -m "$QT_HOST_PREFIX")"
+          fi
           cmake --preset release \
             -DNEKO_WARNINGS_AS_ERRORS=ON \
-            -DNEKO_BUILD_UI=OFF \
             -DCMAKE_TOOLCHAIN_FILE="$vcpkg_root/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_TARGET_TRIPLET=${{ matrix.vcpkg_triplet }}
+            -DVCPKG_TARGET_TRIPLET=${{ matrix.vcpkg_triplet }} \
+            ${EXTRA_ARGS}
 
       # --- 构建与测试 ---------------------------------------------------------
       - name: Build
         run: cmake --build --preset release --parallel
 
+      # Windows ARM64 由 x64 runner 交叉编译，产物无法在 x64 上执行：跳过 ctest
+      # （同一源码的测试由 windows x86_64 任务完整运行，两个任务的代码路径一致）。
       - name: Test
+        if: ${{ !(matrix.platform == 'windows' && matrix.arch == 'arm64') }}
         run: ctest --preset release
 
       - name: Upload ctest logs (on failure)
@@ -243,8 +294,8 @@ jobs:
           if-no-files-found: ignore
 
       # --- 架构校验 -----------------------------------------------------------
-      # 双架构是本次发布的核心诉求：产物架构与矩阵不一致时必须失败，
-      # 而不是悄悄发出一个 x86_64 二进制（Windows arm64 runner 上 x64 也能“跑起来”）。
+      # 双架构是本次发布的核心诉求：产物架构与矩阵不一致时必须失败，而不是在
+      # 交叉编译配置下悄悄产出 x64 二进制（它在 x64 runner 上同样能运行，不会被发现）。
       - name: Verify artifact architecture (Linux / macOS)
         if: runner.os != 'Windows'
         shell: bash
@@ -328,10 +379,39 @@ jobs:
           New-Item -ItemType Directory -Force "$env:PACKAGE/bin" | Out-Null
 
           Copy-Item 'build/release/bin/neko_browser.exe' "$env:PACKAGE/bin/"
-          foreach ($gui in @('build/release/bin/neko_browser_gui.exe')) {
-            if (Test-Path $gui) { Copy-Item $gui "$env:PACKAGE/bin/" }
-          }
+          $gui = 'build/release/bin/neko_browser_gui.exe'
+          if (Test-Path $gui) { Copy-Item $gui "$env:PACKAGE/bin/" }
           Copy-Item 'LICENSE', 'README.md' "$env:PACKAGE/"
+
+          # Qt6 运行库随 GUI 一起打包，否则目标机器必须自行安装同版本 Qt6。
+          if (Test-Path $gui) {
+            if ('${{ matrix.qt_arch }}' -eq '${{ matrix.qt_host_arch }}') {
+              # 原生 x64：windeployqt 部署 Qt DLL 与平台插件。
+              & "$env:QT_HOST_PREFIX\bin\windeployqt.exe" --release --no-translations `
+                --no-compiler-runtime --no-system-d3d-compiler --no-opengl-sw `
+                --dir "$env:PACKAGE/bin" "$env:PACKAGE/bin/neko_browser_gui.exe"
+              if ($LASTEXITCODE -ne 0) { throw "windeployqt 失败（exit $LASTEXITCODE）" }
+            } else {
+              # ARM64 交叉编译包不含 windeployqt（部署工具只有宿主版本，无法为
+              # 目标架构部署），按已知依赖手工部署：3 个运行库 + 平台/样式/图像格式插件。
+              $bin = "$env:PACKAGE/bin"
+              foreach ($dll in @('Qt6Core.dll', 'Qt6Gui.dll', 'Qt6Widgets.dll')) {
+                Copy-Item "$env:QT_PREFIX/bin/$dll" $bin
+              }
+              foreach ($plugin in @('platforms/qwindows.dll',
+                                    'styles/qmodernwindowsstyle.dll',
+                                    'imageformats/qgif.dll',
+                                    'imageformats/qico.dll',
+                                    'imageformats/qjpeg.dll')) {
+                $source = "$env:QT_PREFIX/plugins/$plugin"
+                if (Test-Path $source) {
+                  $target = Join-Path $bin (Split-Path $plugin -Parent)
+                  New-Item -ItemType Directory -Force $target | Out-Null
+                  Copy-Item $source $target
+                }
+              }
+            }
+          }
 
           $zip = "$env:PACKAGE.zip"
           Compress-Archive -Path $env:PACKAGE -DestinationPath $zip -CompressionLevel Optimal
@@ -390,14 +470,15 @@ jobs:
           ## neko-browser ${VERSION}
 
           由标签 \`${TAG}\` 触发 \`release\` workflow 构建：**Release + LTO**，
-          构建前在目标平台上运行完整 CTest 套件。
+          构建前运行完整 CTest 套件（Windows ARM64 为 x64 宿主交叉编译产物，
+          见「已知限制」）。
 
           | 平台 | 架构 | 产物 | GUI |
           | --- | --- | --- | --- |
           | Linux | x86_64 | \`neko-browser-${VERSION}-linux-x86_64.tar.gz\` | 含 \`neko_browser_gui\` |
           | Linux | arm64 | \`neko-browser-${VERSION}-linux-arm64.tar.gz\` | 含 \`neko_browser_gui\` |
-          | Windows | x86_64 | \`neko-browser-${VERSION}-windows-x86_64.zip\` | 仅 CLI |
-          | Windows | arm64 | \`neko-browser-${VERSION}-windows-arm64.zip\` | 仅 CLI |
+          | Windows | x86_64 | \`neko-browser-${VERSION}-windows-x86_64.zip\` | 含 \`neko_browser_gui\` + Qt 运行库 |
+          | Windows | arm64 | \`neko-browser-${VERSION}-windows-arm64.zip\` | 含 \`neko_browser_gui\` + Qt 运行库 |
           | macOS | x86_64 | \`neko-browser-${VERSION}-macos-x86_64.tar.gz\` | 含 \`neko_browser_gui\` |
           | macOS | arm64 | \`neko-browser-${VERSION}-macos-arm64.tar.gz\` | 含 \`neko_browser_gui\` |
 
@@ -408,12 +489,14 @@ jobs:
             见 [BUILDING.md](https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/BUILDING.md)。
           - Linux / macOS 的 \`neko_browser_gui\` 还需要 Qt6 运行库
             （Debian/Ubuntu：\`qt6-base\`；macOS：\`brew install qt\`）。
-          - Windows 产物为 MSVC 构建，需要 VS 2022 运行库。
+          - Windows 产物为 MSVC 构建，需要 VS 2022 运行库；
+            GUI 所需的 Qt6 运行库（含平台插件）已随包提供。
           - \`SHA256SUMS\` 列出全部产物的 SHA-256；\`sha256sum --check SHA256SUMS\` 可校验。
 
           ### 已知限制
 
-          - Windows 不构建 Qt6 GUI（vcpkg 从源码构建 Qt 代价过高）。
+          - Windows ARM64 为 x64 宿主交叉编译产物，未在 ARM64 机器上执行测试；
+            同一源码的测试完整运行于 windows x86_64 任务。
           - 二进制未签名、未公证；macOS 首次运行可能需要
             \`xattr -d com.apple.quarantine\`。
           - 未提供独立调试符号包。

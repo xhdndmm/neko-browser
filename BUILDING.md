@@ -88,8 +88,14 @@ CC=clang CXX=clang++ cmake --preset debug
   - Debian/Ubuntu：`sudo apt install zlib1g-dev libjpeg-dev libwebp-dev libfreetype-dev libssl-dev qt6-base-dev`
   - macOS（Homebrew）：`brew install jpeg webp freetype qt openssl`
   - Windows（vcpkg）：`vcpkg install zlib libjpeg-turbo libwebp freetype openssl`，配置时传入
-    `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake`；
-    Qt6 GUI 在 Windows 上默认不构建（`NEKO_BUILD_UI=OFF`）。
+    `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake`。
+    Qt6 用官方 MSVC 预编译包：
+    `pip install aqtinstall`，
+    `aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 --archives qtbase`，
+    并把 `<安装目录>/6.8.3/msvc2022_64` 加入 `CMAKE_PREFIX_PATH`。
+    交叉编译 ARM64 时额外用 `-A ARM64 -DVCPKG_TARGET_TRIPLET=arm64-windows`、
+    Qt 的 `win64_msvc2022_arm64_cross_compiled` 包与 `-DQT_HOST_PATH=<x64 Qt>`。
+    不需要 GUI 时加 `-DNEKO_BUILD_UI=OFF`。
 - 参见 [dependency-policy.md](docs/development/dependency-policy.md)。
 - 离线或受限网络环境：可预先下载 tarball 并设置
   `CMAKE_FETCHCONTENT_SOURCE_DIR_GOOGLETEST` / `CMAKE_FETCHCONTENT_SOURCE_DIR_QUICKJS`
