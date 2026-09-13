@@ -109,7 +109,12 @@ image::SvgTextShaper CreateSvgTextShaper(const graphics::FontRegistry& fonts)
         return false;
       }
       image::SvgGlyphOutline glyph;
-      glyph.advance = static_cast<double>(outline->advance);
+      // Advance by the metric the layout engine measures text with, so that
+      // SVG <text> spacing matches HTML text on every platform.  The outline
+      // above stays in unhinted design units (what drawing needs); on fonts
+      // with bytecode hinting the design-unit advance can differ from the
+      // hinted one, which would silently mis-space SVG runs.
+      glyph.advance = static_cast<double>(face->Advance(code_point, px));
       glyph.edges.reserve(outline->edges.size());
       for (const graphics::OutlineEdge& edge : outline->edges) {
         glyph.edges.push_back(ConvertEdge(edge));
