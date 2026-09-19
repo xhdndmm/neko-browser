@@ -27,6 +27,8 @@ const int kSigpipeIgnored = [] {
   std::signal(SIGPIPE, SIG_IGN);
   return 0;
 }();
+#else
+#include <process.h>
 #endif
 
 namespace neko::browser {
@@ -41,6 +43,17 @@ std::string ReadFixture(const std::string& name)
   return buffer.str();
 }
 
+// Temp directory names must be unique per process.  MSVC exposes the process
+// id as _getpid (<process.h>), POSIX as getpid (<unistd.h>).
+long CurrentProcessId()
+{
+#ifdef _WIN32
+  return static_cast<long>(::_getpid());
+#else
+  return static_cast<long>(::getpid());
+#endif
+}
+
 // A temporary profile directory removed when the test finishes.
 class TempProfile
 {
@@ -49,7 +62,7 @@ public:
   {
     std::error_code ec;
     path_ = std::filesystem::temp_directory_path(ec) /
-            ("neko-renderer-mode-test-" + std::to_string(::getpid()) + "-" +
+            ("neko-renderer-mode-test-" + std::to_string(CurrentProcessId()) + "-" +
              std::to_string(counter_++));
     std::filesystem::create_directories(path_, ec);
   }

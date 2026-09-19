@@ -32,6 +32,12 @@
 #include <string>
 #include <thread>
 
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 int main(int argc, char** argv)
 {
   // These tests must run without a display; force the offscreen platform
@@ -48,13 +54,24 @@ int main(int argc, char** argv)
 
 namespace {
 
+// Temp directory names must be unique per process.  MSVC exposes the process
+// id as _getpid (<process.h>), POSIX as getpid (<unistd.h>).
+long CurrentProcessId()
+{
+#ifdef _WIN32
+  return static_cast<long>(::_getpid());
+#else
+  return static_cast<long>(::getpid());
+#endif
+}
+
 class TempProfile
 {
 public:
   TempProfile()
   {
     dir_ = std::filesystem::temp_directory_path() /
-           ("neko-ui-test-" + std::to_string(::getpid()) + "-" + std::to_string(++seq_));
+           ("neko-ui-test-" + std::to_string(CurrentProcessId()) + "-" + std::to_string(++seq_));
     std::filesystem::create_directories(dir_);
   }
   ~TempProfile()

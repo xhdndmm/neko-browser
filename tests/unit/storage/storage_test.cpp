@@ -20,10 +20,23 @@
 
 #ifndef _WIN32
 #include <unistd.h>
+#else
+#include <process.h>
 #endif
 
 namespace neko::storage {
 namespace {
+
+// Temp directory names must be unique per process.  MSVC exposes the process
+// id as _getpid (<process.h>), POSIX as getpid (<unistd.h>).
+long CurrentProcessId()
+{
+#ifdef _WIN32
+  return static_cast<long>(::_getpid());
+#else
+  return static_cast<long>(::getpid());
+#endif
+}
 
 using testing::Eq;
 
@@ -36,8 +49,9 @@ class TempProfile
 public:
   TempProfile()
   {
-    dir_ = std::filesystem::temp_directory_path() /
-           ("neko-storage-test-" + std::to_string(::getpid()) + "-" + std::to_string(++seq_));
+    dir_ =
+        std::filesystem::temp_directory_path() /
+        ("neko-storage-test-" + std::to_string(CurrentProcessId()) + "-" + std::to_string(++seq_));
     std::filesystem::create_directories(dir_);
   }
   ~TempProfile()

@@ -27,9 +27,15 @@
 
 #ifdef _WIN32
 // Winsock2 must be included before windows.h (which may arrive through some
-// other header); WIN32_LEAN_AND_MEAN keeps the Windows headers small.
+// other header); WIN32_LEAN_AND_MEAN keeps the Windows headers small, and
+// NOMINMAX keeps them from defining the min/max macros -- those would rewrite
+// every std::min / std::max call in this header's translation units into
+// `std::((a) < (b) ? (a) : (b))` (MSVC C2589).
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
 #endif
 #include <winsock2.h>
 #include <ws2tcpip.h>

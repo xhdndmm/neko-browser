@@ -57,10 +57,13 @@ std::string GenerateWebSocketKey()
 {
   std::random_device rd;
   std::mt19937 gen(rd());
-  std::uniform_int_distribution<uint8_t> dist(0, 255);
+  // A distribution over uint8_t is not conforming (char / unsigned char /
+  // int8_t / uint8_t are excluded by [rand.req.genl]); draw in unsigned int
+  // and narrow explicitly.
+  std::uniform_int_distribution<unsigned int> dist(0, 255);
   std::array<uint8_t, 16> bytes = {};
   for (auto& byte : bytes) {
-    byte = dist(gen);
+    byte = static_cast<uint8_t>(dist(gen));
   }
   return Base64Encode(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
 }
@@ -405,9 +408,10 @@ base::Status WebSocket::SendFrame(uint8_t opcode, std::string_view payload, bool
   if (mask) {
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_int_distribution<uint8_t> dist(0, 255);
+    // See GenerateWebSocketKey(): the distribution draws in unsigned int.
+    std::uniform_int_distribution<unsigned int> dist(0, 255);
     for (auto& b : masking_key) {
-      b = dist(gen);
+      b = static_cast<uint8_t>(dist(gen));
       frame.push_back(static_cast<char>(b));
     }
   }

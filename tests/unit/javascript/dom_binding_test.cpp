@@ -16,7 +16,6 @@
 #include <optional>
 #include <string>
 #include <thread>
-#include <unistd.h>
 #include <vector>
 
 #ifndef _WIN32
@@ -25,6 +24,11 @@
 #include <openssl/evp.h>
 #include <openssl/sha.h>
 #include <sys/socket.h>
+#include <unistd.h>
+#else
+// Only the process-id helper below needs a platform header on Windows: the
+// socket / TLS test classes are POSIX-only and guarded.
+#include <process.h>
 #endif
 
 namespace neko::javascript {
@@ -2804,14 +2808,26 @@ private:
   storage::IndexedDbStore& store_;
 };
 
+// Temp directory names must be unique per process.  MSVC exposes the process
+// id as _getpid (<process.h>), POSIX as getpid (<unistd.h>).
+long CurrentProcessId()
+{
+#ifdef _WIN32
+  return static_cast<long>(::_getpid());
+#else
+  return static_cast<long>(::getpid());
+#endif
+}
+
 // A temp profile directory (removed on destruction) for the real store.
 class IdbTempProfile
 {
 public:
   IdbTempProfile()
   {
-    path_ = std::filesystem::temp_directory_path() /
-            ("neko_idb_js_" + std::to_string(::getpid()) + "_" + std::to_string(counter_++));
+    path_ =
+        std::filesystem::temp_directory_path() /
+        ("neko_idb_js_" + std::to_string(CurrentProcessId()) + "_" + std::to_string(counter_++));
     std::filesystem::create_directories(path_);
   }
   ~IdbTempProfile()
