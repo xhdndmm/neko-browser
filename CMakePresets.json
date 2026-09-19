@@ -96,43 +96,50 @@
       "name": "debug",
       "inherits": "base",
       "configurePreset": "debug",
-      "description": "Build the debug configuration"
+      "description": "Build the debug configuration",
+      "configuration": "Debug"
     },
     {
       "name": "release",
       "inherits": "base",
       "configurePreset": "release",
-      "description": "Build the release configuration"
+      "description": "Build the release configuration",
+      "configuration": "Release"
     },
     {
       "name": "relwithdebinfo",
       "inherits": "base",
       "configurePreset": "relwithdebinfo",
-      "description": "Build the RelWithDebInfo configuration"
+      "description": "Build the RelWithDebInfo configuration",
+      "configuration": "RelWithDebInfo"
     },
     {
       "name": "asan",
       "inherits": "base",
       "configurePreset": "asan",
-      "description": "Build the ASan+UBSan configuration"
+      "description": "Build the ASan+UBSan configuration",
+      "configuration": "RelWithDebInfo"
     },
     {
       "name": "ubsan",
       "inherits": "base",
       "configurePreset": "ubsan",
-      "description": "Build the UBSan configuration"
+      "description": "Build the UBSan configuration",
+      "configuration": "RelWithDebInfo"
     },
     {
       "name": "tsan",
       "inherits": "base",
       "configurePreset": "tsan",
-      "description": "Build the TSan configuration"
+      "description": "Build the TSan configuration",
+      "configuration": "RelWithDebInfo"
     },
     {
       "name": "coverage",
       "inherits": "base",
       "configurePreset": "coverage",
-      "description": "Build the coverage configuration"
+      "description": "Build the coverage configuration",
+      "configuration": "Debug"
     }
   ],
   "testPresets": [

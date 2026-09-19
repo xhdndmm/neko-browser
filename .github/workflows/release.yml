@@ -331,8 +331,9 @@ jobs:
           $expected = @{ 'x86_64' = 0x8664; 'arm64' = 0xAA64 }['${{ matrix.arch }}']
           if (-not $expected) { throw "未知架构：${{ matrix.arch }}" }
 
-          $binaries = Get-ChildItem 'build/release/bin/*.exe'
-          if (-not $binaries) { throw 'build/release/bin 下没有可执行文件' }
+          # VS 是多配置生成器：产物落在 bin/<配置>/ 下（构建 preset 已固定 Release）。
+          $binaries = Get-ChildItem 'build/release/bin/Release/*.exe'
+          if (-not $binaries) { throw 'build/release/bin/Release 下没有可执行文件' }
 
           foreach ($exe in $binaries) {
             $fs = [System.IO.File]::OpenRead($exe.FullName)
@@ -378,8 +379,9 @@ jobs:
           Remove-Item -Recurse -Force $env:PACKAGE -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force "$env:PACKAGE/bin" | Out-Null
 
-          Copy-Item 'build/release/bin/neko_browser.exe' "$env:PACKAGE/bin/"
-          $gui = 'build/release/bin/neko_browser_gui.exe'
+          # VS 是多配置生成器：产物落在 bin/Release/ 下。
+          Copy-Item 'build/release/bin/Release/neko_browser.exe' "$env:PACKAGE/bin/"
+          $gui = 'build/release/bin/Release/neko_browser_gui.exe'
           if (Test-Path $gui) { Copy-Item $gui "$env:PACKAGE/bin/" }
           Copy-Item 'LICENSE', 'README.md' "$env:PACKAGE/"
 

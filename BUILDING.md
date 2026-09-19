@@ -110,6 +110,11 @@ build/<preset>/bin/  可执行文件（neko_browser、测试程序）
 build/<preset>/lib/  静态库（libneko_base.a 等）
 ```
 
+Windows 的 Visual Studio 生成器是多配置生成器：CMake 会在输出目录后再追加一层配置名，
+因此产物在 `build/<preset>/bin/Release/`（Debug 构建则在 `bin/Debug/`）。构建 preset
+已显式指定 `configuration`，所以 `cmake --build --preset release` 在 Windows 上确实
+构建 Release 配置；Linux/macOS 的单配置生成器忽略该字段。
+
 ## 常见问题
 
 - **构建时卡在 googletest-populate**：网络无法访问 GitHub。参考上文"依赖获取"。
