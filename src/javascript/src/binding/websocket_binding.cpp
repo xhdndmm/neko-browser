@@ -670,7 +670,7 @@ JSValue WebSocketConstructor(JSContext* ctx, JSValueConst new_target, int argc, 
         protocols.emplace_back(protocol);
         JS_FreeCString(ctx, protocol);
       }
-    } else if (JS_IsArray(argv[1]) > 0) {
+    } else if (JS_IsArray(argv[1])) {
       JSValue length_value = JS_GetPropertyStr(ctx, argv[1], "length");
       uint32_t length = 0;
       JS_ToUint32(ctx, &length, length_value);
