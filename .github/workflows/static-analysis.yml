@@ -6,6 +6,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 # NOTE: This job is experimental.  clang-tidy check availability varies across
 # toolchain versions, so the job is non-gating (continue-on-error) until the
 # check set is stabilized.  See docs/development/coding-style.md.
