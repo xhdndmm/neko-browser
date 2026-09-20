@@ -35,7 +35,7 @@
 | Qt6 Widgets | 系统包 | GUI 基础设施（窗口/事件/控件，见 ADR 0006） | find_package | LGPL |
 | FreeType | 系统包 | 字体光栅化（封装在 neko::graphics 后，见 ADR 0009） | find_package | FTL（双许可选 FTL） |
 | OpenSSL | 系统包 | TLS/HTTPS（封装在 neko::network::TlsSocket 后，见 ADR 0010） | find_package | Apache-2.0 |
-| FFmpeg | 6.1（系统包） | 视频解复用/解码/像素转换（封装在 neko::media 后，见 ADR 0014） | find_package（pkg-config） | LGPL-2.1-or-later |
+| FFmpeg | 6.1（系统包） | 视频解复用/解码/像素转换（封装在 neko::media 后，见 ADR 0014） | find_package（pkg-config，缺失时回退到头文件/库搜索） | LGPL-2.1-or-later |
 
 > **libwebp 说明**：WebP 是当前 web 内容（尤其 Bing 等站点壁纸）的主要图片格式。
 > 自研 VP8/VP8L 解码器成本高且非本项目核心，因此封装 libwebp（BSD-3-Clause，
@@ -47,13 +47,18 @@
 > 发行版构建（默认配置不含 GPL 组件），禁止链接 `libx264` 等 GPL 编解码器；
 > 如未来需静态链接，须随发行提供重链接目标文件（LGPL §4）。FFmpeg 头文件
 > 不越过 `src/media/src/video.cpp`。
+>
+> 发现方式：`cmake/FindFFmpeg.cmake` 先试 pkg-config（Linux/macOS），失败则
+> 回退到 `find_path`/`find_library`（Windows/vcpkg 没有 pkg-config 程序）。
+> 两条路径都暴露同一个导入目标 `FFmpeg::FFmpeg`（`PkgConfig::FFMPEG` 不再是
+> 公共接口），`src/media/CMakeLists.txt` 只链接前者。
 
 ## 三方头文件与警告
 
 项目的严格警告集（`-Wall -Wextra -Wpedantic -Wconversion -Wold-style-cast …`，
 CI 中配合 `-Werror`）只适用于项目自身代码，绝不作用于三方头文件。
 
-CMake 会把导入目标（`JPEG::JPEG`、`OpenSSL::Crypto`、`PkgConfig::FFMPEG` 等）
+CMake 会把导入目标（`JPEG::JPEG`、`OpenSSL::Crypto`、`FFmpeg::FFmpeg` 等）
 的包含目录标记为 SYSTEM，但对**编译器默认搜索目录**会丢掉该标记
 （`CMAKE_<LANG>_IMPLICIT_INCLUDE_DIRECTORIES`）。macOS 上 Homebrew 前缀
 `/usr/local/include`（Intel）与 `/opt/homebrew/include`（Apple Silicon）即属于此类：

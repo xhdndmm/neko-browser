@@ -48,7 +48,7 @@ Web 视频需要容器解复用（MP4/WebM/…）与编解码器（H.264/VP8/VP9
 
 - FFmpeg 为 **LGPL-2.1-or-later**（Ubuntu 发行版构建，`--enable-gpl`
   关闭的默认配置不含 GPL 组件）。LGPL 要求：本项目动态链接
-  （`PkgConfig::FFmpeg` 默认链接共享库）且不修改 FFmpeg 源码，即可满足
+  （`FFmpeg::FFmpeg` 默认链接共享库）且不修改 FFmpeg 源码，即可满足
   ——与 Unlicense 项目兼容；若未来需要静态链接发行，需提供重链接目标
   文件（LGPL §4）。禁止使用 `libx264`（GPL）等 GPL 编解码器构建。
 

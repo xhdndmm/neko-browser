@@ -83,12 +83,15 @@ CC=clang CXX=clang++ cmake --preset debug
 - **GoogleTest**（单元测试）：FetchContent 从 GitHub 拉取，固定版本与 SHA256。
 - **QuickJS / quickjs-ng**（JavaScript runtime）：FetchContent 从 GitHub 拉取
   `v0.16.1` tarball，固定 SHA256；配置时自动下载。
-- **系统包**：zlib、libjpeg、libwebp（图像解码）、FreeType（字体光栅化）、
-  OpenSSL（HTTPS/TLS）、Qt6 Widgets（GUI，可选；`NEKO_BUILD_UI=OFF` 可跳过）。
-  - Debian/Ubuntu：`sudo apt install zlib1g-dev libjpeg-dev libwebp-dev libfreetype-dev libssl-dev qt6-base-dev`
-  - macOS（Homebrew）：`brew install jpeg webp freetype qt openssl`
-  - Windows（vcpkg）：`vcpkg install zlib libjpeg-turbo libwebp freetype openssl`，配置时传入
+- **系统包**：zlib、libjpeg、libwebp、libavif（图像解码）、FreeType（字体光栅化）、
+  OpenSSL（HTTPS/TLS）、FFmpeg（视频解码，`neko::media` 使用，必需）、
+  Qt6 Widgets（GUI，可选；`NEKO_BUILD_UI=OFF` 可跳过）。
+  - Debian/Ubuntu：`sudo apt install zlib1g-dev libjpeg-dev libwebp-dev libavif-dev libfreetype-dev libssl-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev qt6-base-dev`
+  - macOS（Homebrew）：`brew install jpeg webp libavif freetype qt openssl ffmpeg`
+  - Windows（vcpkg）：`vcpkg install zlib libjpeg-turbo libwebp libavif freetype openssl ffmpeg`，配置时传入
     `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake`。
+    vcpkg 不提供 pkg-config 程序，`FindFFmpeg.cmake` 会自动回退到头文件/库搜索，
+    无需额外配置。
     Qt6 用官方 MSVC 预编译包：
     `pip install aqtinstall`，
     `aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 --archives qtbase`，
