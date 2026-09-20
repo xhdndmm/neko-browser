@@ -18,5 +18,5 @@ target_compile_features(neko_media PUBLIC cxx_std_20)
 target_include_directories(neko_media PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
-target_link_libraries(neko_media PUBLIC neko::base neko::image PRIVATE PkgConfig::FFMPEG)
+target_link_libraries(neko_media PUBLIC neko::base neko::image PRIVATE FFmpeg::FFmpeg)
 apply_compiler_warnings(neko_media)
