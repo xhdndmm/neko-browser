@@ -134,6 +134,8 @@ private:
   std::string last_query_;
 };
 
+// Reads the QNAME that starts at |offset|.  Only the UDP test server needs it,
+// so it stays inside the POSIX guard together with the server.
 std::string NameAt(std::string_view message, std::size_t offset)
 {
   // The query's QNAME sits right after the 12-byte header.
@@ -153,12 +155,6 @@ std::string NameAt(std::string_view message, std::size_t offset)
   return name;
 }
 
-std::uint16_t QueryId(std::string_view message)
-{
-  return static_cast<std::uint16_t>((static_cast<std::uint8_t>(message[0]) << 8) |
-                                    static_cast<std::uint8_t>(message[1]));
-}
-
 std::uint16_t QueryType(std::string_view message)
 {
   // QTYPE is the two bytes after the QNAME + terminator.
@@ -172,6 +168,23 @@ std::uint16_t QueryType(std::string_view message)
   }
   return static_cast<std::uint16_t>((static_cast<std::uint8_t>(message[pos]) << 8) |
                                     static_cast<std::uint8_t>(message[pos + 1]));
+}
+
+#endif // !_WIN32
+
+// ---------------------------------------------------------------------------
+// Portable wire-format helpers.
+//
+// Building and inspecting DNS messages needs no sockets, so everything below
+// stays outside the POSIX guard: the DnsWireTest cases that use it must
+// compile and run on Windows too (keeping them inside the guard is what broke
+// the MSVC build).
+// ---------------------------------------------------------------------------
+
+std::uint16_t QueryId(std::string_view message)
+{
+  return static_cast<std::uint16_t>((static_cast<std::uint8_t>(message[0]) << 8) |
+                                    static_cast<std::uint8_t>(message[1]));
 }
 
 void AppendU16(std::string& out, std::uint16_t value)
@@ -253,8 +266,6 @@ std::string MakeResponse(std::string_view query,
 
 const char kIp1[] = {'\x5d', '\xb8', '\xd8', '\x22'}; // 93.184.216.34
 const char kIp2[] = {'\x0a', '\x00', '\x00', '\x01'}; // 10.0.0.1
-
-#endif // !_WIN32
 
 std::string TempFile(const std::string& name, const std::string& content)
 {

@@ -46,14 +46,18 @@ public:
     std::error_code ec;
     std::filesystem::remove_all(path_, ec);
   }
-  const std::string& path() const
+  // std::filesystem::path::string() is the only portable way to hand the
+  // directory to the store: on Windows the native string type is
+  // std::wstring, so relying on an implicit conversion to std::string (as
+  // POSIX allows) does not compile there.
+  std::string path() const
   {
-    return path_;
+    return path_.string();
   }
 
 private:
   static int counter_;
-  std::string path_;
+  std::filesystem::path path_;
 };
 int TempProfile::counter_ = 0;
 

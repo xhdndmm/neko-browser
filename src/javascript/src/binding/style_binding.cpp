@@ -10,6 +10,7 @@
 
 #include "binding_internal.h"
 
+#include <algorithm>
 #include <quickjs.h>
 #include <string>
 #include <string_view>

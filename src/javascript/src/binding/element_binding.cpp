@@ -12,6 +12,7 @@
 
 #include "binding_internal.h"
 
+#include <algorithm>
 #include <cstring>
 #include <quickjs.h>
 #include <string>

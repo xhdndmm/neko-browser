@@ -11,6 +11,7 @@
 
 #include "binding_internal.h"
 
+#include <algorithm>
 #include <array>
 #include <quickjs.h>
 #include <span>

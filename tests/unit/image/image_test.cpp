@@ -8,6 +8,7 @@
 #include "neko/image/image.h"
 #include "neko/image/svg_decoder.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>

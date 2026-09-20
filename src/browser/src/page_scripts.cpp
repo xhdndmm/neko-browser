@@ -17,6 +17,7 @@
 #include "neko/style/computed_style.h"
 #include "neko/url/url.h"
 
+#include <algorithm>
 #include <array>
 #include <ctime>
 #include <functional>
