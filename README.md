@@ -1,3 +1,5 @@
+
+
 # neko-browser
 
 > **状态：浏览器 UI 里程碑达成（Phases 1–7，含存储/图像/媒体/PDF）**
@@ -193,7 +195,7 @@ src/
   renderer/             页面管线编排
   storage/              Cookie / 历史 / 书签 持久化
   image/                PNG 自研解码 + JPEG(libjpeg)
-  media/                WAV 解码
+  media/                WAV 解码 + FFmpeg 视频解码
   pdf/                  PDF 文本提取 + 页面渲染
   javascript/           QuickJS runtime 封装
   browser/              BrowserController + 下载器 + CLI
