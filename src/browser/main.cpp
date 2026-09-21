@@ -323,6 +323,7 @@ void PrintJsResult(const neko::javascript::ScriptValue& value)
 // viewport and replies with the frame + DOM text.
 int RunRendererChild()
 {
+#ifndef _WIN32
   neko::ipc::Channel channel = neko::ipc::Channel::FromHandles(0, 1);
 
   const auto request_frame = channel.Receive();
@@ -368,6 +369,10 @@ int RunRendererChild()
     return 1;
   }
   return 0;
+#else
+  std::cerr << "renderer child: Windows stdio pipe mode is not implemented\n";
+  return 1;
+#endif
 }
 
 int main(int argc, char** argv)

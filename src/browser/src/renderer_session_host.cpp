@@ -313,6 +313,7 @@ private:
 
 int RunRendererSession()
 {
+#ifndef _WIN32
   ipc::Channel channel = ipc::Channel::FromHandles(0, 1);
 
   // Page storage in a renderer session is per-session scratch (the browser
@@ -335,6 +336,10 @@ int RunRendererSession()
   }
   std::filesystem::remove_all(profile, ec);
   return exit_code;
+#else
+  NEKO_LOG_WARNING("renderer session: Windows stdio pipe mode is not implemented");
+  return 1;
+#endif
 }
 
 } // namespace neko::browser

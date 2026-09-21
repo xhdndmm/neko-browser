@@ -2825,10 +2825,12 @@ class IdbTempProfile
 public:
   IdbTempProfile()
   {
-    path_ =
+    const std::filesystem::path path =
         std::filesystem::temp_directory_path() /
         ("neko_idb_js_" + std::to_string(CurrentProcessId()) + "_" + std::to_string(counter_++));
-    std::filesystem::create_directories(path_);
+    path_ = path.string();
+    std::error_code ec;
+    std::filesystem::create_directories(path, ec);
   }
   ~IdbTempProfile()
   {
