@@ -511,9 +511,12 @@ TEST(SvgTextShaperTest, RendersRealGlyphsThroughTheFontRegistry)
       }
     }
   }
-  // A 24px "H" covers a few hundred pixels; nothing may bleed above the
-  // baseline box (SVG coordinates are not flipped here).
-  EXPECT_GT(dark_pixels, 100);
+  // Different system sans-serif faces vary in stroke weight, so assert on a
+  // meaningful filled area rather than a single hard-coded pixel count.  The
+  // glyph still needs to occupy a visible portion of the canvas and remain
+  // above the baseline box (SVG coordinates are not flipped here).
+  const int minimum_dark_pixels = static_cast<int>(img.width * img.height * 0.015);
+  EXPECT_GT(dark_pixels, minimum_dark_pixels);
   EXPECT_EQ(left_edge_dark, 0);
   const std::size_t above =
       (static_cast<std::size_t>(2) * static_cast<std::size_t>(img.width) + 40) * 4;
