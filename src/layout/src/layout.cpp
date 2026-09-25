@@ -1557,7 +1557,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         return;
       }
       if (child_style.display == style::Display::kInlineBlock &&
-          child_style.position == style::Position::kStatic) {
+          (child_style.position == style::Position::kStatic ||
+           child_style.position == style::Position::kRelative)) {
         auto block_box = BuildInlineBlock(child_element, containing_width);
         InlineItem item;
         item.style = &child_style;
@@ -1572,7 +1573,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         return;
       }
       if (child_style.display == style::Display::kInlineFlex &&
-          child_style.position == style::Position::kStatic) {
+          (child_style.position == style::Position::kStatic ||
+           child_style.position == style::Position::kRelative)) {
         // Inline-level flex container: an atomic inline box whose content is
         // a flex container (handled by LayoutFlexContent inside
         // BuildInlineBlock's LayoutBlockContent dispatch).
@@ -1590,7 +1592,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         return;
       }
       if (child_style.display == style::Display::kInlineGrid &&
-          child_style.position == style::Position::kStatic) {
+          (child_style.position == style::Position::kStatic ||
+           child_style.position == style::Position::kRelative)) {
         // Inline-level grid container: an atomic inline box whose content is
         // a grid container (handled by LayoutGridContent inside
         // BuildInlineBlock's LayoutBlockContent dispatch).

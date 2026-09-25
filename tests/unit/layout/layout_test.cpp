@@ -2500,5 +2500,35 @@ TEST(LayoutTest, DisplayNoneRemovesInlineDescendants)
   EXPECT_EQ(text.find("HIDDEN"), std::string::npos) << "leaked text: " << text;
 }
 
+// Regression: an inline-block with position:relative must still be an atomic
+// inline box (CSS2.2 §9.2.2.1), so its position:absolute children are laid out
+// relative to it (out of flow) instead of leaking into the parent's lines.
+// This is what makes a CSS dropdown (kaom.net's menu) expand correctly.
+TEST(LayoutTest, RelativeInlineBlockIsAtomicAndHoldsAbsoluteChildren)
+{
+  Page page = Build("<body style='margin:0'><div id='host'>"
+                    "<span id='dd' style='position:relative;display:inline-block'>"
+                    "<button>MENU</button>"
+                    "<span id='menu' style='position:absolute;display:block'>ITEM</span>"
+                    "</span></div></body>");
+  const dom::Element* dd_el = dom::QuerySelector(*page.doc, "#dd");
+  ASSERT_NE(dd_el, nullptr);
+  const InlineBox* holder = nullptr;
+  const LayoutBox* dd = FindInlineBlock(*page.root, dd_el, holder);
+  ASSERT_NE(dd, nullptr);
+  // The absolute menu is a positioned child of the inline-block, not inline
+  // content of the host.
+  EXPECT_FALSE(dd->positioned_children.empty());
+  const LayoutBox* host = FindBox(*page.root, "#host", *page.doc);
+  ASSERT_NE(host, nullptr);
+  std::string text;
+  for (const Line& line : host->lines) {
+    for (const TextRun& run : line.runs) {
+      text += run.text;
+    }
+  }
+  EXPECT_EQ(text.find("ITEM"), std::string::npos) << "leaked text: " << text;
+}
+
 } // namespace
 } // namespace neko::layout

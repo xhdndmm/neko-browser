@@ -868,6 +868,53 @@ TEST(BrowserControllerTest, NavigationProducesAFreshFrame)
   EXPECT_NE(b.frame->rgba, a.frame->rgba);
 }
 
+// Regression: hovering an element must drive the style engine's :hover so
+// hover-only rules expand — e.g. a CSS dropdown like kaom.net's menu.  The
+// B refactor (ADR 0019) moved hover handling off the GUI but initially forgot
+// to feed it back into the style engine, so :hover never matched.
+TEST(BrowserControllerTest, HoverExpandsCssDropdown)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><style>"
+                               ".dropdown{position:relative;display:inline-block;}"
+                               ".dropdown-content{position:absolute;display:none;}"
+                               ".dropdown:hover .dropdown-content{display:block;}"
+                               "</style></head><body style=\"margin:0\">"
+                               "<div class=\"dropdown\"><button>MENU</button>"
+                               "<div class=\"dropdown-content\"><a href=\"#\">ITEM</a></div>"
+                               "</div></body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  // Lay the page out (the worker does this when producing the frame) so the
+  // hit test has a layout tree to walk.
+  controller.PumpScriptTimers();
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  ASSERT_NE(tab->page, nullptr);
+  dom::Element* content = dom::QuerySelector(*tab->page->document(), ".dropdown-content");
+  ASSERT_NE(content, nullptr);
+  style::ComputedStyle computed;
+  std::string tag;
+  ASSERT_TRUE(tab->page->TryGetComputedStyle(content, computed, tag));
+  EXPECT_EQ(computed.display, style::Display::kNone);
+
+  // Hovering the dropdown (top-left; margin:0) expands the menu.
+  controller.DispatchHover(tab->id, 5.0F, 5.0F);
+  ASSERT_TRUE(tab->page->TryGetComputedStyle(content, computed, tag));
+  EXPECT_EQ(computed.display, style::Display::kBlock);
+
+  // Leaving the viewport collapses it again.
+  controller.DispatchHoverClear(tab->id);
+  ASSERT_TRUE(tab->page->TryGetComputedStyle(content, computed, tag));
+  EXPECT_EQ(computed.display, style::Display::kNone);
+}
+
 // A "file:///abs/path" URL (the form hyperlinks and bookmarks produce) loads
 // the absolute path.  Regression test: the leading slash used to be stripped,
 // turning it into a relative path that failed to read.

@@ -803,8 +803,8 @@ void BrowserController::DispatchHover(int tab_id, float doc_x, float doc_y)
   if (tab->page != nullptr) {
     dom_lock = tab->page->AcquireDomLock();
   }
-  tab->frame_dirty = true; // the hover link drives the cursor
   if (IsRemoteTab(*tab)) {
+    tab->frame_dirty = true; // the hover link drives the cursor
     auto reply = tab->session->Hover(doc_x, doc_y);
     if (!reply.has_value()) {
       MarkSessionFailed(*tab, reply.error().message());
@@ -826,6 +826,11 @@ void BrowserController::DispatchHover(int tab_id, float doc_x, float doc_y)
         *prev, "mouseout", static_cast<double>(doc_x), static_cast<double>(doc_y), 0);
   }
   tab->hovered_element = const_cast<dom::Element*>(element);
+  // Drive the style engine's :hover.  SetHoveredElement reapplies the cascade
+  // (so hover-only rules such as ".dropdown:hover .dropdown-content{
+  // display:block}" take effect) and bumps the page version, which makes the
+  // worker rebuild the frame — the GUI never touches the DOM.
+  tab->page->SetHoveredElement(element);
   if (element != nullptr && tab->script_runtime != nullptr) {
     tab->script_runtime->DispatchMouseEvent(*const_cast<dom::Element*>(element),
                                             "mouseover",
@@ -864,6 +869,10 @@ void BrowserController::DispatchHoverClear(int tab_id)
       tab->script_runtime->DispatchMouseEvent(*tab->hovered_element, "mouseout", 0, 0, 0);
     }
     tab->hovered_element = nullptr;
+  }
+  // Drop the style engine's :hover so hover-only rules collapse again.
+  if (tab->page != nullptr) {
+    tab->page->SetHoveredElement(nullptr);
   }
 }
 
