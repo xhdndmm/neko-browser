@@ -27,9 +27,12 @@ std::optional<std::string> HyperlinkTarget(const dom::Node* node, std::string_vi
 // corrupt it (a file:// href on a file:// page was concatenated onto the
 // base's directory).  For file:// and bare-path bases, which the URL parser
 // cannot resolve against, references are joined by string concatenation —
-// root-relative references keep the base's root.  An empty reference resolves
-// to the base itself.  Returns nullopt when the reference cannot be resolved
-// at all (no usable base and no scheme of its own).
+// root-relative references keep the base's root.  Windows drive paths
+// ("C:\dir\page.html") are treated the same way even though they parse as a
+// URL with the one-letter scheme "c", so the drive letter's case survives.
+// An empty reference resolves to the base itself.  Returns nullopt when the
+// reference cannot be resolved at all (no usable base and no scheme of its
+// own).
 std::optional<std::string> ResolveReference(std::string_view ref, std::string_view base_url);
 
 // True when |input| is a Windows local path rather than a URL reference:

@@ -12,7 +12,9 @@
 #
 # neko_verify_linkable_dependencies() reports, for each dependency target, the
 # library file it resolved to, and fails the configure when one resolves to
-# nothing.  Keeping the report in the configure log also documents which
+# nothing — or when a resolved file is missing on disk (a stale or
+# wrong-architecture install tree would otherwise be silently dropped from the
+# link line).  Keeping the report in the configure log also documents which
 # dependency came from where in every CI job.
 #
 # INTERFACE libraries (e.g. FFmpeg::FFmpeg) hold their link inputs in
@@ -81,6 +83,45 @@ function(neko_collect_link_inputs target out_var)
   set(${out_var} "${_inputs}" PARENT_SCOPE)
 endfunction()
 
+# Fails when a collected input names an absolute library file that does not
+# exist on disk (for example an install tree for the wrong triplet or target
+# architecture).  The link would silently drop such an input and fail much
+# later with unresolved externals, far away from the real cause.  Plain names
+# ("ws2_32"), flags and generator expressions are ignored.
+function(neko_check_link_input_files_exist target inputs)
+  set(_missing "")
+  foreach(_input IN LISTS inputs)
+    # Config-specific inputs are stored as "<config>:<file>".  A config name is
+    # longer than one character, which keeps "C:/..." drive paths intact.
+    set(_path "${_input}")
+    if(_input MATCHES "^([A-Za-z][A-Za-z0-9_]*):(.+)$")
+      string(LENGTH "${CMAKE_MATCH_1}" _prefix_len)
+      if(_prefix_len GREATER 1)
+        set(_path "${CMAKE_MATCH_2}")
+      endif()
+    endif()
+    if(NOT IS_ABSOLUTE "${_path}")
+      continue()
+    endif()
+    if(NOT _path MATCHES "\\.(lib|dylib|dll|a|so(\\.[0-9.]+)?)$")
+      continue()
+    endif()
+    if(NOT EXISTS "${_path}")
+      list(APPEND _missing "${_path}")
+    endif()
+  endforeach()
+  if(_missing)
+    list(REMOVE_DUPLICATES _missing)
+    string(REPLACE ";" "\n  - " _report "${_missing}")
+    message(FATAL_ERROR
+      "Dependency '${target}' resolved to library files that do not exist:\n"
+      "  - ${_report}\n"
+      "Check the dependency's install tree and the search paths "
+      "(CMAKE_PREFIX_PATH, VCPKG_TARGET_TRIPLET, CMAKE_GENERATOR_PLATFORM): the "
+      "link would silently drop these files and report unresolved externals.")
+  endif()
+endfunction()
+
 # Reports each dependency's resolved library file; fails when one has none.
 function(neko_verify_linkable_dependencies)
   message(STATUS "")
@@ -93,6 +134,7 @@ function(neko_verify_linkable_dependencies)
       list(APPEND _missing ${_target})
       continue()
     endif()
+    neko_check_link_input_files_exist(${_target} "${_inputs}")
     list(GET _inputs 0 _first)
     list(LENGTH _inputs _count)
     if(_count GREATER 1)

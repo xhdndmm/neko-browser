@@ -63,13 +63,29 @@ std::optional<std::string> ResolveReference(std::string_view ref, std::string_vi
   // resolve relative references against these, so use string concatenation.
   // Absolute references (/x) resolve to the same root; relative references (x)
   // resolve to the base's directory.
+  //
+  // Windows drive paths belong to the same group even though they parse as a
+  // URL: "C:\dir\page.html" is the one-letter scheme "c", and a round trip
+  // through the parser would lowercase the drive letter (breaking the exact
+  // tab URL of a self-submitting local form).
   const bool is_file = base_url.rfind("file://", 0) == 0;
+  const bool is_windows_path = IsWindowsLocalPath(base_url);
   const bool is_bare_path = base_url.find(':') == std::string_view::npos;
-  if (is_file || is_bare_path) {
-    if (ref.front() == '/') {
-      return is_file ? "file://" + std::string(ref) : std::string(ref);
+  if (is_file || is_bare_path || is_windows_path) {
+    // A leading slash is root-relative; a backslash is too on a Windows path.
+    const bool root_relative = ref.front() == '/' || (is_windows_path && ref.front() == '\\');
+    if (root_relative) {
+      if (is_file) {
+        return "file://" + std::string(ref);
+      }
+      if (is_windows_path && base_url.size() >= 2 && base_url[1] == ':') {
+        // "/x" on "C:\dir\page.html" is the root of the same drive.
+        return std::string(base_url.substr(0, 2)) + std::string(ref);
+      }
+      return std::string(ref);
     }
-    const std::size_t slash = base_url.find_last_of('/');
+    // Both separators are valid in a Windows path.
+    const std::size_t slash = base_url.find_last_of("/\\");
     return std::string(
                base_url.substr(0, slash != std::string_view::npos ? slash + 1 : base_url.size())) +
            std::string(ref);
