@@ -124,7 +124,9 @@ jobs:
             platform: windows
             arch: x86_64
             archive_ext: zip
-            # VS 生成器默认平台不一定是目标架构，必须显式指定（见 CMAKE_GENERATOR_PLATFORM）。
+            # VS 生成器的默认平台是宿主架构（x64）；目标平台必须用命令行 -A 显式指定。
+            # （CMAKE_GENERATOR_PLATFORM 环境变量只在 CMAKE_GENERATOR 同时设置时才
+            # 生效，单独设置会被静默忽略——见 2026-09 windows-arm64 链接失败复盘。）
             generator_platform: x64
             vcpkg_triplet: x64-windows
             # Qt6：官方 MSVC 预编译包（原生 x64）。
@@ -264,9 +266,6 @@ jobs:
       - name: Configure (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        env:
-          # 文档化的 VS 目标架构指定方式；空值在非 VS 生成器上无影响。
-          CMAKE_GENERATOR_PLATFORM: ${{ matrix.generator_platform }}
         run: |
           set -euo pipefail
           # Git Bash 下 VCPKG_ROOT / QT_HOST_PREFIX 是 C:\... 形式；转成 CMake
@@ -276,11 +275,50 @@ jobs:
           if [ "${{ matrix.arch }}" = "arm64" ]; then
             EXTRA_ARGS="-DQT_HOST_PATH=$(cygpath -m "$QT_HOST_PREFIX")"
           fi
+          # 目标平台必须用命令行 -A 指定：CMAKE_GENERATOR_PLATFORM 环境变量只有
+          # 在 CMAKE_GENERATOR 环境变量同时设置时才被应用（CMake 文档明文），
+          # 单独设置会被静默忽略、VS 生成器回退到宿主默认平台（x64）——
+          # windows-arm64 任务曾因此实际按 x64 构建，链接 arm64 的 vcpkg/Qt
+          # 导入库时爆出整墙 LNK2001（x64 任务因默认平台恰好正确而未受影响）。
+          # release preset 未固定 generator / architecture，-A 与 --preset 可并用
+          # （已在 CMake 4.4 上验证该组合被接受并生效）。
           cmake --preset release \
+            -A ${{ matrix.generator_platform }} \
             -DNEKO_WARNINGS_AS_ERRORS=ON \
             -DCMAKE_TOOLCHAIN_FILE="$vcpkg_root/scripts/buildsystems/vcpkg.cmake" \
             -DVCPKG_TARGET_TRIPLET=${{ matrix.vcpkg_triplet }} \
             ${EXTRA_ARGS}
+
+      # 断言配置期实际生效的平台与 vcpkg 三元组。“平台没有生效”在 CMake 里是
+      # 静默的，失败会推迟到链接期变成数百行 LNK2001；这里失败一次就给出
+      # 可读原因，也保证产物架构与发布矩阵一致。
+      - name: Verify configured platform (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $cachePath = 'build/release/CMakeCache.txt'
+          if (-not (Test-Path $cachePath)) { throw "缺少 $cachePath" }
+          $cache = Get-Content $cachePath
+
+          $platformMatch = @($cache | Select-String '^CMAKE_GENERATOR_PLATFORM:[^=]+=(.+)$') |
+            Select-Object -First 1
+          if (-not $platformMatch) {
+            throw 'CMakeCache.txt 中没有 CMAKE_GENERATOR_PLATFORM：-A 未生效'
+          }
+          $platform = $platformMatch.Matches[0].Groups[1].Value.Trim()
+          Write-Host "CMAKE_GENERATOR_PLATFORM: $platform"
+          if ($platform -ine '${{ matrix.generator_platform }}') {
+            throw "目标平台为 '$platform'，期望 '${{ matrix.generator_platform }}'：产物架构会与发布矩阵不符"
+          }
+
+          $tripletMatch = @($cache | Select-String '^VCPKG_TARGET_TRIPLET:[^=]+=(.+)$') |
+            Select-Object -First 1
+          $triplet = ''
+          if ($tripletMatch) { $triplet = $tripletMatch.Matches[0].Groups[1].Value.Trim() }
+          Write-Host "VCPKG_TARGET_TRIPLET: $triplet"
+          if ($triplet -ne '${{ matrix.vcpkg_triplet }}') {
+            throw "vcpkg 三元组为 '$triplet'，期望 '${{ matrix.vcpkg_triplet }}'"
+          }
 
       # --- 构建与测试 ---------------------------------------------------------
       - name: Build
