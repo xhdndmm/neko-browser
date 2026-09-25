@@ -2479,5 +2479,26 @@ TEST(LayoutTest, NestedGridItemGetsWideEnoughCell)
   EXPECT_GT(nested->children[1]->x, nested->children[0]->x + 72.0f);
 }
 
+// Regression: display:none removes the element AND its whole subtree from
+// layout (CSS2.2 §9.2.4).  An inline descendant of a hidden element used to
+// leak into the line boxes, so a hover-only dropdown menu rendered before
+// hover (this made the kaom.net header show all of its hidden menu items).
+TEST(LayoutTest, DisplayNoneRemovesInlineDescendants)
+{
+  Page page = Build("<body style='margin:0'><div id='d'>"
+                    "<span id='outer'><span id='hidden' style='display:none'>"
+                    "<a href='#'>HIDDEN</a></span></span>"
+                    "</div></body>");
+  const LayoutBox* d = FindBox(*page.root, "#d", *page.doc);
+  ASSERT_NE(d, nullptr);
+  std::string text;
+  for (const Line& line : d->lines) {
+    for (const TextRun& run : line.runs) {
+      text += run.text;
+    }
+  }
+  EXPECT_EQ(text.find("HIDDEN"), std::string::npos) << "leaked text: " << text;
+}
+
 } // namespace
 } // namespace neko::layout

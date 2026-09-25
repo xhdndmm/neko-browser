@@ -1512,6 +1512,13 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       }
       dom::Element& child_element = static_cast<dom::Element&>(node);
       const style::ComputedStyle& child_style = styles.StyleFor(child_element);
+      // display:none removes the element AND its whole subtree from layout
+      // (CSS2.2 §9.2.4).  Without this check an inline descendant of a hidden
+      // element still leaked into the line boxes (e.g. a hover-only dropdown
+      // menu showed before hover).
+      if (child_style.display == style::Display::kNone) {
+        return;
+      }
       if (child_element.tag_name() == "br") {
         items.push_back(InlineItem{{}, &child_style, &child_element, /*line_break=*/true});
         return;

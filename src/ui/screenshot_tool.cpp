@@ -78,6 +78,11 @@ int main(int argc, char** argv)
                              tab.error != nullptr;
     if (has_content) {
       ready = window.TabBarWidget()->count() > 0 && !tab.loading;
+      // In-process HTML: the worker produces the viewport frame on its pump
+      // (ADR 0019), so wait for it before grabbing or the shot is blank.
+      if (ready && tab.content_type == neko::browser::ContentType::kHtml && !tab.remote) {
+        ready = tab.frame != nullptr;
+      }
     } else if (tab.remote && tab.remote_frame != nullptr) {
       // Renderer mode: the first frame is rasterized for the controller's
       // default viewport; wait until the child has been re-laid out for the
@@ -91,6 +96,13 @@ int main(int argc, char** argv)
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
 
+  // The frame is produced on the worker thread and published through a queued
+  // StateChanged; let the WebView consume the latest snapshot (ADR 0019)
+  // before grabbing, otherwise the shot can show the previous blank frame.
+  for (int i = 0; i < 5; ++i) {
+    QCoreApplication::processEvents();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
   const QPixmap shot = window.grab();
   if (shot.isNull()) {
     std::fprintf(stderr, "failed to grab window\n");
