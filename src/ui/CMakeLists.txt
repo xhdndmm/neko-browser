@@ -12,6 +12,11 @@
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
 
+# The Qt imported targets live in this directory scope; verify they resolve to
+# real library files (a Qt package without locations would drop out of every
+# link line later — see cmake/CheckLinkableDependencies.cmake).
+neko_verify_linkable_dependencies(Qt6::Widgets)
+
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)

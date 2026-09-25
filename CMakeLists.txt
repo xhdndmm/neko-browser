@@ -139,6 +139,9 @@ endif()
 # -----------------------------------------------------------------------------
 include(cmake/CompilerWarnings.cmake)
 include(cmake/Sanitizers.cmake)
+# Dependency linkability checks (used by the top level and by every directory
+# that finds its own dependencies, e.g. src/ui for Qt6).
+include(cmake/CheckLinkableDependencies.cmake)
 
 # Directories that provide the C standard library headers must not be
 # re-declared as system include directories (see
@@ -162,6 +165,26 @@ endif()
 if(NEKO_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
+
+# -----------------------------------------------------------------------------
+# Dependency linkability
+# -----------------------------------------------------------------------------
+# A dependency that resolved to a target without a library file would silently
+# drop out of the link line (unresolved externals much later); report every
+# dependency's file and fail early when one is missing.  Qt targets are checked
+# where they are found (src/ui, tests/unit), because imported targets are
+# visible only in the directory that created them.  See
+# cmake/CheckLinkableDependencies.cmake.
+neko_verify_linkable_dependencies(
+  ZLIB::ZLIB
+  JPEG::JPEG
+  Freetype::Freetype
+  OpenSSL::SSL
+  OpenSSL::Crypto
+  WebP::webp
+  AVIF::avif
+  FFmpeg::FFmpeg
+)
 
 # -----------------------------------------------------------------------------
 # Configure summary

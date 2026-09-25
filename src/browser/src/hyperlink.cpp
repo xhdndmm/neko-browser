@@ -34,6 +34,20 @@ bool HasScheme(std::string_view ref)
 
 } // namespace
 
+bool IsWindowsLocalPath(std::string_view input)
+{
+  // UNC path: "\\server\share\page.html" (also covers the "\\?\" and "\\.\"
+  // extended-length prefixes).
+  if (input.size() >= 2 && input[0] == '\\' && input[1] == '\\') {
+    return true;
+  }
+  // Drive path: "<letter>:".  The drive-relative form ("C:page.html") is a
+  // filesystem reference too, and a one-letter URL scheme has no registered
+  // meaning, so the whole shape is treated as a path.
+  return input.size() >= 2 && input[1] == ':' &&
+         std::isalpha(static_cast<unsigned char>(input[0])) != 0;
+}
+
 std::optional<std::string> ResolveReference(std::string_view ref, std::string_view base_url)
 {
   if (ref.empty()) {

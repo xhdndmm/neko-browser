@@ -314,6 +314,16 @@ void PrintJsResult(const neko::javascript::ScriptValue& value)
     std::cout << str.value() << "\n";
 }
 
+// Both renderer child modes own stdout for the wire protocol: the parent reads
+// it as a byte stream of frames.  Anything the engine prints to std::cout (the
+// page-script console printer, CLI-style diagnostics) therefore has to go to
+// stderr instead — a single stray line would be parsed as the next frame
+// header and fail as "frame length exceeds the cap".
+void RedirectStdoutToStderr()
+{
+  std::cout.rdbuf(std::cerr.rdbuf());
+}
+
 } // namespace
 
 // Renderer child mode (ADR 0016 M1): the browser process spawns this binary
@@ -323,8 +333,7 @@ void PrintJsResult(const neko::javascript::ScriptValue& value)
 // viewport and replies with the frame + DOM text.
 int RunRendererChild()
 {
-#ifndef _WIN32
-  neko::ipc::Channel channel = neko::ipc::Channel::FromHandles(0, 1);
+  neko::ipc::Channel channel = neko::ipc::Channel::FromStdio();
 
   const auto request_frame = channel.Receive();
   if (!request_frame.has_value()) {
@@ -369,10 +378,6 @@ int RunRendererChild()
     return 1;
   }
   return 0;
-#else
-  std::cerr << "renderer child: Windows stdio pipe mode is not implemented\n";
-  return 1;
-#endif
 }
 
 int main(int argc, char** argv)
@@ -400,6 +405,13 @@ int main(int argc, char** argv)
 
   neko::base::Logger::Instance().SetLevel(parsed.options.log_level);
   NEKO_LOG_INFO("neko-browser " + std::string(neko::base::GetVersionString()));
+
+  // stdout belongs to the wire protocol in both child modes; move any
+  // std::cout writer (the page-script console printer) to stderr before the
+  // child serves its first request.
+  if (parsed.options.renderer_child || parsed.options.renderer_session) {
+    RedirectStdoutToStderr();
+  }
 
   // Renderer child mode: serve one load request on stdin/stdout and exit
   // (spawned by browser::RendererHost; ADR 0016 M1).

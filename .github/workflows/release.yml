@@ -210,13 +210,16 @@ jobs:
           key: vcpkg-${{ matrix.vcpkg_triplet }}-2026-09
           restore-keys: vcpkg-${{ matrix.vcpkg_triplet }}-
 
+      # libavif 默认不启用任何 AV1 解码器（vcpkg 端口无 default-features），
+      # 必须显式选择 dav1d，否则 AVIF 解码在运行期返回
+      # "No codec available"（2026-09 windows 发布的 AvifTest 失败原因）。
       - name: Install vcpkg dependencies (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         env:
           VCPKG_DEFAULT_TRIPLET: ${{ matrix.vcpkg_triplet }}
           VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vcpkg-cache,readwrite
-        run: vcpkg install zlib libjpeg-turbo libwebp freetype openssl ffmpeg libavif
+        run: vcpkg install zlib libjpeg-turbo libwebp freetype openssl ffmpeg 'libavif[dav1d]'
 
       # Qt6 GUI：Qt 官方 MSVC 预编译包（aqtinstall 从 download.qt.io 下载，不依赖
       # 第三方 action；vcpkg 从源码编译 Qt 代价过高）。arm64 目标用 Qt 的交叉编译
@@ -240,6 +243,10 @@ jobs:
           if (-not (Test-Path "$qtHostPrefix\lib\cmake\Qt6CoreTools\Qt6CoreToolsConfig.cmake")) {
             throw "Qt 宿主工具安装不完整：$qtHostPrefix"
           }
+          # 记录实际布局（原生包与交叉编译包的 lib/ 内容不同）：链接失败时
+          # 这段日志能直接回答“Qt 的导入库到底在不在”。
+          Get-ChildItem "$qtPrefix\lib" -Filter 'Qt6*.lib' -ErrorAction SilentlyContinue |
+            Select-Object -First 40 | ForEach-Object { Write-Host "qt-lib: $($_.FullName)" }
           # 交叉编译时把目标前缀排在宿主前缀之前：目标模块（Widgets/Gui/Core）
           # 取 arm64，Qt*Tools（moc/rcc/uic）只存在于 x64 前缀。
           $prefixPath = $qtPrefix
@@ -278,6 +285,22 @@ jobs:
       # --- 构建与测试 ---------------------------------------------------------
       - name: Build
         run: cmake --build --preset release --parallel
+
+      # Windows 构建失败时打印链接器实际收到的输入：把“依赖没进链接行”与
+      # “依赖搜错（路径/架构不对）”区分开，避免只靠 unresolved 符号猜原因。
+      - name: Diagnose Windows link inputs (on failure)
+        if: failure() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $project = 'build/release/tests/unit/neko_ui_tests.vcxproj'
+          if (-not (Test-Path $project)) {
+            Write-Host "no neko_ui_tests project at $project"
+            exit 0
+          }
+          # -t:Link 只重跑链接；detailed 日志里 Link 任务会列出全部输入。
+          $log = msbuild $project /p:Configuration=Release /p:Platform=${{ matrix.generator_platform }} /t:Link /v:detailed 2>&1
+          $log | Select-String -Pattern 'AdditionalDependencies|AdditionalLibraryDirectories|LNK1' |
+            Select-Object -First 60 | ForEach-Object { Write-Host $_ }
 
       # Windows ARM64 由 x64 runner 交叉编译，产物无法在 x64 上执行：跳过 ctest
       # （同一源码的测试由 windows x86_64 任务完整运行，两个任务的代码路径一致）。

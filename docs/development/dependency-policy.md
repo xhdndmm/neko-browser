@@ -31,6 +31,7 @@
 | zlib | 系统包 | PNG IDAT / PDF FlateDecode / HTTP gzip-deflate 解压 | find_package | zlib |
 | libjpeg | 系统包 | JPEG 解码（封装在 neko::image 后） | find_package | BSD-like |
 | libwebp | 系统包 | WebP 解码（封装在 neko::image 后） | find_package | BSD-3-Clause |
+| libavif | 系统包 | AVIF 解码（封装在 neko::image 后；**必须带 AV1 解码器**） | find_package | BSD-2-Clause |
 | QuickJS (quickjs-ng) | v0.16.1 | JavaScript runtime（封装在 neko::javascript 后） | FetchContent（固定 SHA256） | MIT |
 | Qt6 Widgets | 系统包 | GUI 基础设施（窗口/事件/控件，见 ADR 0006） | find_package | LGPL |
 | FreeType | 系统包 | 字体光栅化（封装在 neko::graphics 后，见 ADR 0009） | find_package | FTL（双许可选 FTL） |
@@ -41,6 +42,21 @@
 > 自研 VP8/VP8L 解码器成本高且非本项目核心，因此封装 libwebp（BSD-3-Clause，
 > Google 维护，Linux/Windows/macOS 全平台，安全更新活跃）。封装在
 > `neko::image` 之后，接口与 PNG/JPEG/GIF 解码器一致。
+
+> **libavif 说明**：AVIF 容器解析由 libavif 提供，AV1 位流解码由它链接的
+> 解码器（dav1d / aom）完成。**libavif 自身不带解码器**：发行版包
+> （Debian `libavif-dev`、Homebrew `libavif`）默认启用，但 vcpkg 的
+> `libavif` 端口没有 default-features，必须显式选择，否则解码在运行期返回
+> `AVIF_RESULT_NO_CODEC_AVAILABLE`（历史上表现为不透明的
+> “avif: decode failed”，2026-09 Windows 发布的 `AvifTest` 失败即此原因）：
+>
+> ```powershell
+> vcpkg install 'libavif[dav1d]'   # 或 libavif[aom]
+> ```
+>
+> 解码器缺失是**环境配置**问题，不改动测试期望：`AvifTest` 用真实 AV1
+> 无损夹具覆盖解码，是这类配置错误的守门测试。解码失败信息里带
+> `avifResultToString()` 的结果文本，便于一眼区分“坏文件”与“缺解码器”。
 
 > **FFmpeg 说明**：视频解复用/解码（MP4/WebM、H.264/VP8/VP9 等）自研不现实
 > 且非本项目核心，故封装 FFmpeg（见 ADR 0014）。**LGPL 约束**：仅动态链接

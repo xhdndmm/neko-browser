@@ -88,8 +88,11 @@ CC=clang CXX=clang++ cmake --preset debug
   Qt6 Widgets（GUI，可选；`NEKO_BUILD_UI=OFF` 可跳过）。
   - Debian/Ubuntu：`sudo apt install zlib1g-dev libjpeg-dev libwebp-dev libavif-dev libfreetype-dev libssl-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev qt6-base-dev`
   - macOS（Homebrew）：`brew install jpeg webp libavif freetype qt openssl ffmpeg`
-  - Windows（vcpkg）：`vcpkg install zlib libjpeg-turbo libwebp libavif freetype openssl ffmpeg`，配置时传入
+  - Windows（vcpkg）：`vcpkg install zlib libjpeg-turbo 'libavif[dav1d]' libwebp freetype openssl ffmpeg`，配置时传入
     `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake`。
+    libavif 自身不含 AV1 解码器且 vcpkg 端口没有默认特性，**必须显式选择
+    `dav1d`（或 `aom`）**，否则 AVIF 解码在运行期失败（见
+    [dependency-policy.md](docs/development/dependency-policy.md)）。
     vcpkg 不提供 pkg-config 程序，`FindFFmpeg.cmake` 会自动回退到头文件/库搜索，
     无需额外配置。
     Qt6 用官方 MSVC 预编译包：

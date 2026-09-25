@@ -17,6 +17,29 @@ std::unique_ptr<dom::Document> Parse(std::string_view html)
   return html::Parser(html).Parse();
 }
 
+// The browser routes these inputs to the filesystem on Windows: a drive path
+// is also a valid URL there ("C:\dir" parses as the one-letter scheme "c"), so
+// the classification has to happen before the URL parse.
+TEST(WindowsLocalPathTest, DetectsDriveAndUncPaths)
+{
+  EXPECT_TRUE(IsWindowsLocalPath("C:\\dir\\page.html"));
+  EXPECT_TRUE(IsWindowsLocalPath("c:/dir/page.html"));
+  EXPECT_TRUE(IsWindowsLocalPath("C:"));
+  EXPECT_TRUE(IsWindowsLocalPath("C:page.html"));
+  EXPECT_TRUE(IsWindowsLocalPath("\\\\server\\share\\page.html"));
+}
+
+TEST(WindowsLocalPathTest, LeavesUrlsAlone)
+{
+  EXPECT_FALSE(IsWindowsLocalPath("https://example.com/page"));
+  EXPECT_FALSE(IsWindowsLocalPath("file:///tmp/page.html"));
+  EXPECT_FALSE(IsWindowsLocalPath("data:text/plain,hello"));
+  EXPECT_FALSE(IsWindowsLocalPath("/tmp/page.html"));
+  EXPECT_FALSE(IsWindowsLocalPath("relative/page.html"));
+  EXPECT_FALSE(IsWindowsLocalPath(""));
+  EXPECT_FALSE(IsWindowsLocalPath("example.com"));
+}
+
 TEST(HyperlinkTargetTest, DirectAnchor)
 {
   auto doc = Parse("<html><body><a href=\"https://example.com/page\">x</a></body></html>");

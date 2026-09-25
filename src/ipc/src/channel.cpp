@@ -157,6 +157,19 @@ Channel Channel::FromHandles(Handle read_handle, Handle write_handle)
   return channel;
 }
 
+Channel Channel::FromStdio()
+{
+#ifdef _WIN32
+  // The parent (ipc::Subprocess) redirected the child's stdio to the pipe
+  // ends, so the standard handles are this end of the channel.  The handles
+  // are used raw (ReadFile/WriteFile): no CRLF translation or text-mode
+  // buffering can corrupt a binary frame.
+  return FromHandles(GetStdHandle(STD_INPUT_HANDLE), GetStdHandle(STD_OUTPUT_HANDLE));
+#else
+  return FromHandles(STDIN_FILENO, STDOUT_FILENO);
+#endif
+}
+
 bool Channel::open() const
 {
   return HandleValid(read_handle_) || HandleValid(write_handle_);

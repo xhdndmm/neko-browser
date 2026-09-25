@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <ctime>
@@ -609,6 +610,16 @@ void BrowserController::NavigateToUrl(Tab& tab, const std::string& url_string)
   }
   // A fresh document replaces the old one; any focused element is stale.
   tab.focused_element = nullptr;
+#ifdef _WIN32
+  // Windows local paths are also valid URLs: "C:\dir\page.html" parses as the
+  // one-letter scheme "c".  They belong to the filesystem, so route them before
+  // the URL parse below (the address bar, bookmarks and the tests all feed
+  // plain drive paths here).
+  if (IsWindowsLocalPath(url_string)) {
+    LoadLocalPath(tab, url_string);
+    return;
+  }
+#endif
   // Local paths (and file:// URLs) are handled directly without the URL
   // parser (which does not support opaque file: URLs yet).
   if (StartsWith(url_string, "file://")) {
@@ -646,6 +657,14 @@ void BrowserController::LoadLocalPath(Tab& tab, const std::string& path)
   // form.html?q=hello): the file on disk is form.html; the query stays in
   // tab.url so window.location.search reflects it.
   std::string file = path;
+#ifdef _WIN32
+  // "file:///C:/dir/page.html" contributes a leading slash before the drive
+  // letter ("/C:/dir/page.html"); fopen() does not resolve that form.
+  if (file.size() >= 3 && (file[0] == '/' || file[0] == '\\') && file[2] == ':' &&
+      std::isalpha(static_cast<unsigned char>(file[1])) != 0) {
+    file.erase(0, 1);
+  }
+#endif
   const std::size_t q = file.find_first_of("?#");
   if (q != std::string::npos) {
     file.resize(q);

@@ -1,6 +1,11 @@
 # FindAVIF.cmake — locate the system libavif and provide the AVIF::avif
 # imported target (same pattern as FindWebP.cmake; Ubuntu 24.04 ships
 # libavif-dev).
+#
+# The library found here must have been built with an AV1 decoder (dav1d/aom):
+# libavif itself is only the container parser/codec API, so a decoder-less
+# build parses AVIF files but fails to decode them at runtime.  vcpkg's libavif
+# port has no default features — install 'libavif[dav1d]' (or [aom]).
 
 find_path(AVIF_INCLUDE_DIR
   NAMES avif/avif.h

@@ -313,8 +313,10 @@ private:
 
 int RunRendererSession()
 {
-#ifndef _WIN32
-  ipc::Channel channel = ipc::Channel::FromHandles(0, 1);
+  // The parent (RendererSession via ipc::Subprocess) wired the session pipe to
+  // this process's stdin/stdout, so the standard handles are this end of the
+  // channel on every platform.
+  ipc::Channel channel = ipc::Channel::FromStdio();
 
   // Page storage in a renderer session is per-session scratch (the browser
   // owns the profile); it lives in a temp directory removed on exit.
@@ -336,10 +338,6 @@ int RunRendererSession()
   }
   std::filesystem::remove_all(profile, ec);
   return exit_code;
-#else
-  NEKO_LOG_WARNING("renderer session: Windows stdio pipe mode is not implemented");
-  return 1;
-#endif
 }
 
 } // namespace neko::browser
