@@ -1,6 +1,6 @@
 # 总体架构
 
-> 版本：Phases 0–7 快照 · 2026-08
+> 版本：Phases 0–12 快照 · 2026-09
 > 本文档描述 neko-browser 的长期架构目标与当前已落地的部分。
 
 ## 1. 项目目标
@@ -142,8 +142,8 @@ graph LR
   Secure/HttpOnly/SameSite、会话 vs 持久化、删除、文件往返。
   **限制**：未做 PSL 校验与 SameSite 强制实施（文档化）。
 - **LocalStorage**：按 origin 分区的键值存储（WHATWG HTML），已接入
-  Profile 的 Load/Save/ClearAll；等待 Phase 8 M2 Web IDL 绑定后才可被页面访问。
-  **限制**：无配额、无 storage 事件。
+  Profile 的 Load/Save/ClearAll，并已通过 JS `Storage` 接口暴露给页面。
+  **限制**：无配额、无 storage 事件、无 sessionStorage。
 - Profile 目录：`cookies.txt / history.txt / bookmarks.txt / local_storage.txt`。
 
 ### image（已落地）
@@ -153,8 +153,9 @@ graph LR
   （interlace）+ 全部颜色类型/位深（灰度/真彩/调色板 + alpha）。zlib 仅用于
   IDAT 解压（基础设施）。
 - **自研 GIF 解码器**（GIF87a/89a）：全局/局部色表、LZW 变长码宽解压、
-  交错、Graphic Control Extension 透明与 disposal。**仅渲染首帧**（无动画，
-  文档化限制）。
+  交错、Graphic Control Extension 透明与 disposal；**动画**（全帧预合成、
+  disposal 0–3、延迟钳制、循环次数；GUI 帧时钟驱动页面内 `<img>`/背景图，
+  直接导航 `.gif` 亦播放）。
 - JPEG 封装 libjpeg（系统库），对外暴露同一 `neko::image` 接口。
 - WebP/AVIF 返回显式 NOT IMPLEMENTED。
 
@@ -162,7 +163,9 @@ graph LR
 
 - `src/media/`：`DecodeWav`（自研 RIFF/WAVE：PCM + IEEE float，
   8/16/24/32-bit、extensible chunk）→ `AudioData`。
-- 视频：`MediaSource::Open` 返回显式 NOT IMPLEMENTED，架构预留。
+- 视频：FFmpeg（ADR 0014）解复用/解码/像素转换，封装在
+  `media::MediaSource`/`DecodeVideo` 之后；`<video>` 元素接入（首帧渲染、
+  autoplay/loop 帧时钟、JS 子集 play/pause/currentTime/duration）。
 - GUI 中 WAV 可显示元数据，播放按钮显式提示未实现。
 
 ### pdf（已落地，PARTIAL）
@@ -170,7 +173,10 @@ graph LR
 - `src/pdf/`：`ExtractText` —— xref 表（含 /Prev 链，最新节优先）、对象、
   流（FlateDecode + 预测器，zlib 解压）、页面树、内容流文本操作符
   （BT/ET/Td/TJ/Tj 等）、UTF-16BE/ASCII/Latin-1 解码。
-- **限制**：无 xref stream、无渲染、无 CMap，明确标注 PARTIAL。
+- **页面渲染**：矢量路径（非零/奇偶填充、描边）、q-Q/cm、文本（FreeType +
+  /Widths）、xref stream 与 /ObjStm、图像 XObject、W/W* 裁剪。
+- **限制**：无 JPX/CCITT/LZW、16 位样本、/SMask、Form XObject、pattern、CMap，
+  明确标注 PARTIAL。
 
 ### javascript（Phase 8 已落地，里程碑 1 + M2 子集）
 
@@ -184,8 +190,12 @@ graph LR
   （document/Node/Element/CSSStyleDeclaration/事件/timers）、页内 `<script>`
   执行（内联 + 外部 src= + async/defer）、最小事件循环（同步定时器泵 +
   事件派发）。依赖方向：javascript → dom/css/html，browser → javascript。
-- **未实现**：完整 Web IDL、fetch/XHR、microtask/Promise 完整对接、
-  module 脚本与动态 import。
+- **已落地（后续里程碑）**：ES 模块（静态 + 动态 `import()` + import maps 子集）、
+  XMLHttpRequest、fetch、Storage/localStorage、IndexedDB、实时 DOM 集合、
+  document.styleSheets（CSSOM 子集）、history/scroll 桥接、平台 Web API
+  （TextEncoder/atob/structuredClone/CSS）、真实视口。
+- **未实现**：完整 Web IDL、microtask/Promise 与浏览器事件循环的完整对接
+  （详见兼容性矩阵）。
 
 ### security（Phase 10 M1 已落地）
 
@@ -242,12 +252,12 @@ tests/unit/<module>/      单元测试
    未完成的功能必须明确标注 `NOT IMPLEMENTED` / `PARTIALLY IMPLEMENTED`。
 5. **依赖方向**：`UI → Browser → Engine → Rendering/Layout/DOM/Network → Core/Platform`。
 
-## 7. 当前已落地（Phases 0–7）
+## 7. 当前已落地（Phases 0–12）
 
 ```text
 src/base/       日志、Error/Result、字符串、UTF-8、版本、断言 —— Tested
 src/url/        URL 解析、相对解析、百分号编码、Origin —— Tested
-src/network/    TCP Socket（POSIX）、HTTP/1.1 GET、重定向、chunked —— Tested
+src/network/    TCP Socket（POSIX/Winsock）、HTTP/1.1、HTTPS/TLS、压缩、内置 DNS —— Tested
 src/dom/        Node 树、Element/Text/Comment/Document、querySelector —— Tested
 src/html/       tokenizer + 树构建（插入模式子集）、字符引用 —— Tested
 src/css/        tokenizer/parser、选择器、级联输入、颜色/值 —— Tested
@@ -277,5 +287,6 @@ src/ui/         Qt6 GUI（标签页/地址栏/DevTools/历史/书签/下载/设�
 - `--dump-history / --dump-bookmarks / --show-cookies / --download /
   --extract-pdf / --audio-info / --image-info` 头less 访问存储与内容解析
 
-未开始：Web IDL / DOM 绑定、Security 子系统、IPC/多进程、视频解码、
-LocalStorage/IndexedDB、Accessibility。见[开发路线图](development/roadmap.md)。
+未开始：Accessibility、SOP/CORS/CSP 强制、沙箱与站点隔离、GPU 合成后端、
+WPT 一致性、fuzz/benchmark 基础设施。见[开发路线图](../development/roadmap.md)
+与[兼容性矩阵](../compatibility/compatibility-matrix.md)。

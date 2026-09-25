@@ -21,7 +21,7 @@ GitHub 私密的安全报告通道（Security → Report a vulnerability）。
 
 ## 已知安全相关工作（路线）
 
-- Origin / Same-Origin Policy（Phase 10）
+- Origin / Same-Origin Policy（Phase 10）—— M1 已落地（`security::Origin`）
 - CORS / CSP（Phase 10）
 - Cookie 安全（Secure / HttpOnly / SameSite）（Phase 10）
 - TLS 证书校验（Phase 2，HTTPS）
@@ -41,5 +41,13 @@ GitHub 私密的安全报告通道（Security → Report a vulnerability）。
 
 ## 威胁模型（当前阶段）
 
-Phase 0 尚无可执行的外部输入面（引擎未实现）。每个新模块落地时必须同步更新
-本威胁模型文档。
+引擎已具备真实的可执行外部输入面：HTML、CSS、JavaScript、URL、HTTP/TLS、
+图片/字体、PDF、IPC 消息。完整威胁模型见
+[docs/security/security-model.md](docs/security/security-model.md)。
+
+- 已落地：TLS 证书 + 主机名校验；QuickJS 沙箱（无 std/os、执行时限、内存上限）；
+  parser 资源上限（深度/尺寸/解压 64 MiB）；Cookie 域/路径匹配；Origin 模型（M1）。
+- 未实施：SOP 在网络读取上的强制（fetch/XHR 需 CORS）、CORS/CSP、
+  SameSite/PSL 强制、权限系统、沙箱与站点隔离、导航/下载安全。
+
+每个新模块落地时必须同步更新本威胁模型文档。

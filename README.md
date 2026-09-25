@@ -1,6 +1,6 @@
 # neko-browser
 
-> **状态：浏览器 UI 里程碑达成（Phases 1–7，含存储/图像/媒体/PDF）**
+> **状态：引擎纵向切片 + Qt6 GUI + JavaScript runtime + 渲染器会话（多进程 M2）已达成**
 > 一个从零开始、真正可编译可运行的**跨平台浏览器引擎与浏览器应用**，主要使用现代 C++20 编写。
 
 本项目不是 WebView 封装、不是截图工具、也不是玩具 HTML 渲染器。它已经能用
@@ -40,7 +40,7 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
 ./build/debug/bin/neko_browser --eval "console.log('hi'); JSON.stringify({a:1})"
 ```
 
-已实现（均有单元测试，277 个测试全绿，含 ASan）：
+已实现（均有测试覆盖；完整测试套件在 CI 中运行并通过，含 ASan/UBSan）：
 
 - **URL**：解析、相对解析（RFC 3986 5.4.1 样例）、百分号编码、Origin
 - **网络**：TCP Socket（POSIX）、HTTP/1.1 GET、重定向、chunked、Content-Length

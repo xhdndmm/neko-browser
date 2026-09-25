@@ -29,6 +29,10 @@ ctest --preset debug
 | 模糊测试 | `tests/fuzz/` | Phase 1+，parser 安全 |
 | Web Platform Tests | `tests/web-platform/` | Phase 13+ |
 
+> **现状（诚实标注）**：当前只建立了 `tests/unit/`（按模块）、`tests/cmake/`
+> （CMake 预设校验）、`tests/pages/`（端到端页面与媒体夹具）；表中其余目录
+> **尚未建立**。集成/端到端性质的测试暂置于 `tests/unit/{browser,renderer,ui}/`。
+
 ## 添加新测试
 
 1. 在 `tests/unit/<module>/` 下新建 `xxx_test.cpp`。

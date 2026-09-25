@@ -1,6 +1,6 @@
 # 开发路线图
 
-> 最后更新：2026-08（Phase 8 里程碑 1 完成 —— JS runtime 接入）
+> 最后更新：2026-09（渲染器会话 M2、平台 Web API、真实视口、自研 DNS、`data:` URL 落地）
 
 ## 总原则
 
@@ -167,10 +167,16 @@ graph LR
 - [x] **XMLHttpRequest（Phase 9 子集）**：AMD loader 级 API 面（open/send/
       headers/事件/头部查询），经页面网络栈带 Cookie；同步传输近似 ——
       **PARTIAL**（仅 GET、无 CORS）
-- [ ] 完整 Web IDL / binding 层（navigator/location/history/fetch/storage/events
-      完整化、活 NodeList、事件冒泡/捕获）—— **后续**
+- [x] **平台 Web API 子集（Phase 9）**：TextEncoder/TextDecoder（复用引擎 WHATWG
+      解码器）、atob/btoa（RFC 4648，Latin-1 语义）、queueMicrotask、
+      structuredClone（含循环引用/Date/ArrayBuffer/TypedArray，失败路径不泄漏）、
+      reportError、CSS.escape/CSS.supports
+- [x] **真实视口（Phase 9）**：`window.innerWidth/innerHeight/devicePixelRatio`
+      与 screen/visualViewport 反映引擎真实视口（非固定 800×600），resize 后即时可见
+- [x] LocalStorage 已接入 JS `Storage` 接口（按 origin 分区，随 Profile 持久化）
+- [ ] 完整 Web IDL / binding 层（navigator/location/history/fetch/storage 完整化）
+      —— **后续**
 - [ ] microtask/Promise 与浏览器事件循环完整对接 —— **后续**
-- [ ] LocalStorage 已就绪（`storage::LocalStorage`），等待 Web IDL 绑定
 
 ## Phase 8 附注 — 多线程基础设施（已扩展）
 
@@ -180,7 +186,8 @@ graph LR
 - [x] **共享线程池**：BrowserController 持有，子资源抓取/解码/渲染复用同一池
 - [x] **字体缓存线程安全**：GlyphCache/FontFace/FontRegistry/TextWidth 记忆化
       全部互斥锁保护（修复字形缓存 UAF）
-- [ ] 多进程架构 —— Phase 12（未开始）
+- [x] **多进程架构 M1/M2 —— Phase 12**（Renderer 子进程 + `neko::ipc` + 渲染器
+      会话；沙箱与 Network/GPU 进程后续）
 
 ## Phase 10 — Security（M1 已起步）
 
@@ -215,8 +222,12 @@ graph LR
       **Renderer 子进程**（`--renderer-child` 独立地址空间跑完整页面管线，
       位图 + DOM 经 IPC 回传，子进程崩溃不带走浏览器）；CLI
       `--renderer-process` 接入；12 IPC + 9 协议 + 1 端到端子进程测试
-- [ ] M2：GUI/BrowserController 接入 RendererHost（每站点子进程、崩溃
-      重建、会话复用）
+- [x] **M2（ADR 0016）**：渲染器会话（`--renderer-session`）—— 持久子进程承载
+      单 tab 的 `BrowserController`，会话协议（Load/Click/Hover/HoverClear/Wheel/
+      Key/Scroll/Pump/Snapshot/Shutdown）载荷全边界检查；顶层文档仍由浏览器抓取
+      （Cookie 权威在浏览器），子进程导航回传 redirect 由浏览器重跑；每 tab 每站点
+      会话（同站复用、跨站/崩溃后重建）；GUI `--renderer-process` 下 WebView 绘制
+      子进程帧并转发交互（视口尺寸上报、滚动条取子进程内容高度、hover 来自子进程）
 - [ ] M3：Network 进程（HTTP/TLS/DNS 搬出 Browser；cookie 裁决留在 Browser）
 - [ ] M4：GPU 进程（SoftwareCompositor 的 GPU 后端 + 共享内存大帧传输）
 - [ ] M5：沙箱（Linux seccomp/namespace、Windows AppContainer、macOS
@@ -240,3 +251,6 @@ graph LR
 | M6 | Phase 6（渲染） | --screenshot、像素对比测试 |
 | M7 | Phase 7（UI + 内容解析） | 可交互浏览器窗口、offscreen 截图、247 测试全绿 |
 | M8 | Phase 8 M1（JS runtime） | `--eval`、GUI DevTools Console REPL、277 测试全绿 |
+
+> 表中测试数为各里程碑验收时的**历史快照**；后续里程碑（渲染器会话 M2、平台
+> Web API、真实视口、自研 DNS 等）已落地，当前测试数量以 CI 为准。

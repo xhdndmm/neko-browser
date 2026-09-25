@@ -15,6 +15,13 @@
 | 模糊测试 | `tests/fuzz/` | URL/HTML/CSS/HTTP parser | CI 冒烟 + 定期 |
 | Web Platform Tests | `tests/web-platform/` | WPT 子集 | Phase 13+ |
 
+> **现状（诚实标注）**：当前只建立了 `tests/unit/`（按模块）、`tests/cmake/`（CMake
+> 预设与三方 include 过滤校验）、`tests/pages/`（端到端页面与媒体夹具）三个目录。
+> 表中 `tests/integration/`、`tests/network/`、`tests/rendering/`、`tests/fuzz/`、
+> `tests/web-platform/` **尚未建立**（见 roadmap 后续项）。集成/端到端性质的测试
+> 目前放在 `tests/unit/browser/`、`tests/unit/renderer/`、`tests/unit/ui/` 内，
+> 待目录拆分后迁移。
+
 ## 单元测试规范
 
 - 每个测试只验证一个行为点。
@@ -54,7 +61,14 @@ HTML + CSS → Browser Engine → Screenshot → Pixel Comparison
 
 ## 当前状态
 
-- `tests/unit/base/`：status / string_util / logging 测试（单元）
-- `tests/unit/browser/`：CLI 选项解析测试（单元）
-- 可执行文件冒烟测试（`--version` / `--help`）
-- 共 54 个测试，全绿。
+- `tests/unit/<module>/`：按模块划分的 GoogleTest 套件（base / url / network /
+  html / dom / css / style / layout / paint / renderer / storage / image /
+  media / pdf / javascript / browser / ui / ipc / security / compositor /
+  graphics）。
+- `tests/cmake/`：CMake 预设与三方 include 过滤校验（由 ctest 驱动）。
+- `tests/pages/`：端到端测试页面与媒体夹具。
+- 可执行文件冒烟测试（`--version` / `--help`）。
+- 全部 ctest 用例通过（含 ASan/UBSan）。**本文件不写死测试数量**——数量随代码
+  增长，以 CI 实际运行为准，避免再次出现文档漂移。
+- 尚未建立：`tests/integration/`、`tests/network/`、`tests/rendering/`（像素对比）、
+  `tests/fuzz/`、`tests/web-platform/`。

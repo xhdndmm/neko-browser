@@ -19,6 +19,15 @@ neko-browser 的文档体系。文档是项目的一等公民 —— 改动架�
   - [0008：JS runtime 接入 QuickJS](architecture/adr/0008-quickjs-runtime.md)
   - [0009：文本渲染迁移到 FreeType](architecture/adr/0009-freetype-font-rendering.md)
   - [0010：HTTPS/TLS 采用 OpenSSL](architecture/adr/0010-tls-openssl.md)
+  - [0011：security 子系统起步 —— Origin / SOP 基础](architecture/adr/0011-security-origin.md)
+  - [0012：HTML/文本字符编码采用 WHATWG Encoding](architecture/adr/0012-character-encoding.md)
+  - [0013：渲染性能——缓存、并行栅格化与滚动 blit](architecture/adr/0013-renderer-caching-parallelism.md)
+  - [0014：视频解码采用 FFmpeg（LGPL）](architecture/adr/0014-video-ffmpeg.md)
+  - [0015：软件合成器抽象层（Compositor 缝）](architecture/adr/0015-software-compositor.md)
+  - [0016：多进程架构（进程模型 + IPC + 迁移路线）](architecture/adr/0016-multiprocess-architecture.md)
+  - [0017：GPU 合成框架（设备抽象 + 回退）](architecture/adr/0017-gpu-compositor-framework.md)
+  - [0018：内置 DNS 解析器（DNS 优先，getaddrinfo 回退）](architecture/adr/0018-built-in-dns-resolver.md)
+  - [0019：DOM 归 worker 线程独占 + GUI 消费不可变帧](architecture/adr/0019-worker-confined-dom.md)
 
 ## 开发
 
@@ -46,6 +55,8 @@ neko-browser 的文档体系。文档是项目的一等公民 —— 改动架�
 | Image / Media / PDF | Partial（Image 含 PNG/JPEG/GIF） | 见 [总体架构](architecture/architecture.md) |
 | GUI (Qt6) | Partial | 见 [总体架构](architecture/architecture.md) |
 | JavaScript | Partial (runtime) | [javascript](javascript/README.md) |
+| Security | Partial (Origin M1) | [security](security/README.md) |
+| IPC / 多进程 | Partial (M1+M2) | [ADR 0016](architecture/adr/0016-multiprocess-architecture.md) |
 
 ## 发布
 

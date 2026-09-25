@@ -65,9 +65,9 @@
 - 安全修复不得以"早期阶段"为由推迟。
 - 代码评审中，安全是硬性检查项。
 
-## 当前状态（Phases 0–8）
+## 当前状态（Phases 0–12）
 
-- Phase 0–6：URL/HTTP/HTML/CSS 等 parser 已按基线实现边界检查。
+- Phase 0–9：URL/HTTP/HTML/CSS 等 parser 已按基线实现边界检查。
 - 内容解析：PNG 解码器（chunk 长度/CRC/尺寸上限/位深组合校验）、
   PDF 解析器（xref/对象/流长度与溢出检查）均含畸形输入测试。
 - Cookie 存储（RFC 6265 子集）：字段经百分号编码转义，防止注入；
@@ -84,5 +84,8 @@
 - JavaScript runtime（Phase 8 M1）：QuickJS 沙箱化 —— 不编译 `std`/`os`
   模块（无文件/进程/网络能力），仅自有 `console` 绑定；默认执行时限
   10 秒 + 内存上限 128 MiB（有中断与内存限制测试）。**已知限制**：
-  尚无 DOM 绑定、无 Origin 隔离（每个 engine 独立全局域）。
-- 未开始：Origin/SOP/CORS/CSP、沙箱、权限、进程隔离。
+  无 Origin 隔离（每个 engine 独立全局域）。
+- 多进程（Phase 12 M1+M2）：Renderer 子进程在独立地址空间运行页面管线，
+  子进程崩溃不带走浏览器；**尚无沙箱与站点隔离**，子进程仍具备完整进程权限。
+- 未开始：SOP 实施（fetch/XHR 需 CORS）、CORS/CSP、SameSite/PSL 强制、
+  沙箱、权限系统、Network/GPU 进程隔离。

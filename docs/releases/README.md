@@ -99,4 +99,4 @@ Release 页面同时附带 `SHA256SUMS`（`sha256sum --check SHA256SUMS` 校验�
 
 | 版本 | 日期 | 内容 |
 | --- | --- | --- |
-| — | 尚未发布 | 开发中（Phases 0–8：引擎纵向切片 + Qt6 GUI + 存储/图像/媒体/PDF + JS runtime，277 测试全绿） |
+| — | 尚未发布 | 开发中（引擎纵向切片 + Qt6 GUI + 存储/图像/媒体/PDF + JS runtime + 渲染器会话；完整测试套件由 CI 运行，含 ASan/UBSan） |
