@@ -186,6 +186,37 @@ void Painter::PaintBox(const layout::LayoutBox& box, DisplayList& list) const
     }
   }
 
+  // Inline element backgrounds (CSS 2.2 §8.4.1): fill behind each group of
+  // consecutive runs that share a source element carrying a background colour
+  // (e.g. a padded `background:#222` overlay link).  Runs whose source is the
+  // block itself duplicate the block's own background, which PaintBox already
+  // filled, so they are skipped.
+  for (const layout::Line& line : box.lines) {
+    for (std::size_t i = 0; i < line.runs.size();) {
+      const layout::TextRun& first = line.runs[i];
+      if (first.background.a == 0 || first.element == nullptr || first.element == box.element) {
+        ++i;
+        continue;
+      }
+      const dom::Element* element = first.element;
+      const std::uint8_t alpha = first.background.a;
+      float left = first.x - first.padding_left;
+      float right = first.x + first.width + first.padding_right;
+      std::size_t j = i + 1;
+      while (j < line.runs.size() && line.runs[j].element == element &&
+             line.runs[j].background.a == alpha) {
+        right = line.runs[j].x + line.runs[j].width + line.runs[j].padding_right;
+        ++j;
+      }
+      const float top = first.y - line.baseline_offset - first.padding_top;
+      const float height = line.height + first.padding_top + first.padding_bottom;
+      if (right > left && height > 0.0f) {
+        list.FillRect(left, top, right - left, height, first.background);
+      }
+      i = j;
+    }
+  }
+
   // Inline text.
   for (const layout::Line& line : box.lines) {
     for (const layout::TextRun& run : line.runs) {

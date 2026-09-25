@@ -342,6 +342,37 @@ TEST(PainterTest, InlineBlockPaintsInnerBlockBackground)
   EXPECT_TRUE(found);
 }
 
+TEST(PainterTest, InlineElementBackgroundAndPaddingArePainted)
+{
+  // A padded inline element with a background paints a filled rect behind its
+  // text (CSS 2.2 §8.4.1) — e.g. a padded overlay link on a photo.  The rect
+  // includes the horizontal/vertical padding, so it extends past the glyphs.
+  auto doc = html::Parser("<body style=\"margin:0\"><div>"
+                          "<span style=\"background-color:#222222;padding:6px 15px;"
+                          "color:#fff\">LINK</span></div></body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine layout(styles);
+  std::unique_ptr<layout::LayoutBox> root = layout.BuildLayoutTree(*doc, 400);
+
+  Painter painter(root.get());
+  const DisplayList list = painter.Paint();
+
+  bool found = false;
+  for (const DrawCommand& c : list.commands()) {
+    if (c.type == CommandType::kFillRect && c.color == css::Color{0x22, 0x22, 0x22, 255}) {
+      // 15px left padding extends left of the text content, so the padded rect
+      // starts left of the first glyph and is wider than the run.
+      EXPECT_LT(c.x, 0.0f);
+      EXPECT_GT(c.width, 30.0f);
+      EXPECT_GT(c.height, 10.0f);
+      found = true;
+    }
+  }
+  EXPECT_TRUE(found);
+}
+
 // ---------------------------------------------------------------------------
 // Renderer performance: buffer reuse, scroll blit, bands, parallel raster.
 // ---------------------------------------------------------------------------

@@ -46,6 +46,15 @@ struct TextRun
   css::Color color{0, 0, 0, 255};
   bool underline = false;
   const dom::Element* element = nullptr; // source element (for hit-testing)
+  // Inline element background + resolved padding (CSS 2.2 §8.4.1 / §10.1).
+  // The painter fills this rect behind the glyphs; alpha 0 = no background.
+  // Only inline source elements set it: a block-level run carries the block's
+  // own style, whose background the box already paints.
+  css::Color background{0, 0, 0, 0};
+  float padding_left = 0;
+  float padding_right = 0;
+  float padding_top = 0;
+  float padding_bottom = 0;
 };
 
 // A positioned atomic inline box within a line.  It is either a replaced

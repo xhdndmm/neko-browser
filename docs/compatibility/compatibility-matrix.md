@@ -62,7 +62,7 @@
 | 历史记录 | Tested | 29 存储单元测试 | 去重访问、搜索、持久化 |
 | 书签 | Tested | 29 存储单元测试 | 增删改、文件夹、持久化 |
 | 下载器 | Tested | Browser 套件 | Content-Disposition/URL 文件名、原子写入 |
-| 绘制 / 光栅化 | Tested | Paint 套件 | 纯色、边框、文字、PPM；**整数定点混合（替代浮点）**、**缓冲复用（Resize 不重分配）**、**分带 Clear/可见带裁剪**、**并行带栅格化**（`RasterizeParallel`，共享线程池，串/并行结果一致）、**滚动 blit**（`ShiftRows` 内存搬移复用上一帧像素，仅重绘露出带） |
+| 绘制 / 光栅化 | Tested | Paint 套件 | 纯色、边框、文字、PPM；**整数定点混合（替代浮点）**、**缓冲复用（Resize 不重分配）**、**分带 Clear/可见带裁剪**、**并行带栅格化**（`RasterizeParallel`，共享线程池，串/并行结果一致）、**滚动 blit**（`ShiftRows` 内存搬移复用上一帧像素，仅重绘露出带）；**行内元素背景**（`display:inline` 的 `background-color` 在字形后填充，矩形含 padding 的水平/垂直扩展——真实站点的图文覆盖层实测）；**未实现 `opacity`**（整棵子树的 group opacity）：用 opacity 做半透明覆盖层的页面按不透明渲染 |
 | 合成器（Compositor） | Tested | 17 软件合成器 + 9 GPU 合成器单元测试 + UI 冒烟/截图 | **软件合成器抽象（ADR 0015）**：`Surface`（RGBA8888 拷贝/alpha 混合/滚动原语）+ `Compositor` 接口（输出表面 + 有序图层、全量/脏矩形 `Composite(Rect)`、`ScrollOutput` 报告暴露带）；混合数学与 Rasterizer 一致；GUI 已接线（图层 0 = 光栅化页面，图层 1 = caret 覆盖层，闪烁/移动走脏矩形重合成，滚动为带级 blit）|
 | GPU 合成（GpuCompositor/GpuContext） | Partial | 9 GPU 合成器单元测试 | **ADR 0017 框架**：`GpuContext` 设备抽象（纹理创建/子矩形上传/绘制/呈现/回读）+ `GpuCompositor`（每图层纹理、脏层上传、每可见层一次 textured-quad draw、CPU 输出始终与软件合成器逐像素一致）+ `ProbeGpuCapabilities`（集中探测点）+ `NullGpuContext`（无设备时明确 NOT IMPLEMENTED）+ `RecordingGpuContext`（测试用记录器，验证上传/绘制账本）；`GpuCompositor::Create` 无可用设备时**返回 SoftwareCompositor**（不假装有 GPU）；**平台后端（GL/Vulkan/Metal/D3D11）未实现**，探测恒报 unavailable |
 | 渲染管线缓存 | Tested | Renderer + UI 套件 | **显示列表缓存**（Painter 输出按版本号增量重建，仅在 DOM/样式变化时失效）、**WebView 视口光栅缓存**（滚动时 blit 复用，仅补绘露出带）；布局/绘制不再全量重做 |

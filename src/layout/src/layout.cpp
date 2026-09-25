@@ -517,6 +517,15 @@ void LayoutLines(std::vector<InlineItem>& items,
     run.color = style.color.value_or(css::Color{0, 0, 0, 255});
     run.underline = style.text_decoration_underline;
     run.element = element;
+    // Inline element background + padding (CSS 2.2 §8.4.1/§10.1).  Percentages
+    // resolve against the inline container's available width.
+    if (style.background_color.has_value()) {
+      run.background = *style.background_color;
+      run.padding_left = ResolveSize(style.padding_left, available_width);
+      run.padding_right = ResolveSize(style.padding_right, available_width);
+      run.padding_top = ResolveSize(style.padding_top, available_width);
+      run.padding_bottom = ResolveSize(style.padding_bottom, available_width);
+    }
     line.runs.push_back(std::move(run));
     line.height = std::max(line.height, style.line_height);
     x += word_width;
