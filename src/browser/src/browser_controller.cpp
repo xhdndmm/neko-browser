@@ -11,6 +11,7 @@
 #include "neko/dom/query.h"
 #include "neko/image/image.h"
 #include "neko/network/http.h"
+#include "neko/paint/rasterizer.h"
 #include "neko/security/origin.h"
 #include "neko/storage/file_util.h"
 #include "neko/url/url.h"
@@ -340,6 +341,17 @@ TabSnapshot ToSnapshot(const Tab& tab)
   s.remote_frame = tab.remote_frame;
   s.remote_content_height = tab.remote_content_height;
   s.remote_hover_link = tab.remote_hover_link;
+  // In-process frames (ADR 0019) and child-process frames share one snapshot
+  // shape: the GUI draws |frame| and never touches the live page.
+  s.frame = s.remote ? tab.remote_frame : tab.frame;
+  s.frame_content_height = s.remote ? tab.remote_content_height : tab.frame_content_height;
+  s.frame_hover_link = s.remote ? tab.remote_hover_link : tab.frame_hover_link;
+  if (!s.remote) {
+    s.has_caret = tab.has_caret;
+    s.caret_x = tab.caret_x;
+    s.caret_y = tab.caret_y;
+    s.caret_height = tab.caret_height;
+  }
   s.zoom = tab.zoom;
   s.find_query = tab.find_query;
   s.find_match_count = tab.find_match_count;
@@ -696,6 +708,13 @@ bool BrowserController::DispatchPointerClick(int tab_id, float doc_x, float doc_
   if (tab == nullptr) {
     return false;
   }
+  // Hold the DOM lock while the click's scripts run (ADR 0019): the pool
+  // threads that inject subresources take the same lock.
+  std::unique_lock<std::recursive_mutex> dom_lock;
+  if (tab->page != nullptr) {
+    dom_lock = tab->page->AcquireDomLock();
+  }
+  tab->frame_dirty = true; // focus / :active may change the caret
   // Renderer-process mode: the child owns the DOM, so the click is forwarded
   // and it runs the same dispatch code (returns whether the default action
   // ran).
@@ -780,6 +799,11 @@ void BrowserController::DispatchHover(int tab_id, float doc_x, float doc_y)
   if (tab == nullptr) {
     return;
   }
+  std::unique_lock<std::recursive_mutex> dom_lock;
+  if (tab->page != nullptr) {
+    dom_lock = tab->page->AcquireDomLock();
+  }
+  tab->frame_dirty = true; // the hover link drives the cursor
   if (IsRemoteTab(*tab)) {
     auto reply = tab->session->Hover(doc_x, doc_y);
     if (!reply.has_value()) {
@@ -821,6 +845,11 @@ void BrowserController::DispatchHoverClear(int tab_id)
   if (tab == nullptr) {
     return;
   }
+  std::unique_lock<std::recursive_mutex> dom_lock;
+  if (tab->page != nullptr) {
+    dom_lock = tab->page->AcquireDomLock();
+  }
+  tab->frame_dirty = true;
   if (IsRemoteTab(*tab)) {
     auto reply = tab->session->HoverClear();
     if (!reply.has_value()) {
@@ -844,6 +873,11 @@ bool BrowserController::DispatchWheel(int tab_id, double delta_y)
   if (tab == nullptr) {
     return false;
   }
+  std::unique_lock<std::recursive_mutex> dom_lock;
+  if (tab->page != nullptr) {
+    dom_lock = tab->page->AcquireDomLock();
+  }
+  tab->frame_dirty = true;
   if (IsRemoteTab(*tab)) {
     auto reply = tab->session->Wheel(delta_y);
     if (!reply.has_value()) {
@@ -883,6 +917,11 @@ bool BrowserController::DispatchKeyboard(int tab_id,
   if (tab == nullptr) {
     return false;
   }
+  std::unique_lock<std::recursive_mutex> dom_lock;
+  if (tab->page != nullptr) {
+    dom_lock = tab->page->AcquireDomLock();
+  }
+  tab->frame_dirty = true; // a key edit moves the caret / mutates the DOM
   if (IsRemoteTab(*tab)) {
     auto reply = tab->session->Key(type, key, code);
     if (!reply.has_value()) {
@@ -978,6 +1017,7 @@ void BrowserController::SubmitForm(int tab_id, dom::Element* form)
   if (tab == nullptr || form == nullptr || tab->page == nullptr) {
     return;
   }
+  std::unique_lock<std::recursive_mutex> dom_lock = tab->page->AcquireDomLock();
   // Cancelable submit event; the page can preventDefault() to block it.
   if (tab->script_runtime != nullptr &&
       !tab->script_runtime->DispatchCancelableEvent(*form, "submit")) {
@@ -1056,11 +1096,77 @@ void BrowserController::Reload()
   NavigateToUrl(*tab, tab->url);
 }
 
+void BrowserController::ProduceFrame(Tab& tab)
+{
+  if (tab.content_type != ContentType::kHtml || tab.page == nullptr) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    tab.frame = nullptr;
+    tab.frame_content_height = 0;
+    tab.frame_hover_link.clear();
+    tab.has_caret = false;
+    tab.frame_dirty = false;
+    return;
+  }
+  const int width = tab.viewport_width > 0 ? tab.viewport_width : kDefaultRemoteViewportWidth;
+  const int height = tab.viewport_height > 0 ? tab.viewport_height : kDefaultRemoteViewportHeight;
+  // The viewport changed (or the page was never laid out): lay out here on the
+  // worker thread.  SetTabViewport already lays out for a resize; this covers
+  // the first frame after a load and any residual mismatch.
+  if (!tab.page->HasLayout()) {
+    tab.page->Layout(static_cast<float>(width), static_cast<float>(height));
+  }
+  const float content_height = tab.page->ContentHeight();
+  paint::Rasterizer raster(width, height);
+  tab.page->RasterizeFull(raster, tab.scroll_offset_y, nullptr);
+  auto frame = std::make_shared<RemoteFrame>();
+  frame->width = width;
+  frame->height = height;
+  const std::vector<std::uint8_t>& pixels = raster.pixels();
+  frame->rgba.assign(pixels.begin(), pixels.end());
+  // Hyperlink under the pointer, computed here so the GUI can show the
+  // pointing hand without the DOM.
+  std::string hover_link;
+  if (tab.hovered_element != nullptr) {
+    if (std::optional<std::string> target = HyperlinkTarget(tab.hovered_element, tab.url);
+        target.has_value()) {
+      hover_link = std::move(target.value());
+    }
+  }
+  // Caret overlay geometry (device px, document coordinates).
+  bool has_caret = false;
+  float caret_x = 0;
+  float caret_y = 0;
+  float caret_height = 0;
+  if (const auto geometry = tab.page->FocusedCaretGeometry(); geometry.has_value()) {
+    has_caret = true;
+    caret_x = geometry->x;
+    caret_y = geometry->y;
+    caret_height = geometry->height;
+  }
+  const std::uint64_t layout_version = tab.page->layout_version();
+  // Publish under the controller mutex: the GUI copies these through
+  // TabSnapshot on its own thread while the worker keeps rendering.
+  std::lock_guard<std::mutex> lock(mutex_);
+  tab.frame = std::move(frame);
+  tab.frame_content_height = content_height;
+  tab.frame_hover_link = std::move(hover_link);
+  tab.has_caret = has_caret;
+  tab.caret_x = caret_x;
+  tab.caret_y = caret_y;
+  tab.caret_height = caret_height;
+  tab.frame_layout_version = layout_version;
+  tab.frame_dirty = false;
+}
+
 void BrowserController::PumpScriptTimers()
 {
   Tab* tab = ActiveTab();
   if (tab == nullptr) {
     return;
+  }
+  std::unique_lock<std::recursive_mutex> dom_lock;
+  if (tab->page != nullptr) {
+    dom_lock = tab->page->AcquireDomLock();
   }
   if (IsRemoteTab(*tab)) {
     // Renderer mode: the child advances its own timers/animations; a changed
@@ -1126,6 +1232,17 @@ void BrowserController::PumpScriptTimers()
       NavigateToUrl(*tab, target);
     }
   }
+  // Rebuild the viewport frame when the page changed or the GUI moved the
+  // viewport / scroll bar since the last one (ADR 0019).  The GUI only draws
+  // this frame; it never rasterizes or walks the DOM.
+  if (tab->content_type == ContentType::kHtml) {
+    if (tab->page == nullptr) {
+      tab->frame = nullptr;
+      tab->frame_content_height = 0;
+    } else if (tab->frame_dirty || tab->frame_layout_version != tab->page->layout_version()) {
+      ProduceFrame(*tab);
+    }
+  }
 }
 
 void BrowserController::SetTabScrollOffset(int tab_id, float y)
@@ -1136,6 +1253,7 @@ void BrowserController::SetTabScrollOffset(int tab_id, float y)
     for (const auto& candidate : tabs_) {
       if (candidate->id == tab_id) {
         candidate->scroll_offset_y = y;
+        candidate->frame_dirty = true;
         tab = candidate.get();
         break;
       }
@@ -1167,10 +1285,15 @@ void BrowserController::SetTabViewport(int tab_id, int width, int height)
   if (tab->viewport_width == width && tab->viewport_height == height) {
     return;
   }
+  std::unique_lock<std::recursive_mutex> dom_lock;
+  if (tab->page != nullptr) {
+    dom_lock = tab->page->AcquireDomLock();
+  }
   {
     std::lock_guard<std::mutex> lock(mutex_);
     tab->viewport_width = width;
     tab->viewport_height = height;
+    tab->frame_dirty = true;
   }
   if (IsRemoteTab(*tab)) {
     // The page is laid out for the new viewport inside the child (kSnapshot
@@ -1392,6 +1515,7 @@ void BrowserController::SetTabScrollRequest(int tab_id, float y)
     if (tab->id == tab_id) {
       tab->pending_scroll_y = y;
       ++tab->scroll_request_id;
+      tab->frame_dirty = true;
       return;
     }
   }
@@ -1772,6 +1896,8 @@ void BrowserController::LoadBytes(Tab& tab,
       std::lock_guard<std::mutex> lock(mutex_);
       tab.content_type = ContentType::kHtml;
       tab.page = new_page; // shared: the background task keeps it alive
+      // A fresh document must produce a fresh viewport frame (ADR 0019).
+      tab.frame_dirty = true;
       tab.title = std::move(title);
       // A previous find-in-page session described the old document.
       tab.find_query.clear();

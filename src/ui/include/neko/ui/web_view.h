@@ -1,8 +1,6 @@
 #pragma once
 
 #include "neko/browser/browser_controller.h"
-#include "neko/compositor/compositor.h"
-#include "neko/paint/rasterizer.h"
 
 #include <QAbstractScrollArea>
 #include <QTimer>
@@ -54,82 +52,42 @@ protected:
 
 private:
   void PaintHtml(QPainter& painter);
-  // Renderer-process mode: paints the frame the child produced.
-  void PaintRemote(QPainter& painter);
   void PaintImage(QPainter& painter);
   // Find-in-page (Ctrl+F): draws the current match's highlight over the page.
   void PaintFindHighlight(QPainter& painter);
-  // Recomputes the caret overlay layer (layer 1) from the focused element
-  // and the current scroll.  Returns true when the caret's screen rect or
-  // visibility changed since the last call.
-  bool UpdateCaretLayer();
   void OnCaretBlink();
   void UpdateTextOverlay();
-  void EnsureLayout(int width);
   void UpdateScrollRange();
   void HandleLinkClick(const QPointF& viewport_pos);
   void HandleHover(const QPointF& viewport_pos);
   void HandleHoverClear();
-  void HandleActive(const QPointF& viewport_pos);
-  void HandleActiveClear();
   float ScrollY() const;
-  // Renderer mode: reports the viewport size to the worker (the child lays the
-  // page out for it) and applies the child-reported hover cursor.
+  // Reports the viewport size to the worker (which lays the page out for it
+  // and produces the frame) and applies the worker-reported hover cursor.
   void ReportViewport();
-  void ApplyRemoteCursor();
+  void ApplyFrameCursor();
+
   BrowserWorker* worker_;
   int tab_id_ = -1;
   // Last consistent copy of the tab's renderable state; GUI-thread only.
   browser::TabSnapshot snapshot_;
   QPlainTextEdit* text_view_;
-  int laid_out_width_ = -1;  // viewport width the page was last laid out at
-  int laid_out_height_ = -1; // viewport height the page was last laid out at
-  int wheel_accum_ = 0;      // fractional wheel delta (eighths of a degree)
-  // Element last reported as hovered/active (GUI thread); reset when the
-  // document is replaced by a navigation so the state re-resolves from scratch.
-  const dom::Element* hovered_element_ = nullptr;
-  const dom::Element* active_element_ = nullptr;
-  // Document generation the hover/active state was resolved against; a change
-  // signals a navigation, requiring a scroll reset.
-  std::uint64_t cached_document_version_ = 0;
+  int wheel_accum_ = 0; // fractional wheel delta (eighths of a degree)
+  // URL the last frame belonged to; a change means a navigation, which resets
+  // the local scroll position (the worker re-renders at the new offset).
+  std::string frame_url_;
+  // Viewport size already reported to the worker (-1 = not yet).
+  int reported_viewport_w_ = -1;
+  int reported_viewport_h_ = -1;
+  bool reported_viewport_ = false;
   // Last applied script-requested scroll latch id.  A fresh value (worker bumped
   // scroll_request_id) moves the scroll bar to the requested offset exactly once.
   std::uint64_t applied_scroll_request_id_ = 0;
-
-  // Renderer mode (ADR 0016 M2): the last frame's document URL (a change means
-  // a navigation, which resets the local scroll), the viewport size already
-  // reported to the worker, and whether a hover has been forwarded (so the
-  // matching hover-clear is sent exactly once).
-  std::string remote_url_;
-  int reported_viewport_w_ = -1;
-  int reported_viewport_h_ = -1;
-  // True once the viewport has been reported for the tab's current renderer
-  // session.  Reset when the tab leaves remote mode so the next session gets
-  // the current size (a report sent before the session existed is ignored).
-  bool reported_viewport_ = false;
-  bool remote_hover_active_ = false;
-
   // Blinking caret for the focused element (GUI thread).  The blink timer
   // flips visibility only while a control holds focus, so an idle page never
   // triggers repaints.
   bool caret_visible_ = true;
   QTimer* caret_timer_ = nullptr;
-
-  // Cached viewport raster + the state it was produced for (GUI thread).
-  std::optional<paint::Rasterizer> raster_cache_;
-  int cached_width_ = -1;
-  int cached_height_ = -1;
-  int cached_scroll_ = -1;
-  std::uint64_t cached_layout_version_ = 0;
-
-  // Presentation compositor (ADR 0015): layer 0 = rasterized page, layer 1 =
-  // the caret overlay.  The GUI paints the compositor's output surface.
-  std::unique_ptr<compositor::Compositor> compositor_;
-  // Last computed caret overlay rect/visibility (output coordinates).
-  int caret_x_ = -1;
-  int caret_y_ = -1;
-  int caret_h_ = 0;
-  bool caret_drawn_ = false;
 };
 
 } // namespace neko::ui

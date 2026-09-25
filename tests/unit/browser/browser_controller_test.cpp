@@ -789,6 +789,85 @@ TEST(BrowserControllerTest, PumpScriptTimersRunsSetTimeout)
   EXPECT_DOUBLE_EQ(num.value(), 1.0);
 }
 
+// ADR 0019: the worker (not the GUI) produces the viewport frame; timers that
+// mutate the DOM and hover changes must be reflected in the next snapshot.
+TEST(BrowserControllerTest, FrameIsProducedAndRefreshedByDomChanges)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body style=\"margin:0\">"
+                               "<a id=\"l\" href=\"/next\">link</a>"
+                               "<script>"
+                               "setTimeout(function(){"
+                               "  var d = document.createElement('div');"
+                               "  d.style.height = '2000px';"
+                               "  document.body.appendChild(d);"
+                               "}, 1);"
+                               "</script>"
+                               "</body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  // The worker lays the page out for the default viewport and produces a frame.
+  controller.PumpScriptTimers();
+  TabSnapshot snapshot = controller.SnapshotActiveTab();
+  ASSERT_NE(snapshot.frame, nullptr);
+  EXPECT_GT(snapshot.frame->width, 0);
+  EXPECT_GT(snapshot.frame->height, 0);
+  EXPECT_EQ(snapshot.frame->rgba.size(),
+            static_cast<std::size_t>(snapshot.frame->width) * snapshot.frame->height * 4);
+  const float initial_height = snapshot.frame_content_height;
+
+  // A timer mutates the DOM; the next pump must rebuild the frame.
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  controller.PumpScriptTimers();
+  snapshot = controller.SnapshotActiveTab();
+  EXPECT_GT(snapshot.frame_content_height, initial_height);
+
+  // Hovering a hyperlink is reported through the snapshot (drives the GUI
+  // cursor without the GUI touching the DOM).
+  controller.DispatchHover(controller.ActiveTab()->id, 5.0F, 5.0F);
+  controller.PumpScriptTimers();
+  snapshot = controller.SnapshotActiveTab();
+  EXPECT_FALSE(snapshot.frame_hover_link.empty());
+}
+
+// Regression: navigating to a new document must produce a fresh frame, not
+// keep the previous page's (a stale frame rendered kaom.net blank).
+TEST(BrowserControllerTest, NavigationProducesAFreshFrame)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/a",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body style=\"margin:0\">short</body></html>"});
+  fetch.Add("http://example.com/b",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body style=\"margin:0\">"
+                               "<div style=\"height:1800px\">tall</div></body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/a").has_value());
+  controller.PumpScriptTimers();
+  const TabSnapshot a = controller.SnapshotActiveTab();
+  ASSERT_NE(a.frame, nullptr);
+
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/b").has_value());
+  controller.PumpScriptTimers();
+  const TabSnapshot b = controller.SnapshotActiveTab();
+  ASSERT_NE(b.frame, nullptr);
+  EXPECT_GT(b.frame_content_height, a.frame_content_height);
+  EXPECT_NE(b.frame->rgba, a.frame->rgba);
+}
+
 // A "file:///abs/path" URL (the form hyperlinks and bookmarks produce) loads
 // the absolute path.  Regression test: the leading slash used to be stripped,
 // turning it into a relative path that failed to read.

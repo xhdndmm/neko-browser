@@ -181,6 +181,24 @@ struct Tab
   // The scroll bar moved since the last frame: pull a fresh one (throttled).
   bool remote_scroll_dirty = false;
   int64_t remote_last_frame_ms = 0;
+
+  // ---- In-process frame (ADR 0019) ---------------------------------------
+  // The worker rasterizes the viewport into an immutable frame that the GUI
+  // draws; the GUI never reads |page| (the DOM is owned by the worker thread).
+  // Produced by ProduceFrame() on the worker thread.  |remote| above stays
+  // true only when the frame came from a child process.
+  std::shared_ptr<const RemoteFrame> frame;
+  float frame_content_height = 0;
+  std::string frame_hover_link;
+  // Caret overlay geometry (device px, document coordinates) while a control
+  // has focus; |has_caret| false hides it.
+  bool has_caret = false;
+  float caret_x = 0;
+  float caret_y = 0;
+  float caret_height = 0;
+  // Set when the frame must be rebuilt (viewport/scroll/content change).
+  bool frame_dirty = true;
+  std::uint64_t frame_layout_version = 0;
 };
 
 // A consistent copy of everything the GUI needs to render one tab.  Produced
@@ -222,6 +240,18 @@ struct TabSnapshot
   float remote_content_height = 0;
   // Hyperlink under the pointer ("" = none), reported by the child.
   std::string remote_hover_link;
+
+  // ---- In-process frame (ADR 0019) ---------------------------------------
+  // The rendered viewport for HTML tabs, produced on the worker thread.  The
+  // GUI draws this (never the live |page|).  |frame| is set in BOTH execution
+  // modes; |remote| distinguishes a child-process frame from an in-process one.
+  std::shared_ptr<const RemoteFrame> frame;
+  float frame_content_height = 0;
+  std::string frame_hover_link;
+  bool has_caret = false;
+  float caret_x = 0;
+  float caret_y = 0;
+  float caret_height = 0;
   // User zoom factor driving the CSS-pixel mapping (1.0 = 100%).
   float zoom = 1.0F;
 
@@ -540,6 +570,13 @@ private:
   void PullRemoteFrame(Tab& tab, bool force);
   // Tears the tab's session down and reports |error| as the tab's content.
   void MarkSessionFailed(Tab& tab, std::string_view message);
+
+  // ---- In-process frame production (ADR 0019) ----------------------------
+  // Rasterizes |tab|'s viewport into an immutable frame (worker thread only)
+  // and refreshes the content height / hover link / caret geometry that go
+  // with it.  Called from the worker after any DOM/layout/scroll/viewport
+  // change; the GUI only ever reads the result through TabSnapshot.
+  void ProduceFrame(Tab& tab);
 
   std::string profile_dir_;
   FetchFn fetch_;

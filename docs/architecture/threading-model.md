@@ -14,10 +14,9 @@
 
 | 线程 | 所有者 | 职责 | 备注 |
 | --- | --- | --- | --- |
-| GUI 线程（Qt 主线程） | `ui::MainWindow` | Qt 事件循环、绘制 `WebView`、把用户输入投递给 `BrowserWorker` | 从不直接访问 DOM/布局/渲染器内部状态 |
+| GUI 线程（Qt 主线程） | `ui::MainWindow` | Qt 事件循环、绘制 `WebView` 帧、把用户输入投递给 `BrowserWorker` | 渲染路径只消费 `TabSnapshot::frame`，不触碰 DOM/布局；DevTools 的 DOM 遍历在 `Page` 的 DOM 锁下进行（ADR 0019） |
 | Worker 线程 | `ui::BrowserWorker` | 执行所有 `BrowserController` 调用（导航、脚本、布局、光栅化、快照） | 串行执行队列中的任务；这是**引擎的唯一变更线程** |
 | Worker 池线程（N 个） | `BrowserController::pool_`（默认 = 硬件并发数） | 并行子资源抓取（样式表/图片/视频/网页字体）、并行带光栅化 | 任务是「每请求一线程」的阻塞式 I/O，不是事件循环 |
-| UI 光栅池（2 个） | `BrowserWorker::raster_pool_` | `WebView` 的 `Page::RasterizeFull(..., pool)` 并行带光栅化 | GUI 线程不得直接光栅化大页面，否则掉帧 |
 | 子进程 I/O 线程 | 每个渲染进程会话一个 | `RendererSession` 读写子进程管道、解析帧 | 只入队 C++ 事件；帧的消费发生在 Worker 线程 |
 | WebSocket I/O 线程 | 每个 `WebSocket` 连接一个 | socket 收发、帧解析、ping→pong | 事件入队后由 Worker 线程泵（与定时器同一时钟） |
 | 媒体解码线程 | 临时池任务（`FetchPageVideos`） | FFmpeg 解复用/解码/像素转换 | 预算有界（帧数 + RGBA 字节封顶） |
@@ -33,8 +32,11 @@
 
 1. **引擎状态只有一个变更线程**：`BrowserController` 的公开方法只允许在
    Worker 线程调用（`BrowserWorker` 通过任务队列保证）。GUI 线程通过
-   `TabSnapshot`（互斥锁保护的**值拷贝**：`shared_ptr<Page>`/`Image` 等）
-   观察状态，绝不持有指向 DOM 的内部指针。
+   `TabSnapshot`（互斥锁保护的**值拷贝**）观察状态；渲染路径只消费
+   `TabSnapshot::frame`（不可变视口位图，ADR 0019），不触碰 DOM/布局。
+   **DOM 归 Worker 线程独占**：Worker 在执行脚本/定时器/事件期间持有
+   `Page` 的递归 DOM 锁（`AcquireDomLock`）；池线程的子资源注入与 DevTools
+   的 DOM 遍历取同一把锁，因此与 Worker 的 DOM 修改序列化。
 2. **快照不可变**：`renderer::Page` 在发布后不再被 Worker 线程原地大改；
    会原地变的只有「动画帧像素」（GIF/`<video>` 帧覆盖，见 ADR 0013 的
    display list 版本号规则）与画布 backing store。GUI 线程在同一时刻只读
@@ -61,6 +63,7 @@
 | --- | --- |
 | GUI ↔ Worker 的命令 | 任务队列 + 条件变量；每条命令执行后 `emit StateChanged()` |
 | GUI ↔ Worker 的快照 | `std::mutex` 保护控制器状态，返回拷贝 |
+| DOM 访问（Worker 脚本 ↔ 池注入 / DevTools） | `Page` 的递归 `std::recursive_mutex`；Worker 执行脚本时持锁，池线程与 DevTools 取同一锁（ADR 0019） |
 | Worker ↔ 池任务 | `std::future`（`Submit`）与 fire-and-forget（`Post`）；导航在池任务里等待子资源 future 前会先确保池大小 > 1（单线程池走内联路径，避免自等待死锁） |
 | 渲染子进程 | 长度前缀的帧 + 版本号；`Pump()` 非阻塞读，超时/EOF 视为会话失败 |
 | WebSocket | 有界事件队列；binder 析构时 join I/O 线程 |
@@ -118,6 +121,7 @@
 | 渲染进程协议/会话 | `tests/unit/browser`（`renderer_protocol_test`、`renderer_session_test`、`renderer_mode_test`） |
 | 崩溃与回退路径 | `renderer_session_test`（`ChildCrashIsDetectedAndReported`、子进程无法启动、协议往返/版本） |
 | 动画时钟 | `tests/unit/renderer`（GIF 帧推进）、`tests/unit/browser`（直接导航 GIF 播放） |
+| DOM 竞争（ADR 0019） | TSan 下加载真实页面：`src/dom|style|renderer` 无数据竞争；渲染路径不再有跨线程 DOM 访问（剩余 TSan 报告为 Qt 信号/槽内部机制） |
 
 ---
 
@@ -125,6 +129,10 @@
 
 - 单线程池大小固定（硬件并发数），没有按优先级/域限流（例如图片抓取不会
   让位给关键路径请求）。
+- 帧在 worker 线程串行光栅化（不再用 UI 光栅池），大页面单帧成本上升；
+  可用控制器自己的光栅池优化。
+- DevTools 仍读取活 DOM（在 DOM 锁下），脚本长跑时会短暂阻塞；完全
+  worker 侧序列化快照是后续可选工作（ADR 0019 B2）。
 - 无事件循环：连接复用与 HTTP/2 需要它，属于后续阶段。
 - 进程隔离模式下子进程崩溃只影响该站点，但**不隔离**：没有沙箱、没有
   内存/CPU 配额、没有共享内存位图。

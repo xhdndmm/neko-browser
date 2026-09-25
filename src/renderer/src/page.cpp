@@ -223,7 +223,7 @@ double Page::NowMs() const
 
 void Page::SetAnimationClockForTesting(std::function<double()> now_ms)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   animation_clock_ = std::move(now_ms);
 }
 
@@ -236,7 +236,7 @@ Page::Page()
 
 void Page::LoadHtmlImpl(std::string_view bytes, base::encoding::Charset charset)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   // The HTML tokenizer consumes UTF-8; transcode the raw bytes (per WHATWG
   // the BOM, if present, overrides the label) before parsing.
   const std::string utf8 = base::encoding::DecodeToUtf8(bytes, charset);
@@ -273,13 +273,13 @@ base::Result<void> Page::LoadHtml(std::string_view bytes, base::encoding::Charse
 
 void Page::ReapplyStyles()
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   ReapplyStylesLocked();
 }
 
 void Page::SetHoveredElement(const dom::Element* element)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (document_ == nullptr) {
     return;
   }
@@ -289,7 +289,7 @@ void Page::SetHoveredElement(const dom::Element* element)
 
 void Page::SetActiveElement(const dom::Element* element)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (document_ == nullptr) {
     return;
   }
@@ -299,7 +299,7 @@ void Page::SetActiveElement(const dom::Element* element)
 
 void Page::SetFocusedElement(const dom::Element* element)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   focused_element_ = element;
 }
 
@@ -311,7 +311,7 @@ bool Page::TryGetComputedStyle(const dom::Element* element,
     return false;
   }
 
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (document_ == nullptr) {
     return false;
   }
@@ -334,7 +334,7 @@ bool Page::TryGetComputedStyle(const dom::Element* element,
 
 std::vector<std::pair<const dom::Element*, std::string>> Page::ImageSources() const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   std::vector<std::pair<const dom::Element*, std::string>> sources;
   if (document_ == nullptr) {
     return sources;
@@ -366,7 +366,7 @@ std::vector<std::pair<const dom::Element*, std::string>> Page::ImageSources() co
 
 std::vector<Page::VideoSource> Page::VideoSources() const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   std::vector<VideoSource> sources;
   if (document_ == nullptr) {
     return sources;
@@ -397,19 +397,19 @@ std::vector<Page::VideoSource> Page::VideoSources() const
 
 std::vector<css::FontFaceRule> Page::FontFaces() const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   return styles_.FontFaces();
 }
 
 const dom::Element* Page::FocusedElement() const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   return focused_element_;
 }
 
 std::optional<CaretGeometry> Page::FocusedCaretGeometry() const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (focused_element_ == nullptr || focused_element_->tag_name() != "input" || root_ == nullptr) {
     return std::nullopt;
   }
@@ -439,7 +439,7 @@ void Page::ReapplyStylesLocked()
 
 float Page::SetUserZoom(float factor)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   const float requested = std::clamp(factor, kMinUserZoom, kMaxUserZoom);
   if (requested == user_zoom_) {
     return user_zoom_;
@@ -453,7 +453,7 @@ float Page::SetUserZoom(float factor)
 
 float Page::user_zoom() const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   return user_zoom_;
 }
 
@@ -510,13 +510,13 @@ void CollectMatches(const layout::LayoutBox& box,
 
 float Page::viewport_css_width() const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   return viewport_width_ / page_zoom_;
 }
 
 float Page::viewport_css_height() const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   return viewport_height_ / page_zoom_;
 }
 
@@ -526,7 +526,7 @@ std::vector<FindMatch> Page::FindMatches(std::string_view query)
   if (query.empty()) {
     return matches;
   }
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (document_ == nullptr) {
     return matches;
   }
@@ -550,7 +550,7 @@ std::vector<FindMatch> Page::FindMatches(std::string_view query)
 
 void Page::SetExternalStylesheets(std::vector<css::StyleSheet> sheets)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   styles_.SetExternalStylesheets(std::move(sheets));
   if (document_ == nullptr) {
     return;
@@ -560,7 +560,7 @@ void Page::SetExternalStylesheets(std::vector<css::StyleSheet> sheets)
 
 void Page::SetAuthorSheetText(std::size_t index, const std::string& text)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   styles_.SetAuthorSheetText(index, text);
   if (document_ == nullptr) {
     return;
@@ -578,9 +578,14 @@ base::Result<void> Page::LoadFile(std::string_view path)
   return LoadHtml(content);
 }
 
+std::unique_lock<std::recursive_mutex> Page::AcquireDomLock()
+{
+  return std::unique_lock<std::recursive_mutex>(mutex_);
+}
+
 void Page::Layout(float viewport_width, float viewport_height)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   LayoutLocked(viewport_width, viewport_height);
 }
 
@@ -624,7 +629,7 @@ void Page::SetElementImage(const dom::Element* element,
                            image::Image image,
                            std::shared_ptr<image::GifAnimation> animation)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (element == nullptr || document_ == nullptr) {
     return;
   }
@@ -660,7 +665,7 @@ void Page::SetElementImages(const std::vector<const dom::Element*>& elements,
                             const image::Image& image,
                             std::shared_ptr<image::GifAnimation> animation)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (document_ == nullptr || elements.empty()) {
     return;
   }
@@ -720,7 +725,7 @@ void Page::FillCanvasRect(const dom::Element& element,
     height = -height;
   }
 
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   auto [entry, inserted] = images_.try_emplace(&element);
   image::Image& canvas = entry->second;
   if (inserted || canvas.width != 300 || canvas.height != 150 ||
@@ -769,7 +774,7 @@ void Page::FillCanvasRect(const dom::Element& element,
 
 bool Page::HasWebFont(const std::string& key) const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   return loaded_webfont_keys_.count(key) != 0;
 }
 
@@ -779,7 +784,7 @@ bool Page::LoadWebFont(const std::string& family,
                        const std::string& key,
                        std::vector<uint8_t> data)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   // Dedup: the post-script stylesheet pass re-runs FetchWebFonts with the
   // same declarations; re-registering would clear the font selector cache
   // and force a full re-layout for nothing.
@@ -803,7 +808,7 @@ void Page::SetElementVideo(const dom::Element* element,
                            VideoStrip strip,
                            bool autoplay)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (element == nullptr || document_ == nullptr || strip.frames == nullptr ||
       strip.frames->empty()) {
     return;
@@ -839,7 +844,7 @@ void Page::SetElementVideo(const dom::Element* element,
 
 void Page::PlayVideo(const dom::Element& element)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   const auto it = video_states_.find(&element);
   if (it == video_states_.end() || it->second.playing) {
     return;
@@ -855,7 +860,7 @@ void Page::PlayVideo(const dom::Element& element)
 
 void Page::PauseVideo(const dom::Element& element)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   const auto it = video_states_.find(&element);
   if (it == video_states_.end() || !it->second.playing) {
     return;
@@ -869,7 +874,7 @@ void Page::PauseVideo(const dom::Element& element)
 
 void Page::SeekVideo(const dom::Element& element, double seconds)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   const auto it = video_states_.find(&element);
   if (it == video_states_.end() || it->second.frames == nullptr || it->second.frame_rate <= 0) {
     return;
@@ -897,14 +902,14 @@ void Page::SeekVideo(const dom::Element& element, double seconds)
 
 bool Page::IsVideoPlaying(const dom::Element& element) const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   const auto it = video_states_.find(&element);
   return it != video_states_.end() && it->second.playing;
 }
 
 std::optional<double> Page::VideoDuration(const dom::Element& element) const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   const auto it = video_states_.find(&element);
   if (it == video_states_.end() || it->second.frames == nullptr || it->second.frame_rate <= 0) {
     return std::nullopt;
@@ -914,7 +919,7 @@ std::optional<double> Page::VideoDuration(const dom::Element& element) const
 
 std::optional<double> Page::VideoCurrentTime(const dom::Element& element) const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   const auto it = video_states_.find(&element);
   if (it == video_states_.end() || it->second.frame_rate <= 0) {
     return std::nullopt;
@@ -928,7 +933,7 @@ std::optional<double> Page::VideoCurrentTime(const dom::Element& element) const
 
 bool Page::AdvanceAnimations()
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   const bool has_images = !animation_states_.empty();
   const bool has_videos = !video_states_.empty();
   if (!has_images && !has_videos) {
@@ -1026,7 +1031,7 @@ const paint::DisplayList& Page::EnsureDisplayList() const
 paint::Rasterizer
 Page::Rasterize(int width, int height, float y_offset, base::ThreadPool* pool) const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   paint::Rasterizer image(width, height);
   image.SetFontRegistry(&fonts_);
   image.Clear(CanvasBackgroundColor());
@@ -1045,7 +1050,7 @@ Page::Rasterize(int width, int height, float y_offset, base::ThreadPool* pool) c
 
 void Page::RasterizeFull(paint::Rasterizer& raster, float y_offset, base::ThreadPool* pool) const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   raster.SetFontRegistry(&fonts_);
   raster.Clear(CanvasBackgroundColor());
   if (root_ == nullptr) {
@@ -1062,7 +1067,7 @@ void Page::RasterizeFull(paint::Rasterizer& raster, float y_offset, base::Thread
 
 void Page::RasterizeInto(paint::Rasterizer& raster, int band_y0, int band_y1, float y_offset) const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (root_ == nullptr) {
     return;
   }
@@ -1076,19 +1081,19 @@ void Page::RasterizeInto(paint::Rasterizer& raster, int band_y0, int band_y1, fl
 
 std::uint64_t Page::layout_version() const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   return version_;
 }
 
 std::uint64_t Page::DocumentVersion() const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   return document_version_;
 }
 
 bool Page::HasLayout() const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   return root_ != nullptr;
 }
 
@@ -1122,7 +1127,7 @@ css::Color Page::CanvasBackgroundColor() const
 
 float Page::ContentHeight() const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (root_ == nullptr) {
     return 0;
   }
@@ -1132,7 +1137,7 @@ float Page::ContentHeight() const
 
 const dom::Element* Page::ElementAt(float x, float y) const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (root_ == nullptr) {
     return nullptr;
   }
@@ -1141,7 +1146,7 @@ const dom::Element* Page::ElementAt(float x, float y) const
 
 std::optional<ElementGeometry> Page::ElementBoxGeometry(const dom::Element& element)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (document_ == nullptr) {
     return std::nullopt;
   }
@@ -1188,13 +1193,13 @@ std::optional<ElementGeometry> Page::ElementBoxGeometry(const dom::Element& elem
 
 std::string Page::DumpDom() const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   return document_ != nullptr ? document_->ToString() : std::string();
 }
 
 std::string Page::DumpLayoutTree() const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   std::string out;
   struct Printer
   {

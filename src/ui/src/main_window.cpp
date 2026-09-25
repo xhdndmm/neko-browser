@@ -824,8 +824,11 @@ void MainWindow::PopulateDomTree(QTreeWidget* tree)
   if (tab.id < 0 || tab.content_type != browser::ContentType::kHtml || tab.page == nullptr) {
     return;
   }
-  // The snapshot keeps the page (and its DOM) alive; a published page is
-  // never mutated by the worker, so walking the document is safe here.
+  // ADR 0019: the DOM is owned by the worker thread, which mutates it while
+  // running page scripts under Page's DOM lock.  Take the same lock so the
+  // tree walk is serialized with those mutations (the snapshot alone does not
+  // pin the document).
+  std::unique_lock<std::recursive_mutex> dom_lock = tab.page->AcquireDomLock();
   const dom::Node* root = tab.page->document();
   if (root == nullptr)
     return;

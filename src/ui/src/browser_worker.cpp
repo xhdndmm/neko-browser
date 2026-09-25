@@ -13,7 +13,6 @@ BrowserWorker::BrowserWorker(QString profile_dir,
                              browser::RendererOptions renderer)
     : QObject(parent), controller_(profile_dir.toStdString(), {}, std::move(renderer))
 {
-  raster_pool_ = std::make_unique<base::ThreadPool>(2);
   // Load persisted profile data on the caller (GUI) thread at startup.
   auto loaded = controller_.Load();
   if (!loaded) {

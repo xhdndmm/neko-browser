@@ -156,6 +156,14 @@ public:
   // Builds the layout tree at the given viewport width.
   void Layout(float viewport_width, float viewport_height = 0);
 
+  // ADR 0019: the DOM/layout tree is owned by the controller (worker) thread.
+  // The controller holds this lock for the duration of any operation that can
+  // run page scripts, so its DOM mutations are serialized with the other
+  // locked accessors (pool-thread subresource injection, DevTools reads).
+  // Recursive: a script callback may re-enter a Page method on the same
+  // thread.
+  std::unique_lock<std::recursive_mutex> AcquireDomLock();
+
   // The layout viewport in CSS pixels: the window's viewport divided by the
   // page zoom, i.e. exactly what window.innerWidth/innerHeight must report.
   // Returns 0x0 before the first layout.
@@ -425,7 +433,7 @@ private:
 
   // Guards document_/styles_/root_/images_ across the GUI (paint, hit-test)
   // and worker (navigation, image injection) threads.
-  mutable std::mutex mutex_;
+  mutable std::recursive_mutex mutex_;
 };
 
 } // namespace neko::renderer
