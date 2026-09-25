@@ -933,8 +933,13 @@ TEST(BrowserControllerTest, ClickOnExpandedDropdownItemNavigates)
                                ".dropdown-content a{display:block;}"
                                "</style></head><body style=\"margin:0\">"
                                "<div class=\"dropdown\"><button>MENU</button>"
-                               "<div class=\"dropdown-content\"><a href=\"/next\">ITEM</a></div>"
-                               "</div></body></html>"});
+                               "<div class=\"dropdown-content\">"
+                               "<a href=\"/next\">ITEM-1</a>"
+                               "<a href=\"/next\">ITEM-2</a>"
+                               "<a href=\"/next\">ITEM-3</a>"
+                               "<a href=\"/next\">ITEM-4</a>"
+                               "<a href=\"/next\">ITEM-5</a>"
+                               "</div></div></body></html>"});
   fetch.Add("http://example.com/next",
             FakeFetcher::Route{200, {{"content-type", "text/html"}}, "<html>next</html>"});
 
@@ -945,7 +950,16 @@ TEST(BrowserControllerTest, ClickOnExpandedDropdownItemNavigates)
   Tab* tab = controller.ActiveTab();
   ASSERT_NE(tab, nullptr);
   ASSERT_NE(tab->page, nullptr);
-  dom::Element* item = dom::QuerySelector(*tab->page->document(), ".dropdown-content a");
+  dom::Element* menu = dom::QuerySelector(*tab->page->document(), ".dropdown-content");
+  ASSERT_NE(menu, nullptr);
+  // The LAST item: it lies below the trigger's own box, so reaching it means
+  // the pointer has left the bar (the case that used to collapse the menu).
+  dom::Element* item = nullptr;
+  for (dom::Node* child : menu->ChildNodes()) {
+    if (child->node_type() == dom::NodeType::kElement) {
+      item = static_cast<dom::Element*>(child);
+    }
+  }
   ASSERT_NE(item, nullptr);
 
   // The hidden menu item has no box; hovering the dropdown expands it.
@@ -954,6 +968,17 @@ TEST(BrowserControllerTest, ClickOnExpandedDropdownItemNavigates)
   controller.PumpScriptTimers();
   const auto geometry = tab->page->ElementBoxGeometry(*item);
   ASSERT_TRUE(geometry.has_value());
+
+  // Moving the pointer from the trigger onto a menu item that overflows below
+  // the trigger's box must keep the ancestor's :hover true — otherwise the
+  // menu collapses before the user can reach an item (“必须离开栏” bug).
+  controller.DispatchHover(
+      tab->id, geometry->x + geometry->width / 2.0F, geometry->y + geometry->height / 2.0F);
+  controller.PumpScriptTimers();
+  style::ComputedStyle open_style;
+  std::string open_tag;
+  ASSERT_TRUE(tab->page->TryGetComputedStyle(menu, open_style, open_tag));
+  EXPECT_EQ(open_style.display, style::Display::kBlock);
 
   // Click the item: the hit test must reach the positioned menu and follow the
   // hyperlink.

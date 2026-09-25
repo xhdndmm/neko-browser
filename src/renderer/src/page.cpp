@@ -190,12 +190,12 @@ const dom::Element* ElementAt(const layout::LayoutBox& box, float x, float y)
     // recurse into it to resolve clicks on its content too.
     for (const layout::InlineBox& ib : line.boxes) {
       if (ib.block_box != nullptr) {
-        const layout::LayoutBox& bb = *ib.block_box;
-        if (x >= bb.x && x < bb.x + bb.width && y >= bb.y && y < bb.y + bb.height) {
-          if (const dom::Element* hit = ElementAt(bb, x, y)) {
-            return hit;
-          }
-          return ib.element;
+        // Recurse into the inline-block even when the point is outside its
+        // border box: a positioned descendant may overflow it (an expanded
+        // dropdown menu extends below its trigger, and hovering the menu must
+        // keep the ancestor's :hover true so the menu stays open).
+        if (const dom::Element* hit = ElementAt(*ib.block_box, x, y)) {
+          return hit;
         }
       } else if (ib.image != nullptr) {
         if (x >= ib.x && x < ib.x + ib.width && y >= ib.y && y < ib.y + ib.height) {
