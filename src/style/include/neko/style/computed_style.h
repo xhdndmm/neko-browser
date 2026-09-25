@@ -410,6 +410,10 @@ struct ComputedStyle
   int order = 0;
   std::optional<AlignItems> align_self;
 
+  // Stacking order for positioned elements (CSS 2.1 §9.9).  nullopt = auto
+  // (treated as 0); only positioned elements take part in the ordering.
+  std::optional<int> z_index;
+
   // Grid layout (CSS Grid Layout 1).  Track templates and row/column gaps
   // live on the container; the item's placement lives on the item.
   std::vector<GridTrack> grid_template_columns;

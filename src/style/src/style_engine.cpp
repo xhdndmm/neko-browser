@@ -1983,6 +1983,17 @@ void StyleEngine::ComputeElement(dom::Element& element,
     }
   }
 
+  // z-index (CSS 2.1 §9.9): an integer, or "auto" (which resets to auto).
+  // Only positioned elements take part in the stacking order the painter uses.
+  if (const css::Declaration* d = find("z-index")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kNumber) {
+      out.z_index = static_cast<int>(v.number);
+    } else {
+      out.z_index.reset(); // auto / invalid
+    }
+  }
+
   // align-self (flex item; CSS Flexbox 1 §8.3).  Overrides the container's
   // align-items for this item; "auto" falls back to the container.
   if (const css::Declaration* d = find("align-self")) {

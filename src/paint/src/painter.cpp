@@ -3,6 +3,8 @@
 #include "neko/image/image.h"
 #include "neko/paint/display_list.h"
 
+#include <algorithm>
+
 namespace neko::paint {
 namespace {
 
@@ -49,13 +51,56 @@ void FillBackground(const layout::LayoutBox& box, css::Color color, DisplayList&
   }
 }
 
+// Collects every positioned (absolute/fixed) descendant in tree order.  They
+// all paint after the in-flow content (there is no z-index support yet, so
+// they are treated as z-index:auto and keep tree order).
+void CollectPositioned(const layout::LayoutBox& box, std::vector<const layout::LayoutBox*>& out)
+{
+  for (const auto& child : box.positioned_children) {
+    out.push_back(child.get());
+    CollectPositioned(*child, out);
+  }
+  for (const auto& child : box.children) {
+    CollectPositioned(*child, out);
+  }
+  for (const auto& f : box.floats) {
+    CollectPositioned(*f, out);
+  }
+  for (const auto& line : box.lines) {
+    for (const auto& ib : line.boxes) {
+      if (ib.block_box != nullptr) {
+        CollectPositioned(*ib.block_box, out);
+      }
+    }
+  }
+}
+
 } // namespace
 
 DisplayList Painter::Paint() const
 {
   DisplayList list;
-  if (root_ != nullptr) {
-    PaintBox(*root_, list);
+  if (root_ == nullptr) {
+    return list;
+  }
+  // CSS 2.1 Appendix E painting order (simplified): paint the in-flow content
+  // (block backgrounds, floats, inline content) first, then every positioned
+  // descendant on top.  Painting positioned children inside their own box let
+  // a later in-flow sibling cover them — an absolutely-positioned dropdown
+  // menu was hidden behind the page content below the header.
+  PaintBox(*root_, list);
+  std::vector<const layout::LayoutBox*> positioned;
+  CollectPositioned(*root_, positioned);
+  // z-index order (CSS 2.1 §9.9): auto/0 first, then ascending; stable, so an
+  // equal z-index keeps tree order.  A z-index:100 dropdown menu therefore
+  // paints above an overlaying banner that uses z-index:auto.
+  std::stable_sort(positioned.begin(),
+                   positioned.end(),
+                   [](const layout::LayoutBox* a, const layout::LayoutBox* b) {
+                     return a->style.z_index.value_or(0) < b->style.z_index.value_or(0);
+                   });
+  for (const layout::LayoutBox* box : positioned) {
+    PaintBox(*box, list);
   }
   return list;
 }
@@ -232,11 +277,6 @@ void Painter::PaintBox(const layout::LayoutBox& box, DisplayList& list) const
                       run.font_italic);
       }
     }
-  }
-
-  // Absolutely positioned descendants paint above in-flow content.
-  for (const auto& child : box.positioned_children) {
-    PaintBox(*child, list);
   }
 
   if (clips) {

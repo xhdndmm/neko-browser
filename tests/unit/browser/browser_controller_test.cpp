@@ -915,6 +915,53 @@ TEST(BrowserControllerTest, HoverExpandsCssDropdown)
   EXPECT_EQ(computed.display, style::Display::kNone);
 }
 
+// Regression: a click must reach an expanded dropdown item.  The hit test now
+// walks positioned descendants first (they paint on top), and the item's
+// hyperlink default action runs — without this the menu was visible but
+// unclickable (kaom.net's header menu could not navigate).
+TEST(BrowserControllerTest, ClickOnExpandedDropdownItemNavigates)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><style>"
+                               ".dropdown{position:relative;display:inline-block;}"
+                               ".dropdown-content{position:absolute;display:none;z-index:100;}"
+                               ".dropdown:hover .dropdown-content{display:block;}"
+                               ".dropdown-content a{display:block;}"
+                               "</style></head><body style=\"margin:0\">"
+                               "<div class=\"dropdown\"><button>MENU</button>"
+                               "<div class=\"dropdown-content\"><a href=\"/next\">ITEM</a></div>"
+                               "</div></body></html>"});
+  fetch.Add("http://example.com/next",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}}, "<html>next</html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  controller.PumpScriptTimers();
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  ASSERT_NE(tab->page, nullptr);
+  dom::Element* item = dom::QuerySelector(*tab->page->document(), ".dropdown-content a");
+  ASSERT_NE(item, nullptr);
+
+  // The hidden menu item has no box; hovering the dropdown expands it.
+  EXPECT_FALSE(tab->page->ElementBoxGeometry(*item).has_value());
+  controller.DispatchHover(tab->id, 5.0F, 5.0F);
+  controller.PumpScriptTimers();
+  const auto geometry = tab->page->ElementBoxGeometry(*item);
+  ASSERT_TRUE(geometry.has_value());
+
+  // Click the item: the hit test must reach the positioned menu and follow the
+  // hyperlink.
+  controller.DispatchPointerClick(
+      tab->id, geometry->x + geometry->width / 2.0F, geometry->y + geometry->height / 2.0F);
+  EXPECT_EQ(controller.SnapshotActiveTab().url, "http://example.com/next");
+}
+
 // A "file:///abs/path" URL (the form hyperlinks and bookmarks produce) loads
 // the absolute path.  Regression test: the leading slash used to be stripped,
 // turning it into a relative path that failed to read.

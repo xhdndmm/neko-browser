@@ -170,6 +170,15 @@ bool FindCaretGeometry(
 // before the box's own border box so deeper content wins.
 const dom::Element* ElementAt(const layout::LayoutBox& box, float x, float y)
 {
+  // Positioned descendants paint on top of the in-flow content (CSS 2.1
+  // Appendix E; the painter emits them last), so they are hit-tested first —
+  // topmost (last painted) wins.  Without this an expanded dropdown menu was
+  // visible but unclickable.
+  for (auto it = box.positioned_children.rbegin(); it != box.positioned_children.rend(); ++it) {
+    if (const dom::Element* hit = ElementAt(**it, x, y)) {
+      return hit;
+    }
+  }
   for (const auto& child : box.children) {
     if (const dom::Element* hit = ElementAt(*child, x, y)) {
       return hit;

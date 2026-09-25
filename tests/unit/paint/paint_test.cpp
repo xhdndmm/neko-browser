@@ -373,6 +373,78 @@ TEST(PainterTest, InlineElementBackgroundAndPaddingArePainted)
   EXPECT_TRUE(found);
 }
 
+TEST(PainterTest, PositionedPaintsAboveInFlowContent)
+{
+  // CSS 2.1 Appendix E: absolutely-positioned boxes paint after in-flow
+  // content of the same stacking context.  Painting them inside their own box
+  // let a later in-flow sibling cover them — a dropdown menu was hidden
+  // behind the page content below the header.
+  auto doc = html::Parser("<body style=\"margin:0\">"
+                          "<div style=\"position:absolute;width:50px;height:50px;"
+                          "background:#0000ff\"></div>"
+                          "<div style=\"height:100px;background:#ff0000\"></div>"
+                          "</body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine layout(styles);
+  std::unique_ptr<layout::LayoutBox> root = layout.BuildLayoutTree(*doc, 400);
+
+  Painter painter(root.get());
+  const DisplayList list = painter.Paint();
+  int blue = -1;
+  int red = -1;
+  for (std::size_t i = 0; i < list.commands().size(); ++i) {
+    const DrawCommand& c = list.commands()[i];
+    if (c.type != CommandType::kFillRect) {
+      continue;
+    }
+    if (c.color == css::Color{0, 0, 255, 255}) {
+      blue = static_cast<int>(i);
+    } else if (c.color == css::Color{255, 0, 0, 255}) {
+      red = static_cast<int>(i);
+    }
+  }
+  ASSERT_GE(blue, 0);
+  ASSERT_GE(red, 0);
+  EXPECT_GT(blue, red) << "the positioned box must paint after in-flow content";
+}
+
+TEST(PainterTest, ZIndexOrdersPositionedElements)
+{
+  // z-index (CSS 2.1 §9.9): a higher value paints above a lower one.
+  auto doc = html::Parser("<body style=\"margin:0\">"
+                          "<div style=\"position:absolute;z-index:5;width:50px;"
+                          "height:50px;background:#0000ff\"></div>"
+                          "<div style=\"position:absolute;z-index:1;width:50px;"
+                          "height:50px;background:#00ff00\"></div>"
+                          "</body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine layout(styles);
+  std::unique_ptr<layout::LayoutBox> root = layout.BuildLayoutTree(*doc, 400);
+
+  Painter painter(root.get());
+  const DisplayList list = painter.Paint();
+  int z5 = -1;
+  int z1 = -1;
+  for (std::size_t i = 0; i < list.commands().size(); ++i) {
+    const DrawCommand& c = list.commands()[i];
+    if (c.type != CommandType::kFillRect) {
+      continue;
+    }
+    if (c.color == css::Color{0, 0, 255, 255}) {
+      z5 = static_cast<int>(i);
+    } else if (c.color == css::Color{0, 255, 0, 255}) {
+      z1 = static_cast<int>(i);
+    }
+  }
+  ASSERT_GE(z5, 0);
+  ASSERT_GE(z1, 0);
+  EXPECT_GT(z5, z1) << "z-index:5 must paint after z-index:1";
+}
+
 // ---------------------------------------------------------------------------
 // Renderer performance: buffer reuse, scroll blit, bands, parallel raster.
 // ---------------------------------------------------------------------------
