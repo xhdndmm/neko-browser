@@ -12,9 +12,11 @@ set -euo pipefail
 preset="${1:?usage: scripts/ci/configure.sh <preset>}"
 runner_os="${RUNNER_OS:-unknown}"
 
-extra_args=()
+# cmake_args 恒非空：macOS runner 的系统 bash 是 3.2，`set -u` 下展开空数组
+# `"${arr[@]}"` 会报 unbound variable（bash 4.4 起才允许）。
+cmake_args=(--preset "$preset" -DNEKO_WARNINGS_AS_ERRORS=ON)
 if [ "$runner_os" = "Windows" ]; then
-  extra_args+=("-DCMAKE_TOOLCHAIN_FILE=${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
+  cmake_args+=("-DCMAKE_TOOLCHAIN_FILE=${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
 fi
 
-cmake --preset "$preset" -DNEKO_WARNINGS_AS_ERRORS=ON "${extra_args[@]}"
+cmake "${cmake_args[@]}"

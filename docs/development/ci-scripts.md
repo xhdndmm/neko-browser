@@ -24,6 +24,7 @@ scripts/
 | 参数 | 矩阵相关取值通过命令行参数传入（如 `-Arch x86_64`、`bash scripts/... linux`），脚本里不出现 `${{ }}` |
 | 环境 | 依赖 Actions 注入的变量（`GITHUB_ENV`、`GITHUB_OUTPUT`、`GITHUB_PATH`、`PACKAGE`、`QT_PREFIX` 等）在脚本头部注释登记 |
 | 失败语义 | 校验/打包脚本失败即非零退出；诊断脚本（`diagnose-link-inputs-windows.ps1`）只打印、不失败 |
+| bash 版本 | macOS runner 的系统 bash 是 3.2（`shell: bash` 即 `/bin/bash`）：在 macOS 任务里执行的 `.sh` 不得使用 bash 4+ 特性——`set -u` 下展开空数组 `"${arr[@]}"`、`mapfile`/`readarray`、`declare -A`。Linux 与 Windows（Git Bash）为 bash 5.x |
 | 注释 | 解释“为什么”的背景（历史事故、平台差异、ADR 链接）随脚本走，workflow 中只留一句指引 |
 | 路径 | 脚本自行解析仓库根（`ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"`），在任意工作目录运行结果一致 |
 
