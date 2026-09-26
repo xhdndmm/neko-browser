@@ -39,7 +39,8 @@ CLI 也无法运行。发布产物的目标是**下载即用（零安装）**。
 - Qt 保持官方动态库，`windeployqt`（原生）或固定清单（ARM64 交叉包没有
   部署工具）随包；MSVC 运行库从 VS 的 `Redist/MSVC/*/<arch>/Microsoft.VC*.CRT`
   拷贝，不要求用户安装 Redistributable。
-- 打包后校验（`release.yml`）：导入表只允许引用包内文件或系统 DLL；
+- 打包后校验（`release.yml` → `scripts/release/verify-package-windows.ps1`）：
+  导入表只允许引用包内文件或系统 DLL；
   被静态链接的依赖（zlib1/libcrypto/avif/webp/freetype/...）不得再以 DLL
   形式出现；Qt/FFmpeg/CRT 必须在包内。
 

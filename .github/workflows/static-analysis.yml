@@ -12,6 +12,7 @@ permissions:
 # NOTE: This job is experimental.  clang-tidy check availability varies across
 # toolchain versions, so the job is non-gating (continue-on-error) until the
 # check set is stabilized.  See docs/development/coding-style.md.
+# 具体命令逻辑在 scripts/static-analysis/run-clang-tidy.sh。
 concurrency:
   group: static-analysis-${{ github.ref }}
   cancel-in-progress: true
@@ -38,10 +39,4 @@ jobs:
             -DNEKO_WARNINGS_AS_ERRORS=OFF
 
       - name: Run clang-tidy
-        run: |
-          sudo ln -sf "$(command -v clang-tidy-18)" /usr/local/bin/clang-tidy
-          set +e
-          find src -name '*.cpp' -print0 | xargs -0 -n1 -P2 \
-            clang-tidy -p build/debug -header-filter='neko/' 2>&1 | tee /tmp/clang-tidy.log
-          # Report regardless of exit status so the log is visible.
-          grep -c "warning:" /tmp/clang-tidy.log || true
+        run: bash scripts/static-analysis/run-clang-tidy.sh

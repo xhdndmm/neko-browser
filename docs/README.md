@@ -35,6 +35,8 @@ neko-browser 的文档体系。文档是项目的一等公民 —— 改动架�
 - [依赖策略](development/dependency-policy.md)
 - [编码风格](development/coding-style.md)
 - [Sanitizer 使用](development/sanitizers.md)
+- [CI / 发布脚本（scripts/）](development/ci-scripts.md) —— workflow 与脚本的分工、
+  约定与本地校验方法
 
 ## 测试与安全
 

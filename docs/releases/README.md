@@ -12,7 +12,9 @@
 
 ## 自动发布流程
 
-工作流：`.github/workflows/release.yml`
+工作流：`.github/workflows/release.yml`；各步骤脚本：`scripts/release/`
+（Windows 为 `.ps1`，Linux/macOS 为 `.sh`，约定见
+[../development/ci-scripts.md](../development/ci-scripts.md)）。
 
 ```text
 push tag vX.Y.Z

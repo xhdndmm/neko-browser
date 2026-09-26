@@ -144,6 +144,11 @@ bash tools/package_runtime_macos.sh <staging-dir> <version>   # macOS（GUI 打�
 rpath / install name；glibc 与系统框架始终来自目标机。本地开发构建
 （`debug` / `release` preset）不经过这些脚本，仍使用系统包。
 
+发布工作流（`.github/workflows/release.yml`）各步骤的脚本在 `scripts/release/`
+（Windows 为 `.ps1`，Linux/macOS 为 `.sh`）；本地想复现某一步时可直接运行对应
+脚本，例如 `bash scripts/release/resolve-version.sh`。整体约定见
+[docs/development/ci-scripts.md](docs/development/ci-scripts.md)。
+
 ## 产物位置
 
 所有产物统一输出到构建目录下：
