@@ -38,12 +38,12 @@ release   合并产物、生成 SHA256SUMS、创建（或更新）GitHub Release
 
 | 平台 | 架构 | Runner | GUI |
 | --- | --- | --- | --- |
-| Linux | x86_64 | `ubuntu-24.04` | 含 Qt6 GUI |
-| Linux | arm64 | `ubuntu-24.04-arm` | 含 Qt6 GUI |
+| Linux | x86_64 | `ubuntu-26.04` | 含 Qt6 GUI |
+| Linux | arm64 | `ubuntu-26.04-arm` | 含 Qt6 GUI |
 | Windows | x86_64 | `windows-2025` | 含 Qt6 GUI（自带 Qt 运行库） |
 | Windows | arm64 | `windows-2025`（x64 宿主交叉编译） | 含 Qt6 GUI（自带 Qt 运行库） |
-| macOS | x86_64 | `macos-15-intel` | 含 Qt6 GUI |
-| macOS | arm64 | `macos-15` | 含 Qt6 GUI |
+| macOS | x86_64 | `macos-26-intel` | 含 Qt6 GUI |
+| macOS | arm64 | `macos-26` | 含 Qt6 GUI |
 
 Windows 全部使用 x64 runner：x86_64 为原生构建，ARM64 用 MSVC 交叉编译到
 ARM64（Qt 也用官方 ARM64 交叉编译包，宿主工具来自同版本 x64 包）。

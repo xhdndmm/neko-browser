@@ -29,23 +29,23 @@ jobs:
       matrix:
         include:
           - name: ubuntu-gcc-debug
-            os: ubuntu-latest
+            os: ubuntu-26.04
             preset: debug
           - name: ubuntu-gcc-release
-            os: ubuntu-latest
+            os: ubuntu-26.04
             preset: release
           - name: ubuntu-clang-debug
-            os: ubuntu-latest
+            os: ubuntu-26.04
             preset: debug
             cc: clang
             cxx: clang++
           - name: windows-msvc-debug
-            os: windows-latest
+            os: windows-2025
             preset: debug
             # Windows 上通过 vcpkg 提供 zlib/libjpeg/libwebp；Qt6 用官方 MSVC 预编译包
             # （见下方 Install Qt 步骤），GUI 与 CLI 一起构建并测试。
           - name: macos-clang-debug
-            os: macos-latest
+            os: macos-26
             preset: debug
     steps:
       - uses: actions/checkout@v7
@@ -102,7 +102,7 @@ jobs:
   # ---------------------------------------------------------------------------
   sanitizers:
     name: sanitizers (ASan+UBSan)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 
@@ -126,7 +126,7 @@ jobs:
   # ---------------------------------------------------------------------------
   coverage:
     name: coverage
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 
@@ -156,7 +156,7 @@ jobs:
   # ---------------------------------------------------------------------------
   format:
     name: clang-format
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 

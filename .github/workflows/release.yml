@@ -20,12 +20,12 @@ name: release
 # 步骤（上传产物、创建 Release）。约定见 docs/development/ci-scripts.md。
 #
 # 平台矩阵（Windows 全部使用 x64 runner；arm64 用 MSVC 交叉编译到 ARM64）：
-#   linux   x86_64  ubuntu-24.04
-#   linux   arm64   ubuntu-24.04-arm
+#   linux   x86_64  ubuntu-26.04
+#   linux   arm64   ubuntu-26.04-arm
 #   windows x86_64  windows-2025      （MSVC + vcpkg + Qt6 GUI，原生 x64）
 #   windows arm64   windows-2025      （MSVC 交叉编译到 ARM64 + Qt6 交叉编译包）
-#   macos   x86_64  macos-15-intel
-#   macos   arm64   macos-15
+#   macos   x86_64  macos-26-intel
+#   macos   arm64   macos-26
 #
 # 已知限制（同步记录在 docs/releases/README.md）：
 #   - Windows ARM64 产物由 x64 runner 交叉编译，无法在 x64 上执行，故该任务
@@ -56,7 +56,7 @@ jobs:
   # ---------------------------------------------------------------------------
   prepare:
     name: prepare
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
@@ -81,12 +81,12 @@ jobs:
       matrix:
         include:
           - name: linux-x86_64
-            os: ubuntu-24.04
+            os: ubuntu-26.04
             platform: linux
             arch: x86_64
             archive_ext: tar.gz
           - name: linux-arm64
-            os: ubuntu-24.04-arm
+            os: ubuntu-26.04-arm
             platform: linux
             arch: arm64
             archive_ext: tar.gz
@@ -125,12 +125,12 @@ jobs:
             qt_host_arch: win64_msvc2022_64
             qt_host_dir: msvc2022_64
           - name: macos-x86_64
-            os: macos-15-intel
+            os: macos-26-intel
             platform: macos
             arch: x86_64
             archive_ext: tar.gz
           - name: macos-arm64
-            os: macos-15
+            os: macos-26
             platform: macos
             arch: arm64
             archive_ext: tar.gz
@@ -270,7 +270,7 @@ jobs:
     needs: [prepare, build]
     # 只在标签推送时发布；workflow_dispatch 仅做演练构建。
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
     steps:
