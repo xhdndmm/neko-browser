@@ -1,5 +1,14 @@
 # neko-browser
 
+<p>
+  <a href="https://github.com/xhdndmm/neko-browser/stargazers"><img src="https://img.shields.io/github/stars/xhdndmm/neko-browser" alt="GitHub Stars"></a>
+  <a href="https://github.com/xhdndmm/neko-browser/issues"><img src="https://img.shields.io/github/issues/xhdndmm/neko-browser" alt="GitHub Issues"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Unlicense-green" alt="Unlicense License"></a>
+  <a href="https://www.isocpp.org/"><img src="https://img.shields.io/badge/C++-20%2B-blue" alt="C++20"></a>
+  <a href="https://github.com/xhdndmm/neko-browser/releases"><img src="https://img.shields.io/github/v/tag/xhdndmm/neko-browser?label=release" alt="Latest Release"></a>
+  <a href="https://github.com/xhdndmm/neko-browser/releases"><img src="https://img.shields.io/github/downloads/xhdndmm/neko-browser/total" alt="Downloads"></a>
+</p>
+
 > **状态：浏览器 UI 里程碑达成（Phases 1–7，含存储/图像/媒体/PDF）**
 > 一个从零开始、真正可编译可运行的**跨平台浏览器引擎与浏览器应用**，主要使用现代 C++20 编写。
 
