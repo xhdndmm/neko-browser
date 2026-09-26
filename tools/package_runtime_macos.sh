@@ -11,14 +11,27 @@
 #
 #   1. turns the GUI binary into a real .app bundle (writing Info.plist) and
 #      runs macdeployqt on it: Qt frameworks, Qt plugins *and* the non-Qt
-#      dylibs (FFmpeg, OpenSSL, ...) are copied into the bundle, install names
-#      are rewritten and everything is ad-hoc signed,
+#      dylibs (FFmpeg, OpenSSL, ...) are copied into the bundle and install
+#      names are rewritten,
 #   2. adds the offscreen platform plugin to the bundle as well (macdeployqt
 #      skips it by design) so headless smoke tests can run,
 #   3. bundles the CLI's non-Qt dylibs into <staging-dir>/lib (the CLI does not
 #      link Qt) and rewrites every reference to @executable_path/../lib/...,
-#   4. ad-hoc signs every Mach-O file it touched,
-#   5. verifies that no dependency still points into a Homebrew prefix.
+#   4. ad-hoc signs every Mach-O file in the bundle, seals the .app itself and
+#      verifies the result with `codesign --verify --deep`,
+#   5. verifies that every non-system dependency resolves to a file inside the
+#      package (@rpath / @loader_path / @executable_path included).
+#
+# macdeployqt's own signing pass is disabled when the option exists: it can
+# fail half-way through on bundles with mixed Homebrew dependency trees (and
+# it never seals the .app itself), so this script signs the finished bundle.
+#
+# The plugin set macdeployqt deploys comes from the Qt installation it belongs
+# to.  CI installs the qtbase keg only (the GUI uses Qt6 Widgets, tests use
+# Qt6 Test); the `qt` umbrella formula would additionally expose the plugins
+# of qtwebengine (QtPdf), qtvirtualkeyboard, qtsvg, ... — macdeployqt deploys
+# iconengines/platforminputcontexts plugins unconditionally, but the matching
+# frameworks live in other kegs and cannot be resolved from there.
 #
 # System libraries (/usr/lib, /System/...) are never touched: on macOS they
 # cannot be static and must match the host.
@@ -38,10 +51,21 @@ fi
 mkdir -p "$LIB_DIR"
 
 BREW_PREFIX="$(brew --prefix 2>/dev/null || echo /usr/local)"
-QT_PREFIX="${QT_PREFIX:-$BREW_PREFIX/opt/qt}"
+QT_PREFIX="${QT_PREFIX:-}"
+if [ -z "$QT_PREFIX" ]; then
+  # Prefer qtbase — the module the GUI links against and the only Qt keg CI
+  # installs (see the header).  Fall back to the `qt` umbrella prefix for
+  # developer machines that installed the full meta formula.
+  for candidate in "$BREW_PREFIX/opt/qtbase" "$BREW_PREFIX/opt/qt"; do
+    if [ -x "$candidate/bin/macdeployqt" ]; then
+      QT_PREFIX="$candidate"
+      break
+    fi
+  done
+fi
 MACDEPLOYQT="${MACDEPLOYQT:-}"
 if [ -z "$MACDEPLOYQT" ]; then
-  if [ -x "$QT_PREFIX/bin/macdeployqt" ]; then
+  if [ -n "$QT_PREFIX" ] && [ -x "$QT_PREFIX/bin/macdeployqt" ]; then
     MACDEPLOYQT="$QT_PREFIX/bin/macdeployqt"
   else
     MACDEPLOYQT="$(command -v macdeployqt || true)"
@@ -133,6 +157,26 @@ sign_file() {
   codesign --force --sign - "$1"
 }
 
+# Ad-hoc sign the complete GUI bundle: every nested Mach-O first, then the
+# bundle itself (codesign refuses to seal a bundle whose nested code is not
+# signed), then verify the result.  macdeployqt's own signing pass is not used
+# (see the header): it fails half-way through for our dependency tree and does
+# not seal the .app root, which leaves an unsigned bundle behind.
+sign_app_bundle() {
+  [ -d "$APP_DIR" ] || return 0
+  local f output
+  while IFS= read -r -d '' f; do
+    sign_file "$f"
+  done < <(find "$APP_DIR" -type f -print0)
+
+  codesign --force --sign - "$APP_DIR"
+  if ! output="$(codesign --verify --deep --verbose=2 "$APP_DIR" 2>&1)"; then
+    echo "$output" >&2
+    echo "error: app bundle signature verification failed: $APP_DIR" >&2
+    exit 1
+  fi
+}
+
 # --- CLI: bundle every non-system dylib into lib/ ----------------------------
 
 # Walks the dependency closure of the CLI (which does not link Qt; the GUI is
@@ -212,13 +256,24 @@ bundle_gui() {
 EOF
 
   echo "==> macdeployqt"
-  "$MACDEPLOYQT" "$APP_DIR"
+  # Recent macdeployqt versions ad-hoc sign the bundle by default.  Skip that
+  # pass when supported: it can fail half-way through and leaves stale or
+  # missing signatures behind; the script signs the finished bundle itself
+  # (see sign_app_bundle).  The option is probed from the usage output so old
+  # macdeployqt builds keep working.
+  local help_output
+  local deploy_args=()
+  help_output="$("$MACDEPLOYQT" 2>&1 || true)"
+  if grep -q -- '-no-codesign' <<<"$help_output"; then
+    deploy_args+=(-no-codesign)
+  fi
+  "$MACDEPLOYQT" "${deploy_args[@]}" "$APP_DIR"
 
   # macdeployqt deliberately skips the offscreen platform plugin; add it back
   # (pointing at the deployed frameworks) so `QT_QPA_PLATFORM=offscreen` works
   # for smoke tests and headless screenshots.
   plugin_dir="${QT_PLUGIN_DIR:-}"
-  if [ -z "$plugin_dir" ] && [ -x "$QT_PREFIX/bin/qmake" ]; then
+  if [ -z "$plugin_dir" ] && [ -n "$QT_PREFIX" ] && [ -x "$QT_PREFIX/bin/qmake" ]; then
     plugin_dir="$("$QT_PREFIX/bin/qmake" -query QT_INSTALL_PLUGINS)"
   fi
   if [ -n "$plugin_dir" ] && [ -f "$plugin_dir/platforms/libqoffscreen.dylib" ]; then
@@ -243,25 +298,103 @@ EOF
     echo "warning: libqoffscreen.dylib not found; skipping offscreen plugin" >&2
   fi
 
+  echo "==> Signing app bundle (ad-hoc)"
+  sign_app_bundle
+
   # The app bundle is one user-visible artifact; the loose GUI binary is gone.
   echo "==> GUI bundled as $(basename "$APP_DIR")"
 }
 
 # --- verification ------------------------------------------------------------
 
+# LC_RPATH entries that dyld may consult when resolving @rpath references of
+# $1: the file's own, plus those of the main executable.  dyld accumulates
+# rpaths along the load chain and macdeployqt relies on that — framework
+# binaries keep @rpath references while only the app binary receives an
+# @executable_path/../Frameworks rpath.
+resolution_rpaths() {
+  local file="$1" main="$2" rpath
+  while read -r rpath; do
+    if [ -n "$rpath" ]; then printf '%s\n' "$rpath"; fi
+  done < <(macho_rpaths "$file")
+  if [ -n "$main" ] && [ "$main" != "$file" ] && [ -f "$main" ]; then
+    while read -r rpath; do
+      if [ -n "$rpath" ]; then printf '%s\n' "$rpath"; fi
+    done < <(macho_rpaths "$main")
+  fi
+}
+
+# Resolve one dependency reference (as printed by otool -L) of $1 to a file
+# inside the package.  $3 is the directory @executable_path stands for (bin/
+# for the CLI, Contents/MacOS inside the bundle); $4 is the main executable
+# whose LC_RPATHs take part in @rpath resolution.  Prints the reference itself
+# for system libraries, the resolved path for package files, and nothing when
+# the reference does not resolve inside the package.
+resolve_packaged_ref() {
+  local file="$1" ref="$2" exec_dir="$3" main="$4"
+  local dir candidate tail rpath
+  dir="$(dirname "$file")"
+  case "$ref" in
+    /usr/lib/*|/System/*)
+      # Part of macOS itself and always present on the target machine.
+      printf '%s\n' "$ref"
+      return 0 ;;
+    @executable_path/*)
+      candidate="$exec_dir/${ref#@executable_path/}" ;;
+    @loader_path/*)
+      candidate="$dir/${ref#@loader_path/}" ;;
+    @rpath/*)
+      tail="${ref#@rpath/}"
+      while read -r rpath; do
+        if [ -z "$rpath" ]; then continue; fi
+        case "$rpath" in
+          @loader_path/*)     rpath="$dir/${rpath#@loader_path/}" ;;
+          @executable_path/*) rpath="$exec_dir/${rpath#@executable_path/}" ;;
+        esac
+        if [ -e "$rpath/$tail" ]; then
+          candidate="$rpath/$tail"
+          break
+        fi
+      done < <(resolution_rpaths "$file" "$main")
+      ;;
+    *)
+      # Absolute references (Homebrew leftovers land here); accepted only when
+      # they point inside the package.
+      candidate="$ref" ;;
+  esac
+  if [ -z "$candidate" ] || [ ! -e "$candidate" ]; then
+    return 1
+  fi
+  candidate="$(cd "$(dirname "$candidate")" && pwd -P)/$(basename "$candidate")"
+  case "$candidate" in
+    "$STAGE_DIR"/*) printf '%s\n' "$candidate" ;;
+    *) return 1 ;;
+  esac
+}
+
+# Fail when any dependency of any Mach-O file in the package would not resolve
+# on a machine that only has this package (plus macOS itself).  This subsumes
+# the old "no reference may point into a Homebrew prefix" check: @rpath,
+# @loader_path and @executable_path references are resolved the way dyld
+# resolves them (LC_RPATH included), and the resolved file must live inside
+# the package.
 verify() {
-  local rc=0 f ref
+  local rc=0 f ref exec_dir main
   while IFS= read -r -d '' f; do
     mach_o "$f" || continue
+    exec_dir="$BIN_DIR"
+    main="$BIN_DIR/neko_browser"
+    case "$f" in
+      "$APP_DIR"/*)
+        exec_dir="$APP_DIR/Contents/MacOS"
+        main="$APP_DIR/Contents/MacOS/neko_browser_gui" ;;
+    esac
     while read -r ref; do
       [ -n "$ref" ] || continue
-      case "$ref" in
-        /usr/lib/*|/System/*) continue ;;
-        @executable_path/../lib/*) continue ;;
-        @executable_path/../Frameworks/*) continue ;;
-      esac
-      echo "error: $(basename "$f") still references $ref" >&2
-      rc=1
+      if [ -z "$(resolve_packaged_ref "$f" "$ref" "$exec_dir" "$main")" ]; then
+        echo "error: $(basename "$f") depends on $ref, which does not resolve inside the package" >&2
+        rc=1
+      fi
     done < <(macho_deps "$f")
   done < <(find "$STAGE_DIR" -type f -print0)
   return "$rc"

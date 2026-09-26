@@ -50,9 +50,16 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y zlib1g-dev libjpeg-dev libwebp-dev libfreetype-dev libssl-dev qt6-base-dev libavcodec-dev libavformat-dev libavutil-dev libavdevice-dev libswscale-dev libavif-dev
 
+      # 与 release.yml 保持一致：只装 qtbase（GUI 只用 Widgets，测试用 Test）。
+      # 聚合包 `qt` 会拖入 qtwebengine/qtvirtualkeyboard/qtsvg 等所有模块，
+      # 发布打包时 macdeployqt 会部署解析不到的插件（见 release.yml 同段注释）。
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install jpeg webp qt freetype openssl ffmpeg libavif
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install jpeg webp qtbase freetype openssl ffmpeg libavif
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix);$(brew --prefix qtbase)" >> "$GITHUB_ENV"
 
       # vcpkg 无官方 setup action，手动 clone + bootstrap（不依赖第三方 action）。
       - name: Set up vcpkg (Windows)

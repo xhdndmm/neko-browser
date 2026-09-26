@@ -185,11 +185,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          brew install jpeg webp qt freetype openssl ffmpeg libavif
-          # Homebrew 的 qt / openssl 是 keg-only，不会符号链接进 prefix，
-          # 需要显式告知 CMake 与 pkg-config（Intel runner 的 prefix 为 /usr/local）。
+          # Qt 只装 qtbase：GUI 只用 Widgets（测试用 Test）。不要装聚合包 `qt`——
+          # 它会拖入 qtwebengine（QtPdf）、qtvirtualkeyboard、qtsvg、qtdeclarative，
+          # 并把它们的插件符号链接进共享插件目录；而 macdeployqt 会*无条件*部署
+          # iconengines / platforminputcontexts / imageformats 里的插件，对应的
+          # framework 却分散在各自的 keg 里解析不到 → 打包出现 “Cannot resolve
+          # rpath” 与依赖校验失败（2026-09 rc2 macOS 发布失败的根因之一）。
+          brew install jpeg webp qtbase freetype openssl ffmpeg libavif
+          # openssl 是 keg-only，不会符号链接进 prefix；qtbase 也显式加入
+          # CMAKE_PREFIX_PATH，保证 find_package(Qt6) 不依赖 keg 链接方式
+          # （Intel runner 的 prefix 为 /usr/local）。
           {
-            echo "CMAKE_PREFIX_PATH=$(brew --prefix);$(brew --prefix qt)"
+            echo "CMAKE_PREFIX_PATH=$(brew --prefix);$(brew --prefix qtbase)"
             echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl)"
             echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig"
           } >> "$GITHUB_ENV"
@@ -571,9 +578,14 @@ jobs:
             }
           }
 
-          # FFmpeg 运行库（LGPL：不静态链接，随包分发动态库）。
-          Get-ChildItem "$env:VCPKG_ROOT\installed\${{ matrix.vcpkg_dynamic_triplet }}\bin\av*.dll" |
-            Copy-Item -Destination "$env:PACKAGE/bin/"
+          # FFmpeg 运行库（LGPL：不静态链接，随包分发动态库）。模式必须覆盖整个
+          # FFmpeg DLL 家族：av*（avcodec/avformat/avutil/avdevice/avfilter）、
+          # sw*（swscale/swresample）、postproc*。只写 `av*.dll` 会漏掉
+          # swscale-*.dll——两个可执行文件都导入它，零安装校验因此失败。
+          foreach ($pattern in @('av*.dll', 'sw*.dll', 'postproc*.dll')) {
+            Get-ChildItem "$env:VCPKG_ROOT\installed\${{ matrix.vcpkg_dynamic_triplet }}\bin\$pattern" |
+              Copy-Item -Destination "$env:PACKAGE/bin/"
+          }
 
           # MSVC 运行库：静态三元组用的仍是动态 CRT（与官方 Qt 的 /MD 一致），
           # windeployqt 不负责跨架构部署，统一从 VS 的 Redist 目录拷贝。
@@ -594,7 +606,8 @@ jobs:
           Get-Content "$zip.sha256"
 
       # 零安装校验：被静态链接的依赖不得再以 DLL 形式出现；运行库必须随包；
-      # 两个可执行文件的导入表只能引用包内文件或系统 DLL。
+      # 包内每个 PE 文件（exe + dll）的导入表只能引用包内文件、系统 DLL 或
+      # Windows API set。
       - name: Verify package dependencies (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -630,7 +643,13 @@ jobs:
             $failed = $true
           }
 
-          # 3) 导入表检查：每个导入的 DLL 要么在包内，要么是目标机器自带的系统 DLL。
+          # 3) 导入表检查：包内每个 PE 文件（.exe 与 .dll）的每个导入都必须来自
+          #    包内、System32，或 Windows API set。把包内所有 DLL 也检查一遍
+          #    等价于验证完整的传递闭包——只看 exe 会漏掉“主程序能启动、某个
+          #    DLL 间接缺依赖”的情况（swscale-*.dll 就是这类漏检）。
+          #    api-ms-win-* / ext-ms-win-* 是 API set 契约名，由加载器按
+          #    apisetschema 解析（Win10+ 系统自带），不是磁盘文件，因此不能用
+          #    Test-Path System32 判断。
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
             -latest -property installationPath
           $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" |
@@ -641,18 +660,23 @@ jobs:
           Get-ChildItem $bin -Recurse -File |
             ForEach-Object { $packageFiles[$_.Name.ToLower()] = $true }
 
-          foreach ($exe in @(Get-ChildItem "$bin/*.exe")) {
-            $imports = & $dumpbin.FullName /nologo /dependents $exe.FullName |
+          $checked = 0
+          foreach ($binary in @(Get-ChildItem $bin -Recurse -File |
+                                  Where-Object { $_.Extension -in '.exe', '.dll' })) {
+            $checked++
+            $imports = & $dumpbin.FullName /nologo /dependents $binary.FullName |
               ForEach-Object {
                 if ($_ -match '^\s+(\S+\.dll)\s*$') { $Matches[1].ToLower() }
               }
             foreach ($dll in $imports) {
+              if ($dll -match '^(api|ext)-ms-win-') { continue }
               if ($packageFiles.ContainsKey($dll)) { continue }
               if (Test-Path "$env:SystemRoot\System32\$dll") { continue }
-              Write-Host "::error::$($exe.Name) 导入 $dll，但包内与系统目录都不存在"
+              Write-Host "::error::$($binary.Name) 导入 $dll，但包内与系统目录都不存在"
               $failed = $true
             }
           }
+          Write-Host "checked $checked PE files"
 
           if ($failed) { throw '零安装校验失败' }
           Write-Host 'package dependency check OK'

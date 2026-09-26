@@ -57,15 +57,19 @@ Windows 链接方式（见 [ADR 0019](../architecture/adr/0019-release-runtime-p
 ### 零安装打包（ADR 0019）
 
 - **Windows**：静态链接（见上）+ 捆绑 Qt（`windeployqt` / ARM64 手工部署）、
-  FFmpeg DLL 与 MSVC 运行库；打包后校验导入表（只允许系统 DLL 或包内文件），
-  且被静态链接的依赖不得再以 DLL 形式出现。
+  FFmpeg DLL 与 MSVC 运行库；打包后校验**包内每个 PE 文件**（exe 与 dll）的
+  导入表——只允许包内文件、System32 或 Windows API set（`api-ms-win-*`，
+  由加载器解析、不是磁盘文件），即完整传递闭包；且被静态链接的依赖不得
+  再以 DLL 形式出现。
 - **Linux**：`tools/package_runtime_linux.sh` 把全部非系统库（Qt、FFmpeg、
   OpenSSL、...）复制进 `lib/`、Qt 插件进 `plugins/`，RPATH 改写为 `$ORIGIN`
   相对路径；**不**捆绑 glibc（NSS/DNS 需要）与 GPU/驱动栈（需要匹配内核驱动）。
 - **macOS**：`tools/package_runtime_macos.sh` 把 GUI 组装为
   `neko_browser_gui.app` 并交给 `macdeployqt`（Qt framework、插件、非 Qt dylib
-  一并部署并 ad-hoc 签名）；CLI 的依赖捆绑进 `lib/`，引用改写为
-  `@executable_path/../lib/...`。系统框架仍来自目标机。
+  一并部署；Qt 只装 Homebrew `qtbase`，见 ADR 0019）；ad-hoc 签名由脚本在
+  部署完成后统一完成（从内到外 + 封 `.app` + `codesign --verify --deep`）。
+  CLI 的依赖捆绑进 `lib/`，引用改写为 `@executable_path/../lib/...`。
+  打包后按 dyld 语义校验每个依赖都能解析到包内文件；系统框架仍来自目标机。
 - 打包后立即用**产物本身**跑冒烟测试（CLI `--dump-dom`；GUI 以
   `QT_QPA_PLATFORM=offscreen` 启动），且清空 `LD_LIBRARY_PATH` /
   `DYLD_LIBRARY_PATH`，避免借用到构建机已装的库。

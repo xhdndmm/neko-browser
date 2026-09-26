@@ -60,13 +60,25 @@ Qt 插件（platforms/imageformats）复制到 `plugins/`，`bin/qt.conf` 指向
 
 - GUI 组装为 `neko_browser_gui.app`（脚本写 `Info.plist`），由
   `macdeployqt` 部署 Qt framework、Qt 插件，**以及非 Qt 的 dylib**
-  （FFmpeg/OpenSSL/...），并做 ad-hoc 签名；脚本再补一个 offscreen 平台
+  （FFmpeg/OpenSSL/...）；脚本再补一个 offscreen 平台
   插件供 headless 冒烟。`dylibbundler` 之类工具明确跳过 `.framework`，
   无法处理 Homebrew 的 Qt，故选官方工具链。
+- CI 只安装 Homebrew 的 `qtbase`（GUI 仅用 Qt6 Widgets，测试用 Qt6 Test）。
+  聚合包 `qt` 会把 qtwebengine（QtPdf）、qtvirtualkeyboard、qtsvg、
+  qtdeclarative 等模块的插件放进共享插件目录，而 `macdeployqt` 会**无条件**
+  部署 `iconengines`/`platforminputcontexts`/`imageformats` 中的插件、却
+  解析不到分散在其他 keg 的 framework → “Cannot resolve rpath”，产物依赖
+  校验失败（2026-09 rc2 macOS 发布失败复盘）。
+- ad-hoc 签名由脚本自己完成：`macdeployqt` 自带的签名在含 Homebrew 依赖树
+  的 bundle 上会半途失败，且从不封 `.app` 本身。脚本在部署完成后关闭它
+  （`-no-codesign`，旧版本无此选项则忽略其结果），从内到外重签 bundle 内的
+  所有 Mach-O，再签 bundle 根并用 `codesign --verify --deep` 校验。
 - CLI 不含 Qt：脚本自行解析 `otool -L` 闭包，把非系统 dylib 复制到 `lib/`，
   引用改写为 `@executable_path/../lib/...`，重签并且清理指向 Homebrew
   的 LC_RPATH。
-- 系统库（`/usr/lib`、`/System`）永不复制：macOS 上它们无法静态且必须与
+- 打包后校验按 dyld 语义解析每个非系统依赖（`@rpath` 查 LC_RPATH，
+  `@loader_path`/`@executable_path` 按文件位置展开），要求解析结果落在包内；
+  系统库（`/usr/lib`、`/System`）永不复制：macOS 上它们无法静态且必须与
   主机一致。
 
 ### 通用

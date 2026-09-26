@@ -87,7 +87,10 @@ CC=clang CXX=clang++ cmake --preset debug
   OpenSSL（HTTPS/TLS）、FFmpeg（视频解码，`neko::media` 使用，必需）、
   Qt6 Widgets（GUI，可选；`NEKO_BUILD_UI=OFF` 可跳过）。
   - Debian/Ubuntu：`sudo apt install zlib1g-dev libjpeg-dev libwebp-dev libavif-dev libfreetype-dev libssl-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev qt6-base-dev`
-  - macOS（Homebrew）：`brew install jpeg webp libavif freetype qt openssl ffmpeg`
+  - macOS（Homebrew）：`brew install jpeg webp libavif freetype qtbase openssl ffmpeg`
+    （Qt 只需 `qtbase`：GUI 只用 Qt6 Widgets。不要装聚合包 `qt`——它会拖入
+    qtsvg/qtvirtualkeyboard/qtwebengine 等模块，macOS 发布打包时 macdeployqt
+    会部署这些模块的插件却解析不到其 framework，见 ADR 0019。）
   - Windows（vcpkg）：`vcpkg install zlib libjpeg-turbo 'libavif[dav1d]' libwebp freetype openssl ffmpeg`，配置时传入
     `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake`。
     libavif 自身不含 AV1 解码器且 vcpkg 端口没有默认特性，**必须显式选择
