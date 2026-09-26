@@ -139,16 +139,50 @@ is_system_ref() {
   return 1
 }
 
-# Drop LC_RPATH entries pointing into a Homebrew prefix: every non-system
-# dependency is rewritten to an explicit @executable_path reference, so the
-# stale entries would only risk resolving something from the build machine.
-delete_brew_rpaths() {
-  local f="$1" rpath
+# Lexically collapse '.' and '..' segments (no symlinks involved) so an LC_RPATH
+# such as '@loader_path/../..' is recognised as leaving the package instead of
+# being accepted by a string prefix match.
+canonicalize_path() {
+  local rest part result
+  rest="$1"
+  result=""
+  while [ -n "$rest" ]; do
+    case "$rest" in
+      */*) part="${rest%%/*}"; rest="${rest#*/}" ;;
+      *)   part="$rest"; rest="" ;;
+    esac
+    case "$part" in
+      ''|.) ;;
+      '..')
+        if [ -n "$result" ]; then result="${result%/*}"; fi ;;
+      *) result="$result/$part" ;;
+    esac
+  done
+  if [ -z "$result" ]; then result="/"; fi
+  printf '%s\n' "$result"
+}
+
+# Drop every LC_RPATH entry that does not lead into the package: every
+# non-system dependency is rewritten to an explicit @executable_path /
+# @loader_path reference, so a leftover entry can only make dyld load a
+# library from the build machine (Homebrew, Xcode, ...) instead of the copy
+# shipped in the package.  $2 is the directory @executable_path stands for
+# (bin/ for the CLI, Contents/MacOS inside the .app).
+delete_external_rpaths() {
+  local f="$1" exec_dir="$2" dir rpath expanded
+  dir="$(dirname "$f")"
   while read -r rpath; do
     [ -n "$rpath" ] || continue
-    case "$rpath" in
-      "$BREW_PREFIX"/*) install_name_tool -delete_rpath "$rpath" "$f" >/dev/null 2>&1 || true ;;
+    expanded="$rpath"
+    case "$expanded" in
+      @loader_path/*)     expanded="$dir/${expanded#@loader_path/}" ;;
+      @executable_path/*) expanded="$exec_dir/${expanded#@executable_path/}" ;;
     esac
+    expanded="$(canonicalize_path "$expanded")"
+    case "$expanded" in
+      "$STAGE_DIR"/*) continue ;;
+    esac
+    install_name_tool -delete_rpath "$rpath" "$f" >/dev/null 2>&1 || true
   done < <(macho_rpaths "$f")
 }
 
@@ -215,8 +249,8 @@ bundle_cli() {
       install_name_tool -change "$dep" "@executable_path/../lib/$base" "$file"
     fi
     # Rewriting references invalidates signatures; re-sign the touched files.
-    delete_brew_rpaths "$file"
-    delete_brew_rpaths "$LIB_DIR/$base"
+    delete_external_rpaths "$file" "$BIN_DIR"
+    delete_external_rpaths "$LIB_DIR/$base" "$BIN_DIR"
     sign_file "$file"
     sign_file "$LIB_DIR/$base"
   done
@@ -303,11 +337,74 @@ EOF
     echo "warning: libqoffscreen.dylib not found; skipping offscreen plugin" >&2
   fi
 
+  echo "==> Normalizing bundled dependency references"
+  normalize_app_bundle
+
   echo "==> Signing app bundle (ad-hoc)"
   sign_app_bundle
 
   # The app bundle is one user-visible artifact; the loose GUI binary is gone.
   echo "==> GUI bundled as $(basename "$APP_DIR")"
+}
+
+# macdeployqt rewrites a dependency reference only when it resolved that
+# dependency without an LC_RPATH (deployQtFrameworks() in
+# qtbase/src/tools/macdeployqt/shared/shared.cpp: a dependency with a
+# non-empty rpathUsed keeps its '@rpath/<name>' reference; changeIdentification
+# and deployRPaths() are likewise only applied to the bundle's *main* binaries).
+# A deployed third-party dylib such as Homebrew's libwebp.7.dylib therefore
+# keeps both its '/opt/homebrew/...' LC_RPATH and its '@rpath/libsharpyuv.0.dylib'
+# reference, even though the target was copied next to it into
+# Contents/Frameworks.  On a machine that has that prefix, dyld would then load
+# the build machine's copy instead of the bundled one.
+#
+# Mirror the CLI treatment over the finished bundle: drop LC_RPATHs that leave
+# the package and point every reference whose target is deployed under
+# Contents/Frameworks at '@executable_path/../Frameworks/<name>'.  References
+# that already resolve inside the bundle (@executable_path, @loader_path such
+# as ICU's '@loader_path/libicuuc.78.dylib') are left untouched;
+# sign_app_bundle re-signs every file this pass modifies.
+normalize_app_bundle() {
+  [ -d "$APP_DIR" ] || return 0
+  local frameworks_dir="$APP_DIR/Contents/Frameworks"
+  local exec_dir="$APP_DIR/Contents/MacOS"
+  local f ref dir tail base rel
+  while IFS= read -r -d '' f; do
+    mach_o "$f" || continue
+    dir="$(dirname "$f")"
+    delete_external_rpaths "$f" "$exec_dir"
+    while read -r ref; do
+      [ -n "$ref" ] || continue
+      is_system_ref "$ref" && continue
+      case "$ref" in
+        @executable_path/*) continue ;; # already bundle-relative
+        @loader_path/*)
+          # Same-directory references (ICU's '@loader_path/libicuuc.78.dylib')
+          # stay as long as they resolve inside the package; an escaping one
+          # falls through and is relocated below.
+          case "$(canonicalize_path "$dir/${ref#@loader_path/}")" in
+            "$STAGE_DIR"/*) continue ;;
+          esac ;;
+      esac
+      rel=""
+      case "$ref" in
+        @rpath/*)
+          tail="${ref#@rpath/}"
+          if [ -e "$frameworks_dir/$tail" ]; then rel="$tail"; fi ;;
+        *)
+          base="${ref##*/}"
+          if [ -e "$frameworks_dir/$base" ]; then rel="$base"; fi ;;
+      esac
+      [ -n "$rel" ] || {
+        case "$ref" in
+          /*|@rpath/*)
+            printf 'warning: %s: %s is not deployed under Contents/Frameworks\n' "${f#"$STAGE_DIR"/}" "$ref" >&2 ;;
+        esac
+        continue
+      }
+      install_name_tool -change "$ref" "@executable_path/../Frameworks/$rel" "$f"
+    done < <(macho_deps "$f")
+  done < <(find "$APP_DIR" -type f -print0)
 }
 
 # --- verification ------------------------------------------------------------
@@ -350,15 +447,18 @@ resolve_packaged_ref() {
       candidate="$dir/${ref#@loader_path/}" ;;
     @rpath/*)
       tail="${ref#@rpath/}"
+      # dyld takes the first LC_RPATH that contains the file; keep reading the
+      # rest of the list (a 'break' here makes the producer's printf fail with
+      # EPIPE and spams the log).
+      candidate=""
       while read -r rpath; do
         if [ -z "$rpath" ]; then continue; fi
         case "$rpath" in
           @loader_path/*)     rpath="$dir/${rpath#@loader_path/}" ;;
           @executable_path/*) rpath="$exec_dir/${rpath#@executable_path/}" ;;
         esac
-        if [ -e "$rpath/$tail" ]; then
+        if [ -z "$candidate" ] && [ -e "$rpath/$tail" ]; then
           candidate="$rpath/$tail"
-          break
         fi
       done < <(resolution_rpaths "$file" "$main")
       ;;
@@ -367,13 +467,20 @@ resolve_packaged_ref() {
       # they point inside the package.
       candidate="$ref" ;;
   esac
-  if [ -z "$candidate" ] || [ ! -e "$candidate" ]; then
+  if [ -z "$candidate" ]; then
+    printf '  %s: no LC_RPATH of the file or of the main executable contains it\n' "$ref" >&2
+    return 1
+  fi
+  if [ ! -e "$candidate" ]; then
+    printf '  %s: no file at %s\n' "$ref" "$candidate" >&2
     return 1
   fi
   candidate="$(cd "$(dirname "$candidate")" && pwd -P)/$(basename "$candidate")"
   case "$candidate" in
     "$STAGE_DIR"/*) printf '%s\n' "$candidate" ;;
-    *) return 1 ;;
+    *)
+      printf '  %s: resolves to %s, which is outside the package\n' "$ref" "$candidate" >&2
+      return 1 ;;
   esac
 }
 
@@ -397,7 +504,7 @@ verify() {
     while read -r ref; do
       [ -n "$ref" ] || continue
       if [ -z "$(resolve_packaged_ref "$f" "$ref" "$exec_dir" "$main")" ]; then
-        echo "error: $(basename "$f") depends on $ref, which does not resolve inside the package" >&2
+        echo "error: ${f#"$STAGE_DIR"/} depends on $ref, which does not resolve inside the package" >&2
         rc=1
       fi
     done < <(macho_deps "$f")

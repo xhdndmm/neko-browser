@@ -74,11 +74,25 @@ Qt 插件（platforms/imageformats）复制到 `plugins/`，`bin/qt.conf` 指向
   的 bundle 上会半途失败，且从不封 `.app` 本身。脚本在部署完成后关闭它
   （`-no-codesign`，旧版本无此选项则忽略其结果），从内到外重签 bundle 内的
   所有 Mach-O，再签 bundle 根并用 `codesign --verify --deep` 校验。
+- `macdeployqt` 只改写“**没有**通过 LC_RPATH 解析到”的依赖
+  （`deployQtFrameworks()`：`rpathUsed` 非空的依赖保留 `@rpath/<name>` 引用，
+  `changeIdentification()` 与 `deployRPaths()` 同样只作用于 bundle 的主
+  二进制）。因此被部署的第三方 dylib（典型的：Homebrew 的
+  `libwebp.7.dylib` → `@rpath/libsharpyuv.0.dylib`）会连同 `/opt/homebrew/...`
+  的 LC_RPATH 一起被原样复制进 `Contents/Frameworks`；在装有 Homebrew 的机器上
+  dyld 会加载构建机的库而不是包内副本（2026-09 rc2 macOS 发布失败的根因）。
+  部署后脚本再加一遍**归一化**，与 CLI 用同一套规则：删除所有落不到包内的
+  LC_RPATH（包括 `@loader_path/../..` 这类靠 `..` 逃逸的条目，按词法归一化
+  判断），把目标已部署在 `Contents/Frameworks` 下的 `@rpath/...`／绝对路径
+  引用改写为 `@executable_path/../Frameworks/...`；已经能在包内解析的
+  `@executable_path`/`@loader_path` 引用保持原样。
 - CLI 不含 Qt：脚本自行解析 `otool -L` 闭包，把非系统 dylib 复制到 `lib/`，
-  引用改写为 `@executable_path/../lib/...`，重签并且清理指向 Homebrew
-  的 LC_RPATH。
+  引用改写为 `@executable_path/../lib/...`，重签并删除所有落不到包内的
+  LC_RPATH（不再只限“指向 Homebrew 前缀”的条目）。
 - 打包后校验按 dyld 语义解析每个非系统依赖（`@rpath` 查 LC_RPATH，
   `@loader_path`/`@executable_path` 按文件位置展开），要求解析结果落在包内；
+  失败时打印该文件的包内相对路径与解析结果（解析到包外、或没有任何 LC_RPATH
+  命中），避免再次出现只能靠猜的 `libwebp.7.dylib` 双副本歧义。
   系统库（`/usr/lib`、`/System`）永不复制：macOS 上它们无法静态且必须与
   主机一致。
 
