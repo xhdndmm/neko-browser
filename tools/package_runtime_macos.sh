@@ -17,8 +17,11 @@
 #      skips it by design) so headless smoke tests can run,
 #   3. bundles the CLI's non-Qt dylibs into <staging-dir>/lib (the CLI does not
 #      link Qt) and rewrites every reference to @executable_path/../lib/...,
-#   4. ad-hoc signs every Mach-O file in the bundle, seals the .app itself and
-#      verifies the result with `codesign --verify --deep`,
+#   4. ad-hoc signs every Mach-O file in the bundle, seals the .app with
+#      `codesign --deep` (a plain seal can abort on Xcode 26 with a misleading
+#      "code object is not signed at all" subcomponent error even though the
+#      nested code was signed above) and verifies the result with
+#      `codesign --verify --deep`,
 #   5. verifies that every non-system dependency resolves to a file inside the
 #      package (@rpath / @loader_path / @executable_path included).
 #
@@ -196,6 +199,15 @@ sign_file() {
 # signed), then verify the result.  macdeployqt's own signing pass is not used
 # (see the header): it fails half-way through for our dependency tree and does
 # not seal the .app root, which leaves an unsigned bundle behind.
+#
+# The seal itself must pass --deep: Xcode 26's codesign aborts a plain bundle
+# sign on already-signed nested items with a misleading "code object is not
+# signed at all / In subcomponent: <path>" error (macOS x86_64 runner, release
+# run 36234131045: Contents/PlugIns/platforms/libqcocoa.dylib), while --deep
+# (re)signs the nested code inside-out itself and then seals successfully.
+# The explicit pass above is kept: it signs every Mach-O deterministically and
+# stays the guarantee that the nested code is signed even if a future --deep
+# implementation skips an item.
 sign_app_bundle() {
   [ -d "$APP_DIR" ] || return 0
   local f output
@@ -203,7 +215,11 @@ sign_app_bundle() {
     sign_file "$f"
   done < <(find "$APP_DIR" -type f -print0)
 
-  codesign --force --sign - "$APP_DIR"
+  if ! output="$(codesign --force --deep --sign - "$APP_DIR" 2>&1)"; then
+    echo "$output" >&2
+    echo "error: failed to sign the app bundle: $APP_DIR" >&2
+    exit 1
+  fi
   if ! output="$(codesign --verify --deep --verbose=2 "$APP_DIR" 2>&1)"; then
     echo "$output" >&2
     echo "error: app bundle signature verification failed: $APP_DIR" >&2

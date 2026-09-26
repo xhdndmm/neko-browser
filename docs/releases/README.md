@@ -72,7 +72,8 @@ Windows 链接方式（见 [ADR 0019](../architecture/adr/0019-release-runtime-p
   依赖归一化（删除落不到包内的 LC_RPATH、把已部署依赖的引用改写为
   `@executable_path/../Frameworks/...`——`macdeployqt` 对经 LC_RPATH 命中的
   依赖两者都不做）；ad-hoc 签名由脚本在归一化后统一完成
-  （从内到外 + 封 `.app` + `codesign --verify --deep`）。
+  （从内到外 + `codesign --deep` 封 `.app` + `codesign --verify --deep`；
+  封包必须带 `--deep`，原因见 ADR 0019）。
   CLI 的依赖捆绑进 `lib/`，引用改写为 `@executable_path/../lib/...`。
   打包后按 dyld 语义校验每个依赖都能解析到包内文件；系统框架仍来自目标机。
 - 打包后立即用**产物本身**跑冒烟测试（CLI `--dump-dom`；GUI 以
