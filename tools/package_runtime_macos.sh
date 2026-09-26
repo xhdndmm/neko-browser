@@ -261,13 +261,18 @@ EOF
   # missing signatures behind; the script signs the finished bundle itself
   # (see sign_app_bundle).  The option is probed from the usage output so old
   # macdeployqt builds keep working.
+  #
+  # Argument order is dictated by macdeployqt itself (src/tools/macdeployqt/
+  # macdeployqt/main.cpp): argv[1] must be the app bundle — when it starts
+  # with '-' the tool prints its usage text and exits 1 — and options are
+  # parsed from argv[2] onward.  An option therefore never goes first.
   local help_output
-  local deploy_args=()
   help_output="$("$MACDEPLOYQT" 2>&1 || true)"
   if grep -q -- '-no-codesign' <<<"$help_output"; then
-    deploy_args+=(-no-codesign)
+    "$MACDEPLOYQT" "$APP_DIR" -no-codesign
+  else
+    "$MACDEPLOYQT" "$APP_DIR"
   fi
-  "$MACDEPLOYQT" "${deploy_args[@]}" "$APP_DIR"
 
   # macdeployqt deliberately skips the offscreen platform plugin; add it back
   # (pointing at the deployed frameworks) so `QT_QPA_PLATFORM=offscreen` works
