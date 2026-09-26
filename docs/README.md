@@ -19,6 +19,15 @@ neko-browser 的文档体系。文档是项目的一等公民 —— 改动架�
   - [0008：JS runtime 接入 QuickJS](architecture/adr/0008-quickjs-runtime.md)
   - [0009：文本渲染迁移到 FreeType](architecture/adr/0009-freetype-font-rendering.md)
   - [0010：HTTPS/TLS 采用 OpenSSL](architecture/adr/0010-tls-openssl.md)
+  - [0011：security 子系统起步（Origin / SOP）](architecture/adr/0011-security-origin.md)
+  - [0012：字符编码采用 WHATWG Encoding](architecture/adr/0012-character-encoding.md)
+  - [0013：渲染性能——缓存与并行栅格化](architecture/adr/0013-renderer-caching-parallelism.md)
+  - [0014：视频解码采用 FFmpeg](architecture/adr/0014-video-ffmpeg.md)
+  - [0015：软件合成器抽象层](architecture/adr/0015-software-compositor.md)
+  - [0016：多进程架构](architecture/adr/0016-multiprocess-architecture.md)
+  - [0017：GPU 合成框架](architecture/adr/0017-gpu-compositor-framework.md)
+  - [0018：内置 DNS 解析器](architecture/adr/0018-built-in-dns-resolver.md)
+  - [0019：发布产物运行时打包（静态链接 + 运行库捆绑）](architecture/adr/0019-release-runtime-packaging.md)
 
 ## 开发
 

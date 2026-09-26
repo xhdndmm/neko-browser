@@ -113,6 +113,10 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
 - 任一编译器：GCC ≥ 12 / Clang ≥ 15 / MSVC ≥ 19.3x（均需 C++20 支持）
 - 构建工具：Ninja 或 Make（自动检测）
 
+> 正式发布产物为**零安装**形态：自带运行库，下载解压即可运行（见
+> [docs/releases/README.md](docs/releases/README.md) 与 ADR 0019）。
+> 下面的系统依赖只在从源码构建时需要。
+
 ### 构建与测试
 
 ```bash

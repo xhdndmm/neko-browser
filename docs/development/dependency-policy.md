@@ -69,6 +69,22 @@
 > 两条路径都暴露同一个导入目标 `FFmpeg::FFmpeg`（`PkgConfig::FFMPEG` 不再是
 > 公共接口），`src/media/CMakeLists.txt` 只链接前者。
 
+## 发布产物的链接方式（ADR 0019）
+
+发布产物以「下载即用」为目标，链接策略按平台取舍：
+
+- **Windows**：zlib / libjpeg-turbo / libwebp / FreeType / OpenSSL / libavif
+  用 vcpkg 静态三元组（`*-windows-static-md`）静态链接；
+  **FFmpeg 保持动态**（LGPL 重链接义务 + 发行构建的 GPL 组件风险），
+  DLL 与官方动态 Qt（`windeployqt` 部署）、MSVC 运行库随包分发。
+- **Linux / macOS**：第三方库保持动态并**随包捆绑**（改写 rpath /
+  install name）；glibc 与系统框架必须来自目标机（macOS 上无法静态，
+  Linux 上静态 glibc 会破坏 NSS/DNS）。
+- 捆绑的 FFmpeg 运行库来自发行版/Homebrew 构建，可能包含其启用的 GPL
+  组件；后续工作是为发布构建自有 LGPL 运行时。捆绑范围与校验脚本见
+  [ADR 0019](../architecture/adr/0019-release-runtime-packaging.md) 与
+  `tools/package_runtime_{linux,macos}.sh`。
+
 ## 三方头文件与警告
 
 项目的严格警告集（`-Wall -Wextra -Wpedantic -Wconversion -Wold-style-cast …`，

@@ -19,7 +19,8 @@ push tag vX.Y.Z
     ↓
 prepare   解析版本、校验「标签 ↔ CMakeLists 版本」一致
     ↓
-build × 6 Release + LTO、跑完整 ctest、校验产物架构、打包
+build × 6 Release + LTO、跑完整 ctest、校验产物架构、零安装打包（ADR 0019）
++ 产物冒烟测试
     ↓
 release   合并产物、生成 SHA256SUMS、创建（或更新）GitHub Release
 ```
@@ -48,19 +49,58 @@ Linux/macOS 使用 runner 原生架构与系统包管理器（apt / Homebrew）�
 打包前会校验产物架构（Windows 解析 PE Machine，Linux/macOS 用 `file`），
 架构与矩阵不符即失败——避免在交叉编译配置下悄悄产出 x64 产物。
 
+Windows 链接方式（见 [ADR 0019](../architecture/adr/0019-release-runtime-packaging.md)）：
+除 **Qt**（官方仅提供动态库）与 **FFmpeg**（LGPL 重链接义务，见 ADR 0014）
+外全部依赖静态链接——vcpkg 使用 `*-windows-static-md` 三元组；FFmpeg 从
+动态三元组单独安装，DLL 与 Qt、MSVC 运行库一起随包分发。
+
+### 零安装打包（ADR 0019）
+
+- **Windows**：静态链接（见上）+ 捆绑 Qt（`windeployqt` / ARM64 手工部署）、
+  FFmpeg DLL 与 MSVC 运行库；打包后校验导入表（只允许系统 DLL 或包内文件），
+  且被静态链接的依赖不得再以 DLL 形式出现。
+- **Linux**：`tools/package_runtime_linux.sh` 把全部非系统库（Qt、FFmpeg、
+  OpenSSL、...）复制进 `lib/`、Qt 插件进 `plugins/`，RPATH 改写为 `$ORIGIN`
+  相对路径；**不**捆绑 glibc（NSS/DNS 需要）与 GPU/驱动栈（需要匹配内核驱动）。
+- **macOS**：`tools/package_runtime_macos.sh` 把 GUI 组装为
+  `neko_browser_gui.app` 并交给 `macdeployqt`（Qt framework、插件、非 Qt dylib
+  一并部署并 ad-hoc 签名）；CLI 的依赖捆绑进 `lib/`，引用改写为
+  `@executable_path/../lib/...`。系统框架仍来自目标机。
+- 打包后立即用**产物本身**跑冒烟测试（CLI `--dump-dom`；GUI 以
+  `QT_QPA_PLATFORM=offscreen` 启动），且清空 `LD_LIBRARY_PATH` /
+  `DYLD_LIBRARY_PATH`，避免借用到构建机已装的库。
+
 ### 「生产版本」的定义
 
 - CMake preset `release`：`CMAKE_BUILD_TYPE=Release` + `NEKO_ENABLE_LTO=ON`
 - `NEKO_WARNINGS_AS_ERRORS=ON`（与 CI 一致，见 AGENTS.md §13）
 - 每个平台在打包前运行完整 `ctest`；测试不通过则不会产出 Release
   （例外：Windows ARM64 为交叉编译产物，无法在 x64 runner 上执行，见「已知限制」）
+- 打包后通过零安装校验（Windows 导入表检查；Linux/macOS 依赖闭包校验）
+  与产物冒烟测试
 
 ### 产物
 
 ```text
-neko-browser-<version>-{linux,windows,macos}-{x86_64,arm64}.{tar.gz,zip}
-├── bin/neko_browser[.exe]        CLI
-├── bin/neko_browser_gui[.exe]    Qt6 GUI（Windows 产物自带 Qt 运行库与平台插件）
+neko-browser-<version>-linux-x86_64.tar.gz
+├── bin/neko_browser              CLI
+├── bin/neko_browser_gui          Qt6 GUI（可直接运行，无需安装 Qt）
+├── lib/                          全部非系统运行库（RPATH 已改写）
+├── plugins/                      Qt 平台/图像格式插件（qt.conf 指向此处）
+├── LICENSE
+└── README.md
+
+neko-browser-<version>-macos-{x86_64,arm64}.tar.gz
+├── bin/neko_browser              CLI（依赖在 lib/）
+├── lib/                          CLI 的非系统运行库
+├── neko_browser_gui.app          Qt6 GUI（macdeployqt 部署，ad-hoc 签名）
+├── LICENSE
+└── README.md
+
+neko-browser-<version>-windows-{x86_64,arm64}.zip
+├── bin/neko_browser.exe          CLI（静态链接，仅需 Windows 系统 DLL）
+├── bin/neko_browser_gui.exe      Qt6 GUI（Qt/FFmpeg/CRT 运行库随身）
+├── bin/*.dll                     Qt、FFmpeg、MSVC 运行库
 ├── LICENSE
 └── README.md
 ```
@@ -80,19 +120,19 @@ Release 页面同时附带 `SHA256SUMS`（`sha256sum --check SHA256SUMS` 校验�
 - **Windows ARM64 未运行测试**：产物由 x64 宿主交叉编译，无法在 x64 runner 上执行；
   同一源码的测试完整运行于 `windows-x86_64` 任务。ARM64 的 Qt 运行库按固定清单
   手工部署（Qt 交叉编译包不含 windeployqt）：3 个 Qt DLL + 平台/样式/图像格式插件。
-- **动态链接**：Linux/macOS 的 GUI 需要目标机器提供 Qt6 运行库；全部产物需要
-  zlib / libjpeg / libwebp / FreeType / OpenSSL / FFmpeg / libavif
-  （见 [BUILDING.md](../../BUILDING.md)「依赖获取」）。
+- **Linux glibc 基线**：产物在 Ubuntu 24.04 上构建，需要目标机的 glibc 不低于
+  构建环境；更旧的发行版不受支持（glibc 与显卡驱动始终来自目标机，见 ADR 0019）。
+- **捆绑的 FFmpeg 来自发行版/Homebrew 构建**：其中可能包含发行版启用的 GPL
+  组件；后续计划为发布构建自有 LGPL 运行时（最小特性集）。
 - **未签名 / 未公证**：macOS 首次运行可能需要
-  `xattr -d com.apple.quarantine <binary>`。
-- macOS 产物未打成独立 `.app`（依赖 Homebrew 的 Qt 运行库路径）。
+  `xattr -d com.apple.quarantine <binary>`；签名/公证见后续工作。
 - **无独立调试符号包**。
 
 ### 后续工作（Phase 12+）
 
 - 代码签名（Windows）与公证（macOS）
 - 调试符号包 / symbol server
-- 自带运行库的独立发行包（`.app` / AppImage / MSIX 等）
+- 自有 LGPL FFmpeg 运行时（替代发行版/Homebrew 构建）
 - `project(VERSION)` 与标签的同步自动化
 
 ## 发布历史

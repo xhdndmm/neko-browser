@@ -107,6 +107,40 @@ CC=clang CXX=clang++ cmake --preset debug
   `CMAKE_FETCHCONTENT_SOURCE_DIR_GOOGLETEST` / `CMAKE_FETCHCONTENT_SOURCE_DIR_QUICKJS`
   指向解压目录。
 
+## 发布版（零安装产物）的链接方式
+
+正式发布产物不要求用户安装运行时依赖（见
+[ADR 0019](docs/architecture/adr/0019-release-runtime-packaging.md)）。本地复现该形态：
+
+**Windows（除 Qt / FFmpeg 外全部静态链接）**
+
+```powershell
+vcpkg install zlib libjpeg-turbo libwebp freetype openssl 'libavif[dav1d]' --triplet x64-windows-static-md
+vcpkg install ffmpeg --triplet x64-windows
+cmake --preset release -DNEKO_WARNINGS_AS_ERRORS=ON `
+  -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake `
+  -DVCPKG_TARGET_TRIPLET=x64-windows-static-md `
+  -DFFMPEG_ROOT=<vcpkg>/installed/x64-windows
+```
+
+- `*-windows-static-md` = 静态库 + 动态 CRT（与官方 Qt 的 /MD 一致）；
+- **FFmpeg 保持动态链接**（LGPL 重链接义务，见 ADR 0014）：DLL 需随包分发，
+  `FFMPEG_ROOT` 让 `FindFFmpeg.cmake` 去动态三元组的安装前缀里找头文件与导入库；
+- Qt 仍为官方动态库，发布时用 `windeployqt` 随包（ARM64 交叉包没有部署工具，
+  按固定清单手工部署），MSVC 运行库从 VS 的 `Redist` 目录拷贝。
+
+**Linux / macOS（捆绑非系统运行库）**
+
+```bash
+cmake --workflow --preset release
+bash tools/package_runtime_linux.sh <staging-dir>             # Linux
+bash tools/package_runtime_macos.sh <staging-dir> <version>   # macOS（GUI 打成 .app）
+```
+
+脚本会把可执行文件（macOS 含 GUI 的 .app）所需的非系统库复制进包内，并改写
+rpath / install name；glibc 与系统框架始终来自目标机。本地开发构建
+（`debug` / `release` preset）不经过这些脚本，仍使用系统包。
+
 ## 产物位置
 
 所有产物统一输出到构建目录下：

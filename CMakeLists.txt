@@ -82,6 +82,41 @@ find_package(WebP REQUIRED)
 find_package(AVIF REQUIRED)
 find_package(FFmpeg REQUIRED)
 
+# -----------------------------------------------------------------------------
+# Static vcpkg triplets (*-windows-static-md, used by the release pipeline)
+# -----------------------------------------------------------------------------
+# Static archives carry no link interface: the system libraries that OpenSSL
+# and the decompression libraries FreeType was built against must be added to
+# the link line explicitly.  Dynamic/import-library builds (every other
+# documented configuration, including the local preset builds) need none of
+# this, so the block is a no-op there.  FFmpeg is deliberately excluded: it
+# stays dynamically linked for LGPL reasons (ADR 0014) and is installed from a
+# dynamic triplet during release packaging (ADR 0019).
+set(NEKO_VCPKG_STATIC_DEPS OFF)
+if(DEFINED VCPKG_TARGET_TRIPLET AND VCPKG_TARGET_TRIPLET MATCHES "static")
+  set(NEKO_VCPKG_STATIC_DEPS ON)
+endif()
+
+if(NEKO_VCPKG_STATIC_DEPS)
+  if(WIN32)
+    # OpenSSL's static archives reference Winsock/CNG/crypto APIs directly.
+    foreach(_neko_openssl_target OpenSSL::SSL OpenSSL::Crypto)
+      set_property(TARGET ${_neko_openssl_target} APPEND PROPERTY
+        INTERFACE_LINK_LIBRARIES ws2_32 crypt32 bcrypt user32 advapi32 gdi32)
+    endforeach()
+  endif()
+  # vcpkg's FreeType port is built with its default features (brotli, bzip2,
+  # png, zlib); link the matching archives next to it where they exist.
+  foreach(_neko_ft_dep IN ITEMS brotlidec brotlicommon bz2 libpng16 zlib)
+    find_library(NEKO_FREETYPE_DEP_${_neko_ft_dep} NAMES ${_neko_ft_dep})
+    mark_as_advanced(NEKO_FREETYPE_DEP_${_neko_ft_dep})
+    if(NEKO_FREETYPE_DEP_${_neko_ft_dep})
+      set_property(TARGET Freetype::Freetype APPEND PROPERTY
+        INTERFACE_LINK_LIBRARIES "${NEKO_FREETYPE_DEP_${_neko_ft_dep}}")
+    endif()
+  endforeach()
+endif()
+
 # Directory roots of third-party headers, as reported by find_package().  They
 # are filtered by neko_filter_third_party_include_dirs() before
 # apply_compiler_warnings() consumes them.
@@ -198,6 +233,7 @@ message(STATUS "  Tests               : ${NEKO_BUILD_TESTS}")
 message(STATUS "  GUI (Qt6)           : ${NEKO_BUILD_UI}")
 message(STATUS "  Warnings as errors  : ${NEKO_WARNINGS_AS_ERRORS}")
 message(STATUS "  Sanitizers          : '${NEKO_SANITIZERS}'")
+message(STATUS "  Static vcpkg deps   : ${NEKO_VCPKG_STATIC_DEPS}")
 message(STATUS "  Coverage            : ${NEKO_ENABLE_COVERAGE}")
 message(STATUS "  LTO                 : ${NEKO_ENABLE_LTO}")
 message(STATUS "  ZLIB                : ${ZLIB_VERSION}")
