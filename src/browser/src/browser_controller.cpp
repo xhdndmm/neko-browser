@@ -835,8 +835,15 @@ void BrowserController::DispatchHover(int tab_id, float doc_x, float doc_y)
   if (tab->content_type != ContentType::kHtml || tab->page == nullptr) {
     return;
   }
-  const dom::Element* element = tab->page->ElementAt(doc_x, doc_y);
+  // Re-resolve the previous hover from the stored position: a page script may
+  // have removed that node since the last frame, leaving a dangling pointer
+  // (mouseout would then dereference freed memory).
+  ResolveHover(*tab);
   dom::Element* prev = tab->hovered_element;
+  const dom::Element* element = tab->page->ElementAt(doc_x, doc_y);
+  tab->hover_x = doc_x;
+  tab->hover_y = doc_y;
+  tab->has_hover = true;
   if (element == prev) {
     return;
   }
@@ -883,6 +890,10 @@ void BrowserController::DispatchHoverClear(int tab_id)
     ApplyRendererUpdate(*tab, reply.value());
     return;
   }
+  // Re-resolve before the mouseout dispatch (the node may have been removed by
+  // a script), then drop the hover entirely.
+  ResolveHover(*tab);
+  tab->has_hover = false;
   if (tab->hovered_element != nullptr) {
     if (tab->script_runtime != nullptr) {
       tab->script_runtime->DispatchMouseEvent(*tab->hovered_element, "mouseout", 0, 0, 0);
@@ -1124,6 +1135,15 @@ void BrowserController::Reload()
   NavigateToUrl(*tab, tab->url);
 }
 
+void BrowserController::ResolveHover(Tab& tab)
+{
+  tab.hovered_element = nullptr;
+  if (tab.page == nullptr || !tab.has_hover) {
+    return;
+  }
+  tab.hovered_element = const_cast<dom::Element*>(tab.page->ElementAt(tab.hover_x, tab.hover_y));
+}
+
 void BrowserController::ProduceFrame(Tab& tab)
 {
   if (tab.content_type != ContentType::kHtml || tab.page == nullptr) {
@@ -1152,7 +1172,11 @@ void BrowserController::ProduceFrame(Tab& tab)
   const std::vector<std::uint8_t>& pixels = raster.pixels();
   frame->rgba.assign(pixels.begin(), pixels.end());
   // Hyperlink under the pointer, computed here so the GUI can show the
-  // pointing hand without the DOM.
+  // pointing hand without the DOM.  Re-resolve the hovered element first: a
+  // script may have removed the node recorded earlier, leaving a dangling
+  // pointer (this crashed in HyperlinkTarget when it walked a freed node's
+  // ancestors).  The layout was just rebuilt, so ElementAt is safe.
+  ResolveHover(tab);
   std::string hover_link;
   if (tab.hovered_element != nullptr) {
     if (std::optional<std::string> target = HyperlinkTarget(tab.hovered_element, tab.url);

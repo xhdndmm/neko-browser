@@ -987,6 +987,46 @@ TEST(BrowserControllerTest, ClickOnExpandedDropdownItemNavigates)
   EXPECT_EQ(controller.SnapshotActiveTab().url, "http://example.com/next");
 }
 
+// Regression: a page script may remove the hovered element.  Producing the next
+// frame must not dereference the freed node — HyperlinkTarget walks a node's
+// ancestors, so a stale |hovered_element| crashed the GUI
+// (neko_browser_gui SIGSEGV in HyperlinkTarget on kaom.net).
+TEST(BrowserControllerTest, HoveredElementRemovedByScriptDoesNotCrash)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><script>"
+                               "setTimeout(function(){"
+                               "  document.body.innerHTML = '<p>replaced</p>';"
+                               "}, 100);"
+                               "</script></head>"
+                               "<body style=\"margin:0\">"
+                               "<a id=\"link\" href=\"/next\" "
+                               "style=\"display:block;width:200px;height:40px\">LINK</a>"
+                               "</body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  controller.PumpScriptTimers();
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+
+  // Hover the link: the frame reports the hyperlink under the pointer.
+  controller.DispatchHover(tab->id, 5.0F, 5.0F);
+  controller.PumpScriptTimers();
+  EXPECT_EQ(controller.SnapshotActiveTab().frame_hover_link, "http://example.com/next");
+
+  // The timer replaces the body; the hovered <a> is freed.  The next frame must
+  // re-resolve the hover instead of walking the freed node.
+  std::this_thread::sleep_for(std::chrono::milliseconds(120));
+  controller.PumpScriptTimers();
+  EXPECT_TRUE(controller.SnapshotActiveTab().frame_hover_link.empty());
+}
+
 // A "file:///abs/path" URL (the form hyperlinks and bookmarks produce) loads
 // the absolute path.  Regression test: the leading slash used to be stripped,
 // turning it into a relative path that failed to read.

@@ -124,9 +124,17 @@ struct Tab
   int find_match_count = 0;
 
   // The element the pointer currently hovers over (worker-thread only, used to
-  // fire mouseover/mouseout).  Points into the current document; the UI posts
-  // pointer positions and the worker hit-tests, so no pointers cross threads.
+  // fire mouseover/mouseout).  Points into the current document.  A page
+  // script can remove that node at any time, so this pointer may become stale
+  // between pumps; ResolveHover() re-resolves it from |hover_x|/|hover_y|
+  // before any deferred use.
   dom::Element* hovered_element = nullptr;
+  // Last pointer position reported by the GUI (document coordinates).  Kept so
+  // the hovered element can be re-resolved after a script mutates the DOM.
+  // Worker thread only.
+  float hover_x = 0;
+  float hover_y = 0;
+  bool has_hover = false;
 
   // Live JavaScript runtime for the current HTML page (Phase 8 M2): holds the
   // DOM bindings, timers and event listeners of the page's scripts.  Worker
@@ -577,6 +585,11 @@ private:
   // with it.  Called from the worker after any DOM/layout/scroll/viewport
   // change; the GUI only ever reads the result through TabSnapshot.
   void ProduceFrame(Tab& tab);
+  // Re-resolves |tab.hovered_element| from the last pointer position (worker
+  // thread).  A page script can remove the previously hovered node, so the
+  // stored raw pointer may dangle; callers re-resolve before any deferred use
+  // (frame production, mouseout dispatch).
+  void ResolveHover(Tab& tab);
 
   std::string profile_dir_;
   FetchFn fetch_;
