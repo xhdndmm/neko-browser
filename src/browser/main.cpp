@@ -78,23 +78,23 @@ std::string DefaultProfileDir()
 
 // |script_runtime|, when non-null, receives the page's JS binder so the caller
 // can drive the event loop after the load (see PumpUntilQuiet in main()).
-neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
-                                    const std::string& target,
-                                    neko::storage::LocalStorage* local_storage,
-                                    neko::storage::IndexedDbStore* indexed_db,
-                                    int depth = 0,
-                                    std::shared_ptr<neko::javascript::DomBinder>* script_runtime =
-                                        nullptr);
+neko::base::Result<void>
+LoadTarget(neko::renderer::Page& page,
+           const std::string& target,
+           neko::storage::LocalStorage* local_storage,
+           neko::storage::IndexedDbStore* indexed_db,
+           int depth = 0,
+           std::shared_ptr<neko::javascript::DomBinder>* script_runtime = nullptr);
 
 // Loads a bare local path (no scheme) into the page and fetches its
 // subresources against an absolute file:// base so relative URLs resolve.
-neko::base::Result<void> LoadLocalTarget(neko::renderer::Page& page,
-                                         const std::string& target,
-                                         neko::storage::LocalStorage* local_storage,
-                                         neko::storage::IndexedDbStore* indexed_db,
-                                         int depth,
-                                         std::shared_ptr<neko::javascript::DomBinder>*
-                                             script_runtime)
+neko::base::Result<void>
+LoadLocalTarget(neko::renderer::Page& page,
+                const std::string& target,
+                neko::storage::LocalStorage* local_storage,
+                neko::storage::IndexedDbStore* indexed_db,
+                int depth,
+                std::shared_ptr<neko::javascript::DomBinder>* script_runtime)
 {
   const auto r = page.LoadFile(target);
   if (!r) {
@@ -228,11 +228,13 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
       // A script may have redirected the page (e.g. location.replace()).
       if (!requested.url.empty()) {
         NEKO_LOG_INFO("script navigated to " + requested.url);
-        return LoadTarget(page, requested.url, local_storage, indexed_db, depth + 1, script_runtime);
+        return LoadTarget(
+            page, requested.url, local_storage, indexed_db, depth + 1, script_runtime);
       }
       if (requested.is_reload) {
         NEKO_LOG_INFO("script reloaded " + url.Serialize());
-        return LoadTarget(page, url.Serialize(), local_storage, indexed_db, depth + 1, script_runtime);
+        return LoadTarget(
+            page, url.Serialize(), local_storage, indexed_db, depth + 1, script_runtime);
       }
       // Scripts may have injected <link rel=stylesheet> (e.g. Bing's
       // as-css-link) after the initial stylesheet pass; fetch those so the
@@ -292,7 +294,8 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
       }
       if (!requested.url.empty()) {
         NEKO_LOG_INFO("script navigated to " + requested.url);
-        return LoadTarget(page, requested.url, local_storage, indexed_db, depth + 1, script_runtime);
+        return LoadTarget(
+            page, requested.url, local_storage, indexed_db, depth + 1, script_runtime);
       }
       // Fetch the page's subresources: relative URLs resolve against the
       // file:// base so local pages behave like served ones.
@@ -721,11 +724,11 @@ int main(int argc, char** argv)
   } else if (parsed.options.url.has_value()) {
     std::shared_ptr<neko::javascript::DomBinder> script_runtime;
     const neko::base::Result<void> loaded = LoadTarget(page,
-                                                        parsed.options.url.value(),
-                                                        &local_storage,
-                                                        &indexed_db,
-                                                        /*depth=*/0,
-                                                        &script_runtime);
+                                                       parsed.options.url.value(),
+                                                       &local_storage,
+                                                       &indexed_db,
+                                                       /*depth=*/0,
+                                                       &script_runtime);
     if (!loaded) {
       std::cerr << "error: " << loaded.error().message() << "\n";
       return 1;

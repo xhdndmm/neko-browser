@@ -192,9 +192,23 @@ bool IsValidHeaderFieldName(std::string_view name)
       return false; // CTLs, SP and DEL
     }
     switch (c) {
-    case '(': case ')': case '<': case '>': case '@': case ',': case ';':
-    case ':': case '\\': case '"': case '/': case '[': case ']': case '?':
-    case '=': case '{': case '}': // separators
+    case '(':
+    case ')':
+    case '<':
+    case '>':
+    case '@':
+    case ',':
+    case ';':
+    case ':':
+    case '\\':
+    case '"':
+    case '/':
+    case '[':
+    case ']':
+    case '?':
+    case '=':
+    case '{':
+    case '}': // separators
       return false;
     default:
       break;

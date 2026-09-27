@@ -82,8 +82,7 @@ TEST(EncodingTest, HttpHeaderCharsetValueMayBeQuoted)
   EXPECT_EQ(CharsetFromHttpHeader("text/html; charset=\"gb2312\""), Charset::kGb18030);
   EXPECT_EQ(CharsetFromHttpHeader("text/html; CHARSET=\"utf-8\""), Charset::kUtf8);
   // A following parameter must not be swallowed into the label.
-  EXPECT_EQ(CharsetFromHttpHeader("text/html; charset=\"utf-8\"; boundary=x"),
-            Charset::kUtf8);
+  EXPECT_EQ(CharsetFromHttpHeader("text/html; charset=\"utf-8\"; boundary=x"), Charset::kUtf8);
 }
 
 // ---------------------------------------------------------------------------

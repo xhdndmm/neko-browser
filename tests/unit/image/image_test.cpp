@@ -94,11 +94,8 @@ std::string EncodePng(int width,
 // Builds a PNG whose IHDR declares |width|x|height| but whose IDAT holds
 // |raw_idat_inflated| verbatim (deflated here).  Used to forge images whose
 // real geometry and whose decompressed payload disagree.
-std::string EncodePngWithRawIdat(int width,
-                                  int height,
-                                  int bit_depth,
-                                  int color_type,
-                                  std::string_view raw_idat_inflated)
+std::string EncodePngWithRawIdat(
+    int width, int height, int bit_depth, int color_type, std::string_view raw_idat_inflated)
 {
   std::string ihdr;
   ihdr += Be32(static_cast<uint32_t>(width));

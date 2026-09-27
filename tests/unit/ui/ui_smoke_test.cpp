@@ -118,8 +118,7 @@ class PageDomReadLock
 public:
   explicit PageDomReadLock(const std::shared_ptr<neko::renderer::Page>& page)
       : lock_(page != nullptr ? page->AcquireDomLock() : std::unique_lock<std::recursive_mutex>())
-  {
-  }
+  {}
   PageDomReadLock(const PageDomReadLock&) = delete;
   PageDomReadLock& operator=(const PageDomReadLock&) = delete;
 

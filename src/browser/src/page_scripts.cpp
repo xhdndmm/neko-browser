@@ -10,10 +10,6 @@
 
 #include "neko/browser/page_scripts.h"
 
-#include <algorithm>
-#include <chrono>
-#include <thread>
-
 #include "neko/base/logging.h"
 #include "neko/base/string_util.h"
 #include "neko/css/stylesheet.h"
@@ -23,6 +19,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <ctime>
 #include <functional>
 #include <map>
@@ -31,6 +28,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 

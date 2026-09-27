@@ -193,7 +193,9 @@ TEST(HtmlTest, LegacyNoSemicolonEntities)
 
   // The spec's two named examples.
   auto notit = ParseDoc("<p>&notit; I tell you</p>");
-  EXPECT_EQ(dom::QuerySelector(*notit, "p")->TextContent(), "\xC2\xAC" "it; I tell you");
+  EXPECT_EQ(dom::QuerySelector(*notit, "p")->TextContent(),
+            "\xC2\xAC"
+            "it; I tell you");
   auto crafts = ParseDoc("<p>Arts&ampcrafts</p>");
   EXPECT_EQ(dom::QuerySelector(*crafts, "p")->TextContent(), "Arts&crafts");
 }

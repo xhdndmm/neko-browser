@@ -1289,8 +1289,8 @@ int BrowserController::PumpScriptTimersUntilQuiet(int max_iterations)
   if (tab->script_runtime == nullptr) {
     return 0;
   }
-  const int iterations = ::neko::browser::PumpScriptTimersUntilQuiet(*tab->script_runtime,
-                                                                      max_iterations);
+  const int iterations =
+      ::neko::browser::PumpScriptTimersUntilQuiet(*tab->script_runtime, max_iterations);
   if (iterations > 0 && tab->page != nullptr) {
     // Timers may have mutated the DOM; re-run the cascade so the next
     // Layout/Rasterize reflects the new state.

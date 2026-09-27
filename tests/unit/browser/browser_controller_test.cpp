@@ -211,7 +211,7 @@ public:
     return response;
   }
 
- private:
+private:
   // Guarded by |mutex_|; read them through Requests()/CookiesSeen()/etc.
   std::vector<std::string> requests_;
   std::vector<std::string> cookies_seen_;
@@ -1956,11 +1956,8 @@ TEST(BrowserControllerTest, PageVideoDecodesAndAutoplays)
   dom::Element* video = dom::QuerySelector(*tab->page->document(), "#v");
   ASSERT_NE(video, nullptr);
   // The decoded first frame is attached asynchronously after publish.
-  ASSERT_TRUE(WaitForSubresourcesOn(*tab,
-                                   [&tab, video] {
-                                     return tab->page != nullptr &&
-                                            tab->page->Find(*video) != nullptr;
-                                   }));
+  ASSERT_TRUE(WaitForSubresourcesOn(
+      *tab, [&tab, video] { return tab->page != nullptr && tab->page->Find(*video) != nullptr; }));
   const image::Image* frame = tab->page->Find(*video);
   ASSERT_NE(frame, nullptr);
   EXPECT_EQ(frame->width, 8);
@@ -2728,10 +2725,10 @@ TEST(BrowserControllerTest, FetchesAndAppliesExternalStylesheets)
   EXPECT_NE(std::find(sheet_requests.begin(), sheet_requests.end(), "http://example.com/style.css"),
             sheet_requests.end());
   EXPECT_EQ(
-      std::count(sheet_requests.begin(), sheet_requests.end(), "http://example.com/style.css"),
-      1);
-  EXPECT_EQ(std::count(sheet_requests.begin(), sheet_requests.end(), "http://example.com/favicon.ico"),
-            0);
+      std::count(sheet_requests.begin(), sheet_requests.end(), "http://example.com/style.css"), 1);
+  EXPECT_EQ(
+      std::count(sheet_requests.begin(), sheet_requests.end(), "http://example.com/favicon.ico"),
+      0);
 
   // The computed style reflects the external sheet (red text, 24px).
   Tab* tab = controller.ActiveTab();

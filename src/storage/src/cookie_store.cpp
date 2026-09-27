@@ -257,8 +257,7 @@ bool IsValidCookieValue(std::string_view value)
 {
   for (const char c : value) {
     const auto byte = static_cast<unsigned char>(c);
-    if (byte >= 0x21 && byte <= 0x7E && byte != '"' && byte != ',' && byte != ';' &&
-        byte != '\\') {
+    if (byte >= 0x21 && byte <= 0x7E && byte != '"' && byte != ',' && byte != ';' && byte != '\\') {
       continue;
     }
     return false;
