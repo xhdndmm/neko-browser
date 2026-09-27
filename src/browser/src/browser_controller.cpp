@@ -729,9 +729,20 @@ bool BrowserController::DispatchPointerClick(int tab_id, float doc_x, float doc_
   }
   // Hold the DOM lock while the click's scripts run (ADR 0020): the pool
   // threads that inject subresources take the same lock.
+  // Keep the Page alive for as long as the lock is held.  Declared *before*
+  // |dom_lock| on purpose: locals are destroyed in reverse declaration order, so
+  // the keepalive must be released last, after the lock is dropped.
+  //
+  // Everything below can navigate -- a timer callback assigning location.href, a
+  // script-requested navigation, a form submit -- and navigation replaces the
+  // tab's Page, dropping the last reference to the current one.  Locking through
+  // a borrowed `tab->page` and then unlocking after the Page had been destroyed
+  // was a use-after-free on its mutex (caught by ThreadSanitizer; undefined
+  // behaviour per the standard).
+  const std::shared_ptr<renderer::Page> page_lock_keepalive = tab->page;
   std::unique_lock<std::recursive_mutex> dom_lock;
-  if (tab->page != nullptr) {
-    dom_lock = tab->page->AcquireDomLock();
+  if (page_lock_keepalive != nullptr) {
+    dom_lock = page_lock_keepalive->AcquireDomLock();
   }
   tab->frame_dirty = true; // focus / :active may change the caret
   // Renderer-process mode: the child owns the DOM, so the click is forwarded
@@ -818,9 +829,20 @@ void BrowserController::DispatchHover(int tab_id, float doc_x, float doc_y)
   if (tab == nullptr) {
     return;
   }
+  // Keep the Page alive for as long as the lock is held.  Declared *before*
+  // |dom_lock| on purpose: locals are destroyed in reverse declaration order, so
+  // the keepalive must be released last, after the lock is dropped.
+  //
+  // Everything below can navigate -- a timer callback assigning location.href, a
+  // script-requested navigation, a form submit -- and navigation replaces the
+  // tab's Page, dropping the last reference to the current one.  Locking through
+  // a borrowed `tab->page` and then unlocking after the Page had been destroyed
+  // was a use-after-free on its mutex (caught by ThreadSanitizer; undefined
+  // behaviour per the standard).
+  const std::shared_ptr<renderer::Page> page_lock_keepalive = tab->page;
   std::unique_lock<std::recursive_mutex> dom_lock;
-  if (tab->page != nullptr) {
-    dom_lock = tab->page->AcquireDomLock();
+  if (page_lock_keepalive != nullptr) {
+    dom_lock = page_lock_keepalive->AcquireDomLock();
   }
   if (IsRemoteTab(*tab)) {
     tab->frame_dirty = true; // the hover link drives the cursor
@@ -876,9 +898,20 @@ void BrowserController::DispatchHoverClear(int tab_id)
   if (tab == nullptr) {
     return;
   }
+  // Keep the Page alive for as long as the lock is held.  Declared *before*
+  // |dom_lock| on purpose: locals are destroyed in reverse declaration order, so
+  // the keepalive must be released last, after the lock is dropped.
+  //
+  // Everything below can navigate -- a timer callback assigning location.href, a
+  // script-requested navigation, a form submit -- and navigation replaces the
+  // tab's Page, dropping the last reference to the current one.  Locking through
+  // a borrowed `tab->page` and then unlocking after the Page had been destroyed
+  // was a use-after-free on its mutex (caught by ThreadSanitizer; undefined
+  // behaviour per the standard).
+  const std::shared_ptr<renderer::Page> page_lock_keepalive = tab->page;
   std::unique_lock<std::recursive_mutex> dom_lock;
-  if (tab->page != nullptr) {
-    dom_lock = tab->page->AcquireDomLock();
+  if (page_lock_keepalive != nullptr) {
+    dom_lock = page_lock_keepalive->AcquireDomLock();
   }
   tab->frame_dirty = true;
   if (IsRemoteTab(*tab)) {
@@ -912,9 +945,20 @@ bool BrowserController::DispatchWheel(int tab_id, double delta_y)
   if (tab == nullptr) {
     return false;
   }
+  // Keep the Page alive for as long as the lock is held.  Declared *before*
+  // |dom_lock| on purpose: locals are destroyed in reverse declaration order, so
+  // the keepalive must be released last, after the lock is dropped.
+  //
+  // Everything below can navigate -- a timer callback assigning location.href, a
+  // script-requested navigation, a form submit -- and navigation replaces the
+  // tab's Page, dropping the last reference to the current one.  Locking through
+  // a borrowed `tab->page` and then unlocking after the Page had been destroyed
+  // was a use-after-free on its mutex (caught by ThreadSanitizer; undefined
+  // behaviour per the standard).
+  const std::shared_ptr<renderer::Page> page_lock_keepalive = tab->page;
   std::unique_lock<std::recursive_mutex> dom_lock;
-  if (tab->page != nullptr) {
-    dom_lock = tab->page->AcquireDomLock();
+  if (page_lock_keepalive != nullptr) {
+    dom_lock = page_lock_keepalive->AcquireDomLock();
   }
   tab->frame_dirty = true;
   if (IsRemoteTab(*tab)) {
@@ -956,9 +1000,20 @@ bool BrowserController::DispatchKeyboard(int tab_id,
   if (tab == nullptr) {
     return false;
   }
+  // Keep the Page alive for as long as the lock is held.  Declared *before*
+  // |dom_lock| on purpose: locals are destroyed in reverse declaration order, so
+  // the keepalive must be released last, after the lock is dropped.
+  //
+  // Everything below can navigate -- a timer callback assigning location.href, a
+  // script-requested navigation, a form submit -- and navigation replaces the
+  // tab's Page, dropping the last reference to the current one.  Locking through
+  // a borrowed `tab->page` and then unlocking after the Page had been destroyed
+  // was a use-after-free on its mutex (caught by ThreadSanitizer; undefined
+  // behaviour per the standard).
+  const std::shared_ptr<renderer::Page> page_lock_keepalive = tab->page;
   std::unique_lock<std::recursive_mutex> dom_lock;
-  if (tab->page != nullptr) {
-    dom_lock = tab->page->AcquireDomLock();
+  if (page_lock_keepalive != nullptr) {
+    dom_lock = page_lock_keepalive->AcquireDomLock();
   }
   tab->frame_dirty = true; // a key edit moves the caret / mutates the DOM
   if (IsRemoteTab(*tab)) {
@@ -1056,21 +1111,30 @@ void BrowserController::SubmitForm(int tab_id, dom::Element* form)
   if (tab == nullptr || form == nullptr || tab->page == nullptr) {
     return;
   }
-  std::unique_lock<std::recursive_mutex> dom_lock = tab->page->AcquireDomLock();
-  // Cancelable submit event; the page can preventDefault() to block it.
-  if (tab->script_runtime != nullptr &&
-      !tab->script_runtime->DispatchCancelableEvent(*form, "submit")) {
-    return;
+  // Everything that reads the live document happens under the DOM lock; the
+  // navigation deliberately happens *after* the lock is released.
+  std::string target;
+  {
+    const std::unique_lock<std::recursive_mutex> dom_lock = tab->page->AcquireDomLock();
+    // Cancelable submit event; the page can preventDefault() to block it.
+    if (tab->script_runtime != nullptr &&
+        !tab->script_runtime->DispatchCancelableEvent(*form, "submit")) {
+      return;
+    }
+    // Encode the named controls (application/x-www-form-urlencoded) and
+    // navigate to the action with the data as the query string (GET).
+    const std::string data = CollectFormData(*form);
+    const std::string action = std::string(form->GetAttribute("action").value_or(""));
+    target = ResolveUrlAgainstBase(action, tab->url);
+    if (target.empty()) {
+      target = tab->url;
+    }
+    target += (target.find('?') != std::string::npos ? "&" : "?") + data;
   }
-  // Encode the named controls (application/x-www-form-urlencoded) and navigate
-  // to the action with the data as the query string (GET).
-  const std::string data = CollectFormData(*form);
-  const std::string action = std::string(form->GetAttribute("action").value_or(""));
-  std::string target = ResolveUrlAgainstBase(action, tab->url);
-  if (target.empty()) {
-    target = tab->url;
-  }
-  target += (target.find('?') != std::string::npos ? "&" : "?") + data;
+  // Navigate *outside* the DOM lock.  Navigate() replaces the tab's Page, which
+  // destroys the Page this lock was taken on; unlocking it afterwards was a
+  // use-after-free on the destroyed Page's mutex (reported by ThreadSanitizer,
+  // and undefined behaviour per the standard).
   static_cast<void>(Navigate(tab_id, target));
 }
 
@@ -1241,9 +1305,20 @@ void BrowserController::PumpScriptTimers()
   if (tab == nullptr) {
     return;
   }
+  // Keep the Page alive for as long as the lock is held.  Declared *before*
+  // |dom_lock| on purpose: locals are destroyed in reverse declaration order, so
+  // the keepalive must be released last, after the lock is dropped.
+  //
+  // Everything below can navigate -- a timer callback assigning location.href, a
+  // script-requested navigation, a form submit -- and navigation replaces the
+  // tab's Page, dropping the last reference to the current one.  Locking through
+  // a borrowed `tab->page` and then unlocking after the Page had been destroyed
+  // was a use-after-free on its mutex (caught by ThreadSanitizer; undefined
+  // behaviour per the standard).
+  const std::shared_ptr<renderer::Page> page_lock_keepalive = tab->page;
   std::unique_lock<std::recursive_mutex> dom_lock;
-  if (tab->page != nullptr) {
-    dom_lock = tab->page->AcquireDomLock();
+  if (page_lock_keepalive != nullptr) {
+    dom_lock = page_lock_keepalive->AcquireDomLock();
   }
   if (IsRemoteTab(*tab)) {
     // Renderer mode: the child advances its own timers/animations; a changed
@@ -1362,9 +1437,20 @@ void BrowserController::SetTabViewport(int tab_id, int width, int height)
   if (tab->viewport_width == width && tab->viewport_height == height) {
     return;
   }
+  // Keep the Page alive for as long as the lock is held.  Declared *before*
+  // |dom_lock| on purpose: locals are destroyed in reverse declaration order, so
+  // the keepalive must be released last, after the lock is dropped.
+  //
+  // Everything below can navigate -- a timer callback assigning location.href, a
+  // script-requested navigation, a form submit -- and navigation replaces the
+  // tab's Page, dropping the last reference to the current one.  Locking through
+  // a borrowed `tab->page` and then unlocking after the Page had been destroyed
+  // was a use-after-free on its mutex (caught by ThreadSanitizer; undefined
+  // behaviour per the standard).
+  const std::shared_ptr<renderer::Page> page_lock_keepalive = tab->page;
   std::unique_lock<std::recursive_mutex> dom_lock;
-  if (tab->page != nullptr) {
-    dom_lock = tab->page->AcquireDomLock();
+  if (page_lock_keepalive != nullptr) {
+    dom_lock = page_lock_keepalive->AcquireDomLock();
   }
   {
     std::lock_guard<std::mutex> lock(mutex_);

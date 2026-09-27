@@ -68,13 +68,20 @@ public:
 
   ~TestDnsServer()
   {
+    // Ask the worker to stop and *wait for it* before closing the socket.
+    //
+    // The order matters: the worker sits in recvfrom(fd_, ...) with a 20 ms
+    // SO_RCVTIMEO, so closing the descriptor underneath it is undefined
+    // behaviour -- the fd number can be handed out again by a later socket()
+    // and the blocked recvfrom then operates on an unrelated socket.  That is
+    // both what ThreadSanitizer reported here and a real flakiness source.
     stop_ = true;
+    if (thread_.joinable()) {
+      thread_.join();
+    }
     if (fd_ >= 0) {
       ::close(fd_);
       fd_ = -1;
-    }
-    if (thread_.joinable()) {
-      thread_.join();
     }
   }
 

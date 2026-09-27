@@ -96,6 +96,34 @@ template <typename Pred> bool WaitForSubresources(Pred pred, int timeout_ms = 50
   return pred();
 }
 
+// Same, for predicates that inspect the live Page.
+//
+// Per ADR 0020 the Page and its DOM are owned by the worker thread, and pool
+// threads mutate them under Page's recursive DOM lock (SetElementImages and
+// friends).  A test polling |tab->page| from the main thread was reading that
+// state with no lock held, which ThreadSanitizer reports as a race against the
+// fetch pool.  Holding the same lock for the duration of each predicate makes
+// the polling well defined -- the assertion still runs on the calling thread,
+// it is just serialised against the writers, exactly as the product code does.
+template <typename Pred>
+bool WaitForSubresourcesOn(const Tab& tab, Pred pred, int timeout_ms = 5000)
+{
+  const auto poll = [&] {
+    if (tab.page == nullptr) {
+      return pred();
+    }
+    const std::unique_lock<std::recursive_mutex> dom_lock = tab.page->AcquireDomLock();
+    return pred();
+  };
+  for (int waited = 0; waited < timeout_ms; waited += 10) {
+    if (poll()) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return poll();
+}
+
 // Records every request (url + cookie header) and answers from a route map.
 // Thread-safe: the controller may fetch page subresources in parallel on a
 // thread pool (see FetchPageImages), so the recorded request lists are
@@ -112,7 +140,49 @@ public:
 
   void Add(std::string url, Route route)
   {
+    std::lock_guard<std::mutex> lock(mutex_);
     routes_[std::move(url)] = std::move(route);
+  }
+
+  // Locked snapshots of the recorded traffic.
+  //
+  // These used to be public data members read directly by the assertions.  The
+  // writer side holds |mutex_|, but the readers did not, so a pool thread
+  // pushing a request raced the test's own polling loop -- which is exactly what
+  // ThreadSanitizer reported on every subresource-fetching test.  Reading
+  // through these accessors makes the whole member set consistently guarded.
+  std::vector<std::string> Requests() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return requests_;
+  }
+
+  std::vector<std::string> CookiesSeen() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return cookies_seen_;
+  }
+
+  std::size_t RequestCount() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return requests_.size();
+  }
+
+  // Returns the Cookie header seen with the request for |url|, or the last one
+  // recorded when |url| is empty.
+  std::string LastCookieFor(std::string_view url = {}) const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (url.empty()) {
+      return cookies_seen_.empty() ? std::string() : cookies_seen_.back();
+    }
+    for (std::size_t index = 0; index < requests_.size(); ++index) {
+      if (requests_[index] == url) {
+        return index < cookies_seen_.size() ? cookies_seen_[index] : std::string();
+      }
+    }
+    return {};
   }
 
   base::Result<network::HttpResponse> operator()(const url::Url& url,
@@ -141,12 +211,13 @@ public:
     return response;
   }
 
+ private:
+  // Guarded by |mutex_|; read them through Requests()/CookiesSeen()/etc.
   std::vector<std::string> requests_;
   std::vector<std::string> cookies_seen_;
   std::map<std::string, Route> routes_;
 
-private:
-  std::mutex mutex_;
+  mutable std::mutex mutex_;
 };
 
 #ifndef _WIN32
@@ -274,17 +345,12 @@ private:
 
 std::string LastCookie(const FakeFetcher& f)
 {
-  return f.cookies_seen_.empty() ? std::string() : f.cookies_seen_.back();
+  return f.LastCookieFor();
 }
 
 std::string CookieForRequest(const FakeFetcher& f, std::string_view url)
 {
-  for (std::size_t index = 0; index < f.requests_.size(); ++index) {
-    if (f.requests_[index] == url) {
-      return f.cookies_seen_[index];
-    }
-  }
-  return {};
+  return f.LastCookieFor(url);
 }
 
 // ---------------------------------------------------------------------------
@@ -364,7 +430,11 @@ std::string MakePdf(std::string_view text)
           "\nendstream\nendobj\n";
   const size_t xref = file.size();
   auto pad = [](size_t v) {
-    char b[16];
+    // A PDF xref offset is 10 digits, but %zu of a 64-bit size_t can expand to
+    // 20 digits plus the NUL, so the buffer must be sized for the worst case
+    // rather than for the nominal field width -- otherwise -O2 builds reject it
+    // with -Wformat-truncation (and CI builds with -Werror).
+    char b[32];
     std::snprintf(b, sizeof(b), "%010zu", v);
     return std::string(b);
   };
@@ -413,7 +483,7 @@ TEST(BrowserControllerTest, NavigatesToHtmlAndRecordsHistory)
   EXPECT_EQ(tab->page->document()->Title(), "Hello");
   EXPECT_EQ(controller.history().size(), 1u);
   EXPECT_EQ(controller.history().All()[0].url, "http://example.com/");
-  EXPECT_EQ(fetch.requests_.size(), 1u);
+  EXPECT_EQ(fetch.RequestCount(), 1u);
 }
 
 // The tab records the security origin of the loaded page (Phase 10 M1).
@@ -1179,7 +1249,7 @@ TEST(BrowserControllerTest, ExternalScriptIsFetchedAndRun)
   controller.NewTab();
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
 
-  EXPECT_EQ(fetch.requests_.size(), 2u); // page + script
+  EXPECT_EQ(fetch.RequestCount(), 2u); // page + script
   EXPECT_EQ(controller.ActiveTab()->title, "external ran");
 }
 
@@ -1377,7 +1447,7 @@ TEST(BrowserControllerTest, ExternalModuleResolvesImportAndDeduplicates)
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
 
   // page + main.js (once — dedup) + dep.js (once — module map cache).
-  EXPECT_EQ(fetch.requests_.size(), 3u);
+  EXPECT_EQ(fetch.RequestCount(), 3u);
   Tab* tab = controller.ActiveTab();
   ASSERT_NE(tab, nullptr);
   EXPECT_EQ(tab->title, "module-1");
@@ -1434,7 +1504,7 @@ TEST(BrowserControllerTest, ClassicScriptDynamicImport)
   controller.NewTab();
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
 
-  EXPECT_EQ(fetch.requests_.size(), 2u); // page + dynamically imported lib
+  EXPECT_EQ(fetch.RequestCount(), 2u); // page + dynamically imported lib
   EXPECT_EQ(controller.ActiveTab()->title, "dynamic-ok");
 }
 
@@ -1464,7 +1534,7 @@ TEST(BrowserControllerTest, ModuleDynamicImportSharesCacheWithStaticImport)
   controller.NewTab();
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
 
-  EXPECT_EQ(fetch.requests_.size(), 2u); // page + shared.js exactly once
+  EXPECT_EQ(fetch.RequestCount(), 2u); // page + shared.js exactly once
   EXPECT_EQ(controller.ActiveTab()->title, "same:shared-1");
 }
 
@@ -1494,7 +1564,7 @@ TEST(BrowserControllerTest, ImportMapRemapsBareSpecifier)
   controller.NewTab();
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
 
-  EXPECT_EQ(fetch.requests_.size(), 2u); // page + mapped vendor module
+  EXPECT_EQ(fetch.RequestCount(), 2u); // page + mapped vendor module
   EXPECT_EQ(controller.ActiveTab()->title, "mapped-ok");
 }
 
@@ -1531,7 +1601,7 @@ TEST(BrowserControllerTest, ImportMapFirstDeclarationWins)
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
 
   // page + first.js only: the second map never applied.
-  EXPECT_EQ(fetch.requests_.size(), 2u);
+  EXPECT_EQ(fetch.RequestCount(), 2u);
   EXPECT_EQ(controller.ActiveTab()->title, "first");
 }
 
@@ -1562,7 +1632,7 @@ TEST(BrowserControllerTest, XhrFetchesAndDeliversResponse)
   controller.NewTab();
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
 
-  EXPECT_EQ(fetch.requests_.size(), 2u); // page + XHR request
+  EXPECT_EQ(fetch.RequestCount(), 2u); // page + XHR request
   EXPECT_EQ(controller.ActiveTab()->title, "payload-42");
 }
 
@@ -1703,8 +1773,8 @@ TEST(BrowserControllerTest, FontFaceFetchedAndRegistered)
   controller.NewTab();
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
 
-  ASSERT_TRUE(WaitForSubresources([&fetch] { return fetch.requests_.size() == 3u; }));
-  EXPECT_THAT(fetch.requests_, testing::Contains("http://example.com/css/fonts/icon.ttf"));
+  ASSERT_TRUE(WaitForSubresources([&fetch] { return fetch.RequestCount() == 3u; }));
+  EXPECT_THAT(fetch.Requests(), testing::Contains("http://example.com/css/fonts/icon.ttf"));
 }
 
 // @font-face with a data: src (the bilibili icon-font case): the bytes are
@@ -1739,8 +1809,8 @@ TEST(BrowserControllerTest, DataUrlFontFaceIsDecodedAndRegistered)
     return tab != nullptr && tab->page != nullptr && tab->page->HasWebFont(expected_key);
   }));
   // Page, stylesheet, then the font data: URL - decoded locally, never routed.
-  ASSERT_EQ(fetch.requests_.size(), 3u);
-  EXPECT_EQ(fetch.requests_[2], expected_key);
+  ASSERT_EQ(fetch.RequestCount(), 3u);
+  EXPECT_EQ(fetch.Requests()[2], expected_key);
 }
 
 TEST(BrowserControllerTest, WebFontDoesNotBlockPagePublication)
@@ -1785,7 +1855,7 @@ TEST(BrowserControllerTest, WebFontDoesNotBlockPagePublication)
   ASSERT_TRUE(WaitForSubresources([&font_requested] { return font_requested.load(); }));
 
   release_font.store(true);
-  ASSERT_TRUE(WaitForSubresources([&fetch] { return fetch.requests_.size() == 2u; }));
+  ASSERT_TRUE(WaitForSubresources([&fetch] { return fetch.RequestCount() == 2u; }));
 }
 
 // The page's scripts can use window.localStorage (scoped to the page origin),
@@ -1865,8 +1935,11 @@ TEST(BrowserControllerTest, PageVideoDecodesAndAutoplays)
   dom::Element* video = dom::QuerySelector(*tab->page->document(), "#v");
   ASSERT_NE(video, nullptr);
   // The decoded first frame is attached asynchronously after publish.
-  ASSERT_TRUE(WaitForSubresources(
-      [&tab, video] { return tab->page != nullptr && tab->page->Find(*video) != nullptr; }));
+  ASSERT_TRUE(WaitForSubresourcesOn(*tab,
+                                   [&tab, video] {
+                                     return tab->page != nullptr &&
+                                            tab->page->Find(*video) != nullptr;
+                                   }));
   const image::Image* frame = tab->page->Find(*video);
   ASSERT_NE(frame, nullptr);
   EXPECT_EQ(frame->width, 8);
@@ -2051,7 +2124,7 @@ TEST(BrowserControllerTest, PageScriptLocationHrefNavigates)
   EXPECT_EQ(tab->title, "Final");
   EXPECT_EQ(tab->page->document()->Title(), "Final");
   // Two network requests happened: the redirector page and the target.
-  EXPECT_EQ(fetch.requests_.size(), 2u);
+  EXPECT_EQ(fetch.RequestCount(), 2u);
 }
 
 // location.reload() from a script reloads the current page.
@@ -2123,8 +2196,8 @@ TEST(BrowserControllerTest, InjectsMultiplePageImages)
   ASSERT_NE(tab, nullptr);
   // All three image requests go out and every <img> gets a decoded 2x2 image
   // (asynchronously after publish).
-  const bool ready = WaitForSubresources([&fetch, &tab] {
-    if (fetch.requests_.size() < 4u || tab->page == nullptr) {
+  const bool ready = WaitForSubresourcesOn(*tab, [&fetch, &tab] {
+    if (fetch.RequestCount() < 4u || tab->page == nullptr) {
       return false;
     }
     for (const dom::Element* el : dom::QuerySelectorAll(*tab->page->document(), "img")) {
@@ -2135,7 +2208,7 @@ TEST(BrowserControllerTest, InjectsMultiplePageImages)
     return true;
   });
   ASSERT_TRUE(ready);
-  EXPECT_EQ(fetch.requests_.size(), 4u); // page + 3 images
+  EXPECT_EQ(fetch.RequestCount(), 4u); // page + 3 images
   const std::vector<dom::Element*> imgs = dom::QuerySelectorAll(*tab->page->document(), "img");
   ASSERT_EQ(imgs.size(), 3u);
   for (const dom::Element* element : imgs) {
@@ -2167,15 +2240,18 @@ TEST(BrowserControllerTest, ReusesOneFetchForDuplicatePageImageUrls)
 
   Tab* tab = controller.ActiveTab();
   ASSERT_NE(tab, nullptr);
-  const bool ready = WaitForSubresources([&fetch, &tab] {
+  const bool ready = WaitForSubresourcesOn(*tab, [&fetch, &tab] {
     const auto images = dom::QuerySelectorAll(*tab->page->document(), "img");
     return images.size() == 2 && tab->page->Find(*images[0]) != nullptr &&
-           tab->page->Find(*images[1]) != nullptr && fetch.requests_.size() >= 2u;
+           tab->page->Find(*images[1]) != nullptr && fetch.RequestCount() >= 2u;
   });
   ASSERT_TRUE(ready);
 
+  // One snapshot, not two temporaries: Requests() returns by value, so
+  // Requests().begin() and Requests().end() would come from different vectors.
+  const auto shared_requests = fetch.Requests();
   EXPECT_EQ(
-      std::count(fetch.requests_.begin(), fetch.requests_.end(), "http://example.com/shared.png"),
+      std::count(shared_requests.begin(), shared_requests.end(), "http://example.com/shared.png"),
       1);
 }
 
@@ -2279,10 +2355,10 @@ TEST(BrowserControllerTest, DataUrlImageIsDecodedWithoutNetwork)
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
 
   // Only the page itself was fetched — the data URL needed no request.
-  EXPECT_LE(fetch.requests_.size(), 1u);
+  EXPECT_LE(fetch.RequestCount(), 1u);
   Tab* tab = controller.ActiveTab();
   ASSERT_NE(tab, nullptr);
-  const bool decoded_ok = WaitForSubresources([&tab] {
+  const bool decoded_ok = WaitForSubresourcesOn(*tab, [&tab] {
     if (tab->page == nullptr) {
       return false;
     }
@@ -2524,10 +2600,10 @@ TEST(BrowserControllerTest, PercentEncodedSvgDataUrlIsDecodedWithoutNetwork)
   controller.NewTab();
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
 
-  EXPECT_LE(fetch.requests_.size(), 1u);
+  EXPECT_LE(fetch.RequestCount(), 1u);
   Tab* tab = controller.ActiveTab();
   ASSERT_NE(tab, nullptr);
-  const bool decoded_ok = WaitForSubresources([&tab] {
+  const bool decoded_ok = WaitForSubresourcesOn(*tab, [&tab] {
     if (tab->page == nullptr) {
       return false;
     }
@@ -2625,16 +2701,16 @@ TEST(BrowserControllerTest, FetchesAndAppliesExternalStylesheets)
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
 
   // The stylesheet (and only it — the icon link is not a stylesheet) was
-  // fetched alongside the page.
-  EXPECT_NE(
-      std::find(fetch.requests_.begin(), fetch.requests_.end(), "http://example.com/style.css"),
-      fetch.requests_.end());
+  // fetched alongside the page.  One snapshot: Requests() returns by value, so
+  // separate calls would yield iterators into different vectors.
+  const auto sheet_requests = fetch.Requests();
+  EXPECT_NE(std::find(sheet_requests.begin(), sheet_requests.end(), "http://example.com/style.css"),
+            sheet_requests.end());
   EXPECT_EQ(
-      std::count(fetch.requests_.begin(), fetch.requests_.end(), "http://example.com/style.css"),
+      std::count(sheet_requests.begin(), sheet_requests.end(), "http://example.com/style.css"),
       1);
-  EXPECT_EQ(
-      std::find(fetch.requests_.begin(), fetch.requests_.end(), "http://example.com/favicon.ico"),
-      fetch.requests_.end());
+  EXPECT_EQ(std::count(sheet_requests.begin(), sheet_requests.end(), "http://example.com/favicon.ico"),
+            0);
 
   // The computed style reflects the external sheet (red text, 24px).
   Tab* tab = controller.ActiveTab();
@@ -2759,7 +2835,7 @@ TEST(BrowserControllerTest, ExtractsCookiesAndSendsThemNextRequest)
   EXPECT_EQ(controller.cookies().size(), 2u);
 
   // The first request went out with no cookies.
-  EXPECT_EQ(fetch.cookies_seen_[0], "");
+  EXPECT_EQ(fetch.CookiesSeen()[0], "");
   // Second navigation sends both cookies.
   ASSERT_TRUE(controller.NavigateActive("http://example.com/dashboard").has_value());
   const std::string cookie = LastCookie(fetch);
