@@ -49,11 +49,25 @@ CLI 也无法运行。发布产物的目标是**下载即用（零安装）**。
 `tools/package_runtime_linux.sh`：递归收集两个可执行文件与 Qt 插件的
 共享库闭包，复制到 `lib/`，并把 RPATH 改写为 `$ORIGIN` 相对路径
 （`bin -> $ORIGIN/../lib`、`lib -> $ORIGIN`、`plugins -> $ORIGIN/../../lib`）；
-Qt 插件（platforms/imageformats）复制到 `plugins/`，`bin/qt.conf` 指向它。
+Qt 插件复制到 `plugins/`，`bin/qt.conf` 指向它。平台插件除
+`platforms/`（xcb、wayland、offscreen、minimal）与 `imageformats/` 外，还带上
+**Wayland 客户端插件族**（`wayland-shell-integration/`、
+`wayland-decoration-client/`、`wayland-graphics-integration-client/`）：
+Wayland 平台插件本身只是个壳，shell 集成（xdg-shell 等）、装饰与 EGL 缓冲
+集成都在独立的插件族里，缺了它们 Qt 会打印
+`No shell integration named "xdg-shell" found` 后报
+`Could not load the Qt platform plugin "wayland"` —— 显式要求 Wayland 时
+GUI 直接起不来（纯 Wayland 会话没有 XWayland 回退），默认情况下则静默回退到
+XWayland（2026-09 rc2 用户实测）。`*-server` 插件族属于合成器，不打包
+（依赖 Qt6WaylandCompositor）。
 
 **不捆绑**：glibc 家族（`ld-linux*`、`libc`、`libm`、`libpthread`、NSS
 相关）与 GPU/驱动栈（`libGL/libEGL/libdrm/...`）——前者是主机 ABI 的一部分
-（DNS、系统证书），后者必须与目标机内核驱动匹配。
+（DNS、NSS），后者必须与目标机内核驱动匹配。
+
+捆绑的 `libcrypto`/`libssl` 来自 runner，因此**不能**依赖它编译期的 CA 路径
+（Ubuntu 的 `/usr/lib/ssl` 在 Arch/Fedora/macOS/Windows 上不存在）；信任库在
+运行时按运行主机发现，见 ADR 0010 「修订 2026-09」。
 
 ### macOS（GUI 打成 .app + macdeployqt；CLI 改写 install name）
 
@@ -131,7 +145,7 @@ Qt 插件（platforms/imageformats）复制到 `plugins/`，`bin/qt.conf` 指向
   产物）。
 - 代价：包体积显著增大（Linux/macOS 含 Qt 与 FFmpeg 运行库，tar.gz 数十
   MB）；发布 CI 增加少量打包/冒烟时间；Linux 产物的 glibc 基线等于构建
-  runner（Ubuntu 24.04）。
+  runner（当前 `ubuntu-26.04`）。
 - **已知合规注意事项**：Linux/macOS 捆绑的 FFmpeg 运行库来自发行版/Homebrew
   构建，可能包含发行版启用的 GPL 组件；后续工作是为发布构建自有 LGPL
   运行时（FFmpeg 最小特性集），并同步更新依赖政策。

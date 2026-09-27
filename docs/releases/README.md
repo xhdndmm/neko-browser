@@ -69,7 +69,12 @@ Windows 链接方式（见 [ADR 0019](../architecture/adr/0019-release-runtime-p
   再以 DLL 形式出现。
 - **Linux**：`tools/package_runtime_linux.sh` 把全部非系统库（Qt、FFmpeg、
   OpenSSL、...）复制进 `lib/`、Qt 插件进 `plugins/`，RPATH 改写为 `$ORIGIN`
-  相对路径；**不**捆绑 glibc（NSS/DNS 需要）与 GPU/驱动栈（需要匹配内核驱动）。
+  相对路径；平台插件除 `platforms/` 与 `imageformats/` 外还包含
+  **Wayland 客户端插件族**（shell integration / decoration /
+  graphics-integration-client —— 缺了它们 wayland 平台插件加载失败，
+  显式要求 Wayland 时 GUI 起不来，见 ADR 0019）；**不**捆绑 glibc（NSS/DNS
+  需要）与 GPU/驱动栈（需要匹配内核驱动）。产物捆绑的 `libcrypto` 来自构建
+  runner，因此信任库在**运行主机**上发现（ADR 0010 修订）。
 - **macOS**：`tools/package_runtime_macos.sh` 把 GUI 组装为
   `neko_browser_gui.app` 并交给 `macdeployqt`（Qt framework、插件、非 Qt dylib
   一并部署；Qt 只装 Homebrew `qtbase`，见 ADR 0019）；部署后脚本会再跑一遍
@@ -83,6 +88,11 @@ Windows 链接方式（见 [ADR 0019](../architecture/adr/0019-release-runtime-p
 - 打包后立即用**产物本身**跑冒烟测试（CLI `--dump-dom`；GUI 以
   `QT_QPA_PLATFORM=offscreen` 启动），且清空 `LD_LIBRARY_PATH` /
   `DYLD_LIBRARY_PATH`，避免借用到构建机已装的库。
+  注意：runner 与构建机同为 Debian 系，**测试不出** CA 布局差异类故障
+  （2026-09 rc2：产物的 `libcrypto` 指向 runner 的 `/usr/lib/ssl`，在
+  Arch/Fedora 上信任库为空）；发布前在非 Debian 系主机上跑一次
+  `bin/neko_browser --url https://example.com/ --dump-dom` 是最直接的
+  端到端验证。
 
 ### 「生产版本」的定义
 
@@ -101,7 +111,7 @@ neko-browser-<version>-linux-x86_64.tar.gz
 ├── bin/neko_browser              CLI
 ├── bin/neko_browser_gui          Qt6 GUI（可直接运行，无需安装 Qt）
 ├── lib/                          全部非系统运行库（RPATH 已改写）
-├── plugins/                      Qt 平台/图像格式插件（qt.conf 指向此处）
+├── plugins/                      Qt 平台/图像格式/Wayland 插件（qt.conf 指向此处）
 ├── LICENSE
 └── README.md
 
@@ -142,12 +152,16 @@ Release 页面同时附带 `SHA256SUMS`（`sha256sum --check SHA256SUMS` 校验�
   `scripts/release/stage-tests-windows-arm64.ps1` / `test-windows-arm64.ps1`）。
   ARM64 的 Qt 运行库按固定清单手工部署（Qt 交叉编译包不含 windeployqt）：
   3 个 Qt DLL + 平台/样式/图像格式插件。
-- **Linux glibc 基线**：产物在 Ubuntu 24.04 上构建，需要目标机的 glibc 不低于
+- **Linux glibc 基线**：产物在 `ubuntu-26.04` 上构建，需要目标机的 glibc 不低于
   构建环境；更旧的发行版不受支持（glibc 与显卡驱动始终来自目标机，见 ADR 0019）。
 - **捆绑的 FFmpeg 来自发行版/Homebrew 构建**：其中可能包含发行版启用的 GPL
   组件；后续计划为发布构建自有 LGPL 运行时（最小特性集）。
 - **未签名 / 未公证**：macOS 首次运行可能需要
   `xattr -d com.apple.quarantine <binary>`；签名/公证见后续工作。
+- **证书信任库来自目标机**：产物不携带 CA 包（HTTPS 用目标机 CA 库，见
+  ADR 0010 修订）。目标机没有 `ca-certificates` 时 HTTPS 会失败关闭并提示
+  安装或设置 `SSL_CERT_FILE`；macOS 尚未接 Keychain，Windows 系统 ROOT 库
+  尚未在运行期验证。
 - **无独立调试符号包**。
 
 ### 后续工作（Phase 12+）

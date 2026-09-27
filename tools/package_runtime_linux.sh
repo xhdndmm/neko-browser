@@ -11,7 +11,8 @@
 #
 #   1. copies the Qt platform/image plugins into <staging-dir>/plugins
 #      (source directory from `qmake6 -query QT_INSTALL_PLUGINS`, override
-#      with QT_PLUGIN_DIR) and writes bin/qt.conf pointing at them,
+#      with QT_PLUGIN_DIR) together with the Wayland client plugin families the
+#      Wayland platform plugin needs, and writes bin/qt.conf pointing at them,
 #   2. walks the transitive shared-library closure of the binaries and the
 #      plugins and copies every non-system library into <staging-dir>/lib,
 #   3. rewrites RPATHs so the binaries, libraries and plugins resolve each
@@ -106,6 +107,34 @@ collect_deps() {
 
 # --- 1. Qt plugins and qt.conf ---------------------------------------------
 
+# The Wayland platform plugin is only a shell: the shell integrations
+# (xdg-shell/ivi/qt-shell), the decorations and the EGL buffer integration are
+# separate plugin families.  Qt fails to load the platform plugin when they are
+# missing ("No shell integration named \"xdg-shell\" found" followed by
+# "Could not load the Qt platform plugin \"wayland\"") and the GUI silently
+# falls back to XWayland -- or cannot start at all on a Wayland-only session.
+# The *-server families are for compositors and stay out: their dependencies
+# (Qt6WaylandCompositor) are not part of a browser runtime.
+copy_wayland_plugins() {
+  local src="$1" family plugin count=0
+  for family in \
+    wayland-shell-integration \
+    wayland-decoration-client \
+    wayland-graphics-integration-client; do
+    if [ ! -d "$src/$family" ]; then
+      echo "warning: $src/$family not found; the Wayland platform plugin needs it" >&2
+      continue
+    fi
+    mkdir -p "$PLUGIN_DIR/$family"
+    for plugin in "$src/$family"/*.so; do
+      [ -f "$plugin" ] || continue
+      cp -fL -- "$plugin" "$PLUGIN_DIR/$family/"
+      count=$((count + 1))
+    done
+  done
+  echo "info: copied $count Wayland plugin(s)"
+}
+
 copy_plugins() {
   local src="${QT_PLUGIN_DIR:-}" candidate rel copied=0
   if [ -z "$src" ]; then
@@ -143,6 +172,12 @@ copy_plugins() {
   if [ ! -f "$PLUGIN_DIR/platforms/libqxcb.so" ]; then
     echo "warning: platforms/libqxcb.so not found under $src;" >&2
     echo "         the GUI needs an X11 platform plugin" >&2
+  fi
+  if [ -f "$PLUGIN_DIR/platforms/libqwayland.so" ]; then
+    copy_wayland_plugins "$src"
+  else
+    echo "warning: platforms/libqwayland.so not found under $src;" >&2
+    echo "         the GUI will not run on a Wayland-only session" >&2
   fi
 }
 
