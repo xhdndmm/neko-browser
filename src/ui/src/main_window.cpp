@@ -824,7 +824,7 @@ void MainWindow::PopulateDomTree(QTreeWidget* tree)
   if (tab.id < 0 || tab.content_type != browser::ContentType::kHtml || tab.page == nullptr) {
     return;
   }
-  // ADR 0019: the DOM is owned by the worker thread, which mutates it while
+  // ADR 0020: the DOM is owned by the worker thread, which mutates it while
   // running page scripts under Page's DOM lock.  Take the same lock so the
   // tree walk is serialized with those mutations (the snapshot alone does not
   // pin the document).

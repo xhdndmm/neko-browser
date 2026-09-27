@@ -27,7 +27,7 @@ neko-browser 的文档体系。文档是项目的一等公民 —— 改动架�
   - [0016：多进程架构（进程模型 + IPC + 迁移路线）](architecture/adr/0016-multiprocess-architecture.md)
   - [0017：GPU 合成框架（设备抽象 + 回退）](architecture/adr/0017-gpu-compositor-framework.md)
   - [0018：内置 DNS 解析器（DNS 优先，getaddrinfo 回退）](architecture/adr/0018-built-in-dns-resolver.md)
-  - [0019：DOM 归 worker 线程独占 + GUI 消费不可变帧](architecture/adr/0019-worker-confined-dom.md)
+  - [0020：DOM 归 worker 线程独占 + GUI 消费不可变帧](architecture/adr/0020-worker-confined-dom.md)
 
 ## 开发
 

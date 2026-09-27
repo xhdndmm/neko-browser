@@ -79,7 +79,7 @@ int main(int argc, char** argv)
     if (has_content) {
       ready = window.TabBarWidget()->count() > 0 && !tab.loading;
       // In-process HTML: the worker produces the viewport frame on its pump
-      // (ADR 0019), so wait for it before grabbing or the shot is blank.
+      // (ADR 0020), so wait for it before grabbing or the shot is blank.
       if (ready && tab.content_type == neko::browser::ContentType::kHtml && !tab.remote) {
         ready = tab.frame != nullptr;
       }
@@ -97,7 +97,7 @@ int main(int argc, char** argv)
   }
 
   // The frame is produced on the worker thread and published through a queued
-  // StateChanged; let the WebView consume the latest snapshot (ADR 0019)
+  // StateChanged; let the WebView consume the latest snapshot (ADR 0020)
   // before grabbing, otherwise the shot can show the previous blank frame.
   for (int i = 0; i < 5; ++i) {
     QCoreApplication::processEvents();

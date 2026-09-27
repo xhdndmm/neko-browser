@@ -511,7 +511,7 @@ TEST(UiSmokeTest, HoverDoesNotResetScroll)
   auto* view = window.findChild<neko::ui::WebView*>();
   ASSERT_NE(view, nullptr);
   // The viewport frame (and therefore the scroll range) is produced by the
-  // worker's pump (ADR 0019), so wait for it instead of asserting immediately
+  // worker's pump (ADR 0020), so wait for it instead of asserting immediately
   // on the layout being ready.
   ASSERT_TRUE(WaitFor([&] { return view->verticalScrollBar()->maximum() > 0; }));
 

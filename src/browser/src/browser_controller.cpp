@@ -341,7 +341,7 @@ TabSnapshot ToSnapshot(const Tab& tab)
   s.remote_frame = tab.remote_frame;
   s.remote_content_height = tab.remote_content_height;
   s.remote_hover_link = tab.remote_hover_link;
-  // In-process frames (ADR 0019) and child-process frames share one snapshot
+  // In-process frames (ADR 0020) and child-process frames share one snapshot
   // shape: the GUI draws |frame| and never touches the live page.
   s.frame = s.remote ? tab.remote_frame : tab.frame;
   s.frame_content_height = s.remote ? tab.remote_content_height : tab.frame_content_height;
@@ -708,7 +708,7 @@ bool BrowserController::DispatchPointerClick(int tab_id, float doc_x, float doc_
   if (tab == nullptr) {
     return false;
   }
-  // Hold the DOM lock while the click's scripts run (ADR 0019): the pool
+  // Hold the DOM lock while the click's scripts run (ADR 0020): the pool
   // threads that inject subresources take the same lock.
   std::unique_lock<std::recursive_mutex> dom_lock;
   if (tab->page != nullptr) {
@@ -1242,7 +1242,7 @@ void BrowserController::PumpScriptTimers()
     }
   }
   // Rebuild the viewport frame when the page changed or the GUI moved the
-  // viewport / scroll bar since the last one (ADR 0019).  The GUI only draws
+  // viewport / scroll bar since the last one (ADR 0020).  The GUI only draws
   // this frame; it never rasterizes or walks the DOM.
   if (tab->content_type == ContentType::kHtml) {
     if (tab->page == nullptr) {
@@ -1905,7 +1905,7 @@ void BrowserController::LoadBytes(Tab& tab,
       std::lock_guard<std::mutex> lock(mutex_);
       tab.content_type = ContentType::kHtml;
       tab.page = new_page; // shared: the background task keeps it alive
-      // A fresh document must produce a fresh viewport frame (ADR 0019).
+      // A fresh document must produce a fresh viewport frame (ADR 0020).
       tab.frame_dirty = true;
       tab.title = std::move(title);
       // A previous find-in-page session described the old document.

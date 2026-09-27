@@ -50,7 +50,7 @@ void WebView::Refresh()
 {
   snapshot_ = worker_->SnapshotTab(tab_id_);
   // A navigation resets the local scroll position; the worker re-renders at
-  // the new offset.  The DOM is owned by the worker thread (ADR 0019), so the
+  // the new offset.  The DOM is owned by the worker thread (ADR 0020), so the
   // GUI detects a navigation by the URL rather than by a document version.
   if (snapshot_.url != frame_url_) {
     frame_url_ = snapshot_.url;
@@ -422,7 +422,7 @@ void WebView::PaintFindHighlight(QPainter& painter)
 
 void WebView::PaintHtml(QPainter& painter)
 {
-  // The worker produces an immutable viewport frame (ADR 0019); the GUI only
+  // The worker produces an immutable viewport frame (ADR 0020); the GUI only
   // draws it.  The frame is already rasterized at the current scroll offset,
   // so it is drawn at the origin.  QImage does not copy the pixels and never
   // writes through them; the const_cast only satisfies its API.

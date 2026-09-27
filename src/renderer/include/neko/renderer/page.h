@@ -156,7 +156,7 @@ public:
   // Builds the layout tree at the given viewport width.
   void Layout(float viewport_width, float viewport_height = 0);
 
-  // ADR 0019: the DOM/layout tree is owned by the controller (worker) thread.
+  // ADR 0020: the DOM/layout tree is owned by the controller (worker) thread.
   // The controller holds this lock for the duration of any operation that can
   // run page scripts, so its DOM mutations are serialized with the other
   // locked accessors (pool-thread subresource injection, DevTools reads).

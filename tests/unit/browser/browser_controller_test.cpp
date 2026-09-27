@@ -789,7 +789,7 @@ TEST(BrowserControllerTest, PumpScriptTimersRunsSetTimeout)
   EXPECT_DOUBLE_EQ(num.value(), 1.0);
 }
 
-// ADR 0019: the worker (not the GUI) produces the viewport frame; timers that
+// ADR 0020: the worker (not the GUI) produces the viewport frame; timers that
 // mutate the DOM and hover changes must be reflected in the next snapshot.
 TEST(BrowserControllerTest, FrameIsProducedAndRefreshedByDomChanges)
 {
@@ -870,7 +870,7 @@ TEST(BrowserControllerTest, NavigationProducesAFreshFrame)
 
 // Regression: hovering an element must drive the style engine's :hover so
 // hover-only rules expand — e.g. a CSS dropdown like kaom.net's menu.  The
-// B refactor (ADR 0019) moved hover handling off the GUI but initially forgot
+// B refactor (ADR 0020) moved hover handling off the GUI but initially forgot
 // to feed it back into the style engine, so :hover never matched.
 TEST(BrowserControllerTest, HoverExpandsCssDropdown)
 {

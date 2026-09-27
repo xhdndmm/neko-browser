@@ -182,7 +182,7 @@ struct Tab
   bool remote_scroll_dirty = false;
   int64_t remote_last_frame_ms = 0;
 
-  // ---- In-process frame (ADR 0019) ---------------------------------------
+  // ---- In-process frame (ADR 0020) ---------------------------------------
   // The worker rasterizes the viewport into an immutable frame that the GUI
   // draws; the GUI never reads |page| (the DOM is owned by the worker thread).
   // Produced by ProduceFrame() on the worker thread.  |remote| above stays
@@ -241,7 +241,7 @@ struct TabSnapshot
   // Hyperlink under the pointer ("" = none), reported by the child.
   std::string remote_hover_link;
 
-  // ---- In-process frame (ADR 0019) ---------------------------------------
+  // ---- In-process frame (ADR 0020) ---------------------------------------
   // The rendered viewport for HTML tabs, produced on the worker thread.  The
   // GUI draws this (never the live |page|).  |frame| is set in BOTH execution
   // modes; |remote| distinguishes a child-process frame from an in-process one.
@@ -571,7 +571,7 @@ private:
   // Tears the tab's session down and reports |error| as the tab's content.
   void MarkSessionFailed(Tab& tab, std::string_view message);
 
-  // ---- In-process frame production (ADR 0019) ----------------------------
+  // ---- In-process frame production (ADR 0020) ----------------------------
   // Rasterizes |tab|'s viewport into an immutable frame (worker thread only)
   // and refreshes the content height / hover link / caret geometry that go
   // with it.  Called from the worker after any DOM/layout/scroll/viewport
