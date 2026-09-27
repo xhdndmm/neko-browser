@@ -17,10 +17,9 @@
 #      skips it by design) so headless smoke tests can run,
 #   3. bundles the CLI's non-Qt dylibs into <staging-dir>/lib (the CLI does not
 #      link Qt) and rewrites every reference to @executable_path/../lib/...,
-#   4. ad-hoc signs every Mach-O file in the bundle, seals the .app with
-#      `codesign --deep` (a plain seal can abort on Xcode 26 with a misleading
-#      "code object is not signed at all" subcomponent error even though the
-#      nested code was signed above) and verifies the result with
+#   4. ad-hoc signs the bundle inside-out — every nested Mach-O first, the
+#      main executable last, then the .app itself (the order is mandatory,
+#      see sign_app_bundle) — and verifies the result with
 #      `codesign --verify --deep`,
 #   5. verifies that every non-system dependency resolves to a file inside the
 #      package (@rpath / @loader_path / @executable_path included).
@@ -191,34 +190,87 @@ delete_external_rpaths() {
 
 sign_file() {
   mach_o "$1" || return 0
-  codesign --force --sign - "$1"
+  local output
+  if ! output="$(codesign --force --sign - "$1" 2>&1)"; then
+    echo "$output" >&2
+    echo "error: codesign failed for $1" >&2
+    return 1
+  fi
 }
 
-# Ad-hoc sign the complete GUI bundle: every nested Mach-O first, then the
-# bundle itself (codesign refuses to seal a bundle whose nested code is not
-# signed), then verify the result.  macdeployqt's own signing pass is not used
-# (see the header): it fails half-way through for our dependency tree and does
-# not seal the .app root, which leaves an unsigned bundle behind.
+# The main executable recorded in the bundle's Info.plist.
+bundle_main_executable() {
+  local plist="$APP_DIR/Contents/Info.plist" name=""
+  if [ -f "$plist" ]; then
+    if [ -x /usr/libexec/PlistBuddy ]; then
+      name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist" 2>/dev/null || true)"
+    fi
+    if [ -z "$name" ]; then
+      name="$(sed -n 's#.*<key>CFBundleExecutable</key><string>\([^<]*\)</string>.*#\1#p' "$plist" | head -n 1)"
+    fi
+  fi
+  if [ -z "$name" ]; then
+    name="neko_browser_gui"
+  fi
+  printf '%s\n' "$APP_DIR/Contents/MacOS/$name"
+}
+
+# Ad-hoc sign the complete GUI bundle inside-out, then seal and verify it.
+# macdeployqt's own signing pass is not used (see the header): it fails
+# half-way through for our dependency tree and does not seal the .app root,
+# which leaves an unsigned bundle behind.
 #
-# The seal itself must pass --deep: Xcode 26's codesign aborts a plain bundle
-# sign on already-signed nested items with a misleading "code object is not
-# signed at all / In subcomponent: <path>" error (macOS x86_64 runner, release
-# run 36234131045: Contents/PlugIns/platforms/libqcocoa.dylib), while --deep
-# (re)signs the nested code inside-out itself and then seals successfully.
-# The explicit pass above is kept: it signs every Mach-O deterministically and
-# stays the guarantee that the nested code is signed even if a future --deep
-# implementation skips an item.
+# The order of the explicit pass is mandatory, not cosmetic.  When codesign is
+# handed the bundle's *main executable* it acts bundle-aware: the same
+# invocation also validates the nested code, and aborts with
+#
+#   <main executable>: code object is not signed at all
+#   In subcomponent: <first item that has no signature yet>
+#
+# whenever a nested item (a dylib, a plugin, anything under Contents/MacOS) is
+# still unsigned — the same error shape is well known for stray data files in
+# Contents/MacOS.  A flat pass over `find` output thus passes or fails
+# depending on the order the file system enumerates the bundle: on the
+# macos-x86_64 release runner (run 36276407029) Contents/MacOS/
+# neko_browser_gui preceded Contents/PlugIns/platforms/libqcocoa.dylib and the
+# loop died mid-way — before the seal below was ever reached, which is why
+# switching the seal to --deep alone could not fix it.  Sign every nested
+# Mach-O first, the main executable second, and seal last.
+#
+# The bundle seal and the main-executable sign both retry with --deep when the
+# plain call fails: --deep (re)signs the nested code itself, which is the
+# documented escape hatch for a nested item this script cannot sign on its
+# own.
 sign_app_bundle() {
   [ -d "$APP_DIR" ] || return 0
-  local f output
+  local f main_bin output
+  main_bin="$(bundle_main_executable)"
+
   while IFS= read -r -d '' f; do
+    [ "$f" = "$main_bin" ] && continue
     sign_file "$f"
   done < <(find "$APP_DIR" -type f -print0)
 
-  if ! output="$(codesign --force --deep --sign - "$APP_DIR" 2>&1)"; then
+  if mach_o "$main_bin"; then
+    if ! output="$(codesign --force --sign - "$main_bin" 2>&1)"; then
+      echo "$output" >&2
+      echo "warning: signing the main executable failed; retrying with --deep" >&2
+      if ! output="$(codesign --force --deep --sign - "$main_bin" 2>&1)"; then
+        echo "$output" >&2
+        echo "error: failed to sign the main executable: $main_bin" >&2
+        exit 1
+      fi
+    fi
+  fi
+
+  if ! output="$(codesign --force --sign - "$APP_DIR" 2>&1)"; then
     echo "$output" >&2
-    echo "error: failed to sign the app bundle: $APP_DIR" >&2
-    exit 1
+    echo "warning: sealing without --deep failed; retrying with --deep" >&2
+    if ! output="$(codesign --force --deep --sign - "$APP_DIR" 2>&1)"; then
+      echo "$output" >&2
+      echo "error: failed to sign the app bundle: $APP_DIR" >&2
+      exit 1
+    fi
   fi
   if ! output="$(codesign --verify --deep --verbose=2 "$APP_DIR" 2>&1)"; then
     echo "$output" >&2

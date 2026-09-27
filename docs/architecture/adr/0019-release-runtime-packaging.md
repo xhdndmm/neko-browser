@@ -73,12 +73,15 @@ Qt 插件（platforms/imageformats）复制到 `plugins/`，`bin/qt.conf` 指向
 - ad-hoc 签名由脚本自己完成：`macdeployqt` 自带的签名在含 Homebrew 依赖树
   的 bundle 上会半途失败，且从不封 `.app` 本身。脚本在部署完成后关闭它
   （`-no-codesign`，旧版本无此选项则忽略其结果），从内到外重签 bundle 内的
-  所有 Mach-O，再封 bundle 根并用 `codesign --verify --deep` 校验。封包必须
-  带 `--deep`：Xcode 26 的 codesign 对“嵌套代码已签名、但以普通（非 deep）
-  封包”的 bundle 会以误导性的 “code object is not signed at all /
-  In subcomponent: <文件>” 退出（2026-09 rc2 macOS x86_64 实测，对象为
-  `Contents/PlugIns/platforms/libqcocoa.dylib`），而 `--deep` 会自行从内到外
-  重签嵌套代码再封包。
+  所有 Mach-O，再封 bundle 根并用 `codesign --verify --deep` 校验。
+  **签名顺序是强制的**：codesign 拿到 bundle 的*主可执行文件*时会连带校验
+  嵌套代码，嵌套项还没签名就以误导性的 “code object is not signed at all /
+  In subcomponent: <文件>” 退出；按 `find` 枚举顺序逐文件签能否成功取决于
+  文件系统枚举顺序（2026-09 rc2 macOS x86_64 实测：`Contents/MacOS/
+  neko_browser_gui` 排在 `Contents/PlugIns/platforms/libqcocoa.dylib` 之前，
+  循环中途失败——封包步骤根本没执行到，这也是“把封包改成 `--deep`”无效的
+  原因）。因此：先签全部嵌套 Mach-O，再签主可执行文件，最后封包；
+  主可执行文件签名与封包在普通签名失败时都会退回 `--deep` 重试一次。
 - `macdeployqt` 只改写“**没有**通过 LC_RPATH 解析到”的依赖
   （`deployQtFrameworks()`：`rpathUsed` 非空的依赖保留 `@rpath/<name>` 引用，
   `changeIdentification()` 与 `deployRPaths()` 同样只作用于 bundle 的主
