@@ -1,8 +1,10 @@
+#include "neko/base/string_util.h"
 #include "neko/base/utf8.h"
 #include "neko/dom/element.h"
 #include "neko/graphics/font_registry.h"
 #include "neko/graphics/font_selector.h"
 #include "neko/image/image.h"
+#include "neko/layout/form_control.h"
 #include "neko/layout/layout_tree.h"
 
 #include <algorithm>
@@ -23,6 +25,40 @@ const std::vector<const LayoutBox*> kNoFloats;
 // The marker (bullet / number) is drawn in this gutter, inside the list's
 // padding-left (the UA stylesheet gives <ul>/<ol> a 40px padding).
 constexpr float kListMarkerGap = 24.0f;
+
+// Native widget boxes (WHATWG HTML §15.5 Widgets).  A widget's native
+// appearance is implementation-defined -- the standard says only "Need to detail
+// the native appearance" throughout the section -- so these are measured
+// defaults instead of values the standard derives.  The ones in `*Em` scale with
+// the control's font-size, which is what the measured browsers do; the others
+// are fixed sizes.
+constexpr float kCheckboxBoxSize = 13.0f;    // Chrome's default (Firefox 156
+                                             // measures 14x14), frozen at 13x13 by
+                                             // the form-control contract so paint
+                                             // and hit-testing agree on one box
+constexpr float kRangeWidthEm = 12.0f;       // Firefox: 12em at any font-size
+constexpr float kRangeHeightEm = 1.5f;       // Firefox: ~1.5em (20px at 13.33px)
+constexpr float kColorWellWidth = 64.0f;     // Firefox: a fixed 64x32, whatever the
+constexpr float kColorWellHeight = 32.0f;    // font-size
+constexpr float kFileWidthEm = 17.7f;        // Firefox: 17.8em at its field font
+constexpr float kSelectArrowWidthEm = 1.35f; // Firefox: 18px of drop-down arrow
+                                             // area at its 13.33px field font
+
+// §15.5.6 / §4.10.5.3.5 defaults: a text control shows 20 characters when the
+// `size` attribute is absent or invalid; §4.10.10.3 defaults a textarea to 20
+// columns and 2 rows; §4.10.9's display size defaults to 1, and a list box whose
+// `size` attribute is absent or invalid is four rows high (§15.5.16).
+constexpr int kDefaultFieldSizeChars = 20;
+constexpr int kDefaultTextAreaCols = 20;
+constexpr int kDefaultTextAreaRows = 2;
+constexpr int kDefaultSelectDisplaySize = 1;
+constexpr int kDefaultListBoxRows = 4;
+
+// Upper bound on the character sizes a control is laid out with.  `size`,
+// `cols` and `rows` are remote input: without a cap, size=2000000000 asks for a
+// box two billion pixels wide.  The style engine caps repeat()/grid counts the
+// same way.
+constexpr int kMaxFieldSizeChars = 1000;
 
 // A unit of inline content (a text chunk with its style).
 struct InlineItem
@@ -934,6 +970,104 @@ int ResolveRowspan(const dom::Element& element, bool& grows_downward)
   return static_cast<int>(std::min<std::int64_t>(*v, 65534));
 }
 
+// The number of characters a `size` / `cols` / `rows` attribute asks for, or
+// nullopt when the attribute is absent, unparsable, or zero -- §4.10.5.3.5,
+// §4.10.10.3 and §4.10.9 all require a value greater than zero, so zero is
+// invalid as well.  The result is capped: the attribute is remote input, and
+// without a cap size=2000000000 would ask for a box two billion pixels wide
+// (the style engine caps repeat()/grid counts for the same reason).
+std::optional<int> FieldSizeAttribute(const dom::Element& element, std::string_view attribute)
+{
+  const std::optional<std::int64_t> value = ParseNonNegativeInt(element, attribute);
+  if (!value.has_value() || *value <= 0) {
+    return std::nullopt;
+  }
+  return static_cast<int>(std::min<std::int64_t>(*value, kMaxFieldSizeChars));
+}
+
+// An option's label (§4.10.10.4 "getting an option element's label"): its
+// non-empty `label` attribute, else its text content with whitespace collapsed
+// (an option's label is shown on one line).
+std::string OptionLabel(const dom::Element& option)
+{
+  const std::optional<std::string_view> label = option.GetAttribute("label");
+  if (label.has_value() && !label->empty()) {
+    return std::string(*label);
+  }
+  return CollapseWhitespace(option.TextContent());
+}
+
+// Appends the option children of |select|, descending into optgroups (an
+// optgroup cannot nest, so this is one level in practice).
+void CollectOptions(const dom::Element& select, std::vector<const dom::Element*>& options)
+{
+  for (const dom::Node* child : select.ChildNodes()) {
+    if (child->node_type() != dom::NodeType::kElement) {
+      continue;
+    }
+    const dom::Element& element = static_cast<const dom::Element&>(*child);
+    if (element.tag_name() == "option") {
+      options.push_back(&element);
+    } else if (element.tag_name() == "optgroup") {
+      CollectOptions(element, options);
+    }
+  }
+}
+
+// The option whose label a drop-down select shows: the first option carrying
+// the `selected` attribute, else the first option (§4.10.10.4 -- selectedness
+// defaults to the first option when no option is selected).
+const dom::Element* SelectedOption(const std::vector<const dom::Element*>& options)
+{
+  for (const dom::Element* option : options) {
+    if (option->HasAttribute("selected")) {
+      return option;
+    }
+  }
+  return options.empty() ? nullptr : options.front();
+}
+
+// The label of a text button.  §15.5.12: the contents are the `value`
+// attribute's text, or text derived from the `type` attribute in an
+// implementation-defined (and probably locale-specific) fashion -- English here.
+// A <button> shows its own content instead.  An input[type=image] shows its
+// `src` image (NOT IMPLEMENTED: it falls back to an empty label).
+std::string ButtonLabel(const dom::Element& element)
+{
+  const std::optional<std::string_view> value = element.GetAttribute("value");
+  if (value.has_value() && !value->empty()) {
+    return std::string(*value);
+  }
+  if (element.tag_name() == "button") {
+    return CollapseWhitespace(element.TextContent());
+  }
+  const std::string_view type = element.GetAttribute("type").value_or("text");
+  if (base::AsciiEqualsIgnoreCase(type, "submit")) {
+    return "Submit";
+  }
+  if (base::AsciiEqualsIgnoreCase(type, "reset")) {
+    return "Reset";
+  }
+  return {};
+}
+
+// Hint text shown while a text control is empty: the standard `placeholder`
+// attribute, then two non-standard attributes that Baidu's home page carries its
+// search-box hint in.  Those two names are site-specific (no other page defines
+// them) and the site's own scripts feed them; the engine keeps reading them so
+// that the hint survives while its script support is partial.
+std::string PlaceholderFor(const dom::Element& element)
+{
+  for (const std::string_view name :
+       {"placeholder", "data-ai-placeholder", "data-normal-placeholder"}) {
+    if (const std::optional<std::string_view> value = element.GetAttribute(name);
+        value.has_value() && !value->empty()) {
+      return std::string(*value);
+    }
+  }
+  return {};
+}
+
 void ComputeReplacedSize(const style::ComputedStyle& style,
                          const dom::Element& element,
                          const image::Image* img,
@@ -1170,6 +1304,54 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
     const graphics::FontRegistry* registry; // may be null (monospace fallback)
     const ImageProvider* images;            // may be null (no decoded images)
 
+    // Records on |box| which form control it is and its `checked` / `disabled`
+    // state.  BuildFormControl does this for the controls whose geometry it
+    // derives itself; the generic builders call it because <button> reaches them
+    // instead (the UA sheet makes it an inline-block).
+    void SetFormControlState(LayoutBox& box, FormControlKind kind)
+    {
+      if (kind == FormControlKind::kNone) {
+        return;
+      }
+      box.form_control = kind;
+      box.form_control_checked = box.element->HasAttribute("checked");
+      box.form_control_disabled = box.element->HasAttribute("disabled");
+    }
+
+    // Average and maximum character width of |style|'s primary font, in CSS
+    // pixels -- the two numbers of §15.5.6's converting-a-character-width-to-
+    // pixels algorithm.  The standard leaves the character set behind them to
+    // the UA and browsers disagree widely (Firefox 156 measures a 13px average
+    // for a 13.33px field font, ~1em); this engine measures the printable ASCII
+    // range.  Without a font registry the monospace fallback model applies, so
+    // both values are the font size.
+    void
+    AverageAndMaxCharWidth(const style::ComputedStyle& style, float& average, float& widest) const
+    {
+      if (registry == nullptr) {
+        average = style.font_size;
+        widest = style.font_size;
+        return;
+      }
+      float total = 0;
+      float widest_char = 0;
+      int count = 0;
+      for (int code = 0x20; code <= 0x7E; ++code) {
+        const char c = static_cast<char>(code);
+        const float width = MeasureTextWidth(registry,
+                                             style.font_family,
+                                             style.font_weight,
+                                             style.font_italic,
+                                             std::string_view(&c, 1),
+                                             style.font_size);
+        total += width;
+        widest_char = std::max(widest_char, width);
+        ++count;
+      }
+      average = total / static_cast<float>(count);
+      widest = widest_char;
+    }
+
     // Resolves the box-model edges (margins, borders, padding) of |box|.
     void ResolveBoxEdges(LayoutBox& box, float containing_width)
     {
@@ -1224,6 +1406,9 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       auto box = std::make_unique<LayoutBox>();
       box->element = &element;
       box->style = styles.StyleFor(element);
+      // <button> is an inline-block per the UA sheet and reaches this builder
+      // instead of BuildFormControl, so it is marked here.
+      SetFormControlState(*box, ClassifyFormControl(element));
       ResolveBoxEdges(*box, containing_width);
 
       const float border_padding_w =
@@ -1276,17 +1461,37 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       return box;
     }
 
-    // Lays out a form control (<input>/<textarea>/<select>) as an atomic
-    // inline box with default widget chrome (border + light background) and the
-    // control's value — or its placeholder when empty — as a single text run.
-    // Selection / editing is wired by the browser layer (focused element +
-    // key input).
+    // Lays out a form control as an atomic widget box.  <input>, <textarea> and
+    // <select> reach this path; ClassifyFormControl says which widget it is.
+    // Geometry follows WHATWG HTML §15.5 Widgets: a text-entry control takes its
+    // inline size from `size` with the converting-a-character-width-to-pixels
+    // algorithm (§15.5.6), <textarea> from `cols`/`rows` (§15.5.17), <select>
+    // from its option labels and display size (§15.5.16), and the remaining
+    // widgets from the native metrics in form_control.h.  Returns nullptr for a
+    // control that generates no box at all (input[type=hidden]).
+    //
+    // PARTIALLY IMPLEMENTED (Wave 2): the widget's content -- checkbox tick,
+    // radio dot, slider track and thumb, colour swatch, file selector button,
+    // drop-down arrow, and a textarea value containing line breaks -- is drawn
+    // by the paint layer, which dispatches on LayoutBox::form_control.  A
+    // textarea value is flattened to one line here because the engine treats
+    // `white-space: pre-wrap` as `normal` (see computed_style.h).
     std::unique_ptr<LayoutBox> BuildFormControl(dom::Element& element, float containing_width)
     {
+      const FormControlKind kind = ClassifyFormControl(element);
+      // §15.3.10 gives input[type=hidden] appearance:none and the UA sheet
+      // display:none, so it generates no box.  Classified in code as well,
+      // because the `type` attribute is ASCII case-insensitive (the UA sheet's
+      // selector is not): an upper-case TYPE=HIDDEN must not become a widget.
+      if (kind == FormControlKind::kHidden || kind == FormControlKind::kNone) {
+        return nullptr;
+      }
+
       auto box = std::make_unique<LayoutBox>();
       box->element = &element;
       box->style = styles.StyleFor(element);
       ResolveBoxEdges(*box, containing_width);
+      SetFormControlState(*box, kind);
 
       // Default widget chrome; author CSS overrides via background/border.
       if (!box->style.background_color.has_value()) {
@@ -1316,19 +1521,121 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
 
       const float border_padding_w =
           box->border_left + box->border_right + box->padding_left + box->padding_right;
+      const float border_padding_h =
+          box->border_top + box->border_bottom + box->padding_top + box->padding_bottom;
+      // "One line high" for the one-line widgets (§15.5.6 requires a text
+      // control's used line-height to be no smaller than `normal`), following
+      // the engine's line box convention of 1.2 * font-size.
+      const float line_h = std::max(1.0f, box->style.font_size * 1.2f);
+
       float content_width = 0;
+      float content_height = line_h;
+      // The text the control shows.  A widget that is drawn rather than written
+      // in (checkbox, radio, range, colour well, file control) shows no text
+      // run: its content belongs to the paint layer.
+      std::string text;
+      switch (kind) {
+      case FormControlKind::kCheckbox:
+      case FormControlKind::kRadio:
+        // §15.5.10: a native box of its own size, with the tick / dot painted
+        // inside it.  Stated as a border-box size (see form_control.h).
+        content_width = std::max(0.0f, kCheckboxBoxSize - border_padding_w);
+        content_height = std::max(0.0f, kCheckboxBoxSize - border_padding_h);
+        break;
+      case FormControlKind::kRange:
+        // §15.5.8: an inline-block slider; the track and thumb are painted.
+        content_width = std::max(0.0f, kRangeWidthEm * box->style.font_size - border_padding_w);
+        content_height = std::max(0.0f, kRangeHeightEm * box->style.font_size - border_padding_h);
+        break;
+      case FormControlKind::kColor:
+        // §15.5.9: a colour well, painted from the element's value.
+        content_width = std::max(0.0f, kColorWellWidth - border_padding_w);
+        content_height = std::max(0.0f, kColorWellHeight - border_padding_h);
+        break;
+      case FormControlKind::kText: {
+        float average = 0;
+        float widest = 0;
+        AverageAndMaxCharWidth(box->style, average, widest);
+        // §15.5.6: (size - 1) * avg + max, with `size` defaulting to 20.
+        const int characters = FieldSizeAttribute(element, "size").value_or(kDefaultFieldSizeChars);
+        content_width = static_cast<float>(characters - 1) * average + widest;
+        text = std::string(element.GetAttribute("value").value_or(""));
+        break;
+      }
+      case FormControlKind::kTextArea: {
+        float average = 0;
+        float widest = 0;
+        AverageAndMaxCharWidth(box->style, average, widest);
+        // §15.5.17: effective width = character width (cols) * avg + scrollbar
+        // width; effective height = the block size of the `rows` lines.  The
+        // engine renders no scrollbars, so the scrollbar term is zero.
+        const int cols = FieldSizeAttribute(element, "cols").value_or(kDefaultTextAreaCols);
+        const int rows = FieldSizeAttribute(element, "rows").value_or(kDefaultTextAreaRows);
+        content_width = static_cast<float>(cols) * average;
+        content_height = static_cast<float>(rows) * box->style.line_height;
+        text = CollapseWhitespace(element.TextContent());
+        break;
+      }
+      case FormControlKind::kSelect: {
+        std::vector<const dom::Element*> options;
+        CollectOptions(element, options);
+        // §15.5.16: the inline size is the width of the select's labels.  The
+        // drop-down arrow's area is reserved here and painted by the paint
+        // layer -- the standard does not fix its size.
+        float labels = 0;
+        for (const dom::Element* option : options) {
+          labels = std::max(labels,
+                            MeasureTextWidth(registry,
+                                             box->style.font_family,
+                                             box->style.font_weight,
+                                             box->style.font_italic,
+                                             OptionLabel(*option),
+                                             box->style.font_size));
+        }
+        content_width = labels + kSelectArrowWidthEm * box->style.font_size;
+        const std::optional<int> display_size = FieldSizeAttribute(element, "size");
+        // A list box shows `size` rows, or four when the attribute is absent or
+        // invalid; a drop-down box is one row (the popup itself is NOT
+        // IMPLEMENTED).  A `multiple` select is a list box, and this engine has
+        // no multi-select popup, so it is one here even at a display size of 1.
+        const int declared_size = display_size.value_or(kDefaultSelectDisplaySize);
+        const bool list_box = declared_size > 1 || element.HasAttribute("multiple");
+        const int rows =
+            list_box ? display_size.value_or(kDefaultListBoxRows) : kDefaultSelectDisplaySize;
+        content_height = static_cast<float>(rows) * box->style.line_height;
+        if (const dom::Element* shown = SelectedOption(options); shown != nullptr) {
+          text = OptionLabel(*shown);
+        }
+        break;
+      }
+      case FormControlKind::kButton:
+        // §15.5.3 button layout: the box shrink-wraps its label.
+        text = ButtonLabel(element);
+        content_width = MeasureTextWidth(registry,
+                                         box->style.font_family,
+                                         box->style.font_weight,
+                                         box->style.font_italic,
+                                         text,
+                                         box->style.font_size);
+        break;
+      case FormControlKind::kFile:
+        // §15.5.11: the selected filename(s) followed by the file selector
+        // button.  Nothing is selected without a file dialog, and the button
+        // (its implementation-defined "Choose file" text) is painted, so no text
+        // run is produced here.
+        content_width = std::max(0.0f, kFileWidthEm * box->style.font_size - border_padding_w);
+        break;
+      case FormControlKind::kNone:
+      case FormControlKind::kHidden:
+        return nullptr; // unreachable: handled above
+      }
+
       if (box->style.width.has_value()) {
         content_width = SpecToContent(
             box->style.width.value(), containing_width, border_padding_w, box->style.box_sizing);
-      } else {
-        content_width = 170.0f; // default text-field width
       }
-      box->width = content_width + border_padding_w;
+      box->width = std::max(0.0f, content_width) + border_padding_w;
 
-      const float line_h = std::max(1.0f, box->style.font_size * 1.2f);
-      float content_height = line_h;
-      const float border_padding_h =
-          box->border_top + box->border_bottom + box->padding_top + box->padding_bottom;
       if (box->style.height.has_value() && !box->style.height.value().percent) {
         content_height = std::max(content_height,
                                   SpecToContent(box->style.height.value(),
@@ -1344,41 +1651,15 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
               SpecToContent(spec, containing_width, border_padding_h, box->style.box_sizing));
         }
       }
-      box->height = content_height + border_padding_h;
+      box->height = std::max(0.0f, content_height) + border_padding_h;
       box->x = box->margin_left;
       box->y = box->margin_top;
 
-      // The displayed text: the value for an <input>, the content for a
-      // <textarea>, the first option for a <select>; placeholder when empty.
-      std::string text;
-      if (element.tag_name() == "textarea") {
-        text = element.TextContent();
-      } else if (element.tag_name() == "select") {
-        for (dom::Node* c : element.ChildNodes()) {
-          if (c->node_type() != dom::NodeType::kElement) {
-            continue;
-          }
-          dom::Element& opt = static_cast<dom::Element&>(*c);
-          if (opt.tag_name() == "option") {
-            const std::optional<std::string_view> val = opt.GetAttribute("value");
-            text = val.has_value() ? std::string(*val) : opt.TextContent();
-            break;
-          }
-        }
-      } else {
-        const std::optional<std::string_view> val = element.GetAttribute("value");
-        text = val.has_value() ? std::string(*val) : "";
-      }
-      const bool is_placeholder = text.empty();
-      if (is_placeholder) {
-        text = std::string(element.GetAttribute("placeholder").value_or(""));
-        if (text.empty()) {
-          // Baidu's homepage search box uses a data-* placeholder.
-          text = std::string(element.GetAttribute("data-ai-placeholder").value_or(""));
-        }
-        if (text.empty()) {
-          text = std::string(element.GetAttribute("data-normal-placeholder").value_or(""));
-        }
+      // The hint text a text control shows while empty.
+      bool is_placeholder = false;
+      if ((kind == FormControlKind::kText || kind == FormControlKind::kTextArea) && text.empty()) {
+        text = PlaceholderFor(element);
+        is_placeholder = !text.empty();
       }
       if (!text.empty()) {
         TextRun run;
@@ -1594,6 +1875,10 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       if (child_element.tag_name() == "input" || child_element.tag_name() == "textarea" ||
           child_element.tag_name() == "select") {
         auto block_box = BuildFormControl(child_element, containing_width);
+        if (block_box == nullptr) {
+          // input[type=hidden] generates no box (§15.3.10) and no inline item.
+          return;
+        }
         InlineItem item;
         item.style = &child_style;
         item.element = &child_element;
@@ -1856,6 +2141,11 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         std::unique_ptr<LayoutBox> child_box;
         if (bc.form_control) {
           child_box = BuildFormControl(*bc.element, avail_width);
+          if (child_box == nullptr) {
+            // input[type=hidden] generates no box (§15.3.10): it contributes
+            // nothing to the flow, neither a box nor vertical space.
+            continue;
+          }
           child_box->x = box.content_x() + child_box->margin_left;
           child_box->y = box.content_y() + cursor_y + child_box->margin_top;
           if (!child_box->lines.empty() && !child_box->lines.front().runs.empty()) {
@@ -1971,6 +2261,9 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       auto box = std::make_unique<LayoutBox>();
       box->element = &element;
       box->style = styles.StyleFor(element);
+      // A block-level <button> (display:block from author CSS) is still a
+      // button widget, so it is marked here.
+      SetFormControlState(*box, ClassifyFormControl(element));
       // CSS background-image: carry the URL and resolve the decoded image
       // through the ImageProvider (the browser fetches it keyed by element,
       // the same mechanism as <img>).

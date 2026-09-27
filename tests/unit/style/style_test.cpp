@@ -408,8 +408,8 @@ TEST(StyleTest, GridRepeatCountIsClamped)
   // untrusted remote input, so `repeat(99999999, 1fr)` hung the renderer for
   // over a minute.  Counts are now clamped.
   for (const char* count : {"99999999", "4294967296", "1e300"}) {
-    auto doc = MakeDoc("<body><div style=\"grid-template-columns:repeat(" +
-                       std::string(count) + ", 1fr)\">x</div></body>");
+    auto doc = MakeDoc("<body><div style=\"grid-template-columns:repeat(" + std::string(count) +
+                       ", 1fr)\">x</div></body>");
     StyleEngine engine;
     engine.ApplyStyles(*doc);
     const ComputedStyle& s = Style(engine, *doc, "div");
@@ -423,8 +423,8 @@ TEST(StyleTest, GridRepeatCountIsClamped)
   // Zero / negative / non-numeric counts produce no tracks rather than a huge
   // number of them.
   for (const char* bad : {"0", "-5", "abc"}) {
-    auto doc = MakeDoc("<body><div style=\"grid-template-columns:repeat(" +
-                       std::string(bad) + ", 1fr)\">x</div></body>");
+    auto doc = MakeDoc("<body><div style=\"grid-template-columns:repeat(" + std::string(bad) +
+                       ", 1fr)\">x</div></body>");
     StyleEngine e2;
     e2.ApplyStyles(*doc);
     EXPECT_TRUE(Style(e2, *doc, "div").grid_template_columns.empty()) << "count=" << bad;
@@ -437,8 +437,8 @@ TEST(StyleTest, GridSpanIsClamped)
   // unbounded value turns a few bytes of CSS into a huge allocation.  A single
   // "span N" in the `grid-row` shorthand lands on the *end* line.
   for (const char* span : {"100000000", "4294967296", "1e300"}) {
-    auto doc = MakeDoc("<body><div style=\"grid-row:span " + std::string(span) +
-                       "\">x</div></body>");
+    auto doc =
+        MakeDoc("<body><div style=\"grid-row:span " + std::string(span) + "\">x</div></body>");
     StyleEngine engine;
     engine.ApplyStyles(*doc);
     EXPECT_LE(Style(engine, *doc, "div").grid_row_end.span, 1000) << "span=" << span;
@@ -1262,7 +1262,211 @@ TEST(StyleTest, HiddenInputIsDisplayNone)
   const std::vector<dom::Element*> inputs = dom::QuerySelectorAll(*doc, "input");
   ASSERT_EQ(inputs.size(), 2u);
   EXPECT_EQ(engine.StyleFor(*inputs[0]).display, Display::kNone);
-  EXPECT_EQ(engine.StyleFor(*inputs[1]).display, Display::kInline);
+  EXPECT_EQ(engine.StyleFor(*inputs[1]).display, Display::kInlineBlock);
+
+  // The UA rule is !important, as in the live spec (`input[type=hidden i] {
+  // display: none !important }`): an author `input { display: ... }` rule must
+  // not resurrect the control.
+  auto doc2 = MakeDoc(
+      "<style>input { display: block; }</style><body><input id=\"h\" type=\"hidden\"></body>");
+  StyleEngine engine2;
+  engine2.ApplyStyles(*doc2);
+  EXPECT_EQ(Style(engine2, *doc2, "#h").display, Display::kNone);
+}
+
+TEST(StyleTest, FormControlUaDisplayIsInlineBlock)
+{
+  // §15.3.10: `input, button { display: inline-block }`.  §15.5 renders a
+  // <select> as an 'inline-block' box, and Blink's UA sheet gives
+  // input/textarea/select/button the same display, so a <textarea>'s computed
+  // display is inline-block too.  All four used to compute to `inline`, which
+  // made getComputedStyle agree with no other engine.
+  auto doc = MakeDoc("<body><input id=\"t\" type=\"text\"><select id=\"s\"><option>a</option>"
+                     "</select><textarea id=\"a\"></textarea><button id=\"b\">b</button></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  EXPECT_EQ(Style(engine, *doc, "#t").display, Display::kInlineBlock);
+  EXPECT_EQ(Style(engine, *doc, "#s").display, Display::kInlineBlock);
+  EXPECT_EQ(Style(engine, *doc, "#a").display, Display::kInlineBlock);
+  EXPECT_EQ(Style(engine, *doc, "#b").display, Display::kInlineBlock);
+}
+
+TEST(StyleTest, FormControlUaTextProperties)
+{
+  // §15.3.10: `input, select, textarea { text-align: initial }` resets what
+  // the control would otherwise inherit; the button states of <input> (and
+  // <button>) are centered; <textarea> is white-space:pre-wrap.
+  auto doc =
+      MakeDoc("<body><div style=\"text-align: right\"><input id=\"t\" type=\"text\">"
+              "<input id=\"sub\" type=\"submit\"><select id=\"sel\"><option>a</option></select>"
+              "<textarea id=\"ta\"></textarea><button id=\"btn\">b</button></div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  EXPECT_EQ(Style(engine, *doc, "#t").text_align, TextAlign::kLeft);
+  EXPECT_EQ(Style(engine, *doc, "#sub").text_align, TextAlign::kCenter);
+  EXPECT_EQ(Style(engine, *doc, "#sel").text_align, TextAlign::kLeft);
+  EXPECT_EQ(Style(engine, *doc, "#ta").text_align, TextAlign::kLeft);
+  EXPECT_EQ(Style(engine, *doc, "#btn").text_align, TextAlign::kCenter);
+  EXPECT_EQ(Style(engine, *doc, "#ta").white_space, WhiteSpace::kPreWrap);
+  // Every control declares appearance:auto now; only <button> is painted
+  // natively (the other controls' native painting is Wave 2).
+  EXPECT_EQ(Style(engine, *doc, "#t").appearance, Appearance::kAuto);
+  EXPECT_EQ(Style(engine, *doc, "#sel").appearance, Appearance::kAuto);
+  EXPECT_EQ(Style(engine, *doc, "#ta").appearance, Appearance::kAuto);
+}
+
+TEST(StyleTest, FormControlUaBoxSizing)
+{
+  // §15.3.10: controls carrying widget chrome are border-box so a specified
+  // width includes the border; a text field keeps the initial content-box.
+  auto doc = MakeDoc("<body><input id=\"c\" type=\"checkbox\"><input id=\"r\" type=\"radio\">"
+                     "<input id=\"sub\" type=\"submit\"><input id=\"rst\" type=\"reset\">"
+                     "<input id=\"btn\" type=\"button\"><input id=\"col\" type=\"color\">"
+                     "<input id=\"sea\" type=\"search\"><input id=\"t\" type=\"text\">"
+                     "<select id=\"sel\"><option>a</option></select>"
+                     "<button id=\"b\">b</button></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  for (const char* id : {"#c", "#r", "#sub", "#rst", "#btn", "#col", "#sea", "#sel", "#b"}) {
+    EXPECT_EQ(Style(engine, *doc, id).box_sizing, BoxSizing::kBorderBox) << id;
+  }
+  EXPECT_EQ(Style(engine, *doc, "#t").box_sizing, BoxSizing::kContentBox);
+}
+
+TEST(StyleTest, HiddenAttributeHidesAnyElement)
+{
+  // §15.3.1: the hidden attribute is a presentational hint setting
+  // display:none on any element -- including the ones the UA sheet gives a box
+  // to, which used to stay visible (<div hidden> rendered in full).
+  auto doc = MakeDoc("<body><div id=\"d\" hidden>x</div>"
+                     "<span id=\"s\" hidden=\"hidden\">y</span>"
+                     "<table id=\"t\" hidden><tr><td>z</td></tr></table>"
+                     "<input id=\"i\" hidden><div id=\"visible\" hidden style=\"display: block\">v"
+                     "</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  EXPECT_EQ(Style(engine, *doc, "#d").display, Display::kNone);
+  EXPECT_EQ(Style(engine, *doc, "#s").display, Display::kNone);
+  EXPECT_EQ(Style(engine, *doc, "#t").display, Display::kNone);
+  EXPECT_EQ(Style(engine, *doc, "#i").display, Display::kNone);
+  // The style attribute counts as an author declaration, and the hint sits
+  // below the author origin: it does not apply.
+  EXPECT_EQ(Style(engine, *doc, "#visible").display, Display::kBlock);
+}
+
+TEST(StyleTest, HiddenAttributeLosesToAuthorDeclarations)
+{
+  // A presentational hint is below the *whole* author origin, not merely below
+  // author selectors of equal specificity: an author rule exposes the element
+  // (the UA sheet's own `div { display: block }` does not).  A UA-level
+  // `[hidden] { display: none }` rule could not express this, because this
+  // engine's cascade compares importance/specificity/order but not origin.
+  auto doc = MakeDoc("<style>div { display: flex; }</style>"
+                     "<body><div id=\"d\" hidden>x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  EXPECT_EQ(Style(engine, *doc, "#d").display, Display::kFlex);
+
+  auto doc2 = MakeDoc("<style>* { display: block; }</style>"
+                      "<body><span id=\"s\" hidden>x</span></body>");
+  StyleEngine engine2;
+  engine2.ApplyStyles(*doc2);
+  // The point of this case is that the hint does not apply either -- a
+  // universal author rule carries no more specificity than the hint, but
+  // origin, not specificity, is what suppresses the hint.  The resolved value
+  // is nevertheless the UA sheet's `inline` for <span>, because this engine's
+  // cascade compares importance/specificity/order and has no origin dimension
+  // (author `*` (0,0,0) loses to the UA `span` (0,0,1) here, where a real
+  // browser would let the author win).  Recorded in the compatibility matrix.
+  EXPECT_NE(Style(engine2, *doc2, "#s").display, Display::kNone);
+}
+
+TEST(StyleTest, HrUaBox)
+{
+  // §15.3.11: hr is a 1px inset rule with 0.5em block margins (auto inline
+  // margins) and hidden overflow.  This engine has neither an inset border
+  // style nor currentColor for border-color, so the same used values are a
+  // solid gray border; it used to be a full-width black border-top with no
+  // margin at all.
+  auto doc = MakeDoc("<body><p>a</p><hr id=\"r\"><p>b</p></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& hr = Style(engine, *doc, "#r");
+  EXPECT_EQ(hr.display, Display::kBlock);
+  EXPECT_EQ(hr.overflow, Overflow::kHidden);
+  EXPECT_FLOAT_EQ(hr.margin_top.value, 8.0f); // 0.5em
+  EXPECT_FLOAT_EQ(hr.margin_bottom.value, 8.0f);
+  EXPECT_TRUE(hr.margin_left_auto);
+  EXPECT_TRUE(hr.margin_right_auto);
+  EXPECT_EQ(hr.border_style, BorderStyle::kSolid);
+  EXPECT_FLOAT_EQ(hr.border_top.value, 1.0f);
+  EXPECT_FLOAT_EQ(hr.border_bottom.value, 1.0f);
+  ASSERT_TRUE(hr.border_color.has_value());
+  EXPECT_EQ(*hr.border_color, (css::Color{128, 128, 128, 255})); // = color: gray
+  ASSERT_TRUE(hr.color.has_value());
+  EXPECT_EQ(*hr.color, (css::Color{128, 128, 128, 255}));
+}
+
+TEST(StyleTest, FieldsetAndLegendUaBox)
+{
+  // §15.3.12: fieldset is a block with 2px inline margins, widget chrome and
+  // 0.35em/0.625em block plus 0.75em inline padding.  It used to have no
+  // border and no padding at all.  legend is a block (§15.3.3) with 2px inline
+  // padding.
+  auto doc = MakeDoc("<body><fieldset id=\"f\"><legend id=\"l\">L</legend></fieldset></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& f = Style(engine, *doc, "#f");
+  EXPECT_EQ(f.display, Display::kBlock);
+  EXPECT_FLOAT_EQ(f.margin_left.value, 2.0f);
+  EXPECT_FLOAT_EQ(f.margin_right.value, 2.0f);
+  EXPECT_FLOAT_EQ(f.padding_top.value, 5.6f);     // 0.35em
+  EXPECT_FLOAT_EQ(f.padding_bottom.value, 10.0f); // 0.625em
+  EXPECT_FLOAT_EQ(f.padding_left.value, 12.0f);   // 0.75em
+  EXPECT_FLOAT_EQ(f.padding_right.value, 12.0f);
+  EXPECT_EQ(f.border_style, BorderStyle::kSolid);
+  EXPECT_FLOAT_EQ(f.border_top.value, 2.0f);
+  EXPECT_FLOAT_EQ(f.border_left.value, 2.0f);
+  const ComputedStyle& l = Style(engine, *doc, "#l");
+  EXPECT_EQ(l.display, Display::kBlock);
+  EXPECT_FLOAT_EQ(l.padding_left.value, 2.0f);
+  EXPECT_FLOAT_EQ(l.padding_right.value, 2.0f);
+}
+
+TEST(StyleTest, DetailsAndSummaryAreBlocks)
+{
+  // §15.5.5: details and summary are display:block.  The disclosure marker
+  // (`details > summary:first-of-type { display: list-item; list-style:
+  // disclosure-closed inside }`) is NOT IMPLEMENTED -- the engine has no
+  // :first-of-type, no disclosure-* list-style keywords and no ::marker box --
+  // so a summary stays a plain block with no marker.
+  auto doc = MakeDoc("<body><details id=\"d\"><summary id=\"s\">S</summary>body</details></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  EXPECT_EQ(Style(engine, *doc, "#d").display, Display::kBlock);
+  const ComputedStyle& summary = Style(engine, *doc, "#s");
+  EXPECT_EQ(summary.display, Display::kBlock);
+  EXPECT_EQ(summary.list_style_type, ListStyleType::kNone);
+}
+
+// CSS Cascade 5 §6.1: the origin order is UA normal < user normal < author
+// normal, so *every* author declaration beats *every* UA declaration whatever
+// their specificities.  This engine's cascade compares importance / specificity
+// / order but not origin, so the UA form-control rules added for §15.3.10 --
+// which carry an attribute selector and therefore specificity (0,1,1) --
+// outrank an author `input { ... }` type selector at (0,0,1) and the author is
+// ignored.  This is a long-standing gap (`ul ul ul { list-style-type: square }`
+// has always had the same shape); the test pins the *spec-correct* behaviour so
+// the gap stays visible and is not mistaken for a working feature.  Fixing it
+// means adding an origin dimension to the Candidate comparison.
+TEST(StyleTest, AuthorDeclarationBeatsHigherSpecificityUaRule)
+{
+  auto doc = MakeDoc("<style>input { text-align: right; }</style>"
+                     "<body><input id=\"s\" type=\"submit\" value=\"go\"></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  // UA says `input[type=submit] { text-align: center }` (0,1,1).
+  EXPECT_EQ(Style(engine, *doc, "#s").text_align, TextAlign::kRight);
 }
 
 TEST(StyleTest, NotPseudoClassAppliesMinHeight)

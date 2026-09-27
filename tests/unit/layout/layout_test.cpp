@@ -3,6 +3,7 @@
 #include "neko/graphics/system_fonts.h"
 #include "neko/html/parser.h"
 #include "neko/image/image.h"
+#include "neko/layout/form_control.h"
 #include "neko/layout/layout_tree.h"
 #include "neko/style/style_engine.h"
 
@@ -74,6 +75,44 @@ FindInlineBlock(const LayoutBox& box, const dom::Element* element, const InlineB
     }
   }
   return nullptr;
+}
+
+// The border-box chrome (borders + padding) of |box|, i.e. what it adds around
+// its content box.
+float ChromeWidth(const LayoutBox& box)
+{
+  return box.border_left + box.border_right + box.padding_left + box.padding_right;
+}
+
+float ChromeHeight(const LayoutBox& box)
+{
+  return box.border_top + box.border_bottom + box.padding_top + box.padding_bottom;
+}
+
+// The box of an in-flow form control, which is laid out as an atomic inline box.
+const LayoutBox* FindControl(const Page& page, std::string_view selector)
+{
+  dom::Element* element = dom::QuerySelector(*page.doc, selector);
+  if (element == nullptr) {
+    return nullptr;
+  }
+  const InlineBox* holder = nullptr;
+  return FindInlineBlock(*page.root, element, holder);
+}
+
+// Number of atomic inline boxes with laid-out content (form controls and
+// inline-blocks) in |box|'s own lines.
+std::size_t CountAtomicBoxes(const LayoutBox& box)
+{
+  std::size_t count = 0;
+  for (const Line& line : box.lines) {
+    for (const InlineBox& ib : line.boxes) {
+      if (ib.block_box != nullptr) {
+        ++count;
+      }
+    }
+  }
+  return count;
 }
 
 TEST(LayoutTest, BlockFillsContainingBlock)
@@ -2479,6 +2518,370 @@ TEST(LayoutTest, HiddenInputDoesNotProduceABox)
   const InlineBox* holder = nullptr;
   const LayoutBox* kw = FindInlineBlock(*page.root, dom::QuerySelector(*page.doc, "#kw"), holder);
   EXPECT_NE(kw, nullptr);
+}
+
+// Regression: every <input> used to be laid out as one fixed-width text box, so
+// a checkbox, radio, slider, colour well, file picker and submit button all
+// rendered as 170px white fields.  The widget kind decides the geometry now
+// (WHATWG HTML §15.5 Widgets).
+TEST(LayoutTest, ClassifyFormControlCoversEveryState)
+{
+  struct Case
+  {
+    const char* markup; // one element, carrying id="target"
+    FormControlKind expected;
+  };
+  const Case cases[] = {
+      // §4.10.5.3: the missing value default is the Text state.
+      {"<input id=\"target\">", FormControlKind::kText},
+      {"<input id=\"target\" type=\"\">", FormControlKind::kText},
+      // §4.10.5.3: the invalid value default is the Text state as well.
+      {"<input id=\"target\" type=\"foo\">", FormControlKind::kText},
+      {"<input id=\"target\" type=\"text\">", FormControlKind::kText},
+      {"<input id=\"target\" type=\"TeXt\">", FormControlKind::kText},
+      {"<input id=\"target\" type=\"search\">", FormControlKind::kText},
+      {"<input id=\"target\" type=\"tel\">", FormControlKind::kText},
+      {"<input id=\"target\" type=\"url\">", FormControlKind::kText},
+      {"<input id=\"target\" type=\"email\">", FormControlKind::kText},
+      {"<input id=\"target\" type=\"password\">", FormControlKind::kText},
+      {"<input id=\"target\" type=\"number\">", FormControlKind::kText},
+      {"<input id=\"target\" type=\"date\">", FormControlKind::kText},
+      {"<input id=\"target\" type=\"month\">", FormControlKind::kText},
+      {"<input id=\"target\" type=\"week\">", FormControlKind::kText},
+      {"<input id=\"target\" type=\"time\">", FormControlKind::kText},
+      {"<input id=\"target\" type=\"datetime-local\">", FormControlKind::kText},
+      {"<input id=\"target\" type=\"hidden\">", FormControlKind::kHidden},
+      // The `type` attribute is ASCII case-insensitive (§4.10.5.3), which this
+      // engine's attribute selectors cannot express -- hence classification in
+      // code.
+      {"<input id=\"target\" TYPE=\"HIDDEN\">", FormControlKind::kHidden},
+      {"<input id=\"target\" type=\"CHECKBOX\">", FormControlKind::kCheckbox},
+      {"<input id=\"target\" type=\"checkbox\">", FormControlKind::kCheckbox},
+      {"<input id=\"target\" type=\"radio\">", FormControlKind::kRadio},
+      {"<input id=\"target\" type=\"range\">", FormControlKind::kRange},
+      {"<input id=\"target\" type=\"color\">", FormControlKind::kColor},
+      {"<input id=\"target\" type=\"file\">", FormControlKind::kFile},
+      {"<input id=\"target\" type=\"submit\">", FormControlKind::kButton},
+      {"<input id=\"target\" type=\"reset\">", FormControlKind::kButton},
+      {"<input id=\"target\" type=\"button\">", FormControlKind::kButton},
+      // The Image Button state is a submit button that shows an image.
+      {"<input id=\"target\" type=\"image\">", FormControlKind::kButton},
+      {"<button id=\"target\">Go</button>", FormControlKind::kButton},
+      {"<select id=\"target\"><option>a</option></select>", FormControlKind::kSelect},
+      {"<textarea id=\"target\"></textarea>", FormControlKind::kTextArea},
+      {"<div id=\"target\"></div>", FormControlKind::kNone},
+  };
+  for (const Case& c : cases) {
+    auto doc = html::Parser(std::string("<body>") + c.markup + "</body>").Parse();
+    dom::Element* element = dom::QuerySelector(*doc, "#target");
+    ASSERT_NE(element, nullptr) << c.markup;
+    EXPECT_EQ(ClassifyFormControl(*element), c.expected) << c.markup;
+  }
+}
+
+// §15.3.10's last rule: every rendered <input> except the Hidden and Image
+// Button states has an inner display type of flow-root; no other widget gets it
+// from that rule.
+TEST(LayoutTest, FlowRootInnerDisplayClassification)
+{
+  struct Case
+  {
+    const char* markup;
+    bool expected;
+  };
+  const Case cases[] = {
+      {"<input id=\"target\" type=\"text\">", true},
+      {"<input id=\"target\" type=\"checkbox\">", true},
+      {"<input id=\"target\" type=\"submit\">", true},
+      {"<input id=\"target\">", true},
+      {"<input id=\"target\" type=\"hidden\">", false},
+      {"<input id=\"target\" type=\"image\">", false},
+      {"<button id=\"target\">Go</button>", false},
+      {"<select id=\"target\"><option>a</option></select>", false},
+      {"<textarea id=\"target\"></textarea>", false},
+      {"<div id=\"target\"></div>", false},
+  };
+  for (const Case& c : cases) {
+    auto doc = html::Parser(std::string("<body>") + c.markup + "</body>").Parse();
+    dom::Element* element = dom::QuerySelector(*doc, "#target");
+    ASSERT_NE(element, nullptr) << c.markup;
+    EXPECT_EQ(HasFlowRootInnerDisplay(*element), c.expected) << c.markup;
+  }
+}
+
+// §15.5.6: a text control's inline size comes from the converting-a-character-
+// width-to-pixels algorithm over `size` (default 20), not from a constant.  With
+// no font registry the monospace fallback makes the average and the maximum
+// character width the font size, so the content width is size * font-size.
+TEST(LayoutTest, TextControlWidthComesFromSizeAttribute)
+{
+  Page page = Build("<body style=\"margin:0\"><input id=\"def\" type=\"text\">"
+                    "<input id=\"twenty\" type=\"text\" size=\"20\">"
+                    "<input id=\"ten\" type=\"text\" size=\"10\">"
+                    "<input id=\"bogus\" type=\"text\" size=\"bogus\"></body>");
+  const LayoutBox* def = FindControl(page, "#def");
+  const LayoutBox* twenty = FindControl(page, "#twenty");
+  const LayoutBox* ten = FindControl(page, "#ten");
+  const LayoutBox* bogus = FindControl(page, "#bogus");
+  ASSERT_NE(def, nullptr);
+  ASSERT_NE(twenty, nullptr);
+  ASSERT_NE(ten, nullptr);
+  ASSERT_NE(bogus, nullptr);
+  EXPECT_EQ(def->form_control, FormControlKind::kText);
+  // An absent and an unparsable `size` both mean 20 characters.
+  EXPECT_FLOAT_EQ(def->width, twenty->width);
+  EXPECT_FLOAT_EQ(bogus->width, twenty->width);
+  const float font_size = twenty->style.font_size;
+  EXPECT_FLOAT_EQ(twenty->width, 20.0f * font_size + ChromeWidth(*twenty));
+  EXPECT_FLOAT_EQ(ten->width, 10.0f * font_size + ChromeWidth(*ten));
+  // Ten characters narrower is visibly narrower.
+  EXPECT_LT(ten->width, twenty->width - 100.0f);
+}
+
+// The text-entry kinds share the text field's geometry: an unknown `type` is the
+// Text state, so it is not a widget of its own.
+TEST(LayoutTest, UnknownTypeIsATextControl)
+{
+  Page page = Build("<body style=\"margin:0\"><input id=\"weird\" type=\"foo\">"
+                    "<input id=\"text\" type=\"text\"></body>");
+  const LayoutBox* weird = FindControl(page, "#weird");
+  const LayoutBox* text = FindControl(page, "#text");
+  ASSERT_NE(weird, nullptr);
+  ASSERT_NE(text, nullptr);
+  EXPECT_EQ(weird->form_control, FormControlKind::kText);
+  EXPECT_FLOAT_EQ(weird->width, text->width);
+}
+
+// §15.5.10: a checkbox and a radio button are a native box of their own size
+// (13x13 border box) with no text run -- the tick and the dot are painted from
+// LayoutBox::form_control.
+TEST(LayoutTest, CheckboxAndRadioAreThirteenPixelBoxes)
+{
+  Page page = Build("<body style=\"margin:0\"><input id=\"cb\" type=\"checkbox\" value=\"yes\">"
+                    "<input id=\"rb\" type=\"radio\"></body>");
+  const LayoutBox* cb = FindControl(page, "#cb");
+  const LayoutBox* rb = FindControl(page, "#rb");
+  ASSERT_NE(cb, nullptr);
+  ASSERT_NE(rb, nullptr);
+  EXPECT_EQ(cb->form_control, FormControlKind::kCheckbox);
+  EXPECT_EQ(rb->form_control, FormControlKind::kRadio);
+  EXPECT_FLOAT_EQ(cb->width, 13.0f);
+  EXPECT_FLOAT_EQ(cb->height, 13.0f);
+  EXPECT_FLOAT_EQ(rb->width, 13.0f);
+  EXPECT_FLOAT_EQ(rb->height, 13.0f);
+  // A `value` attribute is not shown next to the box.
+  EXPECT_TRUE(cb->lines.empty());
+}
+
+// An upper-case TYPE (which the case-sensitive UA sheet rule misses) must still
+// classify -- and therefore size -- as its state.
+TEST(LayoutTest, UpperCaseTypeAttributeClassifiesTheSame)
+{
+  Page page = Build("<body style=\"margin:0\"><input id=\"up\" TYPE=\"CHECKBOX\"></body>");
+  const LayoutBox* up = FindControl(page, "#up");
+  ASSERT_NE(up, nullptr);
+  EXPECT_EQ(up->form_control, FormControlKind::kCheckbox);
+  EXPECT_FLOAT_EQ(up->width, 13.0f);
+  EXPECT_FLOAT_EQ(up->height, 13.0f);
+}
+
+// The `checked` / `disabled` attributes are carried on the box: paint draws the
+// tick of a checked box, the browser layer toggles the state.
+TEST(LayoutTest, CheckboxCarriesCheckedAndDisabledAttributes)
+{
+  Page page = Build("<body style=\"margin:0\"><input id=\"on\" type=\"checkbox\" checked disabled>"
+                    "<input id=\"off\" type=\"checkbox\"></body>");
+  const LayoutBox* on = FindControl(page, "#on");
+  const LayoutBox* off = FindControl(page, "#off");
+  ASSERT_NE(on, nullptr);
+  ASSERT_NE(off, nullptr);
+  EXPECT_TRUE(on->form_control_checked);
+  EXPECT_TRUE(on->form_control_disabled);
+  EXPECT_FALSE(off->form_control_checked);
+  EXPECT_FALSE(off->form_control_disabled);
+}
+
+// §15.5.17: a textarea's effective width is `cols` characters and its effective
+// height `rows` lines, defaulting to 20 columns and 2 rows.  Rendering a value
+// with line breaks over several lines is Wave 2 (see the PARTIALLY IMPLEMENTED
+// note on BuildFormControl).
+TEST(LayoutTest, TextAreaGeometryComesFromRowsAndCols)
+{
+  Page page =
+      Build("<body style=\"margin:0\"><textarea id=\"ta\" rows=\"3\" cols=\"15\">x</textarea>"
+            "<textarea id=\"def\"></textarea></body>");
+  const LayoutBox* ta = FindControl(page, "#ta");
+  const LayoutBox* def = FindControl(page, "#def");
+  ASSERT_NE(ta, nullptr);
+  ASSERT_NE(def, nullptr);
+  EXPECT_EQ(ta->form_control, FormControlKind::kTextArea);
+  const float font_size = ta->style.font_size;
+  EXPECT_FLOAT_EQ(ta->width, 15.0f * font_size + ChromeWidth(*ta));
+  EXPECT_FLOAT_EQ(ta->height, 3.0f * ta->style.line_height + ChromeHeight(*ta));
+  EXPECT_FLOAT_EQ(def->width, 20.0f * font_size + ChromeWidth(*def));
+  EXPECT_FLOAT_EQ(def->height, 2.0f * def->style.line_height + ChromeHeight(*def));
+  // More columns is wider, more rows is taller.
+  EXPECT_GT(def->width, ta->width);
+  EXPECT_GT(ta->height, def->height);
+}
+
+// §15.5.16: a select is as wide as its widest option label plus the drop-down
+// arrow area, one row high as a drop-down box, `size` rows high as a list box.
+TEST(LayoutTest, SelectGeometryComesFromOptionLabelsAndSize)
+{
+  Page page = Build("<body style=\"margin:0\">"
+                    "<select id=\"short\"><option>a</option></select>"
+                    "<select id=\"long\"><option>a</option><option>abcdefghij</option></select>"
+                    "<select id=\"list\" size=\"4\"><option>a</option></select>"
+                    "</body>");
+  const LayoutBox* short_select = FindControl(page, "#short");
+  const LayoutBox* long_select = FindControl(page, "#long");
+  const LayoutBox* list_select = FindControl(page, "#list");
+  ASSERT_NE(short_select, nullptr);
+  ASSERT_NE(long_select, nullptr);
+  ASSERT_NE(list_select, nullptr);
+  EXPECT_EQ(short_select->form_control, FormControlKind::kSelect);
+  EXPECT_EQ(list_select->form_control, FormControlKind::kSelect);
+  // The widest label decides the width: 10 characters against 1.
+  EXPECT_FLOAT_EQ(long_select->width - short_select->width, 9.0f * long_select->style.font_size);
+  // The shown label is the control's text run.
+  ASSERT_FALSE(long_select->lines.empty());
+  ASSERT_FALSE(long_select->lines.front().runs.empty());
+  EXPECT_EQ(long_select->lines.front().runs.front().text, "a");
+  // A drop-down box is one row; a list box shows `size` rows.
+  EXPECT_FLOAT_EQ(short_select->height,
+                  short_select->style.line_height + ChromeHeight(*short_select));
+  EXPECT_FLOAT_EQ(list_select->height,
+                  4.0f * list_select->style.line_height + ChromeHeight(*list_select));
+}
+
+// §15.5.8 / §15.5.9 / §15.5.11: the slider, the colour well and the file control
+// each get their own native geometry instead of the text field's.  Their
+// content is painted (Wave 2), so none of them shows a text run.
+TEST(LayoutTest, RangeColorAndFileControlsHaveNativeGeometry)
+{
+  Page page = Build("<body style=\"margin:0\"><input id=\"rg\" type=\"range\">"
+                    "<input id=\"cl\" type=\"color\">"
+                    "<input id=\"fl\" type=\"file\"></body>");
+  const LayoutBox* range = FindControl(page, "#rg");
+  const LayoutBox* color = FindControl(page, "#cl");
+  const LayoutBox* file = FindControl(page, "#fl");
+  ASSERT_NE(range, nullptr);
+  ASSERT_NE(color, nullptr);
+  ASSERT_NE(file, nullptr);
+  EXPECT_EQ(range->form_control, FormControlKind::kRange);
+  // These native widget sizes are stated as *border-box* sizes (see
+  // form_control.h): the chrome is inside the target, not added on top of it,
+  // exactly as for the 13x13 checkbox and the 64x32 colour well below.
+  EXPECT_FLOAT_EQ(range->width, 12.0f * range->style.font_size);
+  EXPECT_FLOAT_EQ(range->height, 1.5f * range->style.font_size);
+  EXPECT_EQ(color->form_control, FormControlKind::kColor);
+  EXPECT_FLOAT_EQ(color->width, 64.0f);
+  EXPECT_FLOAT_EQ(color->height, 32.0f);
+  EXPECT_EQ(file->form_control, FormControlKind::kFile);
+  EXPECT_FLOAT_EQ(file->width, 17.7f * file->style.font_size);
+  EXPECT_TRUE(range->lines.empty());
+  EXPECT_TRUE(color->lines.empty());
+  EXPECT_TRUE(file->lines.empty());
+}
+
+// §15.5.4 / §15.5.12: <button> and input[type=submit|reset|button] are buttons;
+// the label is the `value` attribute or the element's own content, and button
+// layout shrink-wraps it.
+TEST(LayoutTest, ButtonAndSubmitInputAreButtons)
+{
+  Page page = Build("<body style=\"margin:0\"><button id=\"be\">Press</button>"
+                    "<input id=\"su\" type=\"submit\" value=\"Send\">"
+                    "<input id=\"rs\" type=\"reset\"></body>");
+  const LayoutBox* button = FindControl(page, "#be");
+  const LayoutBox* submit = FindControl(page, "#su");
+  const LayoutBox* reset = FindControl(page, "#rs");
+  ASSERT_NE(button, nullptr);
+  ASSERT_NE(submit, nullptr);
+  ASSERT_NE(reset, nullptr);
+  EXPECT_EQ(button->form_control, FormControlKind::kButton);
+  EXPECT_EQ(submit->form_control, FormControlKind::kButton);
+  EXPECT_EQ(reset->form_control, FormControlKind::kButton);
+  ASSERT_FALSE(button->lines.empty());
+  ASSERT_FALSE(button->lines.front().runs.empty());
+  EXPECT_EQ(button->lines.front().runs.front().text, "Press");
+  ASSERT_FALSE(submit->lines.empty());
+  ASSERT_FALSE(submit->lines.front().runs.empty());
+  EXPECT_EQ(submit->lines.front().runs.front().text, "Send");
+  // The implementation-defined label of a submit input without `value`.
+  ASSERT_FALSE(reset->lines.empty());
+  ASSERT_FALSE(reset->lines.front().runs.empty());
+  EXPECT_EQ(reset->lines.front().runs.front().text, "Reset");
+  // A button shrink-wraps: it is not a text field of the size=20 width.
+  EXPECT_LT(submit->width, 150.0f);
+}
+
+// §15.3.10: input[type=hidden] generates no box at all, on every layout path
+// that builds a form control -- inline, block-level, and (the path that used to
+// dereference the box) inside a line of inline items.
+TEST(LayoutTest, HiddenInputProducesNoBoxOnEveryPath)
+{
+  // Inline, next to a text input.
+  {
+    Page page = Build("<body style=\"margin:0\"><input type=\"hidden\" name=\"ie\">"
+                      "<input id=\"kw\" type=\"text\"></body>");
+    const LayoutBox* body = FindBox(*page.root, "body", *page.doc);
+    ASSERT_NE(body, nullptr);
+    // Only the text input becomes an atomic inline box.
+    EXPECT_EQ(CountAtomicBoxes(*body), 1u);
+    EXPECT_NE(FindControl(page, "#kw"), nullptr);
+  }
+  // Upper-case TYPE=HIDDEN: the UA sheet's `input[type="hidden"]` is
+  // case-sensitive, so this reaches layout as a visible control without the code
+  // path classification.
+  {
+    Page page = Build("<body style=\"margin:0\"><input TYPE=\"HIDDEN\">"
+                      "<span>x</span></body>");
+    const LayoutBox* body = FindBox(*page.root, "body", *page.doc);
+    ASSERT_NE(body, nullptr);
+    EXPECT_EQ(CountAtomicBoxes(*body), 0u);
+  }
+  // Block-level (display:block): the box is dropped and the following sibling is
+  // laid out as if the hidden input were not there.
+  {
+    Page page = Build("<body style=\"margin:0\"><div id=\"host\">"
+                      "<input type=\"hidden\" style=\"display:block\">"
+                      "<div id=\"after\" style=\"height:20px\"></div></div></body>");
+    const LayoutBox* host = FindBox(*page.root, "#host", *page.doc);
+    ASSERT_NE(host, nullptr);
+    ASSERT_EQ(host->children.size(), 1u);
+    EXPECT_EQ(host->children[0]->element, dom::QuerySelector(*page.doc, "#after"));
+    EXPECT_FLOAT_EQ(host->children[0]->y, host->content_y());
+  }
+  // The same, with the upper-case spelling that the UA sheet misses.
+  {
+    Page page = Build("<body style=\"margin:0\"><div id=\"host\">"
+                      "<input TYPE=\"HIDDEN\" style=\"display:block\"></div></body>");
+    const LayoutBox* host = FindBox(*page.root, "#host", *page.doc);
+    ASSERT_NE(host, nullptr);
+    EXPECT_TRUE(host->children.empty());
+  }
+}
+
+// The hint text of an empty text control: the standard `placeholder` attribute
+// (greyed), and a `value` always wins over it.
+TEST(LayoutTest, EmptyTextControlShowsPlaceholder)
+{
+  Page page = Build("<body style=\"margin:0\"><input id=\"ph\" placeholder=\"Search\">"
+                    "<input id=\"filled\" placeholder=\"Search\" value=\"typing\"></body>");
+  const LayoutBox* placeholder = FindControl(page, "#ph");
+  const LayoutBox* filled = FindControl(page, "#filled");
+  ASSERT_NE(placeholder, nullptr);
+  ASSERT_NE(filled, nullptr);
+  ASSERT_FALSE(placeholder->lines.empty());
+  ASSERT_FALSE(placeholder->lines.front().runs.empty());
+  const TextRun& hint = placeholder->lines.front().runs.front();
+  EXPECT_EQ(hint.text, "Search");
+  const css::Color hint_color = css::Color{160, 160, 160, 255};
+  EXPECT_EQ(hint.color, hint_color);
+  ASSERT_FALSE(filled->lines.empty());
+  ASSERT_FALSE(filled->lines.front().runs.empty());
+  EXPECT_EQ(filled->lines.front().runs.front().text, "typing");
 }
 
 TEST(LayoutTest, AbsoluteReplacedUsesPresentationalSize)

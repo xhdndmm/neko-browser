@@ -59,7 +59,6 @@ int ClampGridLine(double value)
   return static_cast<int>(value);
 }
 
-
 // HTML user-agent stylesheet (Phase 4 scope).
 constexpr std::string_view kUaStylesheet = R"css(
 html { display: block; }
@@ -67,19 +66,72 @@ head, title, style, script, meta, link, base, template { display: none; }
 body { display: block; margin: 8px; }
 div, p, section, article, aside, header, footer, nav, main, hgroup,
 h1, h2, h3, h4, h5, h6,
-address, blockquote, pre, figure, figcaption, form, fieldset, details,
+address, blockquote, pre, figure, figcaption, form, fieldset, legend, details,
 summary, hr, dl, dt, dd, ul, ol { display: block; }
+/* <details>/<summary> are block boxes (see the list above), but §15.5.5 also
+expected `details > summary:first-of-type` to become a display:list-item with
+a disclosure-closed marker (disclosure-open when [open]).  This engine has no
+:first-of-type, no disclosure-* list-style keywords and no ::marker box, so the
+disclosure triangle is NOT IMPLEMENTED and a closed <details> still lays out
+its content. */
 table { display: table; }
 caption { display: table-caption; text-align: center; }
 thead, tbody, tfoot { display: table-row-group; }
 tr { display: table-row; }
 td, th { display: table-cell; }
 a, span, em, strong, b, i, u, s, small, sub, sup, code, label,
-select, textarea, input, q, cite, mark, time { display: inline; }
-input[type="hidden"] { display: none; }
+q, cite, mark, time { display: inline; }
 noscript { display: none; }
-button { display: inline-block; appearance: auto; text-align: center;
-         padding: 1px 6px; border: 2px solid; }
+
+/* Form controls (HTML §15.3.10 form controls, §15.5 widgets).
+   The spec phrases several of these rules with :is(), which this engine's
+   selector parser does not implement -- nor :where(); :not() exists but takes
+   a single compound selector, not the selector list Selectors 4 allows -- so
+   each one is expanded into a comma-separated selector list.  The expansion
+   preserves specificity: :is() contributes the specificity of its most
+   specific argument, and every expanded complex selector carries exactly that
+   much -- e.g. `input:is([type=reset i], [type=button i], [type=submit i])`
+   is (0,1,1), and so are the three `input[type=...]` selectors it becomes.
+   The attribute selector's case-insensitive flag (`[type=reset i]`) is not
+   implemented either, so a control declared as TYPE=RESET does not match;
+   that needs value normalisation in the css layer (compatibility matrix).
+
+   Every author declaration beats every UA one (CSS Cascade 5 §6.1); the
+   cascade compares the origin/importance rank before specificity, so these
+   attribute-selector UA rules -- (0,1,1) -- no longer shadow an author
+   `input { ... }` type selector at (0,0,1).  Pinned by the author-override
+   regression test in style_test.cpp. */
+
+/* §15.3.1: the hidden state of an <input type=hidden> is display:none.  The
+   live spec makes it !important so that an author `input { display: ... }`
+   rule cannot resurrect the control; the `i` flag on [type=hidden i] is not
+   expressible here (see above). */
+input[type="hidden"] { display: none !important; }
+
+/* `<select>` is expected to render as an 'inline-block' box (§15.5, select
+   element with native/primitive appearance), and Blink's UA sheet gives
+   input/textarea/select/button that same display; without this the two of them
+   would fall back to the initial `inline`. */
+select, textarea { display: inline-block; }
+input, button { display: inline-block; }
+input, select, textarea { text-align: initial; }
+input[type="reset"], input[type="button"], input[type="submit"], button {
+  text-align: center;
+}
+input[type="radio"], input[type="checkbox"], input[type="reset"],
+input[type="button"], input[type="submit"], input[type="color"],
+input[type="search"], select, button { box-sizing: border-box; }
+textarea { white-space: pre-wrap; }
+/* appearance:auto on a control other than <button> is recorded in the computed
+   style but has no effect yet: the paint layer maps auto to a native look for
+   <button> only (painter.cpp HasNativeButtonAppearance).  The remaining
+   controls' native painting is Wave 2 work. */
+input, select, button, textarea { appearance: auto; }
+/* `line-height: initial` (i.e. `normal`) stops a form control from inheriting
+   an ancestor's line-height.  letter-spacing / word-spacing (also part of this
+   spec rule) have no ComputedStyle field and are NOT IMPLEMENTED. */
+input, button, textarea { line-height: initial; }
+button { padding: 1px 6px; border: 2px solid; }
 p { margin-top: 1em; margin-bottom: 1em; }
 h1 { font-size: 2em; font-weight: bold; margin-top: 0.67em; margin-bottom: 0.67em; }
 h2 { font-size: 1.5em; font-weight: bold; margin-top: 0.83em; margin-bottom: 0.83em; }
@@ -102,7 +154,24 @@ code { font-family: monospace; }
 b, strong { font-weight: bold; }
 i, em { font-style: italic; }
 a { color: blue; text-decoration: underline; }
-hr { border-top: 1px solid; border-top-color: #000; }
+/* §15.3.11.  The spec's hr is a 1px inset border whose colour comes from
+   `color: gray` through currentColor.  Neither the inset border style nor
+   currentColor for border-color is implemented, so the same *used* values are
+   spelled out with a solid border and an explicit colour; inset/double/groove/
+   ridge/outset border styles and currentColor are NOT IMPLEMENTED. */
+hr { color: gray; border: 1px solid; border-color: gray; margin-block: 0.5em;
+     margin-inline: auto; overflow: hidden; }
+/* §15.3.12.  The spec's `border: groove 2px ThreeDFace` cannot be expressed:
+   BorderStyle has no groove, and ThreeDFace (a system colour) is not in the
+   named-colour table, so that border would fall back to black anyway.  The
+   width and the box model are the spec's; the style and colour deviate.
+   `min-inline-size: min-content` is NOT IMPLEMENTED either (min-width accepts
+   only lengths/percentages, so the declaration would be silently dropped).
+   The spec also expects legend[align=...] { justify-self: ... }, which needs
+   the align content-distribution the legend box does not have yet. */
+fieldset { margin-inline: 2px; border: 2px solid;
+           padding-block: 0.35em 0.625em; padding-inline: 0.75em; }
+legend { padding-inline: 2px; }
 )css";
 
 constexpr unsigned kInlineSpecificityA = 1000000;
@@ -1335,6 +1404,33 @@ const css::StyleSheet& UaSheet()
   return sheet;
 }
 
+namespace {
+
+// True when |rule| is a rule of the UA stylesheet.  Used to tell a UA
+// declaration apart from an author one (the cascade index mixes both, see
+// Candidate::author).  The UA sheet is a function-local static whose rules live
+// for the whole process, so rule addresses are stable and the lookup set can be
+// built once.
+bool IsUaRule(const css::StyleRule* rule)
+{
+  static const std::unordered_set<const css::StyleRule*> kUaRules = [] {
+    std::unordered_set<const css::StyleRule*> rules;
+    const auto add = [&rules](const std::vector<css::StyleRule>& list) {
+      for (const css::StyleRule& entry : list) {
+        rules.insert(&entry);
+      }
+    };
+    add(UaSheet().rules);
+    for (const css::AtRule& at_rule : UaSheet().at_rules) {
+      add(at_rule.rules);
+    }
+    return rules;
+  }();
+  return kUaRules.count(rule) != 0;
+}
+
+} // namespace
+
 void StyleEngine::BuildCascadeIndex(dom::Document& /*document*/)
 {
   auto buckets = std::make_unique<CascadeBuckets>();
@@ -1425,6 +1521,21 @@ void StyleEngine::ComputeElement(dom::Element& element,
     const css::Declaration* declaration;
     css::Specificity specificity;
     int order;
+    // Whether the declaration comes from an author sheet or the style
+    // attribute rather than the UA sheet.  Needed both by the cascade
+    // precedence below and by the presentational hint further down: a hint
+    // loses to *any* author-origin declaration (CSS Cascade 5 section 6.1
+    // puts the hint origin below the author origin).
+    bool author;
+  };
+  // CSS Cascade 5 §6.1 precedence, lowest rank first: UA normal < user normal
+  // < author normal < animations < author !important < user !important < UA
+  // !important < transitions.  This engine has no user origin, animations or
+  // transitions, so the pairs collapse to four ranks.  Origin is compared
+  // *before* specificity: `input[type=submit]` in the UA sheet is (0,1,1) and
+  // still loses to an author `input { ... }` at (0,0,1).
+  const auto cascade_rank = [](const css::Declaration* declaration, bool author) {
+    return (author ? 1 : 0) + (declaration->important ? 2 : 0);
   };
   std::vector<Candidate> candidates;
   int order = 0;
@@ -1473,8 +1584,9 @@ void StyleEngine::ComputeElement(dom::Element& element,
           continue;
         }
         const css::Specificity& specificity = indexed.specificities[si];
+        const bool author = !IsUaRule(indexed.rule);
         for (const css::Declaration& declaration : indexed.rule->declarations) {
-          candidates.push_back(Candidate{&declaration, specificity, order++});
+          candidates.push_back(Candidate{&declaration, specificity, order++, author});
         }
       }
     }
@@ -1490,10 +1602,11 @@ void StyleEngine::ComputeElement(dom::Element& element,
   // Parse inline declarations first so their addresses stay stable while the
   // candidate list is built (no reallocation of the container holding them).
   for (const css::Declaration& declaration : inline_decls) {
-    candidates.push_back(Candidate{&declaration, kInlineSpecificity, order++});
+    candidates.push_back(Candidate{&declaration, kInlineSpecificity, order++, /*author=*/true});
   }
 
-  // Cascade: importance > specificity > order.  Declarations are normalized
+  // Cascade: origin/importance rank > specificity > order.  Declarations are
+  // normalized
   // to their physical properties first (logical properties expanded, see
   // NormalizeDeclaration), and the winning value per property is stored so
   // var() references can be resolved after the custom properties are known.
@@ -1502,25 +1615,38 @@ void StyleEngine::ComputeElement(dom::Element& element,
     const css::Declaration* declaration; // for the !important flag
     css::Specificity specificity;
     int order;
+    bool author;       // origin, for the precedence rank above
     std::string value; // physical (normalized) value text
   };
   std::map<std::string, Winner> winners;
+  // Whether any author-origin declaration for `display` matched this element.
+  // The presentational hint below is below the author origin, so such a
+  // declaration suppresses it even when the UA sheet wins the flattened pool
+  // (this engine sorts by importance/specificity/order, not by origin).
+  bool author_declares_display = false;
   for (const Candidate& candidate : candidates) {
-    const bool important = candidate.declaration->important;
     for (auto& normalized : NormalizeDeclaration(*candidate.declaration)) {
       const std::string& property = normalized.first;
       const std::string& value = normalized.second;
+      if (candidate.author && property == "display") {
+        author_declares_display = true;
+      }
       auto existing = winners.find(property);
       if (existing == winners.end()) {
-        winners.emplace(
-            property, Winner{candidate.declaration, candidate.specificity, candidate.order, value});
+        winners.emplace(property,
+                        Winner{candidate.declaration,
+                               candidate.specificity,
+                               candidate.order,
+                               candidate.author,
+                               value});
         continue;
       }
       const Winner& current = existing->second;
-      const bool current_important = current.declaration->important;
       bool replace = false;
-      if (important != current_important) {
-        replace = important;
+      const int rank = cascade_rank(candidate.declaration, candidate.author);
+      const int current_rank = cascade_rank(current.declaration, current.author);
+      if (rank != current_rank) {
+        replace = rank > current_rank;
       } else if (candidate.specificity.a != current.specificity.a ||
                  candidate.specificity.b != current.specificity.b ||
                  candidate.specificity.c != current.specificity.c) {
@@ -1529,8 +1655,8 @@ void StyleEngine::ComputeElement(dom::Element& element,
         replace = candidate.order > current.order;
       }
       if (replace) {
-        existing->second =
-            Winner{candidate.declaration, candidate.specificity, candidate.order, value};
+        existing->second = Winner{
+            candidate.declaration, candidate.specificity, candidate.order, candidate.author, value};
       }
     }
   }
@@ -1570,8 +1696,8 @@ void StyleEngine::ComputeElement(dom::Element& element,
   // Properties whose computed value `out` starts from |inherited| (the block
   // just below).  Kept in sync with it explicitly.
   const auto resolve_inherited_subset = [&inherited](ComputedStyle& out,
-                                                      const std::string& property,
-                                                      int action) {
+                                                     const std::string& property,
+                                                     int action) {
     if (property == "color") {
       out.color = (action == 3 || action == 4) ? std::optional<css::Color>{} : inherited.color;
     } else if (property == "font-size") {
@@ -1581,7 +1707,8 @@ void StyleEngine::ComputeElement(dom::Element& element,
     } else if (property == "font-style") {
       out.font_italic = (action == 3 || action == 4) ? false : inherited.font_italic;
     } else if (property == "font-family") {
-      out.font_family = (action == 3 || action == 4) ? std::string("sans-serif") : inherited.font_family;
+      out.font_family =
+          (action == 3 || action == 4) ? std::string("sans-serif") : inherited.font_family;
     } else if (property == "line-height") {
       out.line_height = (action == 3 || action == 4) ? 19.2f : inherited.line_height;
     } else if (property == "text-align") {
@@ -1590,7 +1717,8 @@ void StyleEngine::ComputeElement(dom::Element& element,
       out.text_decoration_underline =
           (action == 3 || action == 4) ? false : inherited.text_decoration_underline;
     } else if (property == "list-style-type") {
-      out.list_style_type = (action == 3 || action == 4) ? ListStyleType::kDisc : inherited.list_style_type;
+      out.list_style_type =
+          (action == 3 || action == 4) ? ListStyleType::kDisc : inherited.list_style_type;
     } else if (property == "white-space") {
       out.white_space = (action == 3 || action == 4) ? WhiteSpace::kNormal : inherited.white_space;
     } else {
@@ -1647,7 +1775,6 @@ void StyleEngine::ComputeElement(dom::Element& element,
     // value is the documented approximation (see the compatibility matrix).
     ++it;
   }
-
 
   // CSS custom properties (CSS Custom Properties for Cascading Variables
   // Level 1 §2): inherited by default, then overridden by this element's
@@ -1913,6 +2040,18 @@ void StyleEngine::ComputeElement(dom::Element& element,
         out.display = Display::kListItem;
       }
     }
+  }
+
+  // §15.3.1 Hidden elements: the hidden attribute is a presentational hint that
+  // sets display:none, on any element (not just the ones the UA sheet styles).
+  // A presentational hint sits below the author origin in the cascade origin
+  // order (CSS Cascade 5 §6.1) and above the UA sheet, so an author declaration
+  // for `display` -- a stylesheet rule or the style attribute -- suppresses it,
+  // while the UA sheet's own element-specific `display` does not.  The spec
+  // also expects `hidden=until-found` (content-visibility:hidden) and the
+  // `embed` exception; both are NOT IMPLEMENTED and are treated as display:none.
+  if (element.HasAttribute("hidden") && !author_declares_display) {
+    out.display = Display::kNone;
   }
 
   // list-style-type (CSS Lists 3 §4.1).  Inherited, so it applies to the

@@ -2,6 +2,7 @@
 
 #include "neko/css/color.h"
 #include "neko/dom/element.h"
+#include "neko/layout/form_control.h"
 #include "neko/style/computed_style.h"
 #include "neko/style/style_engine.h"
 
@@ -102,6 +103,20 @@ struct LayoutBox
 
   // Decoded image for a replaced <img> box (set by layout from ImageProvider).
   const image::Image* image = nullptr;
+
+  // Which form control this box is (WHATWG HTML §15.5 Widgets / form_control.h),
+  // kNone for everything else.  The widget geometry in this box is the control's
+  // own: paint and hit-testing dispatch on the kind to draw the control's
+  // content (checkbox tick, radio dot, slider, colour swatch, file selector
+  // button, drop-down arrow).  Set for <input>/<textarea>/<select> and for
+  // <button>.
+  FormControlKind form_control = FormControlKind::kNone;
+  // The `checked` / `disabled` attributes.  `checked` is the document's initial
+  // (attribute) check state; toggling it at runtime is the browser layer's job
+  // and re-lays out the page.  `disabled` likewise ignores an inherited fieldset
+  // disabledness (NOT IMPLEMENTED).
+  bool form_control_checked = false;
+  bool form_control_disabled = false;
 
   // CSS background-image (resolved URL from ComputedStyle) and its decoded
   // image, fetched by the browser keyed by the element (like <img>).  Empty

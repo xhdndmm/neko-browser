@@ -9,6 +9,7 @@
 
 add_library(neko_layout
   src/layout.cpp
+  src/form_control.cpp
 )
 add_library(neko::layout ALIAS neko_layout)
 
