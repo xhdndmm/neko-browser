@@ -105,6 +105,28 @@ template <typename Predicate> bool WaitFor(Predicate predicate, int timeout_ms =
   return predicate();
 }
 
+// Holds a Page's DOM lock for as long as it is in scope.
+//
+// The worker thread replaces the layout tree and the style cache under that lock
+// (Page::LayoutLocked), so a test that inspects |Page| state from the test thread
+// has to take it too.  The GUI never needs this: per ADR 0020 it consumes
+// immutable frames rather than the live tree.  Without the lock, a predicate like
+// "is the page laid out yet?" races the worker's relayout -- which ThreadSanitizer
+// reports as a data race on Page::root_.
+class PageDomReadLock
+{
+public:
+  explicit PageDomReadLock(const std::shared_ptr<neko::renderer::Page>& page)
+      : lock_(page != nullptr ? page->AcquireDomLock() : std::unique_lock<std::recursive_mutex>())
+  {
+  }
+  PageDomReadLock(const PageDomReadLock&) = delete;
+  PageDomReadLock& operator=(const PageDomReadLock&) = delete;
+
+private:
+  std::unique_lock<std::recursive_mutex> lock_;
+};
+
 // Sends a real key press+release pair to |widget| through the Qt event
 // system, exactly as the platform would deliver it.
 void SendKey(QWidget* widget, int key, Qt::KeyboardModifiers mods = Qt::NoModifier)
@@ -504,6 +526,7 @@ TEST(UiSmokeTest, HoverDoesNotResetScroll)
   // Wait until the page is laid out (so the scroll range is set).
   ASSERT_TRUE(WaitFor([&] {
     const auto snap = worker.SnapshotActiveTab();
+    const PageDomReadLock page_guard(snap.page);
     return snap.content_type == neko::browser::ContentType::kHtml && snap.page != nullptr &&
            snap.page->layout_root() != nullptr;
   }));
@@ -555,6 +578,7 @@ TEST(UiSmokeTest, ClickRunsPageClickListener)
 
   ASSERT_TRUE(WaitFor([&] {
     const auto snap = worker.SnapshotActiveTab();
+    const PageDomReadLock page_guard(snap.page);
     return snap.page != nullptr && snap.page->layout_root() != nullptr;
   }));
   auto* view = window.findChild<neko::ui::WebView*>();
@@ -575,6 +599,7 @@ TEST(UiSmokeTest, ClickRunsPageClickListener)
   // observed it and updated #status.
   ASSERT_TRUE(WaitFor([&] {
     const auto snap = worker.SnapshotActiveTab();
+    const PageDomReadLock page_guard(snap.page);
     if (snap.page == nullptr || snap.page->document() == nullptr) {
       return false;
     }
@@ -636,6 +661,7 @@ TEST(UiSmokeTest, ClickInputAndTypeUpdatesValue)
 
   ASSERT_TRUE(WaitFor([&] {
     const auto snap = worker.SnapshotActiveTab();
+    const PageDomReadLock page_guard(snap.page);
     if (snap.page == nullptr || snap.page->layout_root() == nullptr ||
         snap.page->document() == nullptr) {
       return false;
@@ -658,6 +684,7 @@ TEST(UiSmokeTest, ClickInputAndTypeUpdatesValue)
   // the WebView (address bar clears above, but the click steals focus too).
   {
     const auto snap = worker.SnapshotActiveTab();
+    const PageDomReadLock page_guard(snap.page);
     ASSERT_NE(snap.page->document(), nullptr);
     neko::dom::Element* input = neko::dom::QuerySelector(*snap.page->document(), "#q");
     ASSERT_NE(input, nullptr);
@@ -676,6 +703,7 @@ TEST(UiSmokeTest, ClickInputAndTypeUpdatesValue)
   // The focused control is published on the page (read by caret painting).
   ASSERT_TRUE(WaitFor([&] {
     const auto snap = worker.SnapshotActiveTab();
+    const PageDomReadLock page_guard(snap.page);
     return snap.page != nullptr && snap.page->FocusedElement() != nullptr;
   }));
 
@@ -690,6 +718,7 @@ TEST(UiSmokeTest, ClickInputAndTypeUpdatesValue)
 
   ASSERT_TRUE(WaitFor([&] {
     const auto snap = worker.SnapshotActiveTab();
+    const PageDomReadLock page_guard(snap.page);
     if (snap.page == nullptr || snap.page->document() == nullptr) {
       return false;
     }
@@ -716,6 +745,7 @@ TEST(UiSmokeTest, TextInputPreservesPrintableUnicodeCharacters)
 
   ASSERT_TRUE(WaitFor([&] {
     const auto snap = worker.SnapshotActiveTab();
+    const PageDomReadLock page_guard(snap.page);
     return snap.page != nullptr && snap.page->layout_root() != nullptr &&
            snap.page->document() != nullptr &&
            neko::dom::QuerySelector(*snap.page->document(), "#q") != nullptr;
@@ -742,6 +772,7 @@ TEST(UiSmokeTest, TextInputPreservesPrintableUnicodeCharacters)
 
   ASSERT_TRUE(WaitFor([&] {
     const auto current = worker.SnapshotActiveTab();
+    const PageDomReadLock page_guard(current.page);
     if (current.page == nullptr || current.page->document() == nullptr) {
       return false;
     }
@@ -805,6 +836,7 @@ TEST(UiSmokeTest, FocusedInputDrawsCaret)
 
   ASSERT_TRUE(WaitFor([&] {
     const auto snap = worker.SnapshotActiveTab();
+    const PageDomReadLock page_guard(snap.page);
     if (snap.page == nullptr || snap.page->layout_root() == nullptr ||
         snap.page->document() == nullptr) {
       return false;
@@ -825,6 +857,7 @@ TEST(UiSmokeTest, FocusedInputDrawsCaret)
   // Click the input's text to focus it.
   {
     const auto snap = worker.SnapshotActiveTab();
+    const PageDomReadLock page_guard(snap.page);
     neko::dom::Element* input = neko::dom::QuerySelector(*snap.page->document(), "#q");
     float x = 0;
     float y = 0;
@@ -841,6 +874,7 @@ TEST(UiSmokeTest, FocusedInputDrawsCaret)
   }
   ASSERT_TRUE(WaitFor([&] {
     const auto snap = worker.SnapshotActiveTab();
+    const PageDomReadLock page_guard(snap.page);
     return snap.page != nullptr && snap.page->FocusedElement() != nullptr;
   }));
 
@@ -889,6 +923,7 @@ TEST(UiSmokeTest, FocusedInputDrawsCaret)
   }
   ASSERT_TRUE(WaitFor([&] {
     const auto snap2 = worker.SnapshotActiveTab();
+    const PageDomReadLock page_guard(snap.page);
     if (snap2.page == nullptr || snap2.page->document() == nullptr) {
       return false;
     }
@@ -900,6 +935,7 @@ TEST(UiSmokeTest, FocusedInputDrawsCaret)
   float ch2 = 0;
   {
     const auto snap2 = worker.SnapshotActiveTab();
+    const PageDomReadLock page_guard(snap.page);
     neko::dom::Element* q = neko::dom::QuerySelector(*snap2.page->document(), "#q");
     ASSERT_NE(q, nullptr);
     ASSERT_TRUE(FindCaretPoint(*snap2.page->layout_root(), q, cx2, cy2, ch2));
@@ -955,6 +991,7 @@ TEST(UiSmokeTest, WheelFiresPageWheelEvent)
 
   ASSERT_TRUE(WaitFor([&] {
     const auto snap = worker.SnapshotActiveTab();
+    const PageDomReadLock page_guard(snap.page);
     return snap.page != nullptr && snap.page->layout_root() != nullptr;
   }));
   auto* view = window.findChild<neko::ui::WebView*>();
@@ -975,6 +1012,7 @@ TEST(UiSmokeTest, WheelFiresPageWheelEvent)
   // The page's onwheel handler observed a non-zero vertical delta.
   ASSERT_TRUE(WaitFor([&] {
     const auto snap = worker.SnapshotActiveTab();
+    const PageDomReadLock page_guard(snap.page);
     if (snap.page == nullptr || snap.page->document() == nullptr) {
       return false;
     }
@@ -1007,6 +1045,7 @@ TEST(UiSmokeTest, HoverOverElementFiresPageMouseOver)
 
   ASSERT_TRUE(WaitFor([&] {
     const auto snap = worker.SnapshotActiveTab();
+    const PageDomReadLock page_guard(snap.page);
     return snap.page != nullptr && snap.page->layout_root() != nullptr;
   }));
   auto* view = window.findChild<neko::ui::WebView*>();
@@ -1029,6 +1068,7 @@ TEST(UiSmokeTest, HoverOverElementFiresPageMouseOver)
   }
   ASSERT_TRUE(WaitFor([&] {
     const auto snap = worker.SnapshotActiveTab();
+    const PageDomReadLock page_guard(snap.page);
     if (snap.page == nullptr || snap.page->document() == nullptr) {
       return false;
     }
@@ -1041,6 +1081,7 @@ TEST(UiSmokeTest, HoverOverElementFiresPageMouseOver)
   QApplication::sendEvent(view->viewport(), &leave);
   ASSERT_TRUE(WaitFor([&] {
     const auto snap = worker.SnapshotActiveTab();
+    const PageDomReadLock page_guard(snap.page);
     if (snap.page == nullptr || snap.page->document() == nullptr) {
       return false;
     }
@@ -1066,6 +1107,7 @@ TEST(UiSmokeTest, ClickLinkNavigates)
 
   ASSERT_TRUE(WaitFor([&] {
     const auto snap = worker.SnapshotActiveTab();
+    const PageDomReadLock page_guard(snap.page);
     return snap.page != nullptr && snap.page->layout_root() != nullptr;
   }));
   auto* view = window.findChild<neko::ui::WebView*>();
@@ -1090,6 +1132,7 @@ TEST(UiSmokeTest, ClickLinkNavigates)
   // The default action navigates the link to /nav.
   ASSERT_TRUE(WaitFor([&] {
     const auto s = worker.SnapshotActiveTab();
+    const PageDomReadLock page_guard(s.page);
     return s.url.find("/nav") != std::string::npos;
   }));
 }
@@ -1111,6 +1154,7 @@ TEST(UiSmokeTest, HoverLinkShowsPointingHand)
 
   ASSERT_TRUE(WaitFor([&] {
     const auto snap = worker.SnapshotActiveTab();
+    const PageDomReadLock page_guard(snap.page);
     return snap.page != nullptr && snap.page->layout_root() != nullptr;
   }));
   auto* view = window.findChild<neko::ui::WebView*>();

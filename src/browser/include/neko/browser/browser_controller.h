@@ -620,6 +620,13 @@ private:
   // tabs_/active_tab_/next_tab_id_, network_log_/console_log_ and the store
   // contents.  Held only around short reads/writes; never across network
   // fetches or HTML parsing.
+  //
+  // LOCK ORDER: a Page's DOM lock is always acquired *before* this mutex, never
+  // after.  ProduceFrame lays the page out and only then takes mutex_ to publish
+  // the frame; taking mutex_ first and then reaching into tab->page (as
+  // FindInTab and DumpDom used to) is an ABBA deadlock against that path, and
+  // ThreadSanitizer reports it as a lock-order-inversion.  So: do all Page work
+  // with mutex_ released, then take mutex_ only to publish or read tab state.
   mutable std::mutex mutex_;
 
   std::vector<std::unique_ptr<Tab>> tabs_;

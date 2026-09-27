@@ -78,6 +78,35 @@
 **禁止**：共享可变状态 + 多线程 + 隐式加锁的组合。需要并行的循环一律
 「切分只读输入 → 各自产出独立输出 → 汇总」，不共享中间状态。
 
+### 3.1 锁序（Lock order）
+
+引擎里有两把会嵌套的锁：`Page` 的 DOM 锁（`std::recursive_mutex`）和
+`BrowserController::mutex_`（保护 GUI 可见状态）。**唯一合法的顺序是：
+
+> 先取 Page 的 DOM 锁，再取控制器 mutex。反向禁止。**
+
+原因：`ProduceFrame` 在 worker 上做完布局/光栅化（每次 `tab.page->*` 调用内部
+各取一次 DOM 锁）之后，才在末尾取 `mutex_` 发布帧——这是 **page → controller**。
+若另一条路径先取 `mutex_` 再伸手进 `tab->page`（例如在控制器锁内调用
+`page->FindMatches()` / `page->DumpDom()`），就构成 ABBA 死锁。TSan 会把它报成
+`lock-order-inversion (potential deadlock)`。
+
+因此约定：
+
+- **所有 Page 访问必须在 `mutex_` 之外进行。** 需要控制器状态时，先在锁内取到
+  需要的值并释放，再做 Page 工作，最后再取一次 `mutex_` 写回结果。
+- `mutex_` 只用于短读写，**不得跨越网络抓取、HTML 解析或 Page 布局**。
+
+### 3.2 持 DOM 锁时必须让 Page 存活
+
+持有 DOM 锁的整个期间，必须有一份 `std::shared_ptr<renderer::Page>` 保活该
+Page，且该 shared_ptr **声明在锁之前**（局部变量逆序析构，保活要最后释放）。
+
+原因：同一函数内完全可能发生导航（脚本 `location` 赋值、表单提交、定时器
+回调），而导航会替换 tab 的 Page 并释放旧的。此时若再去解锁旧 Page 的
+mutex，就是 use-after-free。`browser_controller.cpp` 中所有「取 DOM 锁」的
+路径都遵循这一模式。
+
 ---
 
 ## 4. 进程模型

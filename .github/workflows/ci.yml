@@ -122,6 +122,36 @@ jobs:
         run: ctest --preset asan
 
   # ---------------------------------------------------------------------------
+  # ThreadSanitizer
+  #
+  # ADR 0020 ("DOM confined to the worker thread") rests on a TSan-clean run, so
+  # this has to be a gate rather than a periodic manual check.  Two environment
+  # details are load-bearing:
+  #   * setarch -R disables ASLR.  Newer kernels default to vm.mmap_rnd_bits=32,
+  #     which makes GCC's libtsan abort with "unexpected memory mapping".
+  #   * tools/tsan.supp only loads through `ctest --preset tsan`; a bare ctest
+  #     does not apply the preset environment, so the Qt suppressions would be
+  #     lost and every UiSmokeTest would fail on Qt-internal races.
+  # ---------------------------------------------------------------------------
+  tsan:
+    name: tsan
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install system dependencies
+        run: bash scripts/ci/install-deps-linux.sh
+
+      - name: Configure
+        run: cmake --preset tsan -DNEKO_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build --preset tsan --parallel
+
+      - name: Test
+        run: setarch $(uname -m) -R ctest --preset tsan
+
+  # ---------------------------------------------------------------------------
   # Code coverage
   # ---------------------------------------------------------------------------
   coverage:

@@ -1614,12 +1614,25 @@ int BrowserController::FindInTab(int tab_id, std::string_view query, int directi
     if (tab->page == nullptr) {
       return 0;
     }
-    // The match list lives with the tab and the page lock is taken after the
-    // controller lock (the same order every other path uses).
+    // Lock order: the Page lock is always taken *before* the controller mutex.
+    // Page::FindMatches takes the page lock internally, so it must run with
+    // mutex_ released -- calling it under mutex_ (as this function used to)
+    // inverted the order against ProduceFrame, which lays the page out and only
+    // then takes mutex_ to publish the frame.  That is an ABBA deadlock, and the
+    // comment here used to assert the opposite (wrong) invariant.
+    bool recompute = false;
+    {
+      std::lock_guard<std::mutex> probe(mutex_);
+      recompute = direction == 0 || tab->find_query != query;
+    }
+    std::vector<renderer::FindMatch> matches;
+    if (recompute) {
+      matches = tab->page->FindMatches(query);
+    }
     std::lock_guard<std::mutex> lock(mutex_);
-    if (direction == 0 || tab->find_query != query) {
+    if (recompute) {
       tab->find_query = std::string(query);
-      tab->find_matches = tab->page->FindMatches(query);
+      tab->find_matches = std::move(matches);
       tab->find_index = tab->find_matches.empty() ? -1 : 0;
     } else if (!tab->find_matches.empty()) {
       const int size = static_cast<int>(tab->find_matches.size());
@@ -2351,10 +2364,18 @@ std::string BrowserController::CookieHeader(const url::Url& url, int64_t now) co
 
 std::string BrowserController::DumpDom() const
 {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (active_tab_ < 0 || active_tab_ >= static_cast<int>(tabs_.size()))
-    return "";
-  const std::shared_ptr<renderer::Page>& page = tabs_[static_cast<size_t>(active_tab_)]->page;
+  // Lock order (see the note on BrowserController::mutex_): the Page lock is
+  // always taken *before* the controller mutex, never the other way round.  Grab
+  // the page handle under the controller lock, then dump with the controller
+  // lock released -- Page::DumpDom takes the page lock internally, and taking
+  // it while holding mutex_ would invert the order against ProduceFrame.
+  std::shared_ptr<renderer::Page> page;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (active_tab_ < 0 || active_tab_ >= static_cast<int>(tabs_.size()))
+      return "";
+    page = tabs_[static_cast<size_t>(active_tab_)]->page;
+  }
   return page != nullptr ? page->DumpDom() : std::string();
 }
 

@@ -187,7 +187,7 @@
       "output": { "outputOnFailure": true },
       "execution": { "noTestsAction": "error" },
       "environment": {
-        "TSAN_OPTIONS": "suppressions=${sourceDir}/tools/tsan.supp"
+        "TSAN_OPTIONS": "suppressions=${sourceDir}/tools/tsan.supp report_thread_leaks=0"
       },
       "configuration": "RelWithDebInfo"
     },

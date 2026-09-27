@@ -51,7 +51,26 @@ UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 ctest --preset asan
 
 - 内存错误、数据竞争、UB 是**真实缺陷**，必须修复。
 - 禁止关闭 sanitizer、禁用检查、删除测试来掩盖失败。
-- 新模块落地时，CI 的 asan 任务必须保持通过。
+- 新模块落地时，CI 的 asan 与 tsan 任务必须保持通过。
+
+## TSan 本地运行（两个环境细节是必需的）
+
+```bash
+cmake --build --preset tsan --parallel
+setarch $(uname -m) -R ctest --preset tsan
+```
+
+- **`setarch -R` 不可省略。** 新内核默认 `vm.mmap_rnd_bits=32`，GCC 的 libtsan
+  会直接 `FATAL: ThreadSanitizer: unexpected memory mapping` 崩掉。
+- **必须用 `ctest --preset tsan`，不能用裸 `ctest`。** `tools/tsan.supp`（抑制
+  Qt 内部竞争）挂在 preset 的 `testPresets.environment` 上，裸 `ctest` 不加载
+  preset 环境，于是每个 `UiSmokeTest` 都会因 Qt 内部竞争而失败——那是噪声，不是
+  neko 的竞争。
+- **`report_thread_leaks=0` 已默认开启。** Qt 在退出时不 join 自己的线程，
+  TSan 会报 thread leak；`race:` 前缀的抑制不覆盖 thread leak，正确的开关名是
+  `report_thread_leaks`（不是 `detect_thread_leaks`，后者无效）。
+
+CI 中 `.github/workflows/ci.yml` 的 `tsan` 任务就是这三条的固化。
 
 ## 实现说明
 
