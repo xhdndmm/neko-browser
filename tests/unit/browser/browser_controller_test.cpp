@@ -949,13 +949,10 @@ TEST(BrowserControllerTest, FrameIsProducedAndRefreshedByDomChanges)
                                {{"content-type", "text/html"}},
                                "<html><body style=\"margin:0\">"
                                "<a id=\"l\" href=\"/next\">link</a>"
-                               "<script>"
-                               "setTimeout(function(){"
-                               "  var d = document.createElement('div');"
-                               "  d.style.height = '2000px';"
-                               "  document.body.appendChild(d);"
-                               "}, 1);"
-                               "</script>"
+                               // A script element so the page has a runtime, but
+                               // one that schedules nothing: see below for why
+                               // the mutation is driven from the test instead.
+                               "<script>var _neko_unused = 1;</script>"
                                "</body></html>"});
 
   BrowserController controller(tp.path(), std::ref(fetch));
@@ -974,7 +971,25 @@ TEST(BrowserControllerTest, FrameIsProducedAndRefreshedByDomChanges)
   const float initial_height = snapshot.frame_content_height;
 
   // A timer mutates the DOM; the next pump must rebuild the frame.
-  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  //
+  // The mutation is scheduled *here*, from the test, rather than by an inline
+  // `setTimeout(fn, 1)` in the page.  The page's own timer races the load: if
+  // loading takes longer than the timer's deadline (which it does under
+  // ThreadSanitizer, and on a slow machine generally) the timer fires before the
+  // first pump and "before" and "after" heights are already equal, so the
+  // assertion fails without anything being wrong.  Scheduling it after the first
+  // snapshot makes the sequence deterministic: `setTimeout(…, 0)` is due
+  // immediately, so exactly one pump runs it.
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  ASSERT_NE(tab->script_runtime, nullptr);
+  ASSERT_TRUE(tab->script_runtime
+                  ->Evaluate("setTimeout(function(){"
+                             "var d = document.createElement('div');"
+                             "d.style.height = '2000px';"
+                             "document.body.appendChild(d);"
+                             "}, 0)")
+                  .has_value());
   controller.PumpScriptTimers();
   snapshot = controller.SnapshotActiveTab();
   EXPECT_GT(snapshot.frame_content_height, initial_height);
@@ -1804,10 +1819,16 @@ TEST(BrowserControllerTest, DataUrlFontFaceIsDecodedAndRegistered)
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
 
   const std::string expected_key = "data:font/ttf;base64, " + TestBase64(font_bytes);
-  ASSERT_TRUE(WaitForSubresources([&controller, &expected_key] {
-    Tab* tab = controller.ActiveTab();
-    return tab != nullptr && tab->page != nullptr && tab->page->HasWebFont(expected_key);
-  }));
+  // The budget is generous on purpose: registering the font means decoding it
+  // with FreeType, which takes ~800 ms even without instrumentation.  Under
+  // ThreadSanitizer that is ~6x slower and the default 5 s budget no longer
+  // covers it, so the wait timed out on a correct result.
+  ASSERT_TRUE(WaitForSubresources(
+      [&controller, &expected_key] {
+        Tab* tab = controller.ActiveTab();
+        return tab != nullptr && tab->page != nullptr && tab->page->HasWebFont(expected_key);
+      },
+      /*timeout_ms=*/60000));
   // Page, stylesheet, then the font data: URL - decoded locally, never routed.
   ASSERT_EQ(fetch.RequestCount(), 3u);
   EXPECT_EQ(fetch.Requests()[2], expected_key);
