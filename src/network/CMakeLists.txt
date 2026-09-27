@@ -13,6 +13,7 @@ add_library(neko_network
   src/socket.cpp
   src/socket_platform.cpp
   src/compression.cpp
+  src/system_trust_store.cpp
   src/tls_socket.cpp
   src/dns.cpp
   src/http.cpp

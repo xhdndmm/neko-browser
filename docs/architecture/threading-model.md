@@ -48,6 +48,12 @@
      因此并发淘汰不会让调用方悬空。
    - `graphics::FontRegistry`：选择器缓存加锁；web 字体注册会失效缓存。
    - `network::DnsResolver`：缓存加锁；`Resolve` 每次自建 socket，可并发。
+   - `network` 的系统信任库（`system_trust_store.cpp`）：**进程级记忆化**的
+     宿主 CA 锚点（`shared_ptr<X509>`，按候选列表为键），互斥锁保护；每个
+     连接把锚点插入自己的 `X509_STORE`（`X509_STORE_add_cert` 内部加引用）。
+     缓存只在首次发现时写入、**从不失效**（改 CA 库需重启，与浏览器的根证书
+     取舍一致），因此不存在并发失效/悬空窗口。刻意不析构（进程退出时
+     OpenSSL 的清理顺序不确定）。
    - `base::ThreadPool`：任意线程可 `Post`/`Submit`。
 5. **析构顺序**：`BrowserController::pool_` 声明在最后，析构最先 ——
    `~ThreadPool` 会排空队列，此时其后捕获 `this` 的抓取任务所引用的

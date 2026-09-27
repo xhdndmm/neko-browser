@@ -14,6 +14,16 @@
   chunked 传输、重定向跟随（301/302/303/307/308）
 - **HTTPS/TLS**：`TlsSocket` 封装 OpenSSL（ADR 0010）——证书+主机名校验、
   SNI、TLS≥1.2；`HttpGet` 对 https:// 自动启用
+- **信任库发现**（`src/system_trust_store.{h,cpp}`）：按**运行主机**的 CA 布局
+  定位信任锚——PEM 包（Debian/Ubuntu/Arch 的 `/etc/ssl/certs/ca-certificates.crt`、
+  Fedora/RHEL 的 `/etc/pki/...`、openSUSE/Alpine/BSD 的 `/etc/ssl/*.pem`、
+  macOS 的 `/etc/ssl/cert.pem`）、hashed 目录（仅在确实含 `c_rehash` 条目时
+  计入）、平台 store（Windows `org.openssl.winstore://` 系统 ROOT 库）；
+  `SSL_CERT_FILE` / `SSL_CERT_DIR` 按 OpenSSL 语义**替换**平台默认。一个锚点
+  都没有时**失败关闭**并给出可操作报错（安装 `ca-certificates` 或设置
+  `SSL_CERT_FILE`），绝不拿空信任库去校验。**不用**
+  `SSL_CTX_set_default_verify_paths()`：它读的是 libcrypto **编译期**路径
+  （打包产物 = 构建 runner 的布局），且路径不存在时仍然返回成功
 - **gzip/deflate**：`compression` 封装 zlib，RFC 7231 内容编码解码
   （链式编码、raw deflate 兼容、64 MiB 输出上限）
 - **`data:` URL（RFC 2397）**：`HttpGet` 在打开 socket 之前就地解码
@@ -26,6 +36,8 @@
 
 - keep-alive 连接复用、HTTP/2、HTTP/3、brotli
 - 超时/取消的完整生命周期管理
+- 自有根证书计划（root store）：信任锚完全来自运行主机，macOS 未接 Keychain
+  （只读 `/etc/ssl/cert.pem`），Windows 的 ROOT 库尚无运行期测试
 - Windows 网络路径由 CI 编译验证，但网络测试仍是 POSIX 守卫（未在 Windows 运行）；
   DNS 服务器列表在 Windows 上回退到公共解析器（`/etc/resolv.conf` 不存在）
 

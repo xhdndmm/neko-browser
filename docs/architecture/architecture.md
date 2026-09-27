@@ -247,7 +247,7 @@ tests/unit/<module>/      单元测试
 ```text
 src/base/       日志、Error/Result、字符串、UTF-8、版本、断言 —— Tested
 src/url/        URL 解析、相对解析、百分号编码、Origin —— Tested
-src/network/    TCP Socket（POSIX）、HTTP/1.1 GET、重定向、chunked —— Tested
+src/network/    TCP Socket、HTTP/1.1 GET、重定向、chunked、HTTPS（系统信任库发现，ADR 0010 修订）—— Tested
 src/dom/        Node 树、Element/Text/Comment/Document、querySelector —— Tested
 src/html/       tokenizer + 树构建（插入模式子集）、字符引用 —— Tested
 src/css/        tokenizer/parser、选择器、级联输入、颜色/值 —— Tested
