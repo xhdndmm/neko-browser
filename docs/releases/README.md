@@ -134,8 +134,11 @@ Release 页面同时附带 `SHA256SUMS`（`sha256sum --check SHA256SUMS` 校验�
 
 - **Windows ARM64 测试在独立 runner 上运行**：构建仍是 `windows-2025`（x64 宿主
   交叉编译），测试载荷上传后在 `windows-11-arm`（原生 ARM64）上运行 ctest；
-  两个 runner 的工作区路径必须一致（GitHub Windows runner 固定为
-  `D:\a\<repo>\<repo>`），ctest 生成文件里的绝对路径才成立（载荷与还原细节见
+  两个 runner 的工作区盘符不同（x64 镜像 `D:\a\<repo>\<repo>`，ARM64 镜像
+  `C:\a\<repo>\<repo>`——ARM64 镜像的第二块盘没有挂载，见
+  actions/runner-images#14088），还原脚本先把构建机的盘符别名到本 runner 的
+  盘符根，ctest 生成文件与测试二进制（`NEKO_TEST_PAGES_DIR` / `NEKO_BROWSER_BIN`）
+  里写死的绝对路径才成立（载荷与还原细节见
   `scripts/release/stage-tests-windows-arm64.ps1` / `test-windows-arm64.ps1`）。
   ARM64 的 Qt 运行库按固定清单手工部署（Qt 交叉编译包不含 windeployqt）：
   3 个 Qt DLL + 平台/样式/图像格式插件。

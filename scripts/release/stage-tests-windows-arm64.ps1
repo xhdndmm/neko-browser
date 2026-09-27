@@ -7,9 +7,12 @@
 #
 # 为什么载荷里必须保留构建树的相对布局：ctest 的 GoogleTest PRE_TEST 发现
 # 脚本与 add_test 命令把构建机绝对路径写进了生成文件（测试可执行文件、工作
-# 目录、源目录 tests/pages、CMake 的 GoogleTest 模块）。GitHub 的 Windows
-# runner 工作区固定为 D:\a\<repo>\<repo>，载荷按相同相对布局还原后这些路径
-# 原样成立；CMake 模块另行携带一份，由还原脚本放回它被写死的绝对路径。
+# 目录、源目录 tests/pages、CMake 的 GoogleTest 模块），测试二进制里还编译进
+# 了 NEKO_TEST_PAGES_DIR / NEKO_BROWSER_BIN。构建机（windows-2025）的工作区是
+# D:\a\<repo>\<repo>，ARM64 runner（windows-11-arm）是 C:\a\<repo>\<repo>
+# ——除盘符外布局相同，还原脚本会把构建机的盘符别名到本 runner 的盘符根
+# （见 test-windows-arm64.ps1），这些路径因此原样成立；CMake 模块另行携带一份，
+# 由还原脚本放回它被写死的绝对路径。
 #
 # 用法：stage-tests-windows-arm64.ps1 -VcpkgDynamicTriplet <triplet>
 #
@@ -102,7 +105,7 @@ if (-not $crt) { throw "找不到 arm64 的 MSVC CRT 目录（$vs）" }
 Copy-Item "$($crt.FullName)/*.dll" "$OutDir/runtime/bin/"
 
 # --- 元信息 -----------------------------------------------------------------
-# 还原脚本用它校验 runner 工作区是否与构建机一致（写死的绝对路径依赖这个）。
+# 还原脚本用它把构建机的工作区路径在本 runner 上还原（写死的绝对路径依赖这个）。
 @(
   "build_workspace=$env:GITHUB_WORKSPACE"
   "cmake_root=$cmakeRoot"
