@@ -40,6 +40,25 @@ struct InlineItem
   std::unique_ptr<LayoutBox> block_box = nullptr;
 };
 
+// An absolutely positioned child collected while laying out a parent's
+// content, together with the vertical position it would occupy in normal
+// flow.  |static_x|/|static_y| are the offsets from the absolute containing
+// block origin to the margin edge of the box's hypothetical in-flow position
+// (the "static position", CSS2.2 §10.3.7 / §10.6.4); they are used when the
+// corresponding inset (left/right or top/bottom) is auto.  |static_x| is known
+// at collection time; |static_y| depends on the in-flow content that precedes
+// the element, so it is filled in during the block layout pass.
+struct AbsoluteChild
+{
+  dom::Element* element = nullptr;
+  float static_x = 0;
+  float static_y = 0;
+  // Number of in-flow block-level siblings preceding this element in document
+  // order.  The flow cursor after them (hence |static_y|) is only known once
+  // they have been laid out.
+  std::size_t preceding_blocks = 0;
+};
+
 // True when |c| is an ASCII whitespace character used for word breaking.
 bool IsWordBreak(char c)
 {
@@ -1213,7 +1232,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
 
       const float avail_width = box->width - box->border_left - box->border_right -
                                 box->padding_left - box->padding_right;
-      std::vector<dom::Element*> absolute_children;
+      std::vector<AbsoluteChild> absolute_children;
       float content_height = LayoutBlockContent(
           *box, element, avail_width, 0, 0, avail_width, 0, kNoFloats, absolute_children);
       const float border_padding_h =
@@ -1229,9 +1248,15 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       }
       box->height = content_height + border_padding_h;
       const float child_cb_h = box->height - box->border_top - box->border_bottom;
-      for (dom::Element* child : absolute_children) {
-        box->positioned_children.push_back(
-            BuildAbsolute(*child, 0, 0, avail_width, child_cb_h, kNoFloats));
+      for (const AbsoluteChild& child : absolute_children) {
+        box->positioned_children.push_back(BuildAbsolute(*child.element,
+                                                         0,
+                                                         0,
+                                                         avail_width,
+                                                         child_cb_h,
+                                                         child.static_x,
+                                                         child.static_y,
+                                                         kNoFloats));
       }
       return box;
     }
@@ -1431,7 +1456,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
 
       const float avail_width = box->width - box->border_left - box->border_right -
                                 box->padding_left - box->padding_right;
-      std::vector<dom::Element*> absolute_children;
+      std::vector<AbsoluteChild> absolute_children;
       float content_height = LayoutBlockContent(*box,
                                                 element,
                                                 avail_width,
@@ -1642,7 +1667,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
                              float cb_w,
                              float cb_h,
                              const std::vector<const LayoutBox*>& parent_floats,
-                             std::vector<dom::Element*>& absolute_children,
+                             std::vector<AbsoluteChild>& absolute_children,
                              float percent_base_h = 0)
     {
       // A flex container's children are flex items, not normal-flow content.
@@ -1684,8 +1709,15 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         }
         if (child_style.position == style::Position::kAbsolute ||
             child_style.position == style::Position::kFixed) {
-          // Out of flow: positioned relative to the containing block.
-          absolute_children.push_back(&child_element);
+          // Out of flow: positioned relative to the containing block.  Record
+          // the static (hypothetical in-flow) position for the auto insets;
+          // its horizontal part is final now, the vertical part is filled in
+          // below once the preceding flow content has been laid out.
+          AbsoluteChild absolute;
+          absolute.element = &child_element;
+          absolute.static_x = box.content_x() - cb_x;
+          absolute.preceding_blocks = block_children.size();
+          absolute_children.push_back(absolute);
           continue;
         }
         if (child_style.floating != style::Float::kNone &&
@@ -1742,7 +1774,21 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
                   lines_height);
       // Block-level children come after the inline content.
       cursor_y += lines_height;
-      for (const BlockChild& bc : block_children) {
+      // Absolute children take their static vertical position from the flow
+      // cursor at their document position: after the block-level siblings
+      // that precede them.  Fill those in as the flow advances (the value is
+      // only known once those siblings have been laid out).
+      std::size_t next_absolute = 0;
+      const auto flush_absolute_static_y = [&](std::size_t preceding_blocks) {
+        while (next_absolute < absolute_children.size() &&
+               absolute_children[next_absolute].preceding_blocks <= preceding_blocks) {
+          absolute_children[next_absolute].static_y = box.content_y() + cursor_y - cb_y;
+          ++next_absolute;
+        }
+      };
+      for (std::size_t block_index = 0; block_index < block_children.size(); ++block_index) {
+        flush_absolute_static_y(block_index);
+        const BlockChild& bc = block_children[block_index];
         std::vector<const LayoutBox*> cur = parent_floats;
         for (const auto& f : box.floats) {
           cur.push_back(f.get());
@@ -1799,6 +1845,9 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         cursor_y += child_box->margin_top + child_box->height + child_box->margin_bottom;
         box.children.push_back(std::move(child_box));
       }
+      // Absolute children placed after every in-flow block use the final
+      // cursor (after all preceding content).
+      flush_absolute_static_y(block_children.size());
       // Floats expand the containing block: its height reaches at least the
       // bottom of every float it holds (the float is out of flow, so its
       // height is not otherwise counted here).
@@ -1976,7 +2025,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         }
       }
 
-      std::vector<dom::Element*> absolute_children;
+      std::vector<AbsoluteChild> absolute_children;
       float content_height = LayoutBlockContent(*box,
                                                 element,
                                                 avail_width,
@@ -2024,9 +2073,15 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       const float child_cb_h = box->style.position != style::Position::kStatic
                                    ? box->height - box->border_top - box->border_bottom
                                    : cb_h;
-      for (dom::Element* child : absolute_children) {
-        box->positioned_children.push_back(
-            BuildAbsolute(*child, child_cb_x, child_cb_y, child_cb_w, child_cb_h, kNoFloats));
+      for (const AbsoluteChild& child : absolute_children) {
+        box->positioned_children.push_back(BuildAbsolute(*child.element,
+                                                         child_cb_x,
+                                                         child_cb_y,
+                                                         child_cb_w,
+                                                         child_cb_h,
+                                                         child.static_x,
+                                                         child.static_y,
+                                                         kNoFloats));
       }
       return box;
     }
@@ -2097,7 +2152,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
 
       const float avail = box->width - box->border_left - box->border_right - box->padding_left -
                           box->padding_right;
-      std::vector<dom::Element*> absolute_children;
+      std::vector<AbsoluteChild> absolute_children;
       float content_height = LayoutBlockContent(
           *box, element, avail, cb_x, cb_y, cb_w, cb_h, kNoFloats, absolute_children);
       const float border_padding_h =
@@ -2136,9 +2191,15 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       }
       box->height = content_height + border_padding_h;
       const float child_cb_h = box->height - box->border_top - box->border_bottom;
-      for (dom::Element* child : absolute_children) {
-        box->positioned_children.push_back(
-            BuildAbsolute(*child, cb_x, cb_y, cb_w, child_cb_h, kNoFloats));
+      for (const AbsoluteChild& child : absolute_children) {
+        box->positioned_children.push_back(BuildAbsolute(*child.element,
+                                                         cb_x,
+                                                         cb_y,
+                                                         cb_w,
+                                                         child_cb_h,
+                                                         child.static_x,
+                                                         child.static_y,
+                                                         kNoFloats));
       }
       return box;
     }
@@ -2255,7 +2316,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
                           float cb_y,
                           float cb_w,
                           float cb_h,
-                          std::vector<dom::Element*>& absolute_children,
+                          std::vector<AbsoluteChild>& absolute_children,
                           std::vector<FlexItemData>& items)
     {
       for (dom::Node* child : element.ChildNodes()) {
@@ -2300,7 +2361,9 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
           continue;
         }
         if (s.position == style::Position::kAbsolute || s.position == style::Position::kFixed) {
-          absolute_children.push_back(&child_el);
+          AbsoluteChild absolute;
+          absolute.element = &child_el;
+          absolute_children.push_back(absolute);
           continue;
         }
         FlexItemData item;
@@ -2521,7 +2584,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
                             float cb_y,
                             float cb_w,
                             float cb_h,
-                            std::vector<dom::Element*>& absolute_children)
+                            std::vector<AbsoluteChild>& absolute_children)
     {
       const style::ComputedStyle& cs = box.style;
       const bool row = cs.flex_direction == style::FlexDirection::kRow ||
@@ -2867,7 +2930,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
                             float cb_y,
                             float cb_w,
                             float cb_h,
-                            std::vector<dom::Element*>& absolute_children)
+                            std::vector<AbsoluteChild>& absolute_children)
     {
       const style::ComputedStyle& cs = box.style;
       const float column_gap = cs.column_gap;
@@ -3018,7 +3081,9 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
           continue;
         }
         if (s.position == style::Position::kAbsolute || s.position == style::Position::kFixed) {
-          absolute_children.push_back(el);
+          AbsoluteChild absolute;
+          absolute.element = el;
+          absolute_children.push_back(absolute);
           continue;
         }
         GridItem item;
@@ -3507,6 +3572,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
                                              float cb_y,
                                              float cb_w,
                                              float cb_h,
+                                             float static_x,
+                                             float static_y,
                                              const std::vector<const LayoutBox*>& parent_floats)
     {
       auto box = std::make_unique<LayoutBox>();
@@ -3565,7 +3632,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
 
       const float border_padding_h =
           box->border_top + box->border_bottom + box->padding_top + box->padding_bottom;
-      std::vector<dom::Element*> absolute_children;
+      std::vector<AbsoluteChild> absolute_children;
       float content_height = 0;
       if (element.tag_name() == "img" || element.tag_name() == "video" ||
           element.tag_name() == "canvas") {
@@ -3596,24 +3663,37 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
 
       // Absolutely positioned descendants use this box's padding box (local).
       const float child_cb_h = box->height - box->border_top - box->border_bottom;
-      for (dom::Element* child : absolute_children) {
-        box->positioned_children.push_back(BuildAbsolute(
-            *child, box->border_left, box->border_top, avail_width, child_cb_h, parent_floats));
+      for (const AbsoluteChild& child : absolute_children) {
+        box->positioned_children.push_back(BuildAbsolute(*child.element,
+                                                         box->border_left,
+                                                         box->border_top,
+                                                         avail_width,
+                                                         child_cb_h,
+                                                         child.static_x,
+                                                         child.static_y,
+                                                         parent_floats));
       }
 
       // Insets position the margin edge (CSS2.2 §10.3.7 / §10.6.4); the
-      // border-box origin is then inset by the used margin.
+      // border-box origin is then inset by the used margin.  With both insets
+      // auto the box stays at its static position instead of the containing
+      // block origin; fixed boxes remain pinned to the containing block.
+      const bool fixed = box->style.position == style::Position::kFixed;
       float x = cb_x + box->margin_left;
       if (!box->style.left_auto) {
         x = cb_x + left_inset + box->margin_left;
       } else if (!box->style.right_auto) {
         x = cb_x + cb_w - right_inset - box->margin_right - box->width;
+      } else if (!fixed) {
+        x = cb_x + static_x + box->margin_left;
       }
       float y = cb_y + box->margin_top;
       if (!box->style.top_auto) {
         y = cb_y + top_inset + box->margin_top;
       } else if (!box->style.bottom_auto) {
         y = cb_y + cb_h - bottom_inset - box->margin_bottom - box->height;
+      } else if (!fixed) {
+        y = cb_y + static_y + box->margin_top;
       }
       TranslateBox(*box, x, y); // content was laid out at the local (0,0)
       return box;
@@ -3633,14 +3713,14 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
                    box->padding_right;
       const float avail_width = box->width - box->border_left - box->border_right -
                                 box->padding_left - box->padding_right;
-      std::vector<dom::Element*> absolute_children;
+      std::vector<AbsoluteChild> absolute_children;
       const float content_height = LayoutBlockContent(
           *box, element, avail_width, cb_x, cb_y, cb_w, cb_h, kNoFloats, absolute_children);
       box->height = content_height + box->border_top + box->border_bottom + box->padding_top +
                     box->padding_bottom;
-      for (dom::Element* child : absolute_children) {
-        box->positioned_children.push_back(
-            BuildAbsolute(*child, cb_x, cb_y, cb_w, cb_h, kNoFloats));
+      for (const AbsoluteChild& child : absolute_children) {
+        box->positioned_children.push_back(BuildAbsolute(
+            *child.element, cb_x, cb_y, cb_w, cb_h, child.static_x, child.static_y, kNoFloats));
       }
       return box;
     }
@@ -3917,12 +3997,12 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         const float caption_avail = caption_box->width - caption_box->border_left -
                                     caption_box->border_right - caption_box->padding_left -
                                     caption_box->padding_right;
-        std::vector<dom::Element*> caption_absolute;
+        std::vector<AbsoluteChild> caption_absolute;
         caption_height = LayoutBlockContent(*caption_box,
                                             child_el,
                                             caption_avail,
-                                            cb_x,
-                                            cb_y,
+                                            table_x,
+                                            table_y,
                                             cb_w,
                                             cb_h,
                                             kNoFloats,
@@ -3937,9 +4017,15 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         TranslateBox(*caption_box,
                      table_x - caption_box->border_left - caption_box->padding_left,
                      table_y - caption_box->border_top - caption_box->padding_top);
-        for (dom::Element* abs_child : caption_absolute) {
-          caption_box->positioned_children.push_back(
-              BuildAbsolute(*abs_child, table_x, table_y, cb_w, cb_h, kNoFloats));
+        for (const AbsoluteChild& abs_child : caption_absolute) {
+          caption_box->positioned_children.push_back(BuildAbsolute(*abs_child.element,
+                                                                   table_x,
+                                                                   table_y,
+                                                                   cb_w,
+                                                                   cb_h,
+                                                                   abs_child.static_x,
+                                                                   abs_child.static_y,
+                                                                   kNoFloats));
         }
         break; // only the first caption participates in the table model
       }

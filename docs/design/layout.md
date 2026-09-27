@@ -32,8 +32,11 @@ DOM 与布局树分离：布局树持有几何信息（盒模型、行盒、文�
 - `position: relative` 用 left/top 偏移；absolute 从正常流移除，相对最近
   positioning 祖先的 padding box 定位（top/left/right/bottom，含百分比相对
   包含块、margin 加在 inset 之后、bottom/right 反向偏移），宽度按 CSS2.2
-  §10.3.7（shrink-to-fit 或 left+right 约束方程）。replaced `<img>` 用 CSS
-  尺寸否则 HTML width/height 属性。fixed 暂按 absolute 处理。
+  §10.3.7（shrink-to-fit 或 left+right 约束方程）。当 left/right 或 top/bottom
+  两边都是 auto 时，对应轴使用**静态位置**（CSS2.2 §10.3.7/§10.6.4 的
+  hypothetical in-flow 位置）：行内内容之后的行高、或前置块级兄弟的累计
+  高度，而不是包含块原点。replaced `<img>` 用 CSS 尺寸否则 HTML width/height
+  属性。fixed 暂按 absolute 处理（fixed 的 auto inset 不使用静态位置）。
 - 表格（`display: table`）走独立算法：先收集行/单元格（展平 thead/tbody/tfoot、
   支持匿名直接 `<tr>`），用 colspan/rowspan 建占用网格；列宽由显式单元格宽固定、
   auto 列按 max-content 测量分配剩余宽度；行高由单元格内容高决定；单元格先按

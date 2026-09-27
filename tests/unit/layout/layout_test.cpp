@@ -2530,5 +2530,55 @@ TEST(LayoutTest, RelativeInlineBlockIsAtomicAndHoldsAbsoluteChildren)
   EXPECT_EQ(text.find("ITEM"), std::string::npos) << "leaked text: " << text;
 }
 
+// Regression: an absolutely positioned box whose insets are auto stays at its
+// static position (CSS2.2 §10.3.7 / §10.6.4) instead of collapsing onto the
+// containing block's origin.  Without this a CSS dropdown menu that has no
+// `top` (`position:absolute; right:0`) is painted on top of the navigation bar
+// instead of dropping below its trigger button (kaom.net).
+TEST(LayoutTest, AbsoluteAutoInsetUsesStaticPositionAfterPrecedingBlocks)
+{
+  Page page = Build("<body style='margin:0'><div id='host' style='position:relative'>"
+                    "<div id='pre' style='height:30px'></div>"
+                    "<div id='menu' style='position:absolute;left:0;width:50px;height:20px'>M</div>"
+                    "<div id='after' style='height:10px'></div>"
+                    "</div></body>");
+  const LayoutBox* host = FindBox(*page.root, "#host", *page.doc);
+  ASSERT_NE(host, nullptr);
+  ASSERT_EQ(host->positioned_children.size(), 1u);
+  const LayoutBox* menu = host->positioned_children[0].get();
+  // The hypothetical in-flow position is below the preceding 30px block.
+  EXPECT_FLOAT_EQ(menu->y, host->content_y() + 30.0f);
+  // A specified left inset still wins over the static position.
+  EXPECT_FLOAT_EQ(menu->x, host->content_x());
+}
+
+// Regression: the dropdown that triggers on hover over an inline-block
+// navigation button.  The menu is a block-level absolute box after the button
+// line, so its static top is the height of the trigger line -- not 0, which
+// would overlap the trigger (kaom.net's 漢語上古音 menu).
+TEST(LayoutTest, AbsoluteAutoInsetDropsBelowInlineTrigger)
+{
+  Page page = Build("<body style='margin:0'><div id='host' style='position:relative;"
+                    "display:inline-block'>"
+                    "<span id='trigger' style='display:inline-block;width:80px;height:40px'>"
+                    "</span>"
+                    "<span id='menu' style='position:absolute;right:0;display:block;"
+                    "width:100px'>ITEM</span>"
+                    "</div></body>");
+  const dom::Element* host_el = dom::QuerySelector(*page.doc, "#host");
+  ASSERT_NE(host_el, nullptr);
+  const InlineBox* holder = nullptr;
+  const LayoutBox* host = FindInlineBlock(*page.root, host_el, holder);
+  ASSERT_NE(host, nullptr);
+  ASSERT_EQ(host->positioned_children.size(), 1u);
+  const LayoutBox* menu = host->positioned_children[0].get();
+  // The host has only the trigger line in flow, so its content height is the
+  // trigger line height; the menu's top margin edge sits exactly there.
+  EXPECT_FLOAT_EQ(menu->y, host->content_y() + host->content_height());
+  EXPECT_GT(menu->y, host->content_y());
+  // right:0 pins the menu's right edge to the host's padding box.
+  EXPECT_FLOAT_EQ(menu->x + menu->width, host->x + host->width - host->border_right);
+}
+
 } // namespace
 } // namespace neko::layout
