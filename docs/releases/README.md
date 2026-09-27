@@ -24,6 +24,8 @@ prepare   解析版本、校验「标签 ↔ CMakeLists 版本」一致
 build × 6 Release + LTO、跑完整 ctest、校验产物架构、零安装打包（ADR 0019）
 + 产物冒烟测试
     ↓
+test-windows-arm64   在原生 ARM64 runner 上运行 windows-arm64 的 ctest
+    ↓
 release   合并产物、生成 SHA256SUMS、创建（或更新）GitHub Release
 ```
 
@@ -41,12 +43,14 @@ release   合并产物、生成 SHA256SUMS、创建（或更新）GitHub Release
 | Linux | x86_64 | `ubuntu-26.04` | 含 Qt6 GUI |
 | Linux | arm64 | `ubuntu-26.04-arm` | 含 Qt6 GUI |
 | Windows | x86_64 | `windows-2025` | 含 Qt6 GUI（自带 Qt 运行库） |
-| Windows | arm64 | `windows-2025`（x64 宿主交叉编译） | 含 Qt6 GUI（自带 Qt 运行库） |
+| Windows | arm64 | 构建 `windows-2025`（x64 宿主交叉编译），测试 `windows-11-arm` | 含 Qt6 GUI（自带 Qt 运行库） |
 | macOS | x86_64 | `macos-26-intel` | 含 Qt6 GUI |
 | macOS | arm64 | `macos-26` | 含 Qt6 GUI |
 
-Windows 全部使用 x64 runner：x86_64 为原生构建，ARM64 用 MSVC 交叉编译到
-ARM64（Qt 也用官方 ARM64 交叉编译包，宿主工具来自同版本 x64 包）。
+Windows 构建全部使用 x64 runner：x86_64 为原生构建，ARM64 用 MSVC 交叉编译到
+ARM64（Qt 也用官方 ARM64 交叉编译包，宿主工具来自同版本 x64 包）；ARM64 的
+测试在原生 ARM64 runner（`windows-11-arm`）上运行——构建任务把自包含测试载荷
+打成 artifact，测试任务按相同工作区布局还原后跑 ctest。
 Linux/macOS 使用 runner 原生架构与系统包管理器（apt / Homebrew）。
 打包前会校验产物架构（Windows 解析 PE Machine，Linux/macOS 用 `file`），
 架构与矩阵不符即失败——避免在交叉编译配置下悄悄产出 x64 产物。
@@ -85,7 +89,8 @@ Windows 链接方式（见 [ADR 0019](../architecture/adr/0019-release-runtime-p
 - CMake preset `release`：`CMAKE_BUILD_TYPE=Release` + `NEKO_ENABLE_LTO=ON`
 - `NEKO_WARNINGS_AS_ERRORS=ON`（与 CI 一致，见 AGENTS.md §13）
 - 每个平台在打包前运行完整 `ctest`；测试不通过则不会产出 Release
-  （例外：Windows ARM64 为交叉编译产物，无法在 x64 runner 上执行，见「已知限制」）
+  （Windows ARM64 的测试由 `test-windows-arm64` 任务在原生 ARM64 runner 上
+  运行，见「构建矩阵」）
 - 打包后通过零安装校验（Windows 导入表检查；Linux/macOS 依赖闭包校验）
   与产物冒烟测试
 
@@ -127,9 +132,13 @@ Release 页面同时附带 `SHA256SUMS`（`sha256sum --check SHA256SUMS` 校验�
 
 ### 已知限制
 
-- **Windows ARM64 未运行测试**：产物由 x64 宿主交叉编译，无法在 x64 runner 上执行；
-  同一源码的测试完整运行于 `windows-x86_64` 任务。ARM64 的 Qt 运行库按固定清单
-  手工部署（Qt 交叉编译包不含 windeployqt）：3 个 Qt DLL + 平台/样式/图像格式插件。
+- **Windows ARM64 测试在独立 runner 上运行**：构建仍是 `windows-2025`（x64 宿主
+  交叉编译），测试载荷上传后在 `windows-11-arm`（原生 ARM64）上运行 ctest；
+  两个 runner 的工作区路径必须一致（GitHub Windows runner 固定为
+  `D:\a\<repo>\<repo>`），ctest 生成文件里的绝对路径才成立（载荷与还原细节见
+  `scripts/release/stage-tests-windows-arm64.ps1` / `test-windows-arm64.ps1`）。
+  ARM64 的 Qt 运行库按固定清单手工部署（Qt 交叉编译包不含 windeployqt）：
+  3 个 Qt DLL + 平台/样式/图像格式插件。
 - **Linux glibc 基线**：产物在 Ubuntu 24.04 上构建，需要目标机的 glibc 不低于
   构建环境；更旧的发行版不受支持（glibc 与显卡驱动始终来自目标机，见 ADR 0019）。
 - **捆绑的 FFmpeg 来自发行版/Homebrew 构建**：其中可能包含发行版启用的 GPL
