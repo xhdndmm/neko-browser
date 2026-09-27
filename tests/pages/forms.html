@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<!--
+  forms.html —— 表单控件渲染回归基线页
+
+  给谁看
+    引擎渲染管线的维护者与回归对比工具。本页是 WHATWG HTML Living Standard
+    第 15 章 Rendering（https://html.spec.whatwg.org/multipage/rendering.html）
+    「§15.5 Widgets」各控件类别的固定输入。它不是交互测试（没有脚本），
+    是给「布局 → 绘制 → 光栅化」这条链路的视觉基线。
+
+  怎么用它判断渲染对错
+    1. 用真实浏览器（Chrome/Firefox）与 neko-browser 各截一张全页图对照。
+    2. 每个控件上方/旁边有一条 HTML 注释，写明**期望视觉形态**与**规范条文号**。
+       对照失败时先读那条注释：注释里的期望与规范条文一致 ⇒ 引擎错了；
+       注释本身写错 ⇒ 先修注释再谈渲染。
+    3. 页面刻意不依赖外部资源、不跑脚本、可离线 file:// 打开，因此两张图
+       应当只在控件外观上不同，不会因网络/时序产生差异。
+
+  Wave 1（本次）结束时的预期差异
+    Wave 1 只做「布局层分类 + 几何推导」（`layout::FormControlKind`，见 ADR 0021）
+    与 UA 表声明，**绘制层的控件外观属 Wave 2**。因此 Wave 1 后本页应看到：
+      - 几何是对的：文本类宽度随 size 变化、textarea 随 rows/cols、checkbox/radio
+        是 13x13 的小方块而非 170px 白框。
+      - 但控件「里面」是空的：checkbox 只有方框没有对勾、radio 只有圆框没有圆点、
+        range 只有一条空盒没有轨道/滑块、color 只有空盒没有色块、file 只有空盒没有
+        按钮、select 没有下拉箭头、details/summary 没有 ▸ 三角。
+      - 仍会与真实浏览器不同的其它项：textarea 的换行/空白被塌缩（white-space:
+        pre-wrap 未实现）、按钮文本仅水平居中不垂直居中。
+    这些均已逐条记入 docs/compatibility/compatibility-matrix.md 的「表单控件」行。
+
+  注意（不要「修好」这一条）：`<meta charset>` 必须留在本文件最前面。WHATWG
+  Encoding 规定编码预扫描只看前 1024 字节（引擎已按此实现），而下面这段中文
+  说明远超 1024 字节；一旦把 meta 移到它后面，引擎就只能回退到 windows-1252，
+  整页中文变乱码。
+--><html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>表单控件渲染回归基线</title>
+<style>
+  body { font-family: sans-serif; margin: 24px; color: #222; }
+  h1 { font-size: 20px; }
+  h2 { font-size: 16px; margin: 28px 0 8px; border-bottom: 1px solid #ccc;
+       padding-bottom: 4px; }
+  .row { margin: 8px 0; }
+  .note { color: #666; font-size: 12px; margin: 2px 0; }
+  fieldset { margin: 8px 0; }
+  /* Author-style override demo (task: demonstrate background / border /
+     border-radius / padding defeating the UA defaults). */
+  .styled {
+    background-color: #eef; border: 2px solid #36c; border-radius: 8px;
+    padding: 6px 12px;
+  }
+</style>
+</head>
+<body>
+  <h1>表单控件渲染回归基线</h1>
+  <p class="note">对照真实浏览器全页截图使用；每个控件旁的注释写明期望与规范条文号。</p>
+
+  <!-- ================= §15.5.6 文本录入控件 ================= -->
+  <h2>1. 文本录入控件（§15.5.6 The input element as a text entry widget）</h2>
+
+  <!-- text: §15.5.6 —— inline-block 单行文本框；缺省宽度 = 20 字符宽（size 缺省 20）。
+       Wave 1 期望：几何 = size 推导（此处 20 字符宽）。 -->
+  <div class="row"><input type="text" value="text"> <span class="note">&lt;input type=text&gt;</span></div>
+
+  <!-- password: §15.5.6 —— 同文本框，但字符被遮蔽（应显示圆点/星号，非明文）。
+       Wave 2 才做遮蔽，Wave 1 会按明文绘制 —— 已知差异。 -->
+  <div class="row"><input type="password" value="secret"> <span class="note">&lt;input type=password&gt;（期望遮蔽）</span></div>
+
+  <!-- search: §15.5.6 —— 单行文本框；appearance 非 textfield 时可有搜索框样式。
+       Wave 1 期望：与 text 同形。 -->
+  <div class="row"><input type="search" value="query"> <span class="note">&lt;input type=search&gt;</span></div>
+
+  <!-- tel: §15.5.6 —— 单行文本框，无特殊外观。 -->
+  <div class="row"><input type="tel" value="+86 10086"> <span class="note">&lt;input type=tel&gt;</span></div>
+
+  <!-- url: §15.5.6 —— 单行文本框，无特殊外观。 -->
+  <div class="row"><input type="url" value="https://example.com"> <span class="note">&lt;input type=url&gt;</span></div>
+
+  <!-- email: §15.5.6 —— 单行文本框，无特殊外观。 -->
+  <div class="row"><input type="email" value="a@b.c"> <span class="note">&lt;input type=email&gt;</span></div>
+
+  <!-- size 对照: §15.5.6 —— size 属性决定字符宽。size=5 必须明显窄于 size=20。
+       Wave 1 回归点：两者宽度不同且都随 size 推导（不再是固定 170px）。 -->
+  <div class="row">
+    <input type="text" size="5" value="5">
+    <input type="text" size="10" value="ten chars">
+    <input type="text" size="20" value="twenty characters">
+    <span class="note">size=5 / 10 / 20 —— 宽度应递增</span>
+  </div>
+
+  <!-- placeholder: 空值时显示 placeholder 文本（灰色）。 -->
+  <div class="row"><input type="text" placeholder="placeholder text"> <span class="note">空值 + placeholder</span></div>
+
+  <!-- ================= §15.5.7 domain-specific ================= -->
+  <h2>2. 域专用控件（§15.5.7 The input element as domain-specific widgets）</h2>
+
+  <!-- number: §15.5.7 —— inline-block，单行高，宽度约够显示最宽可能值。
+       Wave 1 期望：按 kText 推导几何（数字框无旋转器）。 -->
+  <div class="row"><input type="number" value="42"> <span class="note">&lt;input type=number&gt;</span></div>
+
+  <!-- date: §15.5.7 —— inline-block 日期控件（真实浏览器画 yyyy/mm/dd + 日历图标）。
+       Wave 2 才画图标；Wave 1 期望：单行文本框形态。 -->
+  <div class="row"><input type="date" value="2026-09-27"> <span class="note">&lt;input type=date&gt;（期望日期控件）</span></div>
+
+  <!-- time: §15.5.7 —— inline-block 时间控件。Wave 1 期望：单行文本形态。 -->
+  <div class="row"><input type="time" value="13:45"> <span class="note">&lt;input type=time&gt;</span></div>
+
+  <!-- ================= §15.5.10 checkbox / radio ================= -->
+  <h2>3. 复选框与单选按钮（§15.5.10 checkbox and radio button widgets）</h2>
+
+  <!-- checkbox: §15.5.10 —— inline-block 盒，内含单个复选框控件、无标签。
+       Wave 1 期望：13x13 方框（不再是 170px 白框），但**里面没有对勾**（Wave 2）。
+       交互差异：点击本框在本引擎不会切换 checked（见任务/矩阵）。 -->
+  <div class="row">
+    <input type="checkbox" checked> <input type="checkbox"> <input type="checkbox" disabled>
+    <span class="note">checkbox（checked / 未选 / disabled）—— 期望 13x13 方框</span>
+  </div>
+
+  <!-- radio: §15.5.10 —— inline-block 盒，内含单个单选控件、无标签。
+       Wave 1 期望：13x13 圆框（外面是圆不是方）。Wave 2 才画内部圆点。 -->
+  <div class="row">
+    <input type="radio" name="r" checked> <input type="radio" name="r"> <input type="radio" name="r" disabled>
+    <span class="note">radio（同 name 一组）—— 期望 13x13 圆框</span>
+  </div>
+
+  <!-- ================= §15.5.8 range ================= -->
+  <h2>4. 滑块（§15.5.8 The input element as a range control）</h2>
+
+  <!-- range: §15.5.8 —— 非 devolvable widget，inline-block 水平滑块（有轨道 + 滑块）。
+       Wave 1 期望：几何是一个行内盒；**轨道与滑块未绘制**（Wave 2）。 -->
+  <div class="row"><input type="range" min="0" max="100" value="50"> <span class="note">&lt;input type=range&gt;（期望轨道 + 滑块）</span></div>
+
+  <!-- ================= §15.5.9 color ================= -->
+  <h2>5. 颜色选择器（§15.5.9 The input element as a color well）</h2>
+
+  <!-- color: §15.5.9 —— button layout，内含一个块级子盒，其 background-color = value。
+       Wave 1 期望：小方块几何；**色块未绘制**（Wave 2）。 -->
+  <div class="row"><input type="color" value="#ff0000"> <span class="note">&lt;input type=color&gt;（期望红色块）</span></div>
+
+  <!-- ================= §15.5.11 file ================= -->
+  <h2>6. 文件上传（§15.5.11 The input element as a file upload control）</h2>
+
+  <!-- file: §15.5.11 —— inline-block：文件名文本 + 一个 button（::file-selector-button）。
+       Wave 1 期望：行内盒；**没有 "Choose file" 按钮**（Wave 2）。 -->
+  <div class="row"><input type="file"> <span class="note">&lt;input type=file&gt;（期望 "Choose file" 按钮）</span></div>
+
+  <!-- ================= §15.5.3 / §15.5.4 / §15.5.12 按钮 ================= -->
+  <h2>7. 按钮（§15.5.3 button layout、§15.5.4 button、§15.5.12 input as a button）</h2>
+
+  <!-- button: §15.5.4 —— 描绘按钮并使用 button layout（inline-block + 文本居中 +
+       buttonface 背景/outset 边框）。Wave 1 已实现水平居中。 -->
+  <div class="row"><button>Button</button> <button disabled>Disabled</button></div>
+
+  <!-- input submit/reset/button: §15.5.12 —— 描绘按钮、button layout、内容为 value
+       文本（缺省时由 type 派生的本地化文本）。Wave 1 期望：文本水平居中。 -->
+  <div class="row">
+    <input type="submit" value="Submit">
+    <input type="reset" value="Reset">
+    <input type="button" value="Button">
+    <span class="note">input submit / reset / button</span>
+  </div>
+
+  <!-- image: §15.3.10 —— input[type=image] appearance:none + overflow-clip-margin
+       content-box；用作图像提交按钮。无 src 时真实浏览器画一个占位小图。 -->
+  <div class="row"><input type="image" alt="ImageSubmit"> <span class="note">&lt;input type=image&gt;</span></div>
+
+  <!-- ================= §15.3.1 / §15.3.10 hidden ================= -->
+  <h2>8. hidden（§15.3.10 / §15.3.1 Hidden elements）</h2>
+
+  <!-- input[type=hidden]: §15.3.10/§15.3.1 —— display:none !important。不应占据任何空间。 -->
+  <div class="row">
+    前 <input type="hidden" value="hidden"> 后
+    <span class="note">两字之间不应有空隙（hidden input 不产生盒子）</span>
+  </div>
+
+  <!-- [hidden] 呈现提示: §15.3.1 —— [hidden] 属性对**任意元素**应用 display:none。
+       Wave 1 未实现该呈现提示 ⇒ 下面的方块仍会显示（已知差异，见矩阵）。 -->
+  <div class="row" hidden>本行有 hidden 属性，规范要求不可见；本引擎目前仍会显示。</div>
+
+  <!-- ================= §15.5.16 select ================= -->
+  <h2>9. 下拉/列表框（§15.5.16 The select element）</h2>
+
+  <!-- select（单值, display size 1）: §15.5.16 —— drop-down box，inline-block，
+       宽度 = 各 option 标签宽；含一个 "drop-down button"。Wave 2 才画箭头。 -->
+  <div class="row">
+    <select>
+      <option>one</option>
+      <option>two</option>
+      <option>three</option>
+    </select>
+    <span class="note">单值 select（期望下拉箭头）</span>
+  </div>
+
+  <!-- select[multiple 或 size>1]: §15.5.16 —— list box，inline-block，高 = size 行
+       （size 缺省时 4 行）。Wave 1 只取首个 option 文本 ⇒ 期望差异：会退化成单行。 -->
+  <div class="row">
+    <select multiple size="3">
+      <option>multi A</option>
+      <option>multi B</option>
+      <option>multi C</option>
+    </select>
+    <select size="4">
+      <option>list 1</option>
+      <option>list 2</option>
+      <option>list 3</option>
+      <option>list 4</option>
+    </select>
+    <span class="note">multiple size=3 / size=4（期望列表框）</span>
+  </div>
+
+  <!-- optgroup: §15.5.16 —— optgroup 为选项组提供表头。
+       Wave 1 完全不渲染 optgroup ⇒ 期望差异。 -->
+  <div class="row">
+    <select>
+      <optgroup label="Group A">
+        <option>a1</option>
+        <option>a2</option>
+      </optgroup>
+      <optgroup label="Group B">
+        <option>b1</option>
+      </optgroup>
+    </select>
+    <span class="note">select + optgroup（期望分组表头）</span>
+  </div>
+
+  <!-- ================= §15.5.17 textarea ================= -->
+  <h2>10. textarea（§15.5.17 The textarea element）</h2>
+
+  <!-- textarea: §15.5.17 —— inline-block 多行文本控件，宽 = cols（缺省 20）字符宽、
+       高 = rows（缺省 2）行；white-space: pre-wrap（§15.3.10）保留换行与空白。
+       Wave 1 期望：rows×cols 几何正确；**换行/空白被塌缩**（pre-wrap 未实现，已知差异）。 -->
+  <div class="row">
+    <textarea rows="3" cols="15">line1
+line2   indented
+line3</textarea>
+    <span class="note">rows=3 cols=15 —— 期望 3 行、保留换行与缩进（当前会塌缩）</span>
+  </div>
+
+  <!-- textarea（缺省 rows/cols）: §15.5.17 —— 缺省 20 字符宽、2 行高。 -->
+  <div class="row"><textarea>default size</textarea> <span class="note">缺省 rows/cols</span></div>
+
+  <!-- ================= §15.3.12 fieldset / legend ================= -->
+  <h2>11. fieldset / legend（§15.3.12）</h2>
+
+  <!-- fieldset: §15.3.12 —— display:block + margin-inline:2px + border:groove 2px
+       ThreeDFace + padding + min-inline-size:min-content。
+       legend: padding-inline:2px，嵌在 fieldset 上边框上。
+       Wave 1 才补 fieldset 边框/内边距（此前完全无边框）。 -->
+  <fieldset>
+    <legend>Legend</legend>
+    <div class="row"><input type="text" value="inside fieldset"></div>
+  </fieldset>
+
+  <!-- ================= §15.5.5 details / summary ================= -->
+  <h2>12. details / summary（§15.5.5）</h2>
+
+  <!-- details/summary: §15.5.5 —— summary 为 list-item + list-style:disclosure-closed
+       （闭合时显示 ▸，展开时 disclosure-open 显示 ▾）。
+       已知障碍：本引擎无 :first-of-type / list-style-type:disclosure-* / ::marker，
+       因此**不渲染三角标记**，但应显示 summary 文本。 -->
+  <details>
+    <summary>Summary（应显示 ▸ 三角，当前不显示）</summary>
+    <div class="row">details 内容</div>
+  </details>
+  <details open>
+    <summary>Open summary（应为 ▾）</summary>
+    <div class="row">已展开的内容</div>
+  </details>
+
+  <!-- ================= §15.3.11 hr ================= -->
+  <h2>13. hr（§15.3.11）</h2>
+
+  <!-- hr: §15.3.11 —— color:gray、border-style:inset、border-width:1px、
+       margin-block:0.5em、margin-inline:auto、overflow:hidden。
+       Wave 1 才改成规范形态（此前是满宽黑色实线、无外边距）。 -->
+  <div class="row">hr 之前</div>
+  <hr>
+  <div class="row">hr 之后</div>
+
+  <!-- ================= appearance: none / auto / button ================= -->
+  <h2>14. appearance 三态（§15.5.1 Native appearance、CSS-UI-4 §7.2）</h2>
+
+  <!-- appearance:auto（默认，见 §15.3.10）—— 元素使用原生外观。
+       对照：button 有原生外观；input text 应是文本框。 -->
+  <div class="row">
+    <button style="appearance: auto">appearance: auto（button）</button>
+    <input type="text" value="appearance: auto（input）" style="appearance: auto">
+    <span class="note">auto：button 有原生外观；input 无原生外观（本引擎 auto 仅映射 button）</span>
+  </div>
+
+  <!-- appearance:none —— 元素不使用原生外观，作者样式完全生效（普通 CSS 盒）。 
+       <button> 在 appearance:none 下应失去 buttonface 背景/outset 边框。 -->
+  <div class="row">
+    <button style="appearance: none">appearance: none（button）</button>
+    <button style="appearance: none; background-color: #ffd; border: 1px solid #999; padding: 4px 12px">none + 自定样式</button>
+    <span class="note">none：button 退化为普通盒</span>
+  </div>
+
+  <!-- appearance:button —— 强制任意元素使用 button layout 与按钮外观（§15.5.3）。 -->
+  <div class="row">
+    <span style="appearance: button">appearance: button（span）</span>
+    <div style="appearance: button; width: 140px">appearance: button（div）</div>
+    <span class="note">button：非 button 元素被强制成按钮</span>
+  </div>
+
+  <!-- ================= 作者样式覆盖 UA ================= -->
+  <h2>15. 作者样式覆盖 UA 默认</h2>
+
+  <!-- 作者 background / border / border-radius / padding 必须覆盖 UA 控件的
+       默认外观（background-color、border、border-radius、padding）。
+       Wave 1 期望：这四样都能生效（这是当前已实现的能力，回归保护）。 -->
+  <div class="row">
+    <input type="text" class="styled" value="styled text">
+    <button class="styled">styled button</button>
+    <textarea class="styled" rows="2" cols="12">styled
+textarea</textarea>
+    <span class="note">background / border / border-radius / padding 覆盖</span>
+  </div>
+</body>
+</html>
