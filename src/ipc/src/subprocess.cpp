@@ -61,6 +61,27 @@ std::wstring Utf8ToWide(const std::string& utf8)
   return wide;
 }
 
+// Returns an inheritable duplicate of |h|, or nullptr when |h| is not a
+// usable handle or duplication fails.  The caller closes a non-null result
+// after CreateProcessW so the handle is not inherited by later subprocesses.
+HANDLE DuplicateInheritable(HANDLE h)
+{
+  if (h == nullptr || h == INVALID_HANDLE_VALUE) {
+    return nullptr;
+  }
+  HANDLE duplicate = nullptr;
+  if (!DuplicateHandle(GetCurrentProcess(),
+                       h,
+                       GetCurrentProcess(),
+                       &duplicate,
+                       0,
+                       /*bInheritHandle=*/TRUE,
+                       DUPLICATE_SAME_ACCESS)) {
+    return nullptr;
+  }
+  return duplicate;
+}
+
 #endif // _WIN32
 
 } // namespace
@@ -168,7 +189,16 @@ base::Result<Subprocess> Subprocess::Spawn(const std::vector<std::string>& argv)
   startup.dwFlags = STARTF_USESTDHANDLES;
   startup.hStdInput = child_stdin_read;
   startup.hStdOutput = child_stdout_write;
-  startup.hStdError = child_stdout_write;
+  // The child's diagnostics (NEKO_LOG_*, script console output) must not share
+  // the protocol pipe: a single log line would be read as the next frame
+  // header and rejected as "frame length exceeds the cap".  POSIX children
+  // inherit the parent's stderr; mirror that with an inheritable duplicate of
+  // the parent's standard error handle.  If the duplicate is unavailable the
+  // child keeps the inherited handle value, whose writes simply fail — still
+  // preferable to corrupting the channel.
+  const HANDLE parent_stderr = GetStdHandle(STD_ERROR_HANDLE);
+  HANDLE child_stderr = DuplicateInheritable(parent_stderr);
+  startup.hStdError = child_stderr != nullptr ? child_stderr : parent_stderr;
 
   PROCESS_INFORMATION process{};
   const std::wstring exe = Utf8ToWide(argv[0]);
@@ -185,6 +215,9 @@ base::Result<Subprocess> Subprocess::Spawn(const std::vector<std::string>& argv)
   // The child now owns its copies; close the parent's.
   CloseHandle(child_stdin_read);
   CloseHandle(child_stdout_write);
+  if (child_stderr != nullptr) {
+    CloseHandle(child_stderr);
+  }
   if (!ok) {
     CloseHandle(child_stdin_write);
     CloseHandle(child_stdout_read);

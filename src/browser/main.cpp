@@ -12,6 +12,7 @@
 #include "neko/base/version.h"
 #include "neko/browser/browser_controller.h"
 #include "neko/browser/browser_options.h"
+#include "neko/browser/hyperlink.h"
 #include "neko/browser/page_scripts.h"
 #include "neko/browser/renderer_host.h"
 #include "neko/browser/renderer_protocol.h"
@@ -75,6 +76,53 @@ std::string DefaultProfileDir()
 #endif
 }
 
+neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
+                                    const std::string& target,
+                                    neko::storage::LocalStorage* local_storage,
+                                    neko::storage::IndexedDbStore* indexed_db,
+                                    int depth = 0);
+
+// Loads a bare local path (no scheme) into the page and fetches its
+// subresources against an absolute file:// base so relative URLs resolve.
+neko::base::Result<void> LoadLocalTarget(neko::renderer::Page& page,
+                                         const std::string& target,
+                                         neko::storage::LocalStorage* local_storage,
+                                         neko::storage::IndexedDbStore* indexed_db,
+                                         int depth)
+{
+  const auto r = page.LoadFile(target);
+  if (!r) {
+    return r;
+  }
+  neko::browser::ScriptRequestedNavigation requested;
+  neko::browser::PageScriptServices services;
+  services.local_storage = local_storage;
+  services.indexed_db = indexed_db;
+  services.origin = "null";
+  neko::browser::RunPageScripts(
+      page,
+      "",
+      [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
+      [](std::string_view level, std::string_view text) {
+        std::cout << "[" << level << "] " << text << "\n";
+      },
+      services,
+      &requested);
+  if (!requested.url.empty()) {
+    NEKO_LOG_INFO("script navigated to " + requested.url);
+    return LoadTarget(page, requested.url, local_storage, indexed_db, depth + 1);
+  }
+  // Local page (opened by path without a scheme): fetch its subresources
+  // against an absolute file:// base so relative URLs resolve.
+  neko::base::ThreadPool pool;
+  const std::string base_url =
+      "file://" + std::filesystem::absolute(std::filesystem::path(target)).generic_string();
+  neko::browser::FetchExternalStylesheets(page, base_url, FetchAny, pool);
+  neko::browser::FetchPageImages(page, base_url, FetchAny, pool);
+  neko::browser::FetchPageVideos(page, base_url, FetchAny, pool);
+  return neko::base::Ok();
+}
+
 // Loads a URL (http via the network stack) or a local file into the page.
 // Follows page-script navigation requests (window.location) recursively, up to
 // a depth cap so a redirect loop terminates.  When |local_storage| and
@@ -84,13 +132,23 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
                                     const std::string& target,
                                     neko::storage::LocalStorage* local_storage,
                                     neko::storage::IndexedDbStore* indexed_db,
-                                    int depth = 0)
+                                    int depth)
 {
   constexpr int kMaxNavigationDepth = 20;
   if (depth >= kMaxNavigationDepth) {
     NEKO_LOG_WARNING("navigation chain too deep; stopped at " + target);
     return neko::base::Ok();
   }
+#ifdef _WIN32
+  // Windows drive and UNC paths are also syntactically valid URLs ("D:/dir/
+  // page.html" parses as the one-letter scheme "d"): they are filesystem
+  // references and must reach the local-file loader before the URL parse
+  // (mirrors BrowserController::NavigateToUrl, so the renderer child accepts
+  // the same path forms the browser process does).
+  if (neko::browser::IsWindowsLocalPath(target)) {
+    return LoadLocalTarget(page, target, local_storage, indexed_db, depth);
+  }
+#endif
   const auto parsed = neko::url::Url::Parse(target);
   if (parsed.has_value()) {
     const neko::url::Url& url = parsed.value();
@@ -205,37 +263,8 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
     return neko::base::Err(
         neko::base::Error::NotImplemented("unsupported URL scheme: " + url.scheme()));
   }
-  const auto r = page.LoadFile(target);
-  if (!r) {
-    return r;
-  }
-  neko::browser::ScriptRequestedNavigation requested;
-  neko::browser::PageScriptServices services;
-  services.local_storage = local_storage;
-  services.indexed_db = indexed_db;
-  services.origin = "null";
-  neko::browser::RunPageScripts(
-      page,
-      "",
-      [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
-      [](std::string_view level, std::string_view text) {
-        std::cout << "[" << level << "] " << text << "\n";
-      },
-      services,
-      &requested);
-  if (!requested.url.empty()) {
-    NEKO_LOG_INFO("script navigated to " + requested.url);
-    return LoadTarget(page, requested.url, local_storage, indexed_db, depth + 1);
-  }
-  // Local page (opened by path without a scheme): fetch its subresources
-  // against an absolute file:// base so relative URLs resolve.
-  neko::base::ThreadPool pool;
-  const std::string base_url =
-      "file://" + std::filesystem::absolute(std::filesystem::path(target)).generic_string();
-  neko::browser::FetchExternalStylesheets(page, base_url, FetchAny, pool);
-  neko::browser::FetchPageImages(page, base_url, FetchAny, pool);
-  neko::browser::FetchPageVideos(page, base_url, FetchAny, pool);
-  return neko::base::Ok();
+  // Not a URL at all: a bare local path.
+  return LoadLocalTarget(page, target, local_storage, indexed_db, depth);
 }
 
 // Writes an image::Image as a binary PPM (P6), compositing alpha over white.
@@ -314,6 +343,16 @@ void PrintJsResult(const neko::javascript::ScriptValue& value)
     std::cout << str.value() << "\n";
 }
 
+// Both renderer child modes own stdout for the wire protocol: the parent reads
+// it as a byte stream of frames.  Anything the engine prints to std::cout (the
+// page-script console printer, CLI-style diagnostics) therefore has to go to
+// stderr instead — a single stray line would be parsed as the next frame
+// header and fail as "frame length exceeds the cap".
+void RedirectStdoutToStderr()
+{
+  std::cout.rdbuf(std::cerr.rdbuf());
+}
+
 } // namespace
 
 // Renderer child mode (ADR 0016 M1): the browser process spawns this binary
@@ -323,8 +362,7 @@ void PrintJsResult(const neko::javascript::ScriptValue& value)
 // viewport and replies with the frame + DOM text.
 int RunRendererChild()
 {
-#ifndef _WIN32
-  neko::ipc::Channel channel = neko::ipc::Channel::FromHandles(0, 1);
+  neko::ipc::Channel channel = neko::ipc::Channel::FromStdio();
 
   const auto request_frame = channel.Receive();
   if (!request_frame.has_value()) {
@@ -369,10 +407,6 @@ int RunRendererChild()
     return 1;
   }
   return 0;
-#else
-  std::cerr << "renderer child: Windows stdio pipe mode is not implemented\n";
-  return 1;
-#endif
 }
 
 int main(int argc, char** argv)
@@ -400,6 +434,13 @@ int main(int argc, char** argv)
 
   neko::base::Logger::Instance().SetLevel(parsed.options.log_level);
   NEKO_LOG_INFO("neko-browser " + std::string(neko::base::GetVersionString()));
+
+  // stdout belongs to the wire protocol in both child modes; move any
+  // std::cout writer (the page-script console printer) to stderr before the
+  // child serves its first request.
+  if (parsed.options.renderer_child || parsed.options.renderer_session) {
+    RedirectStdoutToStderr();
+  }
 
   // Renderer child mode: serve one load request on stdin/stdout and exit
   // (spawned by browser::RendererHost; ADR 0016 M1).

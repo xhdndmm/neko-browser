@@ -20,11 +20,19 @@
 # On Debian/Ubuntu the development packages are:
 #   libavformat-dev libavcodec-dev libavutil-dev libswscale-dev
 #
-# Known limitation: the search assumes a shared/import-library FFmpeg, i.e.
-# FFMPEG_LIBRARIES alone is enough to link.  A static vcpkg triplet
-# (*-windows-static) additionally needs FFmpeg's own system dependencies
-# (ws2_32, secur32, bcrypt, crypt32, ...); add them when such a build is
-# needed.  CI and the documented builds use the dynamic triplets.
+# Optional override:
+#   FFMPEG_ROOT - install prefix to search first (the usual <Package>_ROOT
+#   convention).  The Windows release build uses it: every other dependency
+#   comes from a static vcpkg triplet, while FFmpeg itself stays dynamically
+#   linked (LGPL relink obligation, ADR 0014) and is installed into a second,
+#   dynamic triplet that is not on CMAKE_PREFIX_PATH.
+#
+# The search assumes a shared or import-library FFmpeg, i.e. FFMPEG_LIBRARIES
+# alone is enough to link.  That is deliberate: FFmpeg is kept dynamically
+# linked on every platform and the release pipeline bundles the runtime
+# libraries (ADR 0019).  A static FFmpeg would additionally need its own
+# system dependencies (ws2_32, secur32, bcrypt, crypt32, ... on Windows) and
+# LGPL relink materials; add both when such a build is ever needed.
 # =============================================================================
 
 find_package(PkgConfig QUIET)
@@ -37,15 +45,27 @@ if(PkgConfig_FOUND)
   )
 endif()
 
+# Empty unless the caller points FFMPEG_ROOT at an install prefix.
+set(_ffmpeg_root_hints)
+if(FFMPEG_ROOT)
+  list(APPEND _ffmpeg_root_hints "${FFMPEG_ROOT}")
+endif()
+
 if(NOT TARGET PkgConfig::FFMPEG)
   find_path(FFMPEG_INCLUDE_DIR
     NAMES libavformat/avformat.h libavcodec/avcodec.h
+    HINTS ${_ffmpeg_root_hints}
+    PATH_SUFFIXES include
     DOC "Path to the FFmpeg include directory"
   )
-  find_library(FFMPEG_AVFORMAT_LIBRARY NAMES avformat libavformat DOC "libavformat")
-  find_library(FFMPEG_AVCODEC_LIBRARY NAMES avcodec libavcodec DOC "libavcodec")
-  find_library(FFMPEG_AVUTIL_LIBRARY NAMES avutil libavutil DOC "libavutil")
-  find_library(FFMPEG_SWSCALE_LIBRARY NAMES swscale libswscale DOC "libswscale")
+  find_library(FFMPEG_AVFORMAT_LIBRARY NAMES avformat libavformat
+    HINTS ${_ffmpeg_root_hints} PATH_SUFFIXES lib DOC "libavformat")
+  find_library(FFMPEG_AVCODEC_LIBRARY NAMES avcodec libavcodec
+    HINTS ${_ffmpeg_root_hints} PATH_SUFFIXES lib DOC "libavcodec")
+  find_library(FFMPEG_AVUTIL_LIBRARY NAMES avutil libavutil
+    HINTS ${_ffmpeg_root_hints} PATH_SUFFIXES lib DOC "libavutil")
+  find_library(FFMPEG_SWSCALE_LIBRARY NAMES swscale libswscale
+    HINTS ${_ffmpeg_root_hints} PATH_SUFFIXES lib DOC "libswscale")
   mark_as_advanced(
     FFMPEG_INCLUDE_DIR
     FFMPEG_AVFORMAT_LIBRARY

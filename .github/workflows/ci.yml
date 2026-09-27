@@ -1,5 +1,9 @@
 name: CI
 
+# 依赖安装 / 环境准备 / 校验逻辑都在 scripts/ci/（Windows 为 .ps1，Linux/macOS
+# 为 .sh）；workflow 只负责矩阵与编排，无控制流的单命令步骤（cmake --build /
+# ctest 等）保留为内联 run。约定见 docs/development/ci-scripts.md。
+
 permissions:
   contents: read
 
@@ -25,77 +29,59 @@ jobs:
       matrix:
         include:
           - name: ubuntu-gcc-debug
-            os: ubuntu-latest
+            os: ubuntu-26.04
             preset: debug
           - name: ubuntu-gcc-release
-            os: ubuntu-latest
+            os: ubuntu-26.04
             preset: release
           - name: ubuntu-clang-debug
-            os: ubuntu-latest
+            os: ubuntu-26.04
             preset: debug
             cc: clang
             cxx: clang++
           - name: windows-msvc-debug
-            os: windows-latest
+            os: windows-2025
             preset: debug
             # Windows 上通过 vcpkg 提供 zlib/libjpeg/libwebp；Qt6 用官方 MSVC 预编译包
             # （见下方 Install Qt 步骤），GUI 与 CLI 一起构建并测试。
           - name: macos-clang-debug
-            os: macos-latest
+            os: macos-26
             preset: debug
     steps:
       - uses: actions/checkout@v7
 
+      # 依赖安装 / 环境准备逻辑都在 scripts/ci/（Windows 用 .ps1，其余用 .sh）；
+      # 完整清单与理由见各脚本头部注释。
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y zlib1g-dev libjpeg-dev libwebp-dev libfreetype-dev libssl-dev qt6-base-dev libavcodec-dev libavformat-dev libavutil-dev libavdevice-dev libswscale-dev libavif-dev
+        run: bash scripts/ci/install-deps-linux.sh
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install jpeg webp qt freetype openssl ffmpeg libavif
+        shell: bash
+        run: bash scripts/ci/install-deps-macos.sh
 
-      # vcpkg 无官方 setup action，手动 clone + bootstrap（不依赖第三方 action）。
       - name: Set up vcpkg (Windows)
         if: runner.os == 'Windows'
-        run: |
-          git clone https://github.com/microsoft/vcpkg.git "$env:RUNNER_TEMP\vcpkg"
-          & "$env:RUNNER_TEMP\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
-          "VCPKG_ROOT=$env:RUNNER_TEMP\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "$env:RUNNER_TEMP\vcpkg" | Out-File -FilePath $env:GITHUB_PATH -Append
+        shell: pwsh
+        run: ./scripts/ci/setup-vcpkg-windows.ps1
 
       - name: Install vcpkg dependencies (Windows)
         if: runner.os == 'Windows'
-        run: vcpkg install zlib libjpeg-turbo libwebp freetype openssl ffmpeg libavif
+        shell: pwsh
+        run: ./scripts/ci/install-vcpkg-deps-windows.ps1
 
-      # Qt6 GUI：直接取 Qt 官方 MSVC 预编译包（aqtinstall 从 download.qt.io 下载，
-      # 无需第三方 action；vcpkg 从源码编译 Qt 对 CI 而言过慢）。qtbase 内含
-      # Widgets / Gui / Core / Test 与 offscreen 平台插件（UI 测试用）。
       - name: Install Qt (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          python -m pip install --disable-pip-version-check --quiet aqtinstall
-          $qtRoot = "$env:GITHUB_WORKSPACE\.qt"
-          python -m aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 --outputdir $qtRoot --archives qtbase
-          $qtPrefix = "$qtRoot\6.8.3\msvc2022_64"
-          if (-not (Test-Path "$qtPrefix\lib\cmake\Qt6\Qt6Config.cmake")) {
-            throw "Qt 安装不完整：$qtPrefix"
-          }
-          # find_package(Qt6) 用 CMAKE_PREFIX_PATH；PATH 供运行测试时加载 Qt6*.dll。
-          "CMAKE_PREFIX_PATH=$qtPrefix" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "$qtPrefix\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+        run: ./scripts/ci/install-qt-windows.ps1
 
       - name: Configure
         shell: bash
         env:
           CC: ${{ matrix.cc }}
           CXX: ${{ matrix.cxx }}
-        run: |
-          EXTRA_ARGS=""
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            EXTRA_ARGS="-DCMAKE_TOOLCHAIN_FILE=${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
-          fi
-          cmake --preset "${{ matrix.preset }}" -DNEKO_WARNINGS_AS_ERRORS=ON ${EXTRA_ARGS}
+        run: bash scripts/ci/configure.sh ${{ matrix.preset }}
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }} --parallel
@@ -116,12 +102,12 @@ jobs:
   # ---------------------------------------------------------------------------
   sanitizers:
     name: sanitizers (ASan+UBSan)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y zlib1g-dev libjpeg-dev libwebp-dev libfreetype-dev libssl-dev qt6-base-dev libavcodec-dev libavformat-dev libavutil-dev libavdevice-dev libswscale-dev libavif-dev
+        run: bash scripts/ci/install-deps-linux.sh
 
       - name: Configure
         run: cmake --preset asan -DNEKO_WARNINGS_AS_ERRORS=ON
@@ -140,12 +126,12 @@ jobs:
   # ---------------------------------------------------------------------------
   coverage:
     name: coverage
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y lcov zlib1g-dev libjpeg-dev libwebp-dev libfreetype-dev libssl-dev qt6-base-dev libavcodec-dev libavformat-dev libavutil-dev libavdevice-dev libswscale-dev libavif-dev
+        run: bash scripts/ci/install-deps-linux.sh lcov
 
       - name: Configure
         run: cmake --preset coverage
@@ -157,13 +143,7 @@ jobs:
         run: ctest --preset coverage
 
       - name: Collect coverage
-        run: |
-          cd build/coverage
-          lcov --capture --directory . --output-file coverage.info --ignore-errors mismatch,negative,gcov,gcov
-          lcov --remove coverage.info --output-file coverage-filtered.info \
-            --ignore-errors unused \
-            '/usr/*' '*/_deps/*' '*/tests/*' '*/build/*'
-          lcov --list coverage-filtered.info
+        run: bash scripts/ci/collect-coverage.sh
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v7
@@ -176,7 +156,7 @@ jobs:
   # ---------------------------------------------------------------------------
   format:
     name: clang-format
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 
@@ -184,6 +164,4 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y clang-format-18
 
       - name: Check formatting
-        run: |
-          sudo ln -sf "$(command -v clang-format-18)" /usr/local/bin/clang-format
-          ./tools/check_format.sh
+        run: bash scripts/ci/check-format.sh

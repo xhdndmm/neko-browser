@@ -60,4 +60,5 @@
 ## 静态检查
 
 - CI 强制 clang-format 检查与 `-Werror`。
-- clang-tidy 实验性运行（见 .github/workflows/static-analysis.yml）。
+- clang-tidy 实验性运行（工作流 `.github/workflows/static-analysis.yml`，
+  脚本 `scripts/static-analysis/run-clang-tidy.sh`）。

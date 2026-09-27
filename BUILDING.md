@@ -87,9 +87,15 @@ CC=clang CXX=clang++ cmake --preset debug
   OpenSSL（HTTPS/TLS）、FFmpeg（视频解码，`neko::media` 使用，必需）、
   Qt6 Widgets（GUI，可选；`NEKO_BUILD_UI=OFF` 可跳过）。
   - Debian/Ubuntu：`sudo apt install zlib1g-dev libjpeg-dev libwebp-dev libavif-dev libfreetype-dev libssl-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev qt6-base-dev`
-  - macOS（Homebrew）：`brew install jpeg webp libavif freetype qt openssl ffmpeg`
-  - Windows（vcpkg）：`vcpkg install zlib libjpeg-turbo libwebp libavif freetype openssl ffmpeg`，配置时传入
+  - macOS（Homebrew）：`brew install jpeg webp libavif freetype qtbase openssl ffmpeg`
+    （Qt 只需 `qtbase`：GUI 只用 Qt6 Widgets。不要装聚合包 `qt`——它会拖入
+    qtsvg/qtvirtualkeyboard/qtwebengine 等模块，macOS 发布打包时 macdeployqt
+    会部署这些模块的插件却解析不到其 framework，见 ADR 0019。）
+  - Windows（vcpkg）：`vcpkg install zlib libjpeg-turbo 'libavif[dav1d]' libwebp freetype openssl ffmpeg`，配置时传入
     `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake`。
+    libavif 自身不含 AV1 解码器且 vcpkg 端口没有默认特性，**必须显式选择
+    `dav1d`（或 `aom`）**，否则 AVIF 解码在运行期失败（见
+    [dependency-policy.md](docs/development/dependency-policy.md)）。
     vcpkg 不提供 pkg-config 程序，`FindFFmpeg.cmake` 会自动回退到头文件/库搜索，
     无需额外配置。
     Qt6 用官方 MSVC 预编译包：
@@ -103,6 +109,45 @@ CC=clang CXX=clang++ cmake --preset debug
 - 离线或受限网络环境：可预先下载 tarball 并设置
   `CMAKE_FETCHCONTENT_SOURCE_DIR_GOOGLETEST` / `CMAKE_FETCHCONTENT_SOURCE_DIR_QUICKJS`
   指向解压目录。
+
+## 发布版（零安装产物）的链接方式
+
+正式发布产物不要求用户安装运行时依赖（见
+[ADR 0019](docs/architecture/adr/0019-release-runtime-packaging.md)）。本地复现该形态：
+
+**Windows（除 Qt / FFmpeg 外全部静态链接）**
+
+```powershell
+vcpkg install zlib libjpeg-turbo libwebp freetype openssl 'libavif[dav1d]' --triplet x64-windows-static-md
+vcpkg install ffmpeg --triplet x64-windows
+cmake --preset release -DNEKO_WARNINGS_AS_ERRORS=ON `
+  -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake `
+  -DVCPKG_TARGET_TRIPLET=x64-windows-static-md `
+  -DFFMPEG_ROOT=<vcpkg>/installed/x64-windows
+```
+
+- `*-windows-static-md` = 静态库 + 动态 CRT（与官方 Qt 的 /MD 一致）；
+- **FFmpeg 保持动态链接**（LGPL 重链接义务，见 ADR 0014）：DLL 需随包分发，
+  `FFMPEG_ROOT` 让 `FindFFmpeg.cmake` 去动态三元组的安装前缀里找头文件与导入库；
+- Qt 仍为官方动态库，发布时用 `windeployqt` 随包（ARM64 交叉包没有部署工具，
+  按固定清单手工部署），MSVC 运行库从 VS 的 `Redist` 目录拷贝。
+
+**Linux / macOS（捆绑非系统运行库）**
+
+```bash
+cmake --workflow --preset release
+bash tools/package_runtime_linux.sh <staging-dir>             # Linux
+bash tools/package_runtime_macos.sh <staging-dir> <version>   # macOS（GUI 打成 .app）
+```
+
+脚本会把可执行文件（macOS 含 GUI 的 .app）所需的非系统库复制进包内，并改写
+rpath / install name；glibc 与系统框架始终来自目标机。本地开发构建
+（`debug` / `release` preset）不经过这些脚本，仍使用系统包。
+
+发布工作流（`.github/workflows/release.yml`）各步骤的脚本在 `scripts/release/`
+（Windows 为 `.ps1`，Linux/macOS 为 `.sh`）；本地想复现某一步时可直接运行对应
+脚本，例如 `bash scripts/release/resolve-version.sh`。整体约定见
+[docs/development/ci-scripts.md](docs/development/ci-scripts.md)。
 
 ## 产物位置
 

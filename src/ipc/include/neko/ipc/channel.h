@@ -64,6 +64,15 @@ public:
 #endif
   static bool HandleValid(Handle h);
   static Channel FromHandles(Handle read_handle, Handle write_handle);
+
+  // Wraps the calling process's standard input and output as a channel.  A
+  // renderer child uses this to speak the protocol over the stdio that
+  // ipc::Subprocess wired to its parent: POSIX fd 0/1, Windows the STD_INPUT
+  // / STD_OUTPUT handles.  Ownership matches FromHandles(): Close() and the
+  // destructor close the handles; a child's stdio is also reclaimed by the
+  // OS at exit.
+  static Channel FromStdio();
+
   Handle read_handle() const
   {
     return read_handle_;

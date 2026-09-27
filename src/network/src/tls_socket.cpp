@@ -4,10 +4,11 @@
 
 #include "neko/network/socket.h"
 
+#include "openssl_error.h"
 #include "socket_platform.h"
+#include "system_trust_store.h"
 
 #include <cstring>
-#include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 #include <string>
@@ -21,20 +22,6 @@ using SslCtxPtr = std::unique_ptr<SSL_CTX, decltype(&SSL_CTX_free)>;
 using SslPtr = std::unique_ptr<SSL, decltype(&SSL_free)>;
 using BioPtr = std::unique_ptr<BIO, decltype(&BIO_free)>;
 using X509Ptr = std::unique_ptr<X509, decltype(&X509_free)>;
-
-// Collects and drains the OpenSSL error queue into a readable string.
-std::string SslErrorString()
-{
-  std::string msg;
-  unsigned long code = 0;
-  while ((code = ERR_get_error()) != 0) {
-    if (!msg.empty()) {
-      msg += "; ";
-    }
-    msg += ERR_error_string(code, nullptr);
-  }
-  return msg.empty() ? "unknown TLS error" : msg;
-}
 
 } // namespace
 
@@ -120,10 +107,16 @@ TlsSocket::Connect(std::string_view host, uint16_t port, const TlsOptions& optio
   }
   // Require TLS >= 1.2 (rejects SSLv3 / TLS 1.0 / TLS 1.1).
   SSL_CTX_set_min_proto_version(ctx.get(), TLS1_2_VERSION);
-  // Verify the peer against the system trust store.
+  // Verify the peer against the trust store of the machine this process runs
+  // on.  SSL_CTX_set_default_verify_paths() must NOT be used here: it resolves
+  // the paths compiled into libcrypto, i.e. the *build* machine's layout for a
+  // packaged build, and reports success even when that finds no anchor at all
+  // (see system_trust_store.h).
   SSL_CTX_set_verify(ctx.get(), SSL_VERIFY_PEER, nullptr);
-  if (SSL_CTX_set_default_verify_paths(ctx.get()) != 1) {
-    return base::Err(base::Error::Network("TLS: no system trust store: " + SslErrorString()));
+  X509_STORE* store = SSL_CTX_get_cert_store(ctx.get());
+  const base::Result<TrustStoreLoad> trust_store = LoadSystemTrustStore(store);
+  if (!trust_store) {
+    return base::Err(trust_store.error());
   }
   if (!options.extra_ca_cert_pem.empty()) {
     BioPtr bio(BIO_new_mem_buf(options.extra_ca_cert_pem.data(),
@@ -138,7 +131,6 @@ TlsSocket::Connect(std::string_view host, uint16_t port, const TlsOptions& optio
           base::Error::Network("TLS: invalid extra CA certificate: " + SslErrorString()));
     }
     X509Ptr cert_owner(cert, X509_free);
-    X509_STORE* store = SSL_CTX_get_cert_store(ctx.get());
     if (store == nullptr || X509_STORE_add_cert(store, cert) != 1) {
       return base::Err(
           base::Error::Network("TLS: cannot add extra CA certificate: " + SslErrorString()));

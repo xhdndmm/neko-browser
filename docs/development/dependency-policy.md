@@ -31,6 +31,7 @@
 | zlib | 系统包 | PNG IDAT / PDF FlateDecode / HTTP gzip-deflate 解压 | find_package | zlib |
 | libjpeg | 系统包 | JPEG 解码（封装在 neko::image 后） | find_package | BSD-like |
 | libwebp | 系统包 | WebP 解码（封装在 neko::image 后） | find_package | BSD-3-Clause |
+| libavif | 系统包 | AVIF 解码（封装在 neko::image 后；**必须带 AV1 解码器**） | find_package | BSD-2-Clause |
 | QuickJS (quickjs-ng) | v0.16.1 | JavaScript runtime（封装在 neko::javascript 后） | FetchContent（固定 SHA256） | MIT |
 | Qt6 Widgets | 系统包 | GUI 基础设施（窗口/事件/控件，见 ADR 0006） | find_package | LGPL |
 | FreeType | 系统包 | 字体光栅化（封装在 neko::graphics 后，见 ADR 0009） | find_package | FTL（双许可选 FTL） |
@@ -42,6 +43,21 @@
 > Google 维护，Linux/Windows/macOS 全平台，安全更新活跃）。封装在
 > `neko::image` 之后，接口与 PNG/JPEG/GIF 解码器一致。
 
+> **libavif 说明**：AVIF 容器解析由 libavif 提供，AV1 位流解码由它链接的
+> 解码器（dav1d / aom）完成。**libavif 自身不带解码器**：发行版包
+> （Debian `libavif-dev`、Homebrew `libavif`）默认启用，但 vcpkg 的
+> `libavif` 端口没有 default-features，必须显式选择，否则解码在运行期返回
+> `AVIF_RESULT_NO_CODEC_AVAILABLE`（历史上表现为不透明的
+> “avif: decode failed”，2026-09 Windows 发布的 `AvifTest` 失败即此原因）：
+>
+> ```powershell
+> vcpkg install 'libavif[dav1d]'   # 或 libavif[aom]
+> ```
+>
+> 解码器缺失是**环境配置**问题，不改动测试期望：`AvifTest` 用真实 AV1
+> 无损夹具覆盖解码，是这类配置错误的守门测试。解码失败信息里带
+> `avifResultToString()` 的结果文本，便于一眼区分“坏文件”与“缺解码器”。
+
 > **FFmpeg 说明**：视频解复用/解码（MP4/WebM、H.264/VP8/VP9 等）自研不现实
 > 且非本项目核心，故封装 FFmpeg（见 ADR 0014）。**LGPL 约束**：仅动态链接
 > 发行版构建（默认配置不含 GPL 组件），禁止链接 `libx264` 等 GPL 编解码器；
@@ -52,6 +68,22 @@
 > 回退到 `find_path`/`find_library`（Windows/vcpkg 没有 pkg-config 程序）。
 > 两条路径都暴露同一个导入目标 `FFmpeg::FFmpeg`（`PkgConfig::FFMPEG` 不再是
 > 公共接口），`src/media/CMakeLists.txt` 只链接前者。
+
+## 发布产物的链接方式（ADR 0019）
+
+发布产物以「下载即用」为目标，链接策略按平台取舍：
+
+- **Windows**：zlib / libjpeg-turbo / libwebp / FreeType / OpenSSL / libavif
+  用 vcpkg 静态三元组（`*-windows-static-md`）静态链接；
+  **FFmpeg 保持动态**（LGPL 重链接义务 + 发行构建的 GPL 组件风险），
+  DLL 与官方动态 Qt（`windeployqt` 部署）、MSVC 运行库随包分发。
+- **Linux / macOS**：第三方库保持动态并**随包捆绑**（改写 rpath /
+  install name）；glibc 与系统框架必须来自目标机（macOS 上无法静态，
+  Linux 上静态 glibc 会破坏 NSS/DNS）。
+- 捆绑的 FFmpeg 运行库来自发行版/Homebrew 构建，可能包含其启用的 GPL
+  组件；后续工作是为发布构建自有 LGPL 运行时。捆绑范围与校验脚本见
+  [ADR 0019](../architecture/adr/0019-release-runtime-packaging.md) 与
+  `tools/package_runtime_{linux,macos}.sh`。
 
 ## 三方头文件与警告
 

@@ -49,3 +49,34 @@ TLS 是联网浏览器的基础能力。依赖政策 §5 明确：**TLS/加密�
 - https://www.openssl.org/docs/man3.0/man3/SSL_connect.html
 - https://www.openssl.org/docs/man3.0/man3/SSL_set1_host.html
 - RFC 8446（TLS 1.3）/ RFC 5246（TLS 1.2）
+
+## 修订 2026-09：信任库取自**运行主机**（rc2 发布故障）
+
+- **症状**：rc2 的 Linux 产物（Ubuntu runner 打包）在用户机（Arch）上访问
+  任何 `https://` 都失败：`TLS handshake / certificate verification failed for
+  <host>: error:0A000086:SSL routines::certificate verify failed`。
+- **根因**：产物捆绑了 runner 的 `libcrypto.so.3`，其编译期
+  `OPENSSLDIR=/usr/lib/ssl`（Debian 系布局）。Arch 上只有 `/etc/ssl/certs`，
+  于是 `SSL_CTX_set_default_verify_paths()` **返回 1（成功）而信任库里有 0 个
+  锚点**（实测：宿主 libcrypto = 121 锚点；捆绑 libcrypto = 0 锚点且错误队列
+  为空），握手必然校验失败。macOS/Windows 同理：Homebrew 的
+  `/opt/homebrew/etc/openssl@3`、vcpkg 前缀在用户机上都不存在。
+- **决策**：新增模块内 `system_trust_store`（`src/network/src/`），在
+  **运行时**按运行主机的布局发现信任库（PEM 包 / hashed 目录 / 平台 store），
+  逐个装进连接的 `X509_STORE`；**不再调用**
+  `SSL_CTX_set_default_verify_paths()`。`SSL_CERT_FILE` / `SSL_CERT_DIR` 按
+  OpenSSL 语义替换平台默认。锚点解析按候选列表记忆化（121 张证书解析约
+  2.6 ms，复用后插入约 0.04 ms/连接），缓存不失效、重启生效——与浏览器对
+  根证书的取舍一致。
+- **备选**：
+  - 启动脚本里设 `SSL_CERT_FILE`：把策略藏进环境变量、Windows 无效、用户
+    自定义环境时行为不可预测。否决。
+  - 随包自带 Mozilla CA 包（Chrome/Firefox 形态）：等于自建根证书计划
+    （更新、审计、合规），留作后续工作。否决（暂）。
+- **后果**：验证始终以**用户机器**的信任库为准；主机一个锚点都没有时明确
+  失败关闭并提示安装 `ca-certificates` 或设置 `SSL_CERT_FILE`，绝不拿空信任库
+  校验。测试：`tests/unit/network/network_test.cpp` 的 `TrustStoreTest.*`
+  （PEM 包逐张装载、hashed 目录需真有条目、宿主信任库必须有锚点、空信任库
+  失败关闭、环境变量信任库真的参与握手）。
+- **已知边界**：macOS 只读 `/etc/ssl/cert.pem`，未接 Keychain；Windows 走
+  `org.openssl.winstore://`（系统 ROOT 库），尚无运行期测试（CI 只编译）。

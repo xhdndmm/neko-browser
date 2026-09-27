@@ -145,6 +145,10 @@ add_executable(neko_network_tests
 )
 target_link_libraries(neko_network_tests PRIVATE neko::network ZLIB::ZLIB
   OpenSSL::SSL OpenSSL::Crypto gtest_main)
+# The trust store discovery is deliberately module-internal, but its behaviour
+# is what keeps https:// working in the packaged builds, so the tests are
+# white-box: they include src/network/src/system_trust_store.h.
+target_include_directories(neko_network_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/network/src)
 apply_compiler_warnings(neko_network_tests)
 gtest_discover_tests(neko_network_tests DISCOVERY_MODE PRE_TEST)
 
@@ -263,6 +267,10 @@ gtest_discover_tests(neko_javascript_tests DISCOVERY_MODE PRE_TEST)
 # -----------------------------------------------------------------------------
 if(NEKO_BUILD_UI)
   find_package(Qt6 REQUIRED COMPONENTS Test)
+  # Qt imported targets are directory-scoped: the ones found here are the ones
+  # this test binary links, so verify them here (see
+  # cmake/CheckLinkableDependencies.cmake).
+  neko_verify_linkable_dependencies(Qt6::Test)
   add_executable(neko_ui_tests
     ui/ui_smoke_test.cpp
   )

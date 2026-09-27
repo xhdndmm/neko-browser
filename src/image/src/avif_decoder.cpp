@@ -12,6 +12,7 @@
 
 #include <avif/avif.h>
 #include <cstdint>
+#include <string>
 #include <string_view>
 
 namespace neko::image {
@@ -59,15 +60,22 @@ base::Result<Image> DecodeAvif(std::string_view data)
   avifResult result = avifDecoderSetIOMemory(
       guard.decoder, reinterpret_cast<const uint8_t*>(data.data()), data.size());
   if (result != AVIF_RESULT_OK) {
-    return base::Err(base::Error::Parse("avif: set IO failed"));
+    return base::Err(
+        base::Error::Parse("avif: set IO failed: " + std::string(avifResultToString(result))));
   }
   result = avifDecoderParse(guard.decoder);
   if (result != AVIF_RESULT_OK) {
-    return base::Err(base::Error::Parse("avif: parse failed"));
+    return base::Err(
+        base::Error::Parse("avif: parse failed: " + std::string(avifResultToString(result))));
   }
   result = avifDecoderNextImage(guard.decoder);
   if (result != AVIF_RESULT_OK) {
-    return base::Err(base::Error::Parse("avif: no decodable frame"));
+    // The result text matters here: "No codec available" means the libavif
+    // this binary linked was built without an AV1 decoder (e.g. a vcpkg
+    // `libavif` install without the dav1d/aom feature) — see
+    // docs/development/dependency-policy.md.
+    return base::Err(
+        base::Error::Parse("avif: decode failed: " + std::string(avifResultToString(result))));
   }
   const avifImage* source = guard.decoder->image;
   if (source == nullptr || source->width <= 0 || source->height <= 0) {
@@ -91,7 +99,8 @@ base::Result<Image> DecodeAvif(std::string_view data)
   rgb.rowBytes = static_cast<uint32_t>(source->width) * 4;
   result = avifImageYUVToRGB(source, &rgb);
   if (result != AVIF_RESULT_OK) {
-    return base::Err(base::Error::Parse("avif: pixel conversion failed"));
+    return base::Err(base::Error::Parse("avif: pixel conversion failed: " +
+                                        std::string(avifResultToString(result))));
   }
   return out;
 }

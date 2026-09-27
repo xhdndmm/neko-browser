@@ -1,5 +1,14 @@
 # neko-browser
 
+<p>
+  <a href="https://github.com/xhdndmm/neko-browser/stargazers"><img src="https://img.shields.io/github/stars/xhdndmm/neko-browser" alt="GitHub Stars"></a>
+  <a href="https://github.com/xhdndmm/neko-browser/issues"><img src="https://img.shields.io/github/issues/xhdndmm/neko-browser" alt="GitHub Issues"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Unlicense-green" alt="Unlicense License"></a>
+  <a href="https://www.isocpp.org/"><img src="https://img.shields.io/badge/C++-20%2B-blue" alt="C++20"></a>
+  <a href="https://github.com/xhdndmm/neko-browser/releases"><img src="https://img.shields.io/github/v/tag/xhdndmm/neko-browser?label=release" alt="Latest Release"></a>
+  <a href="https://github.com/xhdndmm/neko-browser/releases"><img src="https://img.shields.io/github/downloads/xhdndmm/neko-browser/total" alt="Downloads"></a>
+</p>
+
 > **状态：引擎纵向切片 + Qt6 GUI + JavaScript runtime + 渲染器会话（多进程 M2）已达成**
 > 一个从零开始、真正可编译可运行的**跨平台浏览器引擎与浏览器应用**，主要使用现代 C++20 编写。
 
@@ -113,6 +122,10 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
 - 任一编译器：GCC ≥ 12 / Clang ≥ 15 / MSVC ≥ 19.3x（均需 C++20 支持）
 - 构建工具：Ninja 或 Make（自动检测）
 
+> 正式发布产物为**零安装**形态：自带运行库，下载解压即可运行（见
+> [docs/releases/README.md](docs/releases/README.md) 与 ADR 0019）。
+> 下面的系统依赖只在从源码构建时需要。
+
 ### 构建与测试
 
 ```bash
@@ -201,7 +214,8 @@ src/
 tests/
   unit/                 GoogleTest 单元测试（按模块）
 docs/                   架构、设计、开发、测试文档
-tools/                  开发脚本（format / check）
+tools/                  开发者本机脚本（format / check / 运行库打包）
+scripts/                CI / 发布脚本（workflow 调用；见 docs/development/ci-scripts.md）
 .github/workflows/      CI 与发布工作流（tag → 三平台 × 双架构生产版本）
 ```
 

@@ -4,20 +4,27 @@
 #include "neko/network/tls_socket.h"
 #include "neko/url/url.h"
 
+#include "system_trust_store.h"
+
 #include <atomic>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
+#include <memory>
 #include <mutex>
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
+#include <openssl/x509_vfy.h>
 #include <openssl/x509v3.h>
 #include <random>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 #include <zlib.h>
 
 #ifndef _WIN32
@@ -336,10 +343,9 @@ private:
 #endif
 
 // ---------------------------------------------------------------------------
-// Local TLS test server (POSIX only)
+// Test certificates (portable; the TLS server below is POSIX only)
 // ---------------------------------------------------------------------------
 
-#ifndef _WIN32
 // Generates a self-signed certificate for CN=localhost with a SAN, returning
 // its PEM form plus the OpenSSL objects (owned by the caller).
 struct TestCert
@@ -382,6 +388,11 @@ TestCert GenerateLocalhostCert()
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Local TLS test server (POSIX only)
+// ---------------------------------------------------------------------------
+
+#ifndef _WIN32
 // A minimal single-page TLS server (self-signed certificate) for tests.
 class TestTlsServer
 {
@@ -1065,6 +1076,221 @@ TEST(TlsTest, HostnameMismatchIsRejected)
   const auto result = HttpGet(url.value(), 5, {}, options);
   ASSERT_FALSE(result.has_value());
   EXPECT_EQ(result.error().category(), base::ErrorCategory::kNetwork);
+}
+#endif
+
+// ---------------------------------------------------------------------------
+// Host trust store discovery (system_trust_store.h)
+//
+// A packaged build bundles libcrypto from the release runner, so
+// SSL_CTX_set_default_verify_paths() resolves the *runner's* CA paths
+// (/usr/lib/ssl on Ubuntu) and reports success even when they do not exist on
+// the machine actually running the binary (Arch, Fedora, openSUSE, macOS,
+// Windows): every https:// handshake then failed with "certificate verify
+// failed" (2026-09 rc2 Linux release).  These tests pin the mechanism that
+// replaced it.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// A scratch directory below the system temp dir, removed on scope exit.
+class ScratchDir
+{
+public:
+  explicit ScratchDir(const std::string& name)
+  {
+    std::error_code error;
+    dir_ = std::filesystem::temp_directory_path(error) / ("neko-trust-store-" + name);
+    std::filesystem::remove_all(dir_, error);
+    std::filesystem::create_directories(dir_, error);
+  }
+
+  ~ScratchDir()
+  {
+    std::error_code error;
+    std::filesystem::remove_all(dir_, error);
+  }
+
+  ScratchDir(const ScratchDir&) = delete;
+  ScratchDir& operator=(const ScratchDir&) = delete;
+
+  const std::filesystem::path& path() const
+  {
+    return dir_;
+  }
+
+  std::filesystem::path Write(const std::string& name, const std::string& contents) const
+  {
+    const std::filesystem::path file = dir_ / name;
+    std::ofstream out(file, std::ios::binary);
+    out << contents;
+    return file;
+  }
+
+private:
+  std::filesystem::path dir_;
+};
+
+// Owns the OpenSSL objects of a generated test certificate.
+class TestCertOwner
+{
+public:
+  TestCertOwner() : cert_(GenerateLocalhostCert()) {}
+
+  ~TestCertOwner()
+  {
+    X509_free(cert_.cert);
+    EVP_PKEY_free(cert_.key);
+  }
+
+  TestCertOwner(const TestCertOwner&) = delete;
+  TestCertOwner& operator=(const TestCertOwner&) = delete;
+
+  const std::string& pem() const
+  {
+    return cert_.cert_pem;
+  }
+
+private:
+  TestCert cert_;
+};
+
+using StorePtr = std::unique_ptr<X509_STORE, decltype(&X509_STORE_free)>;
+
+} // namespace
+
+TEST(TrustStoreTest, LoadsEveryCertificateOfAPemBundle)
+{
+  ScratchDir scratch("bundle");
+  const TestCertOwner first;
+  const TestCertOwner second;
+  const std::filesystem::path bundle = scratch.Write("ca.pem", first.pem() + second.pem());
+
+  StorePtr store(X509_STORE_new(), X509_STORE_free);
+  ASSERT_NE(store, nullptr);
+  const auto loaded =
+      LoadTrustStoreCandidates(store.get(), {{TrustStoreKind::kPemFile, bundle.string()}});
+  ASSERT_TRUE(loaded.has_value()) << loaded.error().message();
+  EXPECT_EQ(loaded.value().certificates, 2u);
+  EXPECT_FALSE(loaded.value().empty());
+  // The anchors really are in the store the handshake verifies against.
+  ASSERT_NE(X509_STORE_get0_objects(store.get()), nullptr);
+  EXPECT_EQ(sk_X509_OBJECT_num(X509_STORE_get0_objects(store.get())), 2);
+}
+
+TEST(TrustStoreTest, AcceptsOnlyDirectoriesThatHoldHashedCertificates)
+{
+  ScratchDir scratch("directories");
+  const TestCertOwner cert;
+  const std::filesystem::path stale = scratch.path() / "stale";
+  const std::filesystem::path hashed = scratch.path() / "hashed";
+  std::error_code error;
+  std::filesystem::create_directories(stale, error);
+  std::filesystem::create_directories(hashed, error);
+  std::filesystem::copy_file(scratch.Write("ca.pem", cert.pem()), hashed / "9d66eef0.0", error);
+
+  // A directory OpenSSL would happily register (X509_STORE_load_path reports
+  // success for an empty one) must not count as a trust store: verification
+  // would then run with zero anchors again.  A directory given as a PEM file
+  // does not count either.
+  const std::vector<TrustStoreCandidate> candidates = ExistingTrustStoreCandidates({
+      {TrustStoreKind::kHashedDirectory, stale.string()},
+      {TrustStoreKind::kPemFile, scratch.path().string()},
+      {TrustStoreKind::kHashedDirectory, hashed.string()},
+  });
+  ASSERT_EQ(candidates.size(), 1u);
+  EXPECT_EQ(candidates[0].location, hashed.string());
+
+  StorePtr store(X509_STORE_new(), X509_STORE_free);
+  ASSERT_NE(store, nullptr);
+  const auto loaded = LoadTrustStoreCandidates(store.get(), candidates);
+  ASSERT_TRUE(loaded.has_value()) << loaded.error().message();
+  EXPECT_EQ(loaded.value().directories, 1u);
+  EXPECT_EQ(loaded.value().certificates, 0u);
+  EXPECT_FALSE(loaded.value().empty());
+}
+
+TEST(TrustStoreTest, HostTrustStoreProvidesAnchors)
+{
+  StorePtr store(X509_STORE_new(), X509_STORE_free);
+  ASSERT_NE(store, nullptr);
+  const auto loaded = LoadSystemTrustStore(store.get());
+  ASSERT_TRUE(loaded.has_value())
+      << loaded.error().message()
+      << " (on Windows the anchors come from OpenSSL's org.openssl.winstore:// loader)";
+  EXPECT_FALSE(loaded.value().empty());
+#ifndef _WIN32
+  // Every supported POSIX host ships a PEM bundle; the packaged build used to
+  // look for the release runner's (/usr/lib/ssl) instead and found none here.
+  EXPECT_GT(loaded.value().certificates, 0u);
+#endif
+}
+
+TEST(TrustStoreTest, LoadsAreConsistentAndSafeAcrossThreads)
+{
+  // The parsed anchors live in a process-wide cache and the browser fetches
+  // subresources from a thread pool, so concurrent loads are the normal case.
+  constexpr std::size_t kThreads = 8;
+  // Plain chars, not std::vector<bool>: its bit packing would make two threads
+  // writing different elements race on the same byte.
+  std::vector<char> ok(kThreads, 0);
+  std::vector<std::size_t> counts(kThreads, 0);
+  std::vector<std::thread> threads;
+  threads.reserve(kThreads);
+  for (std::size_t i = 0; i < kThreads; ++i) {
+    threads.emplace_back([i, &ok, &counts] {
+      StorePtr store(X509_STORE_new(), X509_STORE_free);
+      const auto loaded = LoadSystemTrustStore(store.get());
+      if (!loaded.has_value()) {
+        return;
+      }
+      ok[i] = 1;
+      counts[i] = loaded.value().certificates + loaded.value().directories + loaded.value().stores;
+    });
+  }
+  for (std::thread& thread : threads) {
+    thread.join();
+  }
+  for (std::size_t i = 0; i < kThreads; ++i) {
+    EXPECT_EQ(ok[i], 1) << "thread " << i << " failed to load the trust store";
+    EXPECT_EQ(counts[i], counts[0]) << "thread " << i << " saw a different trust store";
+  }
+  EXPECT_GT(counts[0], 0u);
+}
+
+#ifndef _WIN32
+TEST(TrustStoreTest, HostWithoutAnyTrustStoreFailsClosedWithAHint)
+{
+  ScopedEnvironmentVariable cert_file("SSL_CERT_FILE", "/nonexistent/neko-ca.pem");
+  ScopedEnvironmentVariable cert_dir("SSL_CERT_DIR", "/nonexistent/neko-certs");
+  StorePtr store(X509_STORE_new(), X509_STORE_free);
+  ASSERT_NE(store, nullptr);
+
+  const auto loaded = LoadSystemTrustStore(store.get());
+  ASSERT_FALSE(loaded.has_value());
+  EXPECT_NE(loaded.error().message().find("SSL_CERT_FILE"), std::string::npos);
+  EXPECT_NE(loaded.error().message().find("/nonexistent/neko-ca.pem"), std::string::npos);
+}
+
+TEST(TrustStoreTest, EnvironmentTrustStoreIsUsedForVerification)
+{
+  // End to end: the only anchor available is the one in the trust store
+  // discovered from the environment (no extra_ca_cert_pem), so a successful
+  // https:// handshake proves the discovered store reaches verification.
+  TestTlsServer server;
+  ASSERT_TRUE(server.IsValid());
+  ScratchDir scratch("environment");
+  const std::filesystem::path bundle = scratch.Write("server-ca.pem", server.cert_pem());
+  ScopedEnvironmentVariable cert_file("SSL_CERT_FILE", bundle.string());
+  ScopedEnvironmentVariable cert_dir("SSL_CERT_DIR", "/nonexistent/neko-certs");
+  ScopedEnvironmentVariable lower_no_proxy("no_proxy", "localhost");
+  ScopedEnvironmentVariable upper_no_proxy("NO_PROXY", "localhost");
+
+  const auto url = url::Url::Parse("https://localhost:" + std::to_string(server.port()) + "/");
+  ASSERT_TRUE(url.has_value());
+  const auto result = HttpGet(url.value());
+  ASSERT_TRUE(result.has_value()) << result.error().message();
+  EXPECT_EQ(result.value().status_code, 200);
 }
 #endif
 

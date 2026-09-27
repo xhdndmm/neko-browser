@@ -52,6 +52,21 @@ CI 会强制：
 - ASan/UBSan（阻塞）
 - clang-tidy（实验性，非阻塞）
 
+## CI / 发布脚本
+
+`.github/workflows/` 只负责触发条件、矩阵与 GitHub 相关步骤；依赖安装、环境
+准备、打包与校验逻辑都在 `scripts/` 下（Linux/macOS 为 `.sh`，Windows 为
+`.ps1`）。改动 workflow 或脚本后，提交前运行：
+
+```bash
+for f in scripts/*/*.sh; do bash -n "$f"; done     # 语法
+shellcheck scripts/*/*.sh                           # 静态检查
+actionlint                                          # workflow YAML
+```
+
+目录说明、参数/环境约定与可本地直接运行的脚本清单见
+[docs/development/ci-scripts.md](docs/development/ci-scripts.md)。
+
 ## 代码规范要点
 
 - 遵循 [coding-style.md](docs/development/coding-style.md)。

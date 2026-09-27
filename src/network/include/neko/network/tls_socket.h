@@ -28,8 +28,9 @@ struct TlsOptions
 
 // A TLS (SSL/TLS) client socket over a TCP connection, wrapping OpenSSL
 // behind this project-owned interface.  Performs the TLS handshake with SNI,
-// and verifies the server certificate against the system trust store plus any
-// |extra_ca_cert_pem| anchor, including hostname verification.
+// and verifies the server certificate against the trust store of the host
+// machine plus any |extra_ca_cert_pem| anchor, including hostname
+// verification.
 //
 // TlsSocket is move-only, like Socket.  It is NOT thread-safe: one connection
 // per object, used from one thread.
