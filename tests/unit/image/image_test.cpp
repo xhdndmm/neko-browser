@@ -91,6 +91,43 @@ std::string EncodePng(int width,
   return out;
 }
 
+// Builds a PNG whose IHDR declares |width|x|height| but whose IDAT holds
+// |raw_idat_inflated| verbatim (deflated here).  Used to forge images whose
+// real geometry and whose decompressed payload disagree.
+std::string EncodePngWithRawIdat(int width,
+                                  int height,
+                                  int bit_depth,
+                                  int color_type,
+                                  std::string_view raw_idat_inflated)
+{
+  std::string ihdr;
+  ihdr += Be32(static_cast<uint32_t>(width));
+  ihdr += Be32(static_cast<uint32_t>(height));
+  ihdr.push_back(static_cast<char>(bit_depth));
+  ihdr.push_back(static_cast<char>(color_type));
+  ihdr.push_back(0);
+  ihdr.push_back(0);
+  ihdr.push_back(0);
+
+  std::string out = "\x89PNG\r\n\x1a\n";
+  AppendChunk(out, "IHDR", ihdr);
+  uLongf bound = compressBound(static_cast<uLong>(raw_idat_inflated.size()));
+  std::vector<Bytef> compressed(bound);
+  uLongf compressed_size = bound;
+  if (compress2(compressed.data(),
+                &compressed_size,
+                reinterpret_cast<const Bytef*>(raw_idat_inflated.data()),
+                static_cast<uLong>(raw_idat_inflated.size()),
+                9) != Z_OK) {
+    return {};
+  }
+  AppendChunk(out,
+              "IDAT",
+              std::string_view(reinterpret_cast<const char*>(compressed.data()), compressed_size));
+  AppendChunk(out, "IEND", "");
+  return out;
+}
+
 // Prefixes each packed row with a filter byte (|filter| 0..4).
 std::string FilterRows(std::string_view packed_rows, int row_bytes, int bpp, int filter)
 {
@@ -1092,6 +1129,41 @@ TEST(PngTest, RejectsTruncatedFile)
 TEST(PngTest, RejectsNonPng)
 {
   EXPECT_FALSE(DecodePng("not a png file at all").has_value());
+}
+
+TEST(PngTest, RejectsOversizedCanvas)
+{
+  // Regression (resource exhaustion / process abort): IHDR width and height
+  // are fully attacker-controlled and the canvas used to be allocated with no
+  // budget, so a 70-byte PNG declaring 30000x30000 asked for 3.6 GB.  The
+  // resulting std::bad_alloc escaped DecodeImage and, because the decode runs
+  // on a thread-pool thread with no handler installed, terminated the whole
+  // browser.  The GIF and AVIF decoders already capped this at 128 MiB.
+  for (const auto& dims : std::vector<std::pair<int, int>>{
+           {30000, 30000}, {100000, 100000}, {65536, 65536}, {0, 4096}, {4096, 0}}) {
+    const std::string png = EncodePng(dims.first, dims.second, 8, 2, std::string(16, '\0'));
+    EXPECT_FALSE(DecodePng(png).has_value())
+        << dims.first << "x" << dims.second << " must be rejected";
+  }
+  // Ordinary dimensions are still accepted.
+  const std::string ok =
+      EncodePng(64, 64, 8, 2, FilterRows(std::string(64 * 64 * 3, '\x7f'), 64 * 3, 3, 0));
+  EXPECT_TRUE(DecodePng(ok).has_value());
+}
+
+TEST(PngTest, RejectsDecompressionBomb)
+{
+  // Regression (resource exhaustion): InflateZlib appended to the output with
+  // no cap, so a small IDAT of deflated zeros inflated to whatever it liked
+  // before the decoder ever compared against the image geometry.  The budget
+  // is now the exact size the declared image needs.
+  // 1x1 RGB8 needs 1 * (3 + 1) = 4 bytes; hand it 8 MiB of zeros.
+  const std::string bomb = EncodePngWithRawIdat(1, 1, 8, 2, std::string(8u * 1024u * 1024u, '\0'));
+  ASSERT_FALSE(bomb.empty());
+  EXPECT_FALSE(DecodePng(bomb).has_value());
+  // A small mismatch is rejected too, rather than silently truncated.
+  const std::string small = EncodePngWithRawIdat(1, 1, 8, 2, std::string(64, '\0'));
+  EXPECT_FALSE(DecodePng(small).has_value());
 }
 
 TEST(PngTest, RejectsBadDimensions)

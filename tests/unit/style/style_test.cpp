@@ -400,6 +400,63 @@ TEST(StyleTest, GridRepeatWithNamedLines)
   EXPECT_TRUE(s.grid_column_lines[2].empty());
 }
 
+TEST(StyleTest, GridRepeatCountIsClamped)
+{
+  // Regression (remote CPU/allocation DoS): the repeat() count came straight
+  // from the stylesheet into a loop that materialised that many GridTrack
+  // structs, with static_cast<int> on an unbounded double.  A stylesheet is
+  // untrusted remote input, so `repeat(99999999, 1fr)` hung the renderer for
+  // over a minute.  Counts are now clamped.
+  for (const char* count : {"99999999", "4294967296", "1e300"}) {
+    auto doc = MakeDoc("<body><div style=\"grid-template-columns:repeat(" +
+                       std::string(count) + ", 1fr)\">x</div></body>");
+    StyleEngine engine;
+    engine.ApplyStyles(*doc);
+    const ComputedStyle& s = Style(engine, *doc, "div");
+    EXPECT_LE(s.grid_template_columns.size(), 1000u) << "count=" << count;
+  }
+  // A count inside the budget is honoured exactly.
+  auto ok = MakeDoc("<body><div style=\"grid-template-columns:repeat(7, 1fr)\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*ok);
+  EXPECT_EQ(Style(engine, *ok, "div").grid_template_columns.size(), 7u);
+  // Zero / negative / non-numeric counts produce no tracks rather than a huge
+  // number of them.
+  for (const char* bad : {"0", "-5", "abc"}) {
+    auto doc = MakeDoc("<body><div style=\"grid-template-columns:repeat(" +
+                       std::string(bad) + ", 1fr)\">x</div></body>");
+    StyleEngine e2;
+    e2.ApplyStyles(*doc);
+    EXPECT_TRUE(Style(e2, *doc, "div").grid_template_columns.empty()) << "count=" << bad;
+  }
+}
+
+TEST(StyleTest, GridSpanIsClamped)
+{
+  // Same class of problem: `span N` drives the layout occupancy grid, so an
+  // unbounded value turns a few bytes of CSS into a huge allocation.  A single
+  // "span N" in the `grid-row` shorthand lands on the *end* line.
+  for (const char* span : {"100000000", "4294967296", "1e300"}) {
+    auto doc = MakeDoc("<body><div style=\"grid-row:span " + std::string(span) +
+                       "\">x</div></body>");
+    StyleEngine engine;
+    engine.ApplyStyles(*doc);
+    EXPECT_LE(Style(engine, *doc, "div").grid_row_end.span, 1000) << "span=" << span;
+  }
+  for (const char* span : {"100000000", "4294967296"}) {
+    auto doc = MakeDoc("<body><div style=\"grid-row-start:span " + std::string(span) +
+                       "\">x</div></body>");
+    StyleEngine engine;
+    engine.ApplyStyles(*doc);
+    EXPECT_LE(Style(engine, *doc, "div").grid_row_start.span, 1000) << "span=" << span;
+  }
+  // A span inside the budget is exact.
+  auto ok = MakeDoc("<body><div style=\"grid-row-start:span 4\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*ok);
+  EXPECT_EQ(Style(engine, *ok, "div").grid_row_start.span, 4);
+}
+
 TEST(StyleTest, GridTemplateAreasParse)
 {
   auto doc = MakeDoc(
@@ -574,6 +631,87 @@ TEST(StyleTest, Inheritance)
   ASSERT_TRUE(p.color.has_value());
   EXPECT_EQ(p.color.value(), (css::Color{255, 0, 0, 255}));
   EXPECT_FLOAT_EQ(p.font_size, 24.0f);
+}
+
+TEST(StyleTest, CssWideKeywordsInheritInitialUnset)
+{
+  // Regression: `inherit` / `initial` / `unset` / `revert` apply to every
+  // property, but each per-property handler only recognised its own keywords,
+  // so an unrecognised value fell through to the *initial* value.  That made
+  // `color: inherit` resolve to black instead of the parent's colour, and
+  // `display: inherit` replace the UA sheet's `block` with the initial
+  // `inline` -- silently destroying the block layout of the element.
+  {
+    auto doc = MakeDoc("<body><div id=a style=\"color: green\">"
+                       "<div id=b style=\"color: inherit\">x</div></div></body>");
+    StyleEngine engine;
+    engine.ApplyStyles(*doc);
+    const ComputedStyle& b = Style(engine, *doc, "#b");
+    ASSERT_TRUE(b.color.has_value());
+    EXPECT_EQ(b.color.value(), (css::Color{0, 128, 0, 255}));
+  }
+  {
+    auto doc = MakeDoc("<body><div id=a style=\"color: green\">"
+                       "<div id=b style=\"color: initial\">x</div></div></body>");
+    StyleEngine engine;
+    engine.ApplyStyles(*doc);
+    const ComputedStyle& b = Style(engine, *doc, "#b");
+    // The parent's green must not survive.  This engine represents the initial
+    // colour as "unset" (paint falls back to black) rather than an explicit
+    // black, so the assertion is that the computed value is no longer the
+    // inherited green -- which is what distinguishes `initial` from `inherit`.
+    EXPECT_NE(b.color, std::optional<css::Color>(css::Color{0, 128, 0, 255}));
+  }
+  // `unset` on an inherited property means `inherit`.
+  {
+    auto doc = MakeDoc("<body><div id=a style=\"color: green\">"
+                       "<div id=b style=\"color: unset\">x</div></div></body>");
+    StyleEngine engine;
+    engine.ApplyStyles(*doc);
+    const ComputedStyle& b = Style(engine, *doc, "#b");
+    ASSERT_TRUE(b.color.has_value());
+    EXPECT_EQ(b.color.value(), (css::Color{0, 128, 0, 255}));
+  }
+  // display: inherit must copy the parent rather than falling back to inline.
+  {
+    auto doc = MakeDoc("<body><div id=a style=\"display: block\">"
+                       "<div id=b style=\"display: inherit\">x</div></div></body>");
+    StyleEngine engine;
+    engine.ApplyStyles(*doc);
+    EXPECT_EQ(Style(engine, *doc, "#b").display, Display::kBlock);
+  }
+  // display: initial / revert are the initial value, `inline`.
+  {
+    auto doc = MakeDoc("<body><div id=a style=\"display: block\">"
+                       "<div id=b style=\"display: initial\">x</div></div></body>");
+    StyleEngine engine;
+    engine.ApplyStyles(*doc);
+    EXPECT_EQ(Style(engine, *doc, "#b").display, Display::kInline);
+  }
+  // A UA-styled element with an author `display: inherit` follows its parent:
+  // the author declaration outranks the UA sheet, which in turn outranks plain
+  // inheritance.
+  {
+    auto doc = MakeDoc("<body><div id=a style=\"display: block\">"
+                       "<span id=b style=\"display: inherit\">x</span></div></body>");
+    StyleEngine engine;
+    engine.ApplyStyles(*doc);
+    EXPECT_EQ(Style(engine, *doc, "#b").display, Display::kBlock);
+  }
+  // The other inherited properties resolve the same way.
+  {
+    auto doc = MakeDoc("<body><div style=\"font-size: 24px; line-height: 40px; "
+                       "text-align: center; white-space: pre\">"
+                       "<p id=p style=\"font-size: inherit; line-height: inherit; "
+                       "text-align: inherit; white-space: inherit\">x</p></div></body>");
+    StyleEngine engine;
+    engine.ApplyStyles(*doc);
+    const ComputedStyle& p = Style(engine, *doc, "#p");
+    EXPECT_FLOAT_EQ(p.font_size, 24.0f);
+    EXPECT_FLOAT_EQ(p.line_height, 40.0f);
+    EXPECT_EQ(p.text_align, TextAlign::kCenter);
+    EXPECT_EQ(p.white_space, WhiteSpace::kPre);
+  }
 }
 
 TEST(StyleTest, EmFontSizeResolution)

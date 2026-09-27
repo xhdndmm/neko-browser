@@ -1130,8 +1130,18 @@ std::optional<Charset> CharsetFromHttpHeader(std::string_view content_type)
     while (p < segment.size() && IsAsciiWhitespace(segment[p])) {
       ++p;
     }
-    // Parameter name must be "charset" (ASCII case-insensitive).
-    if (segment.size() - p >= 7 && segment.substr(p, 7) == "charset") {
+    // Parameter name must be "charset", ASCII case-insensitive.  It used to be
+    // compared byte-exactly, so a perfectly legal `Content-Type:
+    // text/html; CHARSET=utf-8` silently yielded no charset at all and the
+    // document fell back to windows-1252 (mojibake) instead of being decoded
+    // as UTF-8.
+    bool is_charset = segment.size() - p >= 7;
+    for (std::size_t k = 0; is_charset && k < 7; ++k) {
+      if (AsciiLower(segment[p + k]) != "charset"[k]) {
+        is_charset = false;
+      }
+    }
+    if (is_charset) {
       std::size_t eq = p + 7;
       while (eq < segment.size() && IsAsciiWhitespace(segment[eq])) {
         ++eq;
@@ -1141,9 +1151,22 @@ std::optional<Charset> CharsetFromHttpHeader(std::string_view content_type)
         while (eq < segment.size() && IsAsciiWhitespace(segment[eq])) {
           ++eq;
         }
+        // The value may be a quoted string.  The old scan stopped *at* the
+        // opening quote and then never stripped it, so the common real-world
+        // header shape `charset="utf-8"` produced an empty label and again fell
+        // back to windows-1252.  Per the MIME / "get an encoding" rules the
+        // value runs to the next ';' with surrounding quotes removed.
+        char quote = '\0';
+        if (eq < segment.size() && (segment[eq] == '"' || segment[eq] == '\'')) {
+          quote = segment[eq];
+          ++eq;
+        }
         std::string label;
-        while (eq < segment.size() && !IsAsciiWhitespace(segment[eq]) && segment[eq] != ';' &&
-               segment[eq] != '"' && segment[eq] != '\'') {
+        while (eq < segment.size() && segment[eq] != ';' &&
+               (quote == '\0' || segment[eq] != quote)) {
+          if (quote == '\0' && IsAsciiWhitespace(segment[eq])) {
+            break;
+          }
           label.push_back(AsciiLower(segment[eq]));
           ++eq;
         }

@@ -360,6 +360,51 @@ TEST(CssParserTest, DeclarationBlock)
   EXPECT_EQ(decls[2].value, "#fff");
 }
 
+TEST(CssParserTest, DeclarationPropertyNamesAreAsciiLowercased)
+{
+  // Regression: property names were taken verbatim from the token text while
+  // tag names, attribute names and at-keywords were lowercased.  The cascade
+  // matches declarations byte-exactly, so `DIV { COLOR: RED }` silently
+  // matched nothing -- an entire stylesheet written in non-canonical case was
+  // dropped with no error.
+  const std::vector<Declaration> decls =
+      ParseDeclarationBlock("COLOR: red; Margin: 4px; BACKGROUND: #fff;");
+  ASSERT_EQ(decls.size(), 3u);
+  EXPECT_EQ(decls[0].property, "color");
+  EXPECT_EQ(decls[1].property, "margin");
+  EXPECT_EQ(decls[2].property, "background");
+  // Mixed case normalises too.
+  EXPECT_EQ(ParseDeclarationBlock("DiSpLaY: block")[0].property, "display");
+}
+
+TEST(CssParserTest, CustomPropertyNamesKeepTheirCase)
+{
+  // CSS Variables 1 section 3: custom property names are case-*sensitive*,
+  // unlike every other property name.  --MyVar and --myvar are different
+  // properties, so the lowercasing must not touch them.
+  const std::vector<Declaration> decls = ParseDeclarationBlock("--MyVar: 10px; --myvar: 20px;");
+  ASSERT_EQ(decls.size(), 2u);
+  EXPECT_EQ(decls[0].property, "--MyVar");
+  EXPECT_EQ(decls[1].property, "--myvar");
+  EXPECT_NE(decls[0].property, decls[1].property);
+}
+
+TEST(CssParserTest, AtKeywordNamesAreAsciiLowercased)
+{
+  // The cascade dispatches on exact matches such as at_rule.name == "media"
+  // and at_rule.name == "font-face", so an uppercase at-keyword had all of
+  // its rules silently discarded.
+  const StyleSheet sheet = ParseStyleSheet("@MEDIA screen { p { color: red } }");
+  ASSERT_EQ(sheet.at_rules.size(), 1u);
+  EXPECT_EQ(sheet.at_rules[0].name, "media");
+  // @FONT-FACE must be recognised too, or web fonts are silently dropped.
+  const StyleSheet fonts = ParseStyleSheet("@FONT-FACE { font-family: X; src: url(a.woff2) }");
+  ASSERT_EQ(fonts.font_faces.size(), 1u);
+  EXPECT_EQ(fonts.font_faces[0].family, "X");
+  // Lowercase still works unchanged.
+  EXPECT_EQ(ParseStyleSheet("@media print { p { color: red } }").at_rules[0].name, "media");
+}
+
 TEST(CssParserTest, MalformedInputIsTolerated)
 {
   const StyleSheet sheet = ParseStyleSheet("p { color: red } div {");

@@ -29,6 +29,10 @@ constexpr uint32_t kChunkTRNS = 0x74524E53; // "tRNS"
 constexpr uint32_t kChunkIDAT = 0x49444154; // "IDAT"
 constexpr uint32_t kChunkIEND = 0x49454E44; // "IEND"
 
+// Maximum decoded canvas, matching the GIF and AVIF decoders.  IHDR width and
+// height are untrusted, so the allocation must be bounded before it happens.
+constexpr size_t kMaxCanvasBytes = 128u * 1024u * 1024u;
+
 uint32_t ReadU32BE(std::string_view s, size_t off)
 {
   return (static_cast<uint32_t>(static_cast<uint8_t>(s[off])) << 24) |
@@ -37,7 +41,7 @@ uint32_t ReadU32BE(std::string_view s, size_t off)
          static_cast<uint32_t>(static_cast<uint8_t>(s[off + 3]));
 }
 
-base::Result<std::string> InflateZlib(std::string_view in)
+base::Result<std::string> InflateZlib(std::string_view in, size_t max_output)
 {
   z_stream zs{};
   if (inflateInit(&zs) != Z_OK) {
@@ -57,6 +61,15 @@ base::Result<std::string> InflateZlib(std::string_view in)
       return base::Error::Parse("png: corrupt IDAT deflate stream");
     }
     out.append(buf, sizeof(buf) - zs.avail_out);
+    // Bound the output.  A deflate stream of zeros expands by ~1000x, so a
+    // ~100 kB IDAT can inflate to gigabytes; without a cap the allocation
+    // escapes as std::bad_alloc out of DecodeImage and, because the decode
+    // runs on a thread-pool thread with no handler installed, terminates the
+    // whole process.  The caller passes the exact size the image needs.
+    if (out.size() > max_output) {
+      inflateEnd(&zs);
+      return base::Error::Parse("png: inflated IDAT exceeds the expected image size");
+    }
     // A deflate stream that consumes input without producing output (and
     // never ends) is pathological; bail out.
     if (zs.avail_in == 0 && ret != Z_STREAM_END && zs.avail_out == sizeof(buf)) {
@@ -485,18 +498,41 @@ base::Result<Image> DecodePng(std::string_view data)
   Image out;
   out.width = p.width;
   out.height = p.height;
-  out.rgba.assign(static_cast<size_t>(p.width) * static_cast<size_t>(p.height) * 4, 0);
 
-  auto inflated = InflateZlib(idat);
+  // Cap the canvas before allocating.  width/height come straight from IHDR,
+  // so they are fully attacker-controlled; 30000x30000 would ask for 3.6 GB
+  // and abort the process on std::bad_alloc.  This mirrors the caps the other
+  // decoders already apply (gif_decoder / avif_decoder: 128 MiB).
+  const size_t width = static_cast<size_t>(p.width);
+  const size_t height = static_cast<size_t>(p.height);
+  // Reject anything that would overflow size_t, or that exceeds the budget.
+  if (width == 0 || height == 0 || width > kMaxCanvasBytes / 4 ||
+      height > kMaxCanvasBytes / 4 / width) {
+    return base::Error::Parse("png: image dimensions exceed the decoding budget");
+  }
+  const size_t canvas_bytes = width * height * 4;
+  if (canvas_bytes > kMaxCanvasBytes) {
+    return base::Error::Parse("png: image dimensions exceed the decoding budget");
+  }
+  out.rgba.assign(canvas_bytes, 0);
+
+  // The inflate budget: for a non-interlaced image the decompressed stream is
+  // exactly height * (packed row bytes + 1) bytes (one filter byte per row).
+  // Interlaced images have a different shape, so allow a generous multiple
+  // there rather than computing Adam7 pass geometry here.
+  const size_t full_row_bytes = (width * static_cast<size_t>(p.bits_per_pixel) + 7) / 8;
+  size_t inflate_budget = p.interlace == 0 ? height * (full_row_bytes + 1) : kMaxCanvasBytes;
+  if (inflate_budget > kMaxCanvasBytes) {
+    inflate_budget = kMaxCanvasBytes;
+  }
+  auto inflated = InflateZlib(idat, inflate_budget);
   if (!inflated)
     return inflated.error();
   const std::string& zdata = inflated.value();
 
   size_t consumed = 0;
   if (p.interlace == 0) {
-    const int packed_row_bytes = (p.width * p.bits_per_pixel + 7) / 8;
-    const size_t needed =
-        static_cast<size_t>(p.height) * (static_cast<size_t>(packed_row_bytes) + 1);
+    const size_t needed = inflate_budget;
     if (zdata.size() < needed) {
       return base::Error::Parse("png: IDAT data too short");
     }

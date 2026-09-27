@@ -89,6 +89,18 @@ std::unique_ptr<dom::Element> CreateElement(const Token& token)
 {
   auto element = std::make_unique<dom::Element>(token.name);
   for (const Attribute& attr : token.attributes) {
+    // WHATWG 13.2.5.34 (attribute name state): "If there is already an
+    // attribute on the token with the exact same name, then this is a
+    // duplicate-attribute parse error and the new attribute must be removed
+    // from the token."  The tokenizer keeps both, and SetAttribute
+    // overwrites, so the *last* occurrence used to win.  Browsers keep the
+    // first: `<div class="a" class="b">` is class="a".  This matters beyond
+    // conformance -- it is a classic parser-differential surface for HTML
+    // sanitizers and attribute allow-lists, which read the first occurrence
+    // while a naive filter reads the last.
+    if (element->GetAttribute(attr.name).has_value()) {
+      continue;
+    }
     element->SetAttribute(attr.name, attr.value);
   }
   return element;
@@ -1158,12 +1170,42 @@ void Parser::ProcessStartTag(Token token)
       mode_ = Mode::kText;
       return;
     }
-    if (token.name == "noscript" || token.name == "noframes" || token.name == "template") {
-      // WHATWG 13.2.6.4.4: with scripting disabled, <noscript> is a normal
-      // element in head (Baidu puts <noscript><meta refresh> here).  Treating
-      // it as "anything else" would pop head and invent a body, discarding
-      // the subsequent real <body> attributes.
+    if (token.name == "noscript" || token.name == "noframes") {
+      // WHATWG 13.2.6.4.4: a <noscript> start tag in head while scripting is
+      // ENABLED inserts the element and switches the tokenizer to RAWTEXT.
+      // (With scripting *disabled* it would be an ordinary element -- but this
+      // engine does run page scripts, so RAWTEXT is both the spec-correct and
+      // the safe form: the content stays text instead of becoming live
+      // elements, which previously meant real network requests for images and
+      // stylesheets that the author had explicitly marked as script-disabled.)
+      //
+      // Regression: this branch used to only insert the element and return.
+      // That left the insertion mode at kInHead with <noscript> on the stack,
+      // so the first start tag *inside* <noscript> fell through to the kInHead
+      // "anything else" rule, whose PopElement() popped <noscript> instead of
+      // <head>.  The stack of open elements and the insertion mode then
+      // desynchronised for the rest of the document: the real <body> was
+      // inserted as a child of <head>, and every element after it became a
+      // direct child of <html>.  `document.body` was consequently null for
+      // the whole document.  <noframes> is RAWTEXT per spec unconditionally.
       InsertElement(CreateElement(token).release());
+      mode_before_text_ = Mode::kInHead;
+      tokenizer_.StartRawText(token.name);
+      mode_ = Mode::kText;
+      return;
+    }
+    if (token.name == "template") {
+      // <template> needs the "in template" insertion mode and a separate
+      // DocumentFragment for its contents (13.2.6.4.7), which the engine does
+      // not model yet (see docs/html/README.md).  Until it does, keep the
+      // content as raw text: that is not the specified behaviour, but it is
+      // strictly better than the previous behaviour, which left <template> on
+      // the stack in kInHead and desynchronised the parser exactly like
+      // <noscript> did -- see the comment above.
+      InsertElement(CreateElement(token).release());
+      mode_before_text_ = Mode::kInHead;
+      tokenizer_.StartRawText(token.name);
+      mode_ = Mode::kText;
       return;
     }
     if (token.name == "head") {

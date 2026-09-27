@@ -179,6 +179,47 @@ std::vector<std::string_view> GetAllHeaderValues(const HttpResponse& response,
   return values;
 }
 
+// RFC 9110 section 5.1 field-name = token.  CTLs and separators are rejected
+// so a header name can never terminate the field and start another line.
+bool IsValidHeaderFieldName(std::string_view name)
+{
+  if (name.empty()) {
+    return false;
+  }
+  for (const char ch : name) {
+    const auto c = static_cast<unsigned char>(ch);
+    if (c <= 0x20 || c >= 0x7F) {
+      return false; // CTLs, SP and DEL
+    }
+    switch (c) {
+    case '(': case ')': case '<': case '>': case '@': case ',': case ';':
+    case ':': case '\\': case '"': case '/': case '[': case ']': case '?':
+    case '=': case '{': case '}': // separators
+      return false;
+    default:
+      break;
+    }
+  }
+  return true;
+}
+
+// RFC 9110 section 5.5 field-value = *( field-vchar [ 1*( SP / HTAB ) field-vchar ] ).
+// field-vchar = VCHAR / obs-text, so any CTL -- and therefore CR and LF -- is
+// forbidden.  HTAB is tolerated because header folding was historically common.
+bool IsValidHeaderFieldValue(std::string_view value)
+{
+  for (const char ch : value) {
+    const auto c = static_cast<unsigned char>(ch);
+    if (c == '\t') {
+      continue;
+    }
+    if (c < 0x20 || c == 0x7F) {
+      return false; // CTL or DEL
+    }
+  }
+  return true;
+}
+
 // Percent-encodes a URL path/query for use in an HTTP request target
 // (RFC 3986 3.3 / RFC 7230 5.3).  Only characters that are valid in a path
 // or query are left raw; anything else (spaces, control characters, quote
@@ -807,6 +848,16 @@ base::Result<HttpResponse> HttpGet(const url::Url& url,
   request += "Accept-Encoding: gzip, deflate\r\n";
   if (extra_headers) {
     for (const HttpHeader& header : extra_headers(url)) {
+      // Last line of defense against request splitting: the request target is
+      // percent-encoded above, but caller-supplied header names/values (e.g.
+      // the Cookie header built from the cookie jar) used to be concatenated
+      // into the request verbatim.  A value carrying CR or LF -- reachable
+      // from document.cookie before the cookie jar validated cookie-octets --
+      // would have injected arbitrary headers or a second request.  Refuse to
+      // emit any header that is not a plain RFC 9110 field.
+      if (!IsValidHeaderFieldName(header.name) || !IsValidHeaderFieldValue(header.value)) {
+        continue;
+      }
       request += header.name;
       request += ": ";
       request += header.value;

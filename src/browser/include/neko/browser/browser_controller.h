@@ -436,6 +436,25 @@ public:
   // Worker thread only (thread-confined like the JS runtime).
   void PumpScriptTimers();
 
+  // Drives the active tab's event loop until it goes quiet, so that deferred
+  // work actually runs before the page is measured.
+  //
+  // The GUI pumps the loop from a 50 ms QTimer, so in the browser the timers
+  // of a freshly loaded page fire as soon as the event loop turns.  The
+  // headless entry points (--screenshot / --dump-dom) have no such loop, so
+  // they used to observe the page in its "synchronous script only" state:
+  // every setTimeout / setInterval / requestAnimationFrame callback was never
+  // invoked, which is where the overwhelming majority of a real page's content
+  // lives (framework hydration, lazy chunks, deferred rendering).
+  //
+  // This pumps the loop, bounded by |max_iterations| and by a virtual clock
+  // advance, then returns.  Deliberately *not* a real sleep: the loop is
+  // synchronous, so advancing the virtual clock is what makes due timers fire.
+  // Worker thread only.
+  //
+  // Returns the number of pump iterations performed.
+  int PumpScriptTimersUntilQuiet(int max_iterations = 1000);
+
   // Worker-thread scroll bridging.  |SetTabScrollOffset| records the page's
   // current vertical scroll offset (the GUI reports it from its scroll bar);
   // |SetTabScrollRequest| records a script-requested scroll (window.scrollTo /

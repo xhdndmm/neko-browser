@@ -59,6 +59,21 @@ struct AbsoluteChild
   std::size_t preceding_blocks = 0;
 };
 
+// CSS 2.1 section 8.3.1: two vertical margins are "adjoining" when no
+// border, padding, line box, clearance or BFC root separates them, and they
+// collapse to a single margin: the largest of the positive margins plus the
+// most negative of the negative ones.
+float CollapseAdjoiningMargins(float previous_bottom, float next_top)
+{
+  if (previous_bottom >= 0.0f && next_top >= 0.0f) {
+    return std::max(previous_bottom, next_top);
+  }
+  if (previous_bottom <= 0.0f && next_top <= 0.0f) {
+    return std::min(previous_bottom, next_top);
+  }
+  return previous_bottom + next_top;
+}
+
 // True when |c| is an ASCII whitespace character used for word breaking.
 bool IsWordBreak(char c)
 {
@@ -1786,9 +1801,36 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
           ++next_absolute;
         }
       };
+      // Bottom margin of the last in-flow block child, held back so it can be
+      // collapsed against the next sibling's top margin (CSS 2.1 8.3.1).  Zero
+      // means "nothing to collapse with", which is also the case for the first
+      // child and for any block preceded by line boxes -- inline content
+      // separates the margins, so they must not collapse.
+      float pending_margin_bottom = 0.0f;
+      bool pending_margin_valid = false;
+      // The parent collapses its own top margin with its first in-flow child's
+      // when it has no border/padding to separate them, so the child's
+      // collapsed margin is partly applied outside the parent's content box.
       for (std::size_t block_index = 0; block_index < block_children.size(); ++block_index) {
         flush_absolute_static_y(block_index);
         const BlockChild& bc = block_children[block_index];
+        // Sibling margin collapsing applies between in-flow block-level boxes
+        // in the same BFC.  Tables and form controls participate in the flow
+        // but the engine lays them out through their own paths, so they are
+        // left out of the collapse rather than mis-positioned by it.
+        const bool collapsible = !bc.table && !bc.form_control;
+        // How far the child's top margin shifts the flow cursor.  The child is
+        // placed with place_y + its own margin_top, so the adjustment is the
+        // difference between the collapsed margin and the raw one.  Resolve the
+        // margin the same way ResolveBoxEdges will, against the same containing
+        // width, so the two cannot disagree.
+        float top_adjust = 0.0f;
+        if (collapsible && pending_margin_valid && box.lines.empty()) {
+          const float child_margin_top = ResolveSize(bc.style.margin_top, avail_width);
+          const float collapsed = CollapseAdjoiningMargins(pending_margin_bottom, child_margin_top);
+          top_adjust = collapsed - child_margin_top;
+        }
+        pending_margin_valid = false;
         std::vector<const LayoutBox*> cur = parent_floats;
         for (const auto& f : box.floats) {
           cur.push_back(f.get());
@@ -1834,7 +1876,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
           child_box = BuildBlock(*bc.element,
                                  avail_width,
                                  box.content_x(),
-                                 box.content_y() + cursor_y,
+                                 box.content_y() + cursor_y + top_adjust,
                                  cb_x,
                                  cb_y,
                                  cb_w,
@@ -1842,8 +1884,28 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
                                  cur,
                                  /*percent_base_h=*/percent_base_h);
         }
-        cursor_y += child_box->margin_top + child_box->height + child_box->margin_bottom;
+        if (collapsible) {
+          // The child's top margin has been consumed by the collapse, so the
+          // cursor advances by the collapsed amount plus the border box; only
+          // the bottom margin is held back for the next sibling.
+          cursor_y += child_box->margin_top + top_adjust + child_box->height;
+          pending_margin_bottom = child_box->margin_bottom;
+          pending_margin_valid = true;
+        } else {
+          cursor_y += child_box->margin_top + child_box->height + child_box->margin_bottom;
+        }
         box.children.push_back(std::move(child_box));
+      }
+      // NOT IMPLEMENTED: the parent/last-child and parent/first-child halves of
+      // margin collapsing (CSS 2.1 8.3.1).  Adjoining *sibling* collapsing,
+      // implemented above, is the case that dominates real pages (the UA
+      // sheet's `p { margin: 1em 0 }` means every pair of paragraphs is an
+      // adjoining pair).  The parent/child halves interact with how the root
+      // box's own margins contribute to the document content height, and
+      // getting that wrong silently changes the scroll height of every page,
+      // so they are left as a follow-up rather than half-applied here.
+      if (pending_margin_valid) {
+        cursor_y += pending_margin_bottom;
       }
       // Absolute children placed after every in-flow block use the final
       // cursor (after all preceding content).

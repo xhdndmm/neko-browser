@@ -76,11 +76,15 @@ std::string DefaultProfileDir()
 #endif
 }
 
+// |script_runtime|, when non-null, receives the page's JS binder so the caller
+// can drive the event loop after the load (see PumpUntilQuiet in main()).
 neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
                                     const std::string& target,
                                     neko::storage::LocalStorage* local_storage,
                                     neko::storage::IndexedDbStore* indexed_db,
-                                    int depth = 0);
+                                    int depth = 0,
+                                    std::shared_ptr<neko::javascript::DomBinder>* script_runtime =
+                                        nullptr);
 
 // Loads a bare local path (no scheme) into the page and fetches its
 // subresources against an absolute file:// base so relative URLs resolve.
@@ -88,7 +92,9 @@ neko::base::Result<void> LoadLocalTarget(neko::renderer::Page& page,
                                          const std::string& target,
                                          neko::storage::LocalStorage* local_storage,
                                          neko::storage::IndexedDbStore* indexed_db,
-                                         int depth)
+                                         int depth,
+                                         std::shared_ptr<neko::javascript::DomBinder>*
+                                             script_runtime)
 {
   const auto r = page.LoadFile(target);
   if (!r) {
@@ -99,18 +105,30 @@ neko::base::Result<void> LoadLocalTarget(neko::renderer::Page& page,
   services.local_storage = local_storage;
   services.indexed_db = indexed_db;
   services.origin = "null";
-  neko::browser::RunPageScripts(
-      page,
-      "",
-      [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
-      [](std::string_view level, std::string_view text) {
-        std::cout << "[" << level << "] " << text << "\n";
-      },
-      services,
-      &requested);
+  if (script_runtime != nullptr) {
+    *script_runtime = neko::browser::RunPageScripts(
+        page,
+        "",
+        [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
+        [](std::string_view level, std::string_view text) {
+          std::cout << "[" << level << "] " << text << "\n";
+        },
+        services,
+        &requested);
+  } else {
+    neko::browser::RunPageScripts(
+        page,
+        "",
+        [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
+        [](std::string_view level, std::string_view text) {
+          std::cout << "[" << level << "] " << text << "\n";
+        },
+        services,
+        &requested);
+  }
   if (!requested.url.empty()) {
     NEKO_LOG_INFO("script navigated to " + requested.url);
-    return LoadTarget(page, requested.url, local_storage, indexed_db, depth + 1);
+    return LoadTarget(page, requested.url, local_storage, indexed_db, depth + 1, script_runtime);
   }
   // Local page (opened by path without a scheme): fetch its subresources
   // against an absolute file:// base so relative URLs resolve.
@@ -132,7 +150,8 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
                                     const std::string& target,
                                     neko::storage::LocalStorage* local_storage,
                                     neko::storage::IndexedDbStore* indexed_db,
-                                    int depth)
+                                    int depth,
+                                    std::shared_ptr<neko::javascript::DomBinder>* script_runtime)
 {
   constexpr int kMaxNavigationDepth = 20;
   if (depth >= kMaxNavigationDepth) {
@@ -146,7 +165,7 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
   // (mirrors BrowserController::NavigateToUrl, so the renderer child accepts
   // the same path forms the browser process does).
   if (neko::browser::IsWindowsLocalPath(target)) {
-    return LoadLocalTarget(page, target, local_storage, indexed_db, depth);
+    return LoadLocalTarget(page, target, local_storage, indexed_db, depth, script_runtime);
   }
 #endif
   const auto parsed = neko::url::Url::Parse(target);
@@ -185,23 +204,35 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
       services.local_storage = local_storage;
       services.indexed_db = indexed_db;
       services.origin = neko::security::Origin::FromUrl(url).Serialize();
-      neko::browser::RunPageScripts(
-          page,
-          url.Serialize(),
-          [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
-          [](std::string_view level, std::string_view text) {
-            std::cout << "[" << level << "] " << text << "\n";
-          },
-          services,
-          &requested);
+      if (script_runtime != nullptr) {
+        *script_runtime = neko::browser::RunPageScripts(
+            page,
+            url.Serialize(),
+            [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
+            [](std::string_view level, std::string_view text) {
+              std::cout << "[" << level << "] " << text << "\n";
+            },
+            services,
+            &requested);
+      } else {
+        neko::browser::RunPageScripts(
+            page,
+            url.Serialize(),
+            [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
+            [](std::string_view level, std::string_view text) {
+              std::cout << "[" << level << "] " << text << "\n";
+            },
+            services,
+            &requested);
+      }
       // A script may have redirected the page (e.g. location.replace()).
       if (!requested.url.empty()) {
         NEKO_LOG_INFO("script navigated to " + requested.url);
-        return LoadTarget(page, requested.url, local_storage, indexed_db, depth + 1);
+        return LoadTarget(page, requested.url, local_storage, indexed_db, depth + 1, script_runtime);
       }
       if (requested.is_reload) {
         NEKO_LOG_INFO("script reloaded " + url.Serialize());
-        return LoadTarget(page, url.Serialize(), local_storage, indexed_db, depth + 1);
+        return LoadTarget(page, url.Serialize(), local_storage, indexed_db, depth + 1, script_runtime);
       }
       // Scripts may have injected <link rel=stylesheet> (e.g. Bing's
       // as-css-link) after the initial stylesheet pass; fetch those so the
@@ -238,18 +269,30 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
       // Local pages share the opaque file origin (same treatment as the
       // controller's non-URL content).
       services.origin = "null";
-      neko::browser::RunPageScripts(
-          page,
-          "",
-          [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
-          [](std::string_view level, std::string_view text) {
-            std::cout << "[" << level << "] " << text << "\n";
-          },
-          services,
-          &requested);
+      if (script_runtime != nullptr) {
+        *script_runtime = neko::browser::RunPageScripts(
+            page,
+            "",
+            [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
+            [](std::string_view level, std::string_view text) {
+              std::cout << "[" << level << "] " << text << "\n";
+            },
+            services,
+            &requested);
+      } else {
+        neko::browser::RunPageScripts(
+            page,
+            "",
+            [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
+            [](std::string_view level, std::string_view text) {
+              std::cout << "[" << level << "] " << text << "\n";
+            },
+            services,
+            &requested);
+      }
       if (!requested.url.empty()) {
         NEKO_LOG_INFO("script navigated to " + requested.url);
-        return LoadTarget(page, requested.url, local_storage, indexed_db, depth + 1);
+        return LoadTarget(page, requested.url, local_storage, indexed_db, depth + 1, script_runtime);
       }
       // Fetch the page's subresources: relative URLs resolve against the
       // file:// base so local pages behave like served ones.
@@ -264,7 +307,7 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
         neko::base::Error::NotImplemented("unsupported URL scheme: " + url.scheme()));
   }
   // Not a URL at all: a bare local path.
-  return LoadLocalTarget(page, target, local_storage, indexed_db, depth);
+  return LoadLocalTarget(page, target, local_storage, indexed_db, depth, script_runtime);
 }
 
 // Writes an image::Image as a binary PPM (P6), compositing alpha over white.
@@ -676,13 +719,34 @@ int main(int argc, char** argv)
     renderer_result = std::move(loaded.value());
     NEKO_LOG_INFO("renderer child loaded document title: " + renderer_result->title);
   } else if (parsed.options.url.has_value()) {
-    const neko::base::Result<void> loaded =
-        LoadTarget(page, parsed.options.url.value(), &local_storage, &indexed_db);
+    std::shared_ptr<neko::javascript::DomBinder> script_runtime;
+    const neko::base::Result<void> loaded = LoadTarget(page,
+                                                        parsed.options.url.value(),
+                                                        &local_storage,
+                                                        &indexed_db,
+                                                        /*depth=*/0,
+                                                        &script_runtime);
     if (!loaded) {
       std::cerr << "error: " << loaded.error().message() << "\n";
       return 1;
     }
     NEKO_LOG_INFO("loaded document title: " + page.document()->Title());
+    // Drive the page's event loop before anything observes the document.  The
+    // GUI pumps this from a 50 ms QTimer, but the headless entry points had no
+    // event loop at all, so --screenshot / --dump-dom used to capture the page
+    // in its "synchronous script only" state: no setTimeout, setInterval or
+    // requestAnimationFrame callback had run, and that is where most of a real
+    // page's content lives (framework hydration, lazy chunks, deferred
+    // rendering).  Bounded by both an iteration cap and a 250 ms quiet budget
+    // so a page that schedules work forever still terminates.
+    if (script_runtime != nullptr) {
+      neko::browser::PumpScriptTimersUntilQuiet(*script_runtime);
+      if (script_runtime->TakeDomDirty()) {
+        // Timers mutated the DOM; re-run the cascade so the measured layout
+        // reflects it.
+        page.ReapplyStyles();
+      }
+    }
   } else {
     std::cout << "no URL given; run with --url <url> to load a page.\n";
   }

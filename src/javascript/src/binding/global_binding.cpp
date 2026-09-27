@@ -383,7 +383,18 @@ LocationParts ParseLocationParts(std::string_view href)
     const std::size_t ps = href.find_first_of("/?#", i);
     const std::size_t host_end = ps == std::string_view::npos ? href.size() : ps;
     out.host = std::string(href.substr(i, host_end - i));
-    out.origin = out.protocol + "//" + out.host;
+    // The origin must come from the URL/origin model, not from string
+    // concatenation.  `out.protocol + "//" + out.host` produced "file://"
+    // and "data://"-style constant origins for opaque-origin schemes, which
+    // would have made every file: (or data:) document same-origin with every
+    // other one, and returned "" for a file: URL.  url::Url::Origin() applies
+    // the HTML rule: non-special schemes have an opaque origin, serialized
+    // as "null".
+    if (const auto parsed = url::Url::Parse(href)) {
+      out.origin = parsed.value().Origin();
+    } else {
+      out.origin = "null";
+    }
     const std::size_t colon = out.host.rfind(':');
     if (colon != std::string::npos) {
       out.hostname = out.host.substr(0, colon);
@@ -658,10 +669,18 @@ std::string StringifyHistoryState(JSContext* ctx, JSValueConst state)
 }
 
 // The origin tuple (scheme://host:port) of |url|, or "" when unparseable.
-std::string UrlOrigin(const std::string& url)
+// Parses |url| into an Origin, for same-origin comparisons that must treat
+// opaque origins correctly.  Returns false when the URL does not parse, which
+// is the "no usable origin" case callers must treat as "cannot prove
+// cross-origin".
+bool TryParseOrigin(const std::string& url, security::Origin& out)
 {
   const base::Result<url::Url> parsed = url::Url::Parse(url);
-  return parsed.has_value() ? security::Origin::FromUrl(parsed.value()).Serialize() : std::string();
+  if (!parsed.has_value()) {
+    return false;
+  }
+  out = security::Origin::FromUrl(parsed.value());
+  return true;
 }
 
 // Shared body of HistoryPushState/HistoryReplaceState.  |replace| selects the
@@ -690,12 +709,19 @@ JSValue HistoryMutateState(
     if (resolved.empty()) {
       return ThrowDomException(ctx, "SecurityError", "cannot resolve pushState URL");
     }
-    // Cross-origin guard: only meaningful when both URLs carry a parseable
-    // origin (a raw relative string — the fallback when no resolver is wired —
-    // has none, so it cannot be cross-origin).
-    const std::string current_origin = UrlOrigin(impl->document_url);
-    const std::string resolved_origin = UrlOrigin(resolved);
-    if (!current_origin.empty() && !resolved_origin.empty() && resolved_origin != current_origin) {
+    // Cross-origin guard.  This must compare Origin *values*, not their
+    // serialized form: every opaque origin serializes to the string "null", so
+    // a string comparison treated any two opaque-origin pages (data:, file:,
+    // blob:, ...) as same-origin and let the history entry through.  Use
+    // IsSameOrigin, which returns false whenever either side is opaque.
+    // Only meaningful when both URLs parse; a raw relative string (the
+    // fallback when no resolver is wired) has no origin, so it cannot be
+    // cross-origin.
+    security::Origin current_origin;
+    security::Origin resolved_origin;
+    if (TryParseOrigin(impl->document_url, current_origin) &&
+        TryParseOrigin(resolved, resolved_origin) &&
+        !current_origin.IsSameOrigin(resolved_origin)) {
       return ThrowDomException(ctx, "SecurityError", "pushState to a cross-origin URL");
     }
   }

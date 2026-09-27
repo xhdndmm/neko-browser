@@ -243,6 +243,29 @@ bool NameHasSeparator(std::string_view name)
   return false;
 }
 
+// True when |value| is a valid RFC 6265 section 5.2 cookie-value: zero or more
+// cookie-octet, where
+//   cookie-octet = %x21 / %x23-2B / %x2D-3A / %x3C-5B / %x5D-7E
+// i.e. US-ASCII excluding CTLs, whitespace, DQUOTE, comma, semicolon and
+// backslash.  This is also the security-relevant check: a cookie value is
+// concatenated raw into the Cookie request header by CookieHeaderFor() and
+// then written straight to the socket by the HTTP layer, so a value carrying
+// CR or LF would let any page inject arbitrary request headers or split the
+// request.  The cookie *name* was already checked by NameHasSeparator(); the
+// value was not, which is what made that reachable from document.cookie.
+bool IsValidCookieValue(std::string_view value)
+{
+  for (const char c : value) {
+    const auto byte = static_cast<unsigned char>(c);
+    if (byte >= 0x21 && byte <= 0x7E && byte != '"' && byte != ',' && byte != ';' &&
+        byte != '\\') {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
 // Splits "name=value" at the first '='.  Trailing/leading whitespace is
 // trimmed from both sides.
 void SplitNameValue(std::string_view pair, std::string_view& name, std::string_view& value)
@@ -411,6 +434,13 @@ bool CookieStore::SetCookieFromHeader(const url::Url& origin, std::string_view h
   SplitNameValue(parts[0], raw_name, raw_value);
   if (raw_name.empty() || NameHasSeparator(raw_name))
     return false;
+  if (!IsValidCookieValue(raw_value)) {
+    // RFC 6265 section 5.2: a cookie-pair whose value is not made only of
+    // cookie-octets is ignored.  Rejecting here (rather than at header-write
+    // time) keeps a hostile value from ever entering the jar, which is what
+    // makes it safe for CookieHeaderFor() to concatenate values raw.
+    return false;
+  }
   const std::string name(raw_name);
   const std::string value(raw_value);
 

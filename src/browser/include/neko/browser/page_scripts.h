@@ -103,4 +103,25 @@ RunPageScripts(renderer::Page& page,
                const PageScriptServices& services = {},
                ScriptRequestedNavigation* out_navigation = nullptr);
 
+// Drives |binder|'s event loop until it goes quiet, so deferred work actually
+// runs before the page is observed.  Returns the number of pump iterations.
+//
+// In the GUI the loop is pumped by a periodic timer, so a freshly loaded page
+// gets its callbacks as soon as the event loop turns.  Headless callers
+// (--screenshot / --dump-dom) have no event loop of their own and used to
+// capture the page in its "synchronous script only" state: no setTimeout,
+// setInterval or requestAnimationFrame callback had run, and that is where
+// most of a real page's content lives (framework hydration, lazy chunks,
+// deferred rendering).
+//
+// Waiting is bounded twice over so a page cannot stall a capture: by
+// |max_iterations| pump turns, and by a quiet budget -- a timer scheduled
+// further out than kPumpQuietBudget is treated as "settled" rather than waited
+// for.  Runaway timer chains therefore terminate on the iteration cap.
+inline constexpr int kDefaultPumpIterations = 1000;
+inline constexpr int kPumpQuietBudgetMs = 250;
+
+int PumpScriptTimersUntilQuiet(javascript::DomBinder& binder,
+                               int max_iterations = kDefaultPumpIterations);
+
 } // namespace neko::browser

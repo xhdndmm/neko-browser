@@ -1552,6 +1552,43 @@ TEST(SocketTest, ConnectRefused)
   EXPECT_NE(socket.error().message().find("IPv4 127.0.0.1"), std::string::npos);
   EXPECT_NE(socket.error().message().find("connect:"), std::string::npos);
 }
+
+TEST(HttpTest, HeaderWithControlCharactersIsNotSent)
+{
+  // Regression (security): caller-supplied header names/values were
+  // concatenated into the request verbatim, so a value carrying CR/LF could
+  // inject arbitrary headers or split the request.  The request target is
+  // percent-encoded, but the header block had no equivalent guard.
+  TestHttpServer server;
+  ASSERT_TRUE(server.IsValid());
+  const std::string host = "http://127.0.0.1:" + std::to_string(server.port()) + "/";
+  const auto url = url::Url::Parse(host);
+  ASSERT_TRUE(url.has_value());
+
+  const auto result = HttpGet(url.value(), 5, [](const url::Url&) {
+    std::vector<HttpHeader> headers;
+    headers.push_back(HttpHeader{"X-Good", "fine"});
+    // Must be dropped entirely rather than emitted.
+    headers.push_back(HttpHeader{"X-Evil", std::string("a\r\nX-Injected: 1")});
+    headers.push_back(HttpHeader{"X-Evil2", std::string("a\nb")});
+    headers.push_back(HttpHeader{"X-Evil3", std::string("a\rb")});
+    headers.push_back(HttpHeader{std::string("X\r\nEvil: 1"), "v"});
+    headers.push_back(HttpHeader{"X-Evil4", std::string("a\x7f")});
+    return headers;
+  });
+  ASSERT_TRUE(result.has_value());
+  const auto requests = server.Requests();
+  ASSERT_EQ(requests.size(), 1u);
+  const std::string& raw = requests[0];
+  // The legitimate header still goes out ...
+  EXPECT_NE(raw.find("X-Good: fine"), std::string::npos);
+  // ... and none of the hostile ones, nor any smuggled header, appear.
+  EXPECT_EQ(raw.find("X-Injected"), std::string::npos);
+  EXPECT_EQ(raw.find("X-Evil"), std::string::npos);
+  EXPECT_EQ(raw.find("Evil: 1"), std::string::npos);
+  // Exactly one request was received: nothing was split off.
+  EXPECT_EQ(raw.find("GET /"), 0u);
+}
 #endif
 
 } // namespace

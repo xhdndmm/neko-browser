@@ -1210,6 +1210,31 @@ void BrowserController::ProduceFrame(Tab& tab)
   tab.frame_dirty = false;
 }
 
+int BrowserController::PumpScriptTimersUntilQuiet(int max_iterations)
+{
+  Tab* tab = ActiveTab();
+  if (tab == nullptr) {
+    return 0;
+  }
+  // Remote tabs: the child owns its own loop, and its Pump() reply reports
+  // whether anything changed.
+  if (IsRemoteTab(*tab)) {
+    PumpScriptTimers();
+    return 1;
+  }
+  if (tab->script_runtime == nullptr) {
+    return 0;
+  }
+  const int iterations = ::neko::browser::PumpScriptTimersUntilQuiet(*tab->script_runtime,
+                                                                      max_iterations);
+  if (iterations > 0 && tab->page != nullptr) {
+    // Timers may have mutated the DOM; re-run the cascade so the next
+    // Layout/Rasterize reflects the new state.
+    tab->page->ReapplyStyles();
+  }
+  return iterations;
+}
+
 void BrowserController::PumpScriptTimers()
 {
   Tab* tab = ActiveTab();

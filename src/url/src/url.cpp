@@ -55,6 +55,16 @@ bool IsUnreserved(char c)
 
 // Characters allowed in a (non-bracketed) host.  Forbids whitespace, control
 // characters and path delimiters; '%' is allowed for percent-encoded hosts.
+// True when |c| is an ASCII control character (0x00-0x1F or 0x7F).  These
+// must never appear raw in a URL's path/query: they are not valid in a
+// request target and would let untrusted input inject bytes into the HTTP
+// request line (CRLF injection).
+bool IsControlChar(char c)
+{
+  const unsigned char u = static_cast<unsigned char>(c);
+  return u < 0x20 || u == 0x7F;
+}
+
 bool IsValidHostChar(char c)
 {
   return IsUnreserved(c) || c == '!' || c == '$' || c == '&' || c == '\'' || c == '(' || c == ')' ||
@@ -186,6 +196,17 @@ bool ParseAuthority(std::string_view authority, Url& url)
       return false;
     }
     url.host_ = std::string(hostport.substr(1, close - 1));
+    // The bracketed form bypasses the IsValidHostChar loop below, so it must
+    // apply the control-character rule itself.  Without this, a host such as
+    // "[a\r\nX-Injected: 1]" parsed successfully and the raw CRLF was written
+    // straight into the Host request header -- exactly the injection the
+    // IsControlChar comment below documents as the defence, reached through
+    // the one path that skipped it.
+    for (const char c : url.host_) {
+      if (IsControlChar(c)) {
+        return false;
+      }
+    }
     const std::string_view rest = hostport.substr(close + 1);
     if (rest.empty()) {
       return true;
@@ -212,16 +233,6 @@ bool ParseAuthority(std::string_view authority, Url& url)
     }
   }
   return true;
-}
-
-// True when |c| is an ASCII control character (0x00-0x1F or 0x7F).  These
-// must never appear raw in a URL's path/query: they are not valid in a
-// request target and would let untrusted input inject bytes into the HTTP
-// request line (CRLF injection).
-bool IsControlChar(char c)
-{
-  const unsigned char u = static_cast<unsigned char>(c);
-  return u < 0x20 || u == 0x7F;
 }
 
 // Splits the remainder of a URL (after scheme or authority) into
@@ -473,6 +484,19 @@ std::string Url::Serialize(bool include_fragment) const
 
 std::string Url::Origin() const
 {
+  // HTML Standard 4.4.1.2 / the URL Standard: only schemes that use the
+  // "//" authority syntax with a host have a tuple origin.  Everything else
+  // -- data:, javascript:, file:, about: and the rest -- has an *opaque*
+  // origin, which serializes as "null".
+  //
+  // This function used to unconditionally build "scheme://host", so a data:
+  // URL reported the origin "data://" and a file: URL reported "file://".
+  // Those are constant strings, which would have made every data: document
+  // same-origin with every other data: document (and likewise for file:), the
+  // moment the Same-Origin Policy was wired up to this value.
+  if (!IsSpecialScheme(scheme_)) {
+    return "null";
+  }
   std::string out = scheme_;
   out += "://";
   out += SerializeHost(host_);

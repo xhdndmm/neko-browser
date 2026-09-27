@@ -28,15 +28,13 @@ struct NamedEntity
 };
 
 // The full WHATWG named character reference table (2125 entries, sorted by
-// name) plus the legacy no-semicolon name set, generated from the official
-// entities.json (see tools/gen_html_entities.py).
+// name), generated from the official entities.json (see
+// tools/gen_html_entities.py).  The generated file also carries the legacy
+// no-semicolon name set, which is kept because it documents the table's
+// provenance, but the tokenizer no longer needs it: the "for historical
+// reasons" rule in 13.2.5.78 is attribute-scoped and does not consult that
+// list.
 #include "entities_generated.inc"
-
-// Entities that may omit the trailing semicolon (WHATWG legacy set).
-bool IsLegacyNoSemicolon(std::string_view name)
-{
-  return std::binary_search(std::begin(kLegacyNoSemicolon), std::end(kLegacyNoSemicolon), name);
-}
 
 // Binary search over the sorted full table.
 const NamedEntity* LookupNamedEntity(std::string_view name)
@@ -251,14 +249,32 @@ std::string Tokenizer::ConsumeCharacterReference(bool in_attribute)
       pos_ = after + 1;
       return encode();
     }
-    // In an attribute, a legacy name directly followed by '=' or an ASCII
-    // alnum is not a reference (13.2.5.78 "for historical reasons").
-    if (IsLegacyNoSemicolon(candidate) && !followed_by_alnum &&
-        !(in_attribute && followed_by_equals)) {
-      pos_ = after;
-      return encode();
+    // WHATWG 13.2.5.78 (named character reference state), after taking the
+    // longest match that ends in ';':
+    //
+    //  1. "If the character reference was consumed as part of an attribute,
+    //     and the last character matched is not ';', and the next input
+    //     character is '=' or an ASCII alphanumeric, then, for historical
+    //     reasons, flush code points consumed as a character reference and
+    //     switch to the return state."  -- i.e. emit a *literal* '&'.
+    //  2. Otherwise a missing ';' is a parse error, but the reference is
+    //     still returned (reconsume in the return state).
+    //
+    // The old code applied the "followed by alnum" rejection in *all*
+    // contexts and additionally required the candidate to be on the legacy
+    // no-semicolon list.  Both are wrong: rule 1 is attribute-only, and the
+    // legacy list is not part of the algorithm at all.  The result was that
+    // "&notit;" stayed literal instead of expanding to "¬it;", "&copyx" stayed
+    // literal instead of "©x", and "Arts&ampcrafts" stayed literal instead of
+    // "Arts&crafts" -- i.e. a missing semicolon silently disabled the entity
+    // almost everywhere, which is exactly the case a naive author hits.
+    if (in_attribute && (followed_by_equals || followed_by_alnum)) {
+      pos_ = start;
+      return "&";
     }
-    // The candidate is a prefix of a longer name; not a valid reference.
+    // Missing-semicolon error, but expand anyway.
+    pos_ = after;
+    return encode();
   }
   pos_ = start;
   return "&";

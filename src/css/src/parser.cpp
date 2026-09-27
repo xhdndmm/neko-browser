@@ -10,6 +10,26 @@
 namespace neko::css {
 namespace {
 
+// ASCII-only case folding.  Deliberately not std::tolower: the C locale can
+// map non-ASCII bytes, and CSS keywords are defined over ASCII only.
+std::string AsciiLower(std::string_view text)
+{
+  std::string out;
+  out.reserve(text.size());
+  for (const char c : text) {
+    out.push_back((c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c);
+  }
+  return out;
+}
+
+// True for a custom property name (CSS Variables 1 section 2: "--" followed by
+// an ident).  Custom property names are case-sensitive, unlike every other
+// property name.
+bool IsCustomPropertyName(std::string_view name)
+{
+  return name.size() >= 3 && name[0] == '-' && name[1] == '-';
+}
+
 struct TokenStream
 {
   explicit TokenStream(const std::vector<CssToken>& input) : tokens(input) {}
@@ -152,7 +172,14 @@ std::vector<Declaration> ParseDeclarationBody(TokenStream& stream)
       }
     } else {
       Declaration declaration;
-      declaration.property = stream.Next().text;
+      const std::string property = stream.Next().text;
+      // CSS Syntax 3 section 3.3: property names are ASCII case-insensitive,
+      // *except* custom properties, which are case-sensitive.  Tag names,
+      // attribute names and at-keywords were already lowercased, but property
+      // names were not, so `DIV { COLOR: RED }` silently matched nothing --
+      // and because the cascade matches declarations byte-exactly, a
+      // stylesheet written in any non-canonical case was dropped whole.
+      declaration.property = IsCustomPropertyName(property) ? property : AsciiLower(property);
       stream.SkipWhitespace();
       if (!stream.AtEnd() && stream.Peek().type == CssTokenType::kColon) {
         stream.Next();
@@ -346,7 +373,12 @@ bool ParseFontFaceBlock(std::string_view block, FontFaceRule* out)
 AtRule ParseAtRule(TokenStream& stream)
 {
   AtRule at_rule;
-  at_rule.name = stream.Next().text; // the at-keyword
+  // At-keywords are ASCII case-insensitive (CSS Syntax 3 3.2: "The
+  // at-keyword is an ident, with the same case-sensitivity as property
+  // names"), and the cascade dispatches on exact matches such as
+  // at_rule.name == "media" and at_rule.name == "font-face".  Without this an
+  // `@MEDIA` / `@FONT-FACE` block had its rules silently discarded.
+  at_rule.name = AsciiLower(stream.Next().text); // the at-keyword
   const std::string prelude = CollectPrelude(stream);
   at_rule.prelude = prelude;
   if (!stream.AtEnd() && stream.Peek().type == CssTokenType::kSemicolon) {

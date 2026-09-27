@@ -183,6 +183,46 @@ TEST(CookieStoreTest, RejectsNameWithSeparators)
   EXPECT_TRUE(store.empty());
 }
 
+TEST(CookieStoreTest, ValueWithControlCharactersIsRejected)
+{
+  // Regression (security): only the cookie *name* used to be validated, so a
+  // value carrying CR/LF was stored verbatim.  CookieHeaderFor() concatenates
+  // values raw and the HTTP layer wrote them straight to the socket, so
+  // `document.cookie = "a=b\r\nX-Injected: 1"` gave any page a request-header
+  // injection / request-splitting primitive.  RFC 6265 section 5.2 requires
+  // cookie-octets only, so these must be rejected at set time.
+  TempProfile tp;
+  CookieStore store(tp.path());
+  ASSERT_TRUE(store.Load().has_value());
+  const int64_t now = 1'700'000'000;
+  const auto origin = MakeUrl("http://example.com/");
+
+  // An *embedded* CR/LF is what enabled the injection, and it is rejected.
+  EXPECT_FALSE(store.SetCookieFromHeader(origin, "inj=a\r\nX-Injected: 1", now));
+  EXPECT_FALSE(store.SetCookieFromHeader(origin, "inj=a\nX-Injected: 1", now));
+  EXPECT_FALSE(store.SetCookieFromHeader(origin, std::string("inj=a\x01") + '\x7f', now));
+  // RFC 6265 cookie-octet excludes DQUOTE, comma, semicolon and backslash too.
+  EXPECT_FALSE(store.SetCookieFromHeader(origin, "inj=a\"b", now));
+  EXPECT_FALSE(store.SetCookieFromHeader(origin, "inj=a,b", now));
+  EXPECT_FALSE(store.SetCookieFromHeader(origin, "inj=a\\b", now));
+  // An inner space is not a cookie-octet; surrounding whitespace is trimmed.
+  EXPECT_FALSE(store.SetCookieFromHeader(origin, "inj=a b", now));
+  EXPECT_TRUE(store.empty());
+
+  // A *trailing* CR/LF is stripped as surrounding whitespace, so the stored
+  // value is the safe "a" -- nothing reaches the header but a cookie-octet.
+  ASSERT_TRUE(store.SetCookieFromHeader(origin, "trail=a\r", now));
+  EXPECT_THAT(store.All()[0].value, Eq("a"));
+  EXPECT_THAT(store.CookieHeaderFor(origin, now), Eq("trail=a"));
+
+  // Sanity check that ordinary values still round-trip through the header.
+  ASSERT_TRUE(store.SetCookieFromHeader(origin, "sid=abc123", now));
+  EXPECT_THAT(store.CookieHeaderFor(origin, now), ::testing::HasSubstr("sid=abc123"));
+  // ...and that a value which merely *contains* '=' is still fine.
+  ASSERT_TRUE(store.SetCookieFromHeader(origin, "tok=a=b=c", now));
+  EXPECT_THAT(store.CookieHeaderFor(origin, now), ::testing::HasSubstr("tok=a=b=c"));
+}
+
 TEST(CookieStoreTest, DefaultPathIsDirectoryOfRequest)
 {
   TempProfile tp;

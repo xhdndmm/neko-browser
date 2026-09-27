@@ -22,6 +22,43 @@
 
 namespace neko::style {
 namespace {
+// Upper bound on author-supplied grid repetition counts and span lengths.
+// Every mainstream engine bounds these (Blink caps grid line numbers at 1e6)
+// because the values are untrusted remote input that directly drive allocation
+// and loop counts.  Table row/column spans use the same shape of limit.
+constexpr int kMaxGridCount = 1000;
+
+// Clamps a CSS number used as a grid repetition count or span length into
+// [0, kMaxGridCount].  NaN maps to 0; anything above the ceiling is clamped
+// rather than rejected so the declaration stays usable.
+int ClampGridCount(double value)
+{
+  if (!(value >= 0.0)) { // also catches NaN
+    return 0;
+  }
+  if (value > static_cast<double>(kMaxGridCount)) {
+    return kMaxGridCount;
+  }
+  return static_cast<int>(value);
+}
+
+// Clamps a grid *line* number.  Negative values are legitimate (CSS Grid 1
+// 8.3: -1 is the last line, -2 the one before it), so the magnitude is bounded
+// rather than the value itself.
+int ClampGridLine(double value)
+{
+  if (!(value == value)) { // NaN
+    return 0;
+  }
+  if (value > static_cast<double>(kMaxGridCount)) {
+    return kMaxGridCount;
+  }
+  if (value < -static_cast<double>(kMaxGridCount)) {
+    return -kMaxGridCount;
+  }
+  return static_cast<int>(value);
+}
+
 
 // HTML user-agent stylesheet (Phase 4 scope).
 constexpr std::string_view kUaStylesheet = R"css(
@@ -856,7 +893,15 @@ ParsedGridTrackList ParseGridTrackList(const std::string& value, const SizeConte
         const css::CssValue cv =
             css::ParseCssValue(std::string(neko::base::Trim(inner.substr(0, comma))));
         if (cv.type == css::CssValue::Type::kNumber) {
-          count = static_cast<int>(cv.number);
+          // The repetition count is author-controlled and previously went
+          // straight into a loop that materialised that many GridTrack
+          // structs, with static_cast<int> applied to an unbounded double (UB
+          // for counts above INT_MAX).  A stylesheet is untrusted remote
+          // input, so the count needs a budget: `repeat(99999999, 1fr)` used to
+          // hang the renderer for minutes.  Clamping keeps the declaration
+          // usable (the tracks simply stop there) instead of failing the whole
+          // rule; the ceiling matches the grid-line cap used for spans below.
+          count = ClampGridCount(cv.number);
         }
         // auto-fill / auto-fit repeat counts are not supported: treated as
         // no tracks (documented approximation).
@@ -903,7 +948,10 @@ void ParseGridLine(const std::string& text, GridPlacement& out)
     const css::CssValue v = css::ParseCssValue(rest);
     if (v.type == css::CssValue::Type::kNumber && v.number >= 1) {
       out.kind = GridPlacement::Kind::kSpan;
-      out.span = static_cast<int>(v.number);
+      // Clamped: the span drives the layout occupancy grid
+      // (row_span * col_span cells), so an unbounded author value turns a
+      // few bytes of CSS into a multi-gigabyte allocation.
+      out.span = ClampGridCount(v.number);
       out.name.clear();
       return;
     }
@@ -917,7 +965,7 @@ void ParseGridLine(const std::string& text, GridPlacement& out)
   const css::CssValue v = css::ParseCssValue(lower);
   if (v.type == css::CssValue::Type::kNumber && v.number != 0) {
     out.kind = GridPlacement::Kind::kLine;
-    out.line = static_cast<int>(v.number);
+    out.line = ClampGridLine(v.number);
     out.name.clear();
     return;
   }
@@ -1487,6 +1535,70 @@ void StyleEngine::ComputeElement(dom::Element& element,
     }
   }
 
+  // CSS-wide keywords (CSS Cascade 5 section 6): `inherit`, `initial`,
+  // `unset` and `revert` apply to *every* property, but each per-property
+  // handler below only recognises its own keywords.  An unrecognised value
+  // therefore used to fall through to whatever `out` already held, which for
+  // most properties is the *initial* value -- so `display: inherit` replaced
+  // the UA sheet's `block` with the initial `inline` and destroyed the block
+  // layout of every element the author wrote that way, and `color: inherit`
+  // resolved to black instead of the parent's colour.
+  //
+  // The inherited subset below is initialised from |inherited|, so for those
+  // properties `inherit`/`unset` are honoured simply by not letting the
+  // declaration through, and `initial`/`revert` by restoring the initial
+  // value.  `display` needs explicit handling: it *is* an inherited property,
+  // but the UA stylesheet sits above inheritance in the cascade, so a plain
+  // "copy the parent's value" would be wrong for every element the UA sheet
+  // does not style.
+  const ComputedStyle initial_style{};
+  const auto css_wide = [](const std::string& value) {
+    if (value == "inherit") {
+      return 1; // inherit
+    }
+    if (value == "unset") {
+      return 2; // unset: inherit for inherited properties, initial otherwise
+    }
+    if (value == "initial") {
+      return 3;
+    }
+    if (value == "revert") {
+      return 4;
+    }
+    return 0;
+  };
+  // Properties whose computed value `out` starts from |inherited| (the block
+  // just below).  Kept in sync with it explicitly.
+  const auto resolve_inherited_subset = [&inherited](ComputedStyle& out,
+                                                      const std::string& property,
+                                                      int action) {
+    if (property == "color") {
+      out.color = (action == 3 || action == 4) ? std::optional<css::Color>{} : inherited.color;
+    } else if (property == "font-size") {
+      out.font_size = (action == 3 || action == 4) ? 16.0f : inherited.font_size;
+    } else if (property == "font-weight") {
+      out.font_weight = (action == 3 || action == 4) ? 400 : inherited.font_weight;
+    } else if (property == "font-style") {
+      out.font_italic = (action == 3 || action == 4) ? false : inherited.font_italic;
+    } else if (property == "font-family") {
+      out.font_family = (action == 3 || action == 4) ? std::string("sans-serif") : inherited.font_family;
+    } else if (property == "line-height") {
+      out.line_height = (action == 3 || action == 4) ? 19.2f : inherited.line_height;
+    } else if (property == "text-align") {
+      out.text_align = (action == 3 || action == 4) ? TextAlign::kLeft : inherited.text_align;
+    } else if (property == "text-decoration") {
+      out.text_decoration_underline =
+          (action == 3 || action == 4) ? false : inherited.text_decoration_underline;
+    } else if (property == "list-style-type") {
+      out.list_style_type = (action == 3 || action == 4) ? ListStyleType::kDisc : inherited.list_style_type;
+    } else if (property == "white-space") {
+      out.white_space = (action == 3 || action == 4) ? WhiteSpace::kNormal : inherited.white_space;
+    } else {
+      return false;
+    }
+    return true;
+  };
+
   // Resolve the computed style.
   ComputedStyle out;
   out.color = inherited.color;
@@ -1500,6 +1612,42 @@ void StyleEngine::ComputeElement(dom::Element& element,
   out.list_style_type = inherited.list_style_type;
   out.white_space = inherited.white_space;
   out.custom_properties = inherited.custom_properties;
+
+  // Apply the CSS-wide keywords resolved above and drop them from |winners|
+  // so the per-property handlers below never see them.
+  for (auto it = winners.begin(); it != winners.end();) {
+    const int action = css_wide(it->second.value);
+    if (action == 0) {
+      ++it;
+      continue;
+    }
+    if (resolve_inherited_subset(out, it->first, action)) {
+      it = winners.erase(it);
+      continue;
+    }
+    if (it->first == "display") {
+      // `display` is inherited (CSS Display 3 section 2.1), but the UA
+      // stylesheet outranks inheritance, so only an explicit `inherit` /
+      // `unset` copies the parent's value.  `initial` / `revert` mean the
+      // initial value, which is `inline`.
+      out.display = (action == 3 || action == 4) ? Display::kInline : inherited.display;
+      it = winners.erase(it);
+      continue;
+    }
+    // For every other property the value is left at the initial value, which
+    // is already what `out` holds -- but the declaration must still be dropped
+    // so the handler does not misparse the keyword as a real value.
+    if (action == 3 || action == 4) {
+      it = winners.erase(it);
+      continue;
+    }
+    // `inherit` / `unset` on a non-inherited property: `unset` is already the
+    // initial value.  `inherit` would need this property's value copied from
+    // |inherited|, which is a per-property mapping; leaving it at the initial
+    // value is the documented approximation (see the compatibility matrix).
+    ++it;
+  }
+
 
   // CSS custom properties (CSS Custom Properties for Cascading Variables
   // Level 1 §2): inherited by default, then overridden by this element's

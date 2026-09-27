@@ -19,6 +19,15 @@ dom::Element* Body(dom::Document& doc)
   return dom::QuerySelector(doc, "body");
 }
 
+std::string_view ParentTag(const dom::Element* element)
+{
+  const dom::Node* parent = element != nullptr ? element->parent() : nullptr;
+  if (parent == nullptr || parent->node_type() != dom::NodeType::kElement) {
+    return "<none>";
+  }
+  return static_cast<const dom::Element*>(parent)->tag_name();
+}
+
 TEST(HtmlTest, FullDocumentStructure)
 {
   auto doc = ParseDoc("<!DOCTYPE html><html><head><title>Hi</title></head>"
@@ -144,15 +153,16 @@ TEST(HtmlTest, CharacterReferences)
 
 TEST(HtmlTest, NamedReferenceDoesNotSwallowFollowingText)
 {
-  // A named reference that is a prefix of a longer alnum run must be emitted
-  // literally, keeping the trailing characters (WHATWG named character
-  // reference state).
+  // A named reference matches the *longest* prefix present in the table.  When
+  // that match lacks its semicolon, the reference is still expanded and the
+  // remainder is reconsumed as ordinary text (WHATWG 13.2.5.78: a
+  // missing-semicolon-after-character-reference *parse error*, not a
+  // rejection).  So "&ltx" is "<" followed by "x", and "&ampfoo;" is "&"
+  // followed by "foo;".
   auto doc = ParseDoc("<p>&ampfoo; &ltx &notin; &apos;</p>");
   dom::Element* p = dom::QuerySelector(*doc, "p");
   ASSERT_NE(p, nullptr);
-  // &ampfoo; -> literal "&ampfoo;"; &ltx -> literal "&ltx";
-  // &notin; -> U+2209 (∉); &apos; -> single quote.
-  EXPECT_EQ(p->TextContent(), "&ampfoo; &ltx \xE2\x88\x89 '");
+  EXPECT_EQ(p->TextContent(), "&foo; <x \xE2\x88\x89 '");
 }
 
 TEST(HtmlTest, FullEntityTableLookups)
@@ -168,13 +178,51 @@ TEST(HtmlTest, FullEntityTableLookups)
 
 TEST(HtmlTest, LegacyNoSemicolonEntities)
 {
-  // Legacy names resolve without a trailing semicolon when not followed by an
-  // alnum; &AElig, &copy and &amp keep the following text.
+  // A named reference without its trailing semicolon is a parse error but is
+  // still expanded, in text as well as in attributes.  This used to be gated
+  // on the legacy no-semicolon list *and* rejected whenever an alphanumeric
+  // followed, which meant a missing semicolon silently disabled the entity in
+  // most real markup.  The spec's own examples:
+  //   "&notit; I tell you" -> "¬it; I tell you"
+  //   "&copyx"             -> "©x"
   auto doc = ParseDoc("<p>&copy x &copyx &AElig &amp;x</p>");
   dom::Element* p = dom::QuerySelector(*doc, "p");
   ASSERT_NE(p, nullptr);
-  // &copy x -> ©x; &copyx -> literal (alnum follows); &AElig -> Æ; &amp;x -> &x.
-  EXPECT_EQ(p->TextContent(), "\xC2\xA9 x &copyx \xC3\x86 &x");
+  // &copy x -> ©x; &copyx -> ©x; &AElig -> Æ; &amp;x -> &x.
+  EXPECT_EQ(p->TextContent(), "\xC2\xA9 x \xC2\xA9x \xC3\x86 &x");
+
+  // The spec's two named examples.
+  auto notit = ParseDoc("<p>&notit; I tell you</p>");
+  EXPECT_EQ(dom::QuerySelector(*notit, "p")->TextContent(), "\xC2\xAC" "it; I tell you");
+  auto crafts = ParseDoc("<p>Arts&ampcrafts</p>");
+  EXPECT_EQ(dom::QuerySelector(*crafts, "p")->TextContent(), "Arts&crafts");
+}
+
+TEST(HtmlTest, MissingSemicolonAttributeReferenceIsLiteral)
+{
+  // The one case where a semicolon-less reference is *not* expanded: inside an
+  // attribute, when the next character is '=' or an alphanumeric.  This is the
+  // spec's "for historical reasons" rule, and it is attribute-scoped -- which is
+  // the contrast with the text cases above.
+  {
+    auto doc = ParseDoc("<p><input value=\"Arts&ampcrafts\"></p>");
+    dom::Element* input = dom::QuerySelector(*doc, "input");
+    ASSERT_NE(input, nullptr);
+    EXPECT_EQ(input->GetAttribute("value"), "Arts&ampcrafts");
+  }
+  {
+    auto doc = ParseDoc("<p><input value=\"&amp=x\"></p>");
+    dom::Element* input = dom::QuerySelector(*doc, "input");
+    ASSERT_NE(input, nullptr);
+    EXPECT_EQ(input->GetAttribute("value"), "&amp=x");
+  }
+  // Inside an attribute but *not* followed by '=' or an alnum, it expands.
+  {
+    auto doc = ParseDoc("<p><input value=\"&notin\"></p>");
+    dom::Element* input = dom::QuerySelector(*doc, "input");
+    ASSERT_NE(input, nullptr);
+    EXPECT_EQ(input->GetAttribute("value"), "\xE2\x88\x89");
+  }
 }
 
 TEST(HtmlTest, RcdataRawtextEndTagClosesWithWhitespace)
@@ -462,6 +510,104 @@ TEST(HtmlTest, OverDeepNestingIsCapped)
   // The depth cap is internal; assert the result stays far below the input
   // nesting so the recursive downstream walks cannot overflow.
   EXPECT_LT(MaxDepth(doc.get()), 1000);
+}
+
+TEST(HtmlTest, DuplicateAttributesKeepTheFirstValue)
+{
+  // WHATWG 13.2.5.34: a duplicate attribute is a parse error and the *new*
+  // attribute must be removed from the token, so the first occurrence wins.
+  // The engine kept both and overwrote, making the last one win.  Beyond
+  // conformance this is a parser-differential surface: HTML sanitizers read
+  // the first occurrence while a naive allow-list filter often reads the last.
+  {
+    auto doc = ParseDoc("<body><div class=\"a\" class=\"b\">x</div></body>");
+    const dom::Element* div = dom::QuerySelector(*doc, "div");
+    ASSERT_NE(div, nullptr);
+    EXPECT_EQ(div->GetAttribute("class"), "a");
+    // Only one attribute is present, not two.
+    std::size_t class_attrs = 0;
+    for (const auto& attr : div->attributes()) {
+      if (attr.name == "class") {
+        ++class_attrs;
+      }
+    }
+    EXPECT_EQ(class_attrs, 1u);
+  }
+  {
+    auto doc = ParseDoc("<body><input type=\"text\" type=\"file\"></body>");
+    const dom::Element* input = dom::QuerySelector(*doc, "input");
+    ASSERT_NE(input, nullptr);
+    EXPECT_EQ(input->GetAttribute("type"), "text");
+  }
+  // Distinct attributes are unaffected.
+  {
+    auto doc = ParseDoc("<body><div class=\"a\" id=\"b\">x</div></body>");
+    const dom::Element* div = dom::QuerySelector(*doc, "div");
+    ASSERT_NE(div, nullptr);
+    EXPECT_EQ(div->GetAttribute("class"), "a");
+    EXPECT_EQ(div->GetAttribute("id"), "b");
+  }
+}
+
+// ---- <noscript> / <noframes> / <template> in head (13.2.6.4.4) -----------
+
+TEST(HtmlTest, NoscriptInHeadKeepsBodyUsable)
+{
+  // Regression: <noscript> in <head> used to be inserted as an ordinary
+  // element without switching the tokenizer to RAWTEXT.  The insertion mode
+  // therefore stayed at "in head" with <noscript> on the stack of open
+  // elements, so the first start tag *inside* <noscript> hit the "in head"
+  // "anything else" rule, whose PopElement() popped <noscript> rather than
+  // <head>.  From there the mode stack and the stack of open elements stayed
+  // desynchronised for the rest of the document: <body> was inserted as a
+  // child of <head> and every following element became a direct child of
+  // <html>, which left `document.body` null for the whole page.
+  auto doc = ParseDoc("<!DOCTYPE html><html><head>"
+                      "<noscript><div id=ns>N</div></noscript>"
+                      "</head><body><div id=c>x</div></body></html>");
+  dom::Element* body = Body(*doc);
+  ASSERT_NE(body, nullptr) << "document.body must exist and be a real <body>";
+  // <body> must be a child of <html>, not of <head>.
+  EXPECT_EQ(ParentTag(body), "html");
+  EXPECT_EQ(dom::QuerySelector(*doc, "#c"), body->first_child());
+  // The <div> inside <noscript> is text, not a live element.
+  dom::Element* noscript = dom::QuerySelector(*doc, "noscript");
+  ASSERT_NE(noscript, nullptr);
+  // Only a text node, no element children.
+  ASSERT_EQ(noscript->child_count(), 1u);
+  EXPECT_EQ(noscript->first_child()->node_type(), dom::NodeType::kText);
+  EXPECT_EQ(noscript->TextContent(), "<div id=ns>N</div>");
+}
+
+TEST(HtmlTest, EmptyNoscriptInHeadKeepsBodyUsable)
+{
+  auto doc = ParseDoc("<!DOCTYPE html><html><head><noscript></noscript></head>"
+                      "<body><p>x</p></body></html>");
+  ASSERT_NE(Body(*doc), nullptr);
+  EXPECT_NE(dom::QuerySelector(*doc, "p"), nullptr);
+}
+
+TEST(HtmlTest, TemplateInHeadDoesNotCorruptTheTree)
+{
+  // The "in template" insertion mode is not implemented yet (see
+  // docs/html/README.md), so <template> content is kept as raw text.  What
+  // must not happen is the parser desynchronising the way <noscript> did.
+  auto doc = ParseDoc("<!DOCTYPE html><html><head>"
+                      "<template><div>TT</div></template>"
+                      "</head><body><p>x</p></body></html>");
+  dom::Element* body = Body(*doc);
+  ASSERT_NE(body, nullptr);
+  EXPECT_EQ(ParentTag(body), "html");
+  EXPECT_NE(dom::QuerySelector(*doc, "p"), nullptr);
+}
+
+TEST(HtmlTest, NoframesInHeadDoesNotCorruptTheTree)
+{
+  auto doc = ParseDoc("<!DOCTYPE html><html><head>"
+                      "<noframes><div>N</div></noframes>"
+                      "</head><body><p>x</p></body></html>");
+  ASSERT_NE(Body(*doc), nullptr);
+  EXPECT_NE(dom::QuerySelector(*doc, "p"), nullptr);
 }
 
 // ---- Newline normalization (13.2.3.5) ------------------------------------

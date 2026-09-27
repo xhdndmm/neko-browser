@@ -39,11 +39,34 @@
 
 - CDATA section 状态、processing instruction 状态（依赖 foreign content）
 - in template / in frameset 模式（依赖 template/frameset 支持）
-- in head noscript 的完整插入模式（脚本启用时的 RAWTEXT；当前按脚本禁用
-  处理：`<noscript>` 作为 head 内普通元素，避免提前弹出 head 并丢掉
-  后续真实 `<body>` 属性 —— 百度首页回归）
 - quirks mode 尚未接线到 CSS/布局（force-quirks 标志已由 tokenizer 计算，
   但 Document 的渲染模式仍为 no-quirks）
+- 无 fragment parsing（`innerHTML` 走完整文档解析器再取 `<body>` 子节点，
+  因此 `<style>`/`<meta>`/`<link>`/`<template>` 形式的片段会被静默丢弃，
+  表格片段的上下文规则也不正确 —— 见兼容性矩阵）
+- 重复 `<body>` 的属性合并、form element pointer 等次要规则
+
+## 已修正的解析器缺陷（曾经的静默失真）
+
+以下几项曾静默产出错误 DOM，现已修复并各有回归测试：
+
+- **in-head `<noscript>` / `<noframes>`**：按 WHATWG 13.2.6.4.4 在脚本**启用**
+  时切 RAWTEXT。此前该分支只插入元素、不切 tokenizer，也不弹出，插入模式仍
+  停在 `kInHead` 且 `<noscript>` 留在开元素栈上，于是 `<noscript>` 内的第一个
+  起始标签走 "in head anything else" 分支，`PopElement()` 弹出的是
+  `noscript` 而不是 `head`；此后模式栈与开元素栈**整篇文档失步**：真正的
+  `<body>` 被插到 `<head>` 之下，其后所有元素成了 `<html>` 的直接子节点，
+  **`document.body` 全程为 null**。`<noscript>` 内容此前还会被解析成活动元素
+  并触发真实网络请求（`<img src>`）。`<template>` 同因缺 "in template" 模式而
+  有同样风险，现按 rawtext 处理并在文档中标注为近似。
+- **命名字符引用 13.2.5.78**：`for historical reasons` 规则只适用于属性上下文，
+  且不查 legacy 名单。此前该拒绝逻辑被用在所有上下文并额外要求 legacy 名单，
+  结果「缺分号」几乎在所有真实标记里都静默禁用实体。现缺分号仍展开：
+  `&notit;`→`¬it;`、`&copyx`→`©x`、`Arts&ampcrafts`→`Arts&crafts`。
+  **注意**：`html_test.cpp` 中原有两个用例把旧（错误）行为写成了断言，已随之更正。
+- **重复属性（13.2.5.34）**：应保留**首个**，此前 `SetAttribute` 覆盖导致末个胜出。
+  这不只是规范问题——它构成典型的解析器差异面（HTML 清洗器读首个，朴素过滤器
+  常读末个）。
 
 ## 命名字符引用（生成代码）
 

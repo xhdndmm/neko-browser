@@ -10,6 +10,10 @@
 
 #include "neko/browser/page_scripts.h"
 
+#include <algorithm>
+#include <chrono>
+#include <thread>
+
 #include "neko/base/logging.h"
 #include "neko/base/string_util.h"
 #include "neko/css/stylesheet.h"
@@ -859,6 +863,32 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
   // the new state.
   page.ReapplyStyles();
   return binder;
+}
+
+int PumpScriptTimersUntilQuiet(javascript::DomBinder& binder, int max_iterations)
+{
+  constexpr auto kQuietBudget = std::chrono::milliseconds(kPumpQuietBudgetMs);
+  int iterations = 0;
+  for (; iterations < max_iterations; ++iterations) {
+    if (binder.RunPendingTimers() > 0) {
+      continue; // ran something; go round again
+    }
+    // Nothing was due.  Stop unless a timer is scheduled close enough to now
+    // to be worth waiting for.
+    const std::optional<std::chrono::steady_clock::time_point> next = binder.NextTimerDeadline();
+    if (!next.has_value()) {
+      break; // nothing scheduled: the loop is quiet
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (*next <= now) {
+      continue; // due this instant; the next turn will run it
+    }
+    if (*next - now > kQuietBudget) {
+      break; // too far out to wait: the page is treated as settled
+    }
+    std::this_thread::sleep_until(std::min(*next, now + kQuietBudget));
+  }
+  return iterations;
 }
 
 } // namespace neko::browser

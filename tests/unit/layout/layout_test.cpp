@@ -143,6 +143,87 @@ TEST(LayoutTest, VerticalStacking)
   EXPECT_FLOAT_EQ(body->y + body->height, second->y + second->height);
 }
 
+// Returns the vertical gap between two adjacent block boxes.
+float VGap(const LayoutBox& first, const LayoutBox& second)
+{
+  return (second.y - (first.y + first.height));
+}
+
+TEST(LayoutTest, AdjoiningSiblingMarginsCollapse)
+{
+  // Regression: every pair of vertical margins used to be *summed*.  Since the
+  // UA sheet gives `p { margin: 1em 0 }`, two adjacent paragraphs rendered
+  // with 32px between them instead of the specified 16px -- the single largest
+  // source of visual divergence from other browsers, visible on nearly every
+  // page.  CSS 2.1 8.3.1: adjoining margins collapse to the largest of the
+  // positive margins plus the most negative of the negative ones.
+  {
+    Page page = Build("<body><p style=\"margin:16px 0;height:20px\">A</p>"
+                      "<p style=\"margin:16px 0;height:20px\">B</p></body>");
+    const LayoutBox* body = FindBox(*page.root, "body", *page.doc);
+    ASSERT_NE(body, nullptr);
+    ASSERT_EQ(body->children.size(), 2u);
+    EXPECT_FLOAT_EQ(VGap(*body->children[0], *body->children[1]), 16.0f);
+  }
+  // max(), not the sum: 40 and 10 collapse to 40.
+  {
+    Page page = Build("<body><div style=\"margin:0 0 40px;height:20px\"></div>"
+                      "<div style=\"margin:10px 0 0;height:20px\"></div></body>");
+    const LayoutBox* body = FindBox(*page.root, "body", *page.doc);
+    ASSERT_NE(body, nullptr);
+    ASSERT_EQ(body->children.size(), 2u);
+    EXPECT_FLOAT_EQ(VGap(*body->children[0], *body->children[1]), 40.0f);
+  }
+  // A run of siblings collapses pairwise, so the middle box's margins are
+  // absorbed on both sides.
+  {
+    Page page = Build("<body><div style=\"height:20px\"></div>"
+                      "<div style=\"margin:25px 0;height:20px\"></div>"
+                      "<div style=\"height:20px\"></div></body>");
+    const LayoutBox* body = FindBox(*page.root, "body", *page.doc);
+    ASSERT_NE(body, nullptr);
+    ASSERT_EQ(body->children.size(), 3u);
+    EXPECT_FLOAT_EQ(VGap(*body->children[0], *body->children[1]), 25.0f);
+    EXPECT_FLOAT_EQ(VGap(*body->children[1], *body->children[2]), 25.0f);
+  }
+  // One positive plus one negative: they add (CSS 2.1 8.3.1), so the boxes
+  // overlap rather than leaving a gap.
+  {
+    Page page = Build("<body><div style=\"height:20px\"></div>"
+                      "<div style=\"margin-top:-20px;height:20px\"></div></body>");
+    const LayoutBox* body = FindBox(*page.root, "body", *page.doc);
+    ASSERT_NE(body, nullptr);
+    ASSERT_EQ(body->children.size(), 2u);
+    EXPECT_FLOAT_EQ(VGap(*body->children[0], *body->children[1]), -20.0f);
+  }
+}
+
+TEST(LayoutTest, MarginsDoNotCollapseAcrossInlineContentOrBfcRoots)
+{
+  // Line boxes between two blocks separate their margins, so they must not
+  // collapse (CSS 2.1 8.3.1: "no line box ... separates them").
+  {
+    Page page = Build("<body><div style=\"margin-bottom:30px;height:20px\"></div>"
+                      "some text"
+                      "<div style=\"margin-top:30px;height:20px\"></div></body>");
+    const LayoutBox* body = FindBox(*page.root, "body", *page.doc);
+    ASSERT_NE(body, nullptr);
+    ASSERT_EQ(body->children.size(), 2u);
+    EXPECT_GT(VGap(*body->children[0], *body->children[1]), 0.0f);
+  }
+  // A block formatting context root does not let its children's margins
+  // collapse through its own boundary, so the gap survives.
+  {
+    Page page = Build("<body><div style=\"overflow:hidden\">"
+                      "<div style=\"height:20px\"></div>"
+                      "<div style=\"margin-top:20px;height:20px\"></div></div></body>");
+    const LayoutBox* outer = FindBox(*page.root, "div", *page.doc);
+    ASSERT_NE(outer, nullptr);
+    ASSERT_EQ(outer->children.size(), 2u);
+    EXPECT_FLOAT_EQ(VGap(*outer->children[0], *outer->children[1]), 20.0f);
+  }
+}
+
 TEST(LayoutTest, BoxModelWithPaddingBorderMargin)
 {
   Page page = Build("<body><div style=\"width: 200px; padding: 10px; border: 2px solid; "

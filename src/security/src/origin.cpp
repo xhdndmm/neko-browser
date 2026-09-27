@@ -8,6 +8,12 @@ namespace neko::security {
 
 Origin Origin::FromUrl(const url::Url& url)
 {
+  // Only schemes with the "//" authority syntax and a host have a tuple
+  // origin.  data:, javascript:, blob:, file:, about: and every other
+  // non-special scheme have an *opaque* origin: they are never same-origin
+  // with anything, not even with another URL of the same scheme, and they
+  // serialize as "null".  Returning a tuple for them would make, say, all
+  // data: documents mutually same-origin.
   if (!url::IsSpecialScheme(url.scheme())) {
     return Opaque();
   }

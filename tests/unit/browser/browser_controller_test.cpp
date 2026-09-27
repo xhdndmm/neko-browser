@@ -789,6 +789,85 @@ TEST(BrowserControllerTest, PumpScriptTimersRunsSetTimeout)
   EXPECT_DOUBLE_EQ(num.value(), 1.0);
 }
 
+TEST(BrowserControllerTest, PumpScriptTimersUntilQuietRunsDeferredWork)
+{
+  // Regression: the headless entry points (--screenshot / --dump-dom) have no
+  // event loop of their own, so they used to observe the page in its
+  // "synchronous script only" state -- no setTimeout / setInterval /
+  // requestAnimationFrame callback had run.  That is where most of a real
+  // page's content lives (framework hydration, lazy chunks, deferred
+  // rendering), so every rendering capture was of the wrong page.  This
+  // drives the loop until it goes quiet.
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<script>"
+                               "window._a = 0; window._b = 0;"
+                               // zero-delay, a short delay, and a chained timer
+                               "setTimeout(function(){ window._a++; }, 0);"
+                               "setTimeout(function(){ window._a++;"
+                               "  setTimeout(function(){ window._b++; }, 0); }, 5);"
+                               "</script>"
+                               "</body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  ASSERT_NE(tab->script_runtime, nullptr);
+
+  const auto read = [&](const char* expr) {
+    const auto v = tab->script_runtime->Evaluate(expr);
+    EXPECT_TRUE(v.has_value()) << expr;
+    return v.has_value() ? v.value().ToNumber().value_or(-1.0) : -1.0;
+  };
+  // Nothing has run yet: a single PumpScriptTimers() cannot wait for a
+  // deadline, and the chained timer does not exist yet.
+  EXPECT_DOUBLE_EQ(read("window._a"), 0.0);
+  EXPECT_DOUBLE_EQ(read("window._b"), 0.0);
+
+  // A single call to the "until quiet" pump must run every one of them,
+  // including the timer scheduled from inside another timer.
+  controller.PumpScriptTimersUntilQuiet();
+  EXPECT_DOUBLE_EQ(read("window._a"), 2.0);
+  EXPECT_DOUBLE_EQ(read("window._b"), 1.0);
+}
+
+TEST(BrowserControllerTest, PumpScriptTimersUntilQuietIsBounded)
+{
+  // A page that keeps scheduling timers must not stall the caller: the loop is
+  // bounded by an iteration cap, and a timer scheduled further out than the
+  // quiet budget is treated as "settled" rather than waited for.
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body><script>"
+                               "window._n = 0;"
+                               "function spin(){ window._n++; setTimeout(spin, 0); }"
+                               "setTimeout(spin, 0);"
+                               // Far in the future: must not be waited for.
+                               "setTimeout(function(){}, 600000);"
+                               "</script></body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  const auto start = std::chrono::steady_clock::now();
+  controller.PumpScriptTimersUntilQuiet();
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+  // The iteration cap (1000) is what stops the runaway chain; the 600 s timer
+  // is what the quiet budget skips.  Neither may turn into a real wait.
+  EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(), 5000)
+      << "the pump must not block on a runaway timer chain";
+}
+
 // ADR 0020: the worker (not the GUI) produces the viewport frame; timers that
 // mutate the DOM and hover changes must be reflected in the next snapshot.
 TEST(BrowserControllerTest, FrameIsProducedAndRefreshedByDomChanges)
@@ -820,7 +899,8 @@ TEST(BrowserControllerTest, FrameIsProducedAndRefreshedByDomChanges)
   EXPECT_GT(snapshot.frame->width, 0);
   EXPECT_GT(snapshot.frame->height, 0);
   EXPECT_EQ(snapshot.frame->rgba.size(),
-            static_cast<std::size_t>(snapshot.frame->width) * snapshot.frame->height * 4);
+            static_cast<std::size_t>(snapshot.frame->width) *
+                static_cast<std::size_t>(snapshot.frame->height) * 4u);
   const float initial_height = snapshot.frame_content_height;
 
   // A timer mutates the DOM; the next pump must rebuild the frame.

@@ -60,6 +60,32 @@ TEST(EncodingTest, HttpHeaderCharset)
   EXPECT_FALSE(CharsetFromHttpHeader("text/html; foo=bar").has_value());
 }
 
+TEST(EncodingTest, HttpHeaderCharsetParameterNameIsCaseInsensitive)
+{
+  // Regression: the parameter name was compared byte-exactly, so a perfectly
+  // legal `CHARSET=utf-8` yielded no charset and the document silently fell
+  // back to windows-1252 (mojibake).
+  EXPECT_EQ(CharsetFromHttpHeader("text/html; CHARSET=utf-8"), Charset::kUtf8);
+  EXPECT_EQ(CharsetFromHttpHeader("text/html; Charset=utf-8"), Charset::kUtf8);
+  EXPECT_EQ(CharsetFromHttpHeader("text/html; cHaRsEt=gb2312"), Charset::kGb18030);
+  EXPECT_EQ(CharsetFromHttpHeader("text/html; CHARSET = utf-8"), Charset::kUtf8);
+}
+
+TEST(EncodingTest, HttpHeaderCharsetValueMayBeQuoted)
+{
+  // Regression: the value scan stopped *at* the opening quote and never
+  // stripped it, so `charset="utf-8"` produced an empty label and fell back to
+  // windows-1252.  This is a very common real-world header shape.
+  EXPECT_EQ(CharsetFromHttpHeader("text/html; charset=\"utf-8\""), Charset::kUtf8);
+  EXPECT_EQ(CharsetFromHttpHeader("text/html; charset='utf-8'"), Charset::kUtf8);
+  EXPECT_EQ(CharsetFromHttpHeader("text/html; charset=\"UTF-8\""), Charset::kUtf8);
+  EXPECT_EQ(CharsetFromHttpHeader("text/html; charset=\"gb2312\""), Charset::kGb18030);
+  EXPECT_EQ(CharsetFromHttpHeader("text/html; CHARSET=\"utf-8\""), Charset::kUtf8);
+  // A following parameter must not be swallowed into the label.
+  EXPECT_EQ(CharsetFromHttpHeader("text/html; charset=\"utf-8\"; boundary=x"),
+            Charset::kUtf8);
+}
+
 // ---------------------------------------------------------------------------
 // UTF-8 / UTF-16
 // ---------------------------------------------------------------------------

@@ -248,6 +248,26 @@ TEST(UrlTest, IPv6Host)
   EXPECT_EQ(r.value().Serialize(), "http://[::1]:8080/x");
 }
 
+TEST(UrlTest, BracketedHostRejectsControlCharacters)
+{
+  // Regression (security): the bracketed IPv6 form bypassed the host-character
+  // validation applied to every other authority, so "http://[a\r\nX-Injected: 1]/p"
+  // parsed successfully and the raw CRLF was written straight into the Host
+  // request header -- the exact injection the control-character rule exists to
+  // prevent, reached through the one path that skipped it.
+  const auto base = Url::Parse("http://base/");
+  ASSERT_TRUE(base.has_value());
+  EXPECT_FALSE(Url::Parse("http://[a\r\nX-Injected: 1]/p", base.value()).has_value());
+  EXPECT_FALSE(Url::Parse("http://[a\nb]/p", base.value()).has_value());
+  EXPECT_FALSE(Url::Parse("http://[a\rb]/p", base.value()).has_value());
+  EXPECT_FALSE(Url::Parse(std::string("http://[a\x01") + "b]/p", base.value()).has_value());
+  EXPECT_FALSE(Url::Parse(std::string("http://[a\x7f") + "b]/p", base.value()).has_value());
+  // A well-formed IPv6 literal (and one with a zone-ish colon form) still works.
+  EXPECT_TRUE(Url::Parse("http://[::1]/p", base.value()).has_value());
+  EXPECT_TRUE(Url::Parse("http://[fe80::1]:8080/p", base.value()).has_value());
+  EXPECT_TRUE(Url::Parse("http://[2001:db8::8a2e:370:7334]/p", base.value()).has_value());
+}
+
 TEST(UrlTest, NonSpecialScheme)
 {
   const auto r = Url::Parse("mailto:user@example.com");
@@ -286,6 +306,39 @@ TEST(UrlTest, OriginForDefaultAndCustomPort)
   const auto b = Url::Parse("http://example.com:8080/path");
   ASSERT_TRUE(b.has_value());
   EXPECT_EQ(b.value().Origin(), "http://example.com:8080");
+}
+
+TEST(UrlTest, OriginForOpaqueOriginSchemesIsNull)
+{
+  // Regression (security): Url::Origin() unconditionally built
+  // "scheme://host", so a data: URL reported the origin "data://" and a
+  // file: URL reported "file://".  Those are constant strings, so every
+  // data: document (and every file: document) would have been same-origin
+  // with every other one the moment the Same-Origin Policy was wired to this
+  // value -- and storage partitioning keys off the origin string too.
+  // Per HTML 4.4.1.2 these schemes have an *opaque* origin, serialized "null".
+  for (const char* u : {"data:text/html,x",
+                        "data:;base64,AAAA",
+                        "file:///etc/passwd",
+                        "javascript:alert(1)",
+                        "about:blank",
+                        "blob:http://example.com/uuid",
+                        "mailto:a@b.c",
+                        "urn:isbn:1234"}) {
+    const auto parsed = Url::Parse(u);
+    ASSERT_TRUE(parsed.has_value()) << u;
+    EXPECT_EQ(parsed.value().Origin(), "null") << u;
+  }
+  // Special schemes keep their tuple origin.
+  for (const char* u : {"http://a.com/", "https://a.com/", "ws://a.com/", "wss://a.com/"}) {
+    const auto parsed = Url::Parse(u);
+    ASSERT_TRUE(parsed.has_value()) << u;
+    EXPECT_NE(parsed.value().Origin(), "null") << u;
+  }
+  // The default port is elided rather than reported explicitly.
+  const auto def = Url::Parse("http://example.com:80/");
+  ASSERT_TRUE(def.has_value());
+  EXPECT_EQ(def.value().Origin(), "http://example.com");
 }
 
 } // namespace
