@@ -227,4 +227,15 @@ void ForgetEventTargetRuntime(JSRuntime* rt)
   g_event_target_class_registered.erase(rt);
 }
 
+JSValue CreateEventTargetInstance(JSContext* ctx, JSValueConst prototype)
+{
+  EnsureEventTargetClassRegistered(JS_GetRuntime(ctx));
+  JSValue object = JS_NewObjectProtoClass(ctx, prototype, g_event_target_class_id);
+  if (JS_IsException(object)) {
+    return object;
+  }
+  JS_SetOpaque(object, new EventTargetWrapper());
+  return object;
+}
+
 } // namespace neko::javascript

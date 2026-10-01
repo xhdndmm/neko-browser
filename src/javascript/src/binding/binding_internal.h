@@ -496,6 +496,14 @@ void CloseMessagePorts(Impl& impl);
 int RunPendingMessagePortTasks(Impl& impl);
 void InstallEventTargetGlobal(JSContext* ctx, JSValue global, Impl& impl);
 void ForgetEventTargetRuntime(JSRuntime* rt);
+
+// Creates a genuine EventTarget instance whose prototype is |prototype| (it
+// should chain to Impl::event_target_proto so the listener methods resolve).
+// Bindings whose spec interface inherits EventTarget (Performance, ...) use
+// this instead of a plain object so that
+// `EventTarget.prototype.addEventListener.call(object, ...)` and
+// `object instanceof EventTarget` behave like in a real browser.
+JSValue CreateEventTargetInstance(JSContext* ctx, JSValueConst prototype);
 // AbortController/AbortSignal (abort_binding.cpp).
 void InstallAbortGlobals(JSContext* ctx, JSValue global, Impl& impl);
 void ForgetAbortRuntime(JSRuntime* rt);
@@ -519,6 +527,14 @@ JSValue PerformanceNow(JSContext* ctx, JSValueConst this_val, int argc, JSValueC
 JSValue PerformanceGetEntries(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue
 PerformanceGetEntriesByType(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue PerformanceSetResourceTimingBufferSize(JSContext* ctx,
+                                               JSValueConst this_val,
+                                               int argc,
+                                               JSValueConst* argv);
+JSValue PerformanceClearResourceTimings(JSContext* ctx,
+                                        JSValueConst this_val,
+                                        int argc,
+                                        JSValueConst* argv);
 JSValue UIEventConstructor(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue LocationHrefGetter(JSContext* ctx, JSValueConst this_val);
 JSValue LocationHrefSetter(JSContext* ctx, JSValueConst this_val, JSValueConst value);
@@ -746,6 +762,10 @@ struct Impl
   std::chrono::steady_clock::time_point performance_origin = std::chrono::steady_clock::now();
   // performance.timing.navigationStart (wall-clock epoch ms at construction).
   double navigation_start_epoch_ms = 0.0;
+  // performance.setResourceTimingBufferSize() limit.  The engine does not
+  // produce resource timing entries yet, so the value is stored but has no
+  // observable effect until entries exist.
+  std::size_t resource_timing_buffer_size = 250;
 
   // Event listeners: node -> (type -> listeners).  Keyed by node (elements
   // and the document; window-level listeners are stored under the document,

@@ -2,6 +2,7 @@
 
 #include "binding_internal.h"
 
+#include <iterator>
 #include <quickjs.h>
 #include <string>
 
@@ -12,6 +13,57 @@ namespace {
 JSValue StringProperty(JSContext* ctx, std::string_view value)
 {
   return JS_NewStringLen(ctx, value.data(), value.size());
+}
+
+// The standard URL component surface.  Each instance stores its components as
+// own data properties (the binding keeps that representation so existing reads
+// and writes behave as before), and the prototype mirrors them with real
+// getters: hardened libraries read
+// `Object.getOwnPropertyDescriptors(URL.prototype)` and call the getters with
+// the URL instance as receiver instead of touching instance properties, so a
+// prototype without accessors makes them see every component as undefined
+// (Transcend's airgap.js mis-detected the page domain this way on mozilla.org).
+constexpr const char* kUrlComponentNames[] = {"href",
+                                              "origin",
+                                              "protocol",
+                                              "username",
+                                              "password",
+                                              "host",
+                                              "hostname",
+                                              "port",
+                                              "pathname",
+                                              "search",
+                                              "hash"};
+
+JSValue UrlComponentGetter(JSContext* ctx, JSValueConst this_val, int magic)
+{
+  JSAtom atom = JS_NewAtom(ctx, kUrlComponentNames[magic]);
+  if (atom == JS_ATOM_NULL)
+    return JS_EXCEPTION;
+  JSPropertyDescriptor desc = {};
+  const int found = JS_GetOwnProperty(ctx, &desc, this_val, atom);
+  JS_FreeAtom(ctx, atom);
+  if (found < 0)
+    return JS_EXCEPTION;
+  if (found == 0)
+    return JS_ThrowTypeError(ctx, "URL component getter called on a non-URL object");
+  JS_FreeValue(ctx, desc.getter);
+  JS_FreeValue(ctx, desc.setter);
+  return desc.value;
+}
+
+JSValue UrlComponentSetter(JSContext* ctx, JSValueConst this_val, JSValueConst value, int magic)
+{
+  // Keeps the historical data-property semantics: the component is updated in
+  // place and `href` is not re-serialized (a pre-existing approximation, not
+  // made worse by exposing the accessors).
+  JSAtom atom = JS_NewAtom(ctx, kUrlComponentNames[magic]);
+  if (atom == JS_ATOM_NULL)
+    return JS_EXCEPTION;
+  const int rc =
+      JS_DefinePropertyValue(ctx, this_val, atom, JS_DupValue(ctx, value), JS_PROP_C_W_E);
+  JS_FreeAtom(ctx, atom);
+  return rc < 0 ? JS_EXCEPTION : JS_UNDEFINED;
 }
 
 JSValue Constructor(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv)
@@ -85,6 +137,14 @@ void InstallUrlGlobal(JSContext* ctx, JSValue global)
   JSValue prototype = JS_NewObject(ctx);
   JS_SetPropertyStr(ctx, prototype, "toString", JS_NewCFunction(ctx, ToString, "toString", 0));
   JS_SetPropertyStr(ctx, prototype, "toJSON", JS_NewCFunction(ctx, ToString, "toJSON", 0));
+  for (std::size_t i = 0; i < std::size(kUrlComponentNames); ++i) {
+    const int magic = static_cast<int>(i);
+    DefineAccessor(ctx,
+                   prototype,
+                   kUrlComponentNames[i],
+                   MakeGetterMagic(ctx, kUrlComponentNames[i], UrlComponentGetter, magic),
+                   MakeSetterMagic(ctx, kUrlComponentNames[i], UrlComponentSetter, magic));
+  }
 
   JSValue constructor = JS_NewCFunction2(ctx, Constructor, "URL", 1, JS_CFUNC_constructor, 0);
   JS_SetConstructor(ctx, constructor, prototype);

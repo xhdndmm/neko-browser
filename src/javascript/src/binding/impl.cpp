@@ -607,17 +607,22 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   }
 
   // window.performance exposes the current document's navigation entry.
+  // Performance inherits EventTarget, so the instance is a real EventTarget:
+  // hardened libraries register listeners through
+  // EventTarget.prototype.addEventListener.call(performance, ...).
   {
-    JSValue performance_proto = JS_NewObject(ctx);
-    static const std::array<JSCFunctionListEntry, 3> kPerformance = {{
+    JSValue performance_proto = JS_NewObjectProto(ctx, event_target_proto);
+    static const std::array<JSCFunctionListEntry, 5> kPerformance = {{
         JS_CFUNC_DEF("now", 0, PerformanceNow),
         JS_CFUNC_DEF("getEntries", 0, PerformanceGetEntries),
         JS_CFUNC_DEF("getEntriesByType", 1, PerformanceGetEntriesByType),
+        JS_CFUNC_DEF("setResourceTimingBufferSize", 1, PerformanceSetResourceTimingBufferSize),
+        JS_CFUNC_DEF("clearResourceTimings", 0, PerformanceClearResourceTimings),
     }};
     JS_SetPropertyFunctionList(
         ctx, performance_proto, kPerformance.data(), static_cast<int>(kPerformance.size()));
     DefineInterface(ctx, global, "Performance", performance_proto);
-    JSValue performance = JS_NewObjectProto(ctx, performance_proto);
+    JSValue performance = CreateEventTargetInstance(ctx, performance_proto);
     JS_FreeValue(ctx, performance_proto);
     // timeOrigin and timing.navigationStart are both the page-load start
     // (epoch ms; same value as a real browser reports for a fresh load).

@@ -420,6 +420,34 @@ TEST_F(DomBinderTest, UrlConstructsParsedValuesAndExposesPrototype)
                "url.href; })()"));
 }
 
+// Hardened libraries (for example Transcend's consent manager) read URL
+// components through the prototype accessor descriptors and invoke the getters
+// with the instance as receiver, as in
+// `Object.getOwnPropertyDescriptor(URL.prototype, 'hostname').get.call(url)`.
+// The binding stores components as own data properties, so the prototype must
+// still expose real getters, otherwise those libraries observe `undefined` for
+// every component and mis-detect the page domain.
+TEST_F(DomBinderTest, UrlComponentsAreReadableThroughPrototypeGetterDescriptors)
+{
+  EXPECT_TRUE(EvalBool("(function(){"
+                       " var descriptors = Object.getOwnPropertyDescriptors(URL.prototype);"
+                       " var url = new URL('https://example.test:8443/docs?q=1#part');"
+                       " function viaPrototype(name){ var d = descriptors[name];"
+                       "   return d && typeof d.get === 'function' ? d.get.call(url) : undefined; }"
+                       " return viaPrototype('href') === 'https://example.test:8443/docs?q=1#part'"
+                       "   && viaPrototype('origin') === 'https://example.test:8443'"
+                       "   && viaPrototype('protocol') === 'https:'"
+                       "   && viaPrototype('host') === 'example.test:8443'"
+                       "   && viaPrototype('hostname') === 'example.test'"
+                       "   && viaPrototype('port') === '8443'"
+                       "   && viaPrototype('pathname') === '/docs'"
+                       "   && viaPrototype('search') === '?q=1'"
+                       "   && viaPrototype('hash') === '#part'"
+                       "   && typeof descriptors['username'].get === 'function'"
+                       "   && typeof descriptors['password'].get === 'function'"
+                       "   && typeof descriptors['hostname'].set === 'function'; })()"));
+}
+
 TEST_F(DomBinderTest, UrlAcceptsLocationAsItsBase)
 {
   EXPECT_TRUE(EvalBool("new URL('/docs', window.location).pathname === '/docs'"));
@@ -2010,6 +2038,39 @@ TEST_F(DomBinderTest, EventTargetDispatchesEventsAndIsMessagePortBase)
                        "var channel = new MessageChannel(); "
                        "return dispatched && hits === 1 "
                        "    && channel.port1 instanceof EventTarget; })()"));
+}
+
+// The Performance interface inherits EventTarget.  Hardened libraries register
+// listeners through
+// EventTarget.prototype.addEventListener.call(performance, ...) (Transcend's
+// airgap.js does for "resourcetimingbufferfull"), which requires the instance
+// to be a real EventTarget rather than a plain object.
+TEST_F(DomBinderTest, PerformanceIsAnEventTarget)
+{
+  EXPECT_TRUE(EvalBool(
+      "(function(){"
+      " if (!(window.performance instanceof EventTarget)) return false;"
+      " if (window.performance.addEventListener !== EventTarget.prototype.addEventListener)"
+      "   return false;"
+      " var add = Object.getOwnPropertyDescriptor(EventTarget.prototype, 'addEventListener');"
+      " if (!add || typeof add.value !== 'function') return false;"
+      " add.value.call(window.performance, 'resourcetimingbufferfull', function(){});"
+      " return true; })()"));
+}
+
+// Bootstrap code (Transcend's airgap.js among others) captures these methods
+// with optional chaining but calls them unconditionally, so a browser without
+// them throws "not a function" during initialization.  The resource timing
+// buffer itself stays empty (no resource entries are produced yet).
+TEST_F(DomBinderTest, PerformanceResourceTimingBufferMethodsAreCallable)
+{
+  EXPECT_TRUE(
+      EvalBool("(function(){"
+               " if (typeof performance.setResourceTimingBufferSize !== 'function') return false;"
+               " if (typeof performance.clearResourceTimings !== 'function') return false;"
+               " performance.setResourceTimingBufferSize(1000);"
+               " performance.clearResourceTimings();"
+               " return performance.getEntriesByType('resource').length === 0; })()"));
 }
 
 TEST_F(DomBinderTest, DomTokenListInterfaceUsesClassListPrototype)

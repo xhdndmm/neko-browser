@@ -881,6 +881,43 @@ PerformanceGetEntriesByType(JSContext* ctx, JSValueConst this_val, int argc, JSV
   return is_navigation ? MakeNavigationPerformanceEntries(ctx, *impl) : JS_NewArray(ctx);
 }
 
+JSValue PerformanceSetResourceTimingBufferSize(JSContext* ctx,
+                                               JSValueConst this_val,
+                                               int argc,
+                                               JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  if (argc == 0) {
+    return JS_ThrowTypeError(ctx, "setResourceTimingBufferSize requires a size");
+  }
+  uint32_t max_size = 0;
+  if (JS_ToUint32(ctx, &max_size, argv[0]) != 0) {
+    return JS_EXCEPTION;
+  }
+  // Resource timing entries are not produced yet, so the limit is not
+  // observable; it is still stored so the API has its specified state once
+  // entries start flowing.
+  impl->resource_timing_buffer_size = max_size;
+  return JS_UNDEFINED;
+}
+
+JSValue PerformanceClearResourceTimings(JSContext* ctx,
+                                        JSValueConst this_val,
+                                        int /*argc*/,
+                                        JSValueConst* /*argv*/)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  // The resource timing buffer is always empty (no entries are recorded yet);
+  // accepting the call keeps the API surface complete for bootstrap code.
+  return JS_UNDEFINED;
+}
+
 // ---------------------------------------------------------------------------
 // window.matchMedia(query).
 //
