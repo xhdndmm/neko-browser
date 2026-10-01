@@ -60,6 +60,24 @@ Windows 链接方式（见 [ADR 0019](../architecture/adr/0019-release-runtime-p
 外全部依赖静态链接——vcpkg 使用 `*-windows-static-md` 三元组；FFmpeg 从
 动态三元组单独安装，DLL 与 Qt、MSVC 运行库一起随包分发。
 
+### 最低系统版本与基线校验
+
+产物声明的操作系统下限与校验方式（详细政策见 [BUILDING.md](../../BUILDING.md)
+「最低操作系统版本」）：
+
+- **macOS**：`CMAKE_OSX_DEPLOYMENT_TARGET=13.0`（Qt 6.8 基线，可在配置时覆盖）。
+  打包脚本对包内每个 Mach-O 校验 `LC_BUILD_VERSION minos` ≤ 声明值
+  （`MIN_MACOS` 可覆盖声明，默认 13.0）。Homebrew 依赖为 runner 自身系统构建，
+  若某个依赖超出声明值，打包直接失败并列出文件——不得静默发布与文档不符的产物。
+- **Windows**：`_WIN32_WINNT=_WINVER=0x0A00`（Windows 10 1809）在 CMake 层统一
+  定义；零安装校验（ADR 0019）额外保证导入表中不存在包外 DLL。
+- **Linux**：产物不捆绑 glibc，因此基线 = 构建镜像的 glibc（当前 `ubuntu-26.04`）。
+  `scripts/release/package-unix.sh` 自动用 `getconf GNU_LIBC_VERSION` 取值并通过
+  `tools/check_glibc_baseline.sh` 校验：包内任何 ELF 的最高 `GLIBC_x.y` 符号需求
+  不得超过该值（防止预编译的第三方二进制把基线拖高）。需要声明更低支持面时
+  显式传 `GLIBC_BASELINE=<x.y>`，失败输出会列出具体超标文件；**真正降低基线
+  需要换用更老的构建环境**，校验的作用是让基线无法悄悄变化。
+
 ### 零安装打包（ADR 0019）
 
 - **Windows**：静态链接（见上）+ 捆绑 Qt（`windeployqt` / ARM64 手工部署）、

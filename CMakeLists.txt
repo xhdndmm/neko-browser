@@ -10,6 +10,20 @@
 
 cmake_minimum_required(VERSION 3.24)
 
+# -----------------------------------------------------------------------------
+# Platform version baselines (see BUILDING.md "最低操作系统版本")
+# -----------------------------------------------------------------------------
+# macOS: declare the deployment target *before* project() so every target the
+# build creates records it as LC_BUILD_VERSION minos.  Default: macOS 13, the
+# oldest release Qt 6.8 supports.  Override by configuring with
+# -DCMAKE_OSX_DEPLOYMENT_TARGET=<version> when building against another floor.
+if(APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET
+      "13.0"
+      CACHE STRING
+      "Minimum macOS version (Qt 6.8 baseline; see BUILDING.md)")
+endif()
+
 project(
   neko-browser
   VERSION 0.1.0
@@ -17,6 +31,20 @@ project(
   HOMEPAGE_URL "https://github.com/xhdndmm/neko-browser"
   LANGUAGES CXX C
 )
+
+# Windows: pin the API floor to Windows 10 1809 (0x0A00 / build 17763), the
+# oldest Windows Qt 6.8 supports.  Declaring it keeps the floor from silently
+# following the toolchain's SDK default (which may be lower -- MinGW -- or may
+# rise with a future SDK), so a newer API cannot slip into a release.  The
+# release pipeline additionally verifies the PE import tables (ADR 0019).
+if(WIN32)
+  add_compile_definitions(_WIN32_WINNT=0x0A00 WINVER=0x0A00)
+endif()
+
+# Linux has no artifact-level version field to declare; the compatibility
+# contract is the glibc symbol baseline of the build environment, checked by
+# tools/check_glibc_baseline.sh (run by the release packaging step) and
+# documented in docs/releases/README.md.
 
 # -----------------------------------------------------------------------------
 # Build options

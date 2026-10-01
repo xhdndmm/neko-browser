@@ -52,6 +52,14 @@ if [ ! -d "$BIN_DIR" ]; then
 fi
 mkdir -p "$LIB_DIR"
 
+# Minimum macOS version this release claims to support.  Kept in sync with the
+# CMake default (CMAKE_OSX_DEPLOYMENT_TARGET, see BUILDING.md); override with
+# MIN_MACOS=<version> when building against another floor.  The finished
+# package is checked against it below: Homebrew libraries are built for the
+# runner's own macOS, so a drifting dependency would otherwise silently raise
+# the real minimum while the README still advertises the declared one.
+MIN_MACOS="${MIN_MACOS:-13.0}"
+
 BREW_PREFIX="$(brew --prefix 2>/dev/null || echo /usr/local)"
 QT_PREFIX="${QT_PREFIX:-}"
 if [ -z "$QT_PREFIX" ]; then
@@ -99,6 +107,22 @@ macho_rpaths() {
   otool -l "$1" | awk '
     $1 == "cmd" && $2 == "LC_RPATH" { want=1; next }
     want && $1 == "path"            { print $2; want=0 }'
+}
+
+# The minimum OS version recorded in one Mach-O file: LC_BUILD_VERSION minos
+# on modern binaries, the legacy LC_VERSION_MIN_MACOSX version otherwise.
+# Prints nothing when neither load command exists.
+macho_min_os() {
+  otool -l "$1" 2>/dev/null | awk '
+    $1 == "cmd" && $2 == "LC_BUILD_VERSION"       { build=1; next }
+    build && $1 == "minos"                         { print $2; build=0; next }
+    $1 == "cmd" && $2 == "LC_VERSION_MIN_MACOSX"  { legacy=1; next }
+    legacy && $1 == "version"                      { print $2; legacy=0; next }'
+}
+
+# True when version $1 <= version $2 (dotted numeric, sort -V semantics).
+version_le() {
+  [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n 1)" = "$1" ]
 }
 
 # Resolve one dependency reference (as printed by otool) to an existing path,
@@ -580,6 +604,33 @@ verify() {
   return "$rc"
 }
 
+# Fail when any bundled Mach-O records a minimum macOS version above the
+# declared one: the archive would then refuse to launch on the system it
+# claims to support.  Our own binaries get their minos from
+# CMAKE_OSX_DEPLOYMENT_TARGET (top-level CMakeLists.txt); this check mainly
+# guards the bundled dependencies, which are built by Homebrew for the
+# runner's own macOS and could otherwise raise the real floor silently.
+verify_min_os() {
+  local f declared highest="" highest_file="" rc=0
+  while IFS= read -r -d '' f; do
+    mach_o "$f" || continue
+    declared="$(macho_min_os "$f")"
+    [ -n "$declared" ] || continue
+    if [ -z "$highest" ] || ! version_le "$highest" "$declared"; then
+      highest="$declared"
+      highest_file="$f"
+    fi
+    if ! version_le "$declared" "$MIN_MACOS"; then
+      echo "error: ${f#"$STAGE_DIR"/} requires macOS $declared, above the declared minimum $MIN_MACOS" >&2
+      rc=1
+    fi
+  done < <(find "$STAGE_DIR" -type f -print0)
+  if [ -n "$highest" ]; then
+    echo "    highest minos in the package: $highest (${highest_file#"$STAGE_DIR"/})"
+  fi
+  return "$rc"
+}
+
 # --- main --------------------------------------------------------------------
 
 if [ -f "$BIN_DIR/neko_browser" ]; then
@@ -591,5 +642,8 @@ bundle_gui
 
 echo "==> Verifying runtime references"
 verify
+
+echo "==> Checking the declared minimum macOS version ($MIN_MACOS)"
+verify_min_os
 
 echo "==> OK: $(find "$LIB_DIR" -maxdepth 1 -type f | wc -l | tr -d ' ') CLI libraries bundled into lib/"

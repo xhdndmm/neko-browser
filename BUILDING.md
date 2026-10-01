@@ -12,6 +12,24 @@
 | MSVC | VS 2022 17.x | `/std:c++20` |
 | Ninja 或 Make | 任一 | 自动检测 |
 
+## 最低操作系统版本
+
+发布产物声明并校验以下最低系统版本（对应 Qt 6.8 的支持范围；发布侧的说明见
+[docs/releases/README.md](docs/releases/README.md)）：
+
+| 平台 | 最低版本 | 如何声明 / 校验 |
+| --- | --- | --- |
+| macOS | 13.0 | 顶层 `CMakeLists.txt` 在 `project()` 前设置 `CMAKE_OSX_DEPLOYMENT_TARGET=13.0`，每个 Mach-O 都会记录 `LC_BUILD_VERSION minos`；可用 `-DCMAKE_OSX_DEPLOYMENT_TARGET=<x.y>` 覆盖。打包脚本校验包内**所有**文件的 minos 不超过声明值（Homebrew 依赖可能拖高，见下） |
+| Windows | 10 1809（build 17763） | `CMakeLists.txt` 对所有目标定义 `_WIN32_WINNT=_WINVER=0x0A00`，防止工具链 SDK 默认值悄悄抬高 API 下限；发布打包另有 PE 导入表传递闭包校验（ADR 0019） |
+| Linux | 构建发行版的 glibc（当前发布镜像 = `ubuntu-26.04`） | glibc 永不捆绑（NSS/DNS 需要宿主 libc），因此产物基线 = 构建环境的 glibc。`tools/check_glibc_baseline.sh` 校验包内没有任何 ELF 要求高于基线；**要降低基线必须换用更老的构建发行版**（例如在 Ubuntu 22.04 容器里构建），不能用新镜像构建更老的目标 |
+
+macOS 打包校验使用 `MIN_MACOS` 环境变量覆盖声明值（默认 13.0，与 CMake 默认一致）；
+Homebrew 的库是为构建 runner 自身的 macOS 构建的，若某个依赖的 minos 高于声明值，
+打包会失败并列出文件——此时要么更换依赖来源，要么显式提高声明的最低版本。
+
+本地开发构建（`debug` / `release` preset）直接使用系统库，不受上述发布校验约束；
+但若目标是产出发布物，请沿用镜像中的工具链版本。
+
 ## 一键流程
 
 ```bash
