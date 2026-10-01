@@ -8,6 +8,7 @@
 #include "neko/storage/file_util.h"
 #include "neko/storage/history_store.h"
 #include "neko/storage/local_storage.h"
+#include "neko/storage/password_store.h"
 #include "neko/storage/preferences.h"
 #include "neko/url/url.h"
 
@@ -20,6 +21,7 @@
 #include <vector>
 
 #ifndef _WIN32
+#include <sys/stat.h>
 #include <unistd.h>
 #else
 #include <process.h>
@@ -770,6 +772,130 @@ TEST(FileUtilTest, AtomicWriteDoesNotFollowSymlink)
   EXPECT_THAT(ReadFile(victim).value(), Eq("original"));
 }
 #endif
+
+// ---------------------------------------------------------------------------
+// PasswordStore
+// ---------------------------------------------------------------------------
+
+TEST(PasswordStoreTest, RoundTripsAndFiltersByOrigin)
+{
+  TempProfile tp;
+  {
+    PasswordStore store(tp.path());
+    ASSERT_TRUE(store.Load().has_value());
+    store.Add("https://example.com", "alice", "s3cret");
+    store.Add("https://example.com", "bob", "hunter2");
+    store.Add("https://other.example", "alice", "different");
+    const auto saved = store.Save();
+    ASSERT_TRUE(saved.has_value()) << (saved.has_value() ? "" : saved.error().message());
+    EXPECT_EQ(store.size(), 3u);
+  }
+  {
+    PasswordStore store(tp.path());
+    ASSERT_TRUE(store.Load().has_value());
+    EXPECT_EQ(store.size(), 3u);
+    const auto all = store.All();
+    ASSERT_EQ(all.size(), 3u);
+    // Sorted by (origin, username); the password survives the round trip.
+    EXPECT_THAT(all[0].origin, Eq("https://example.com"));
+    EXPECT_THAT(all[0].username, Eq("alice"));
+    EXPECT_THAT(all[0].password, Eq("s3cret"));
+    EXPECT_THAT(all[1].username, Eq("bob"));
+    const auto for_example = store.ForOrigin("https://example.com");
+    ASSERT_EQ(for_example.size(), 2u);
+    EXPECT_TRUE(store.ForOrigin("https://unknown.example").empty());
+  }
+}
+
+TEST(PasswordStoreTest, FileNeverContainsPlaintextAndKeyIsPrivate)
+{
+  TempProfile tp;
+  PasswordStore store(tp.path());
+  ASSERT_TRUE(store.Load().has_value());
+  store.Add("https://example.com", "alice", "s3cret-password");
+  const auto saved = store.Save();
+  ASSERT_TRUE(saved.has_value()) << (saved.has_value() ? "" : saved.error().message());
+
+  // The on-disk container must not leak any of the plaintext fields.
+  const auto raw = ReadFile(tp.path() + "/logins.dat");
+  ASSERT_TRUE(raw.has_value());
+  const std::string& bytes = raw.value();
+  EXPECT_EQ(bytes.substr(0, 8), std::string("NEKOPW1\n"));
+  EXPECT_EQ(bytes.find("alice"), std::string::npos);
+  EXPECT_EQ(bytes.find("s3cret-password"), std::string::npos);
+  EXPECT_EQ(bytes.find("example.com"), std::string::npos);
+
+  const auto key = ReadFile(tp.path() + "/login_key.bin");
+  ASSERT_TRUE(key.has_value());
+  EXPECT_EQ(key.value().size(), 32u);
+#ifndef _WIN32
+  struct stat st = {};
+  ASSERT_EQ(::stat((tp.path() + "/login_key.bin").c_str(), &st), 0);
+  EXPECT_EQ(static_cast<unsigned>(st.st_mode) & 0777u, 0600u);
+#endif
+}
+
+TEST(PasswordStoreTest, WrongKeyFailsLoadAndRefusesToOverwrite)
+{
+  TempProfile tp;
+  std::string original_key;
+  {
+    PasswordStore store(tp.path());
+    ASSERT_TRUE(store.Load().has_value());
+    store.Add("https://example.com", "alice", "s3cret");
+    const auto saved = store.Save();
+    ASSERT_TRUE(saved.has_value()) << (saved.has_value() ? "" : saved.error().message());
+    const auto key = ReadFile(tp.path() + "/login_key.bin");
+    ASSERT_TRUE(key.has_value());
+    original_key = key.value();
+  }
+
+  // Replace the key with a different one: the GCM tag check must fail instead
+  // of returning garbage, and Save() must refuse to destroy the old data.
+  ASSERT_TRUE(WriteFileAtomic(tp.path() + "/login_key.bin", std::string(32, '\xAA')).has_value());
+  {
+    PasswordStore store(tp.path());
+    const auto loaded = store.Load();
+    EXPECT_FALSE(loaded.has_value());
+    EXPECT_TRUE(store.All().empty());
+    store.Add("https://example.com", "mallory", "hijack");
+    EXPECT_FALSE(store.Save().has_value());
+  }
+
+  // Restoring the original key recovers the data: nothing was overwritten.
+  ASSERT_TRUE(WriteFileAtomic(tp.path() + "/login_key.bin", original_key).has_value());
+  PasswordStore recovered(tp.path());
+  ASSERT_TRUE(recovered.Load().has_value());
+  const auto all = recovered.All();
+  ASSERT_EQ(all.size(), 1u);
+  EXPECT_THAT(all[0].username, Eq("alice"));
+  EXPECT_THAT(all[0].password, Eq("s3cret"));
+}
+
+TEST(PasswordStoreTest, ReplacesSameKeyRemovesAndClears)
+{
+  TempProfile tp;
+  PasswordStore store(tp.path());
+  ASSERT_TRUE(store.Load().has_value());
+  store.Add("https://example.com", "alice", "old");
+  store.Add("https://example.com", "alice", "new");
+  store.Add("https://example.com", "bob", "bobpw");
+  EXPECT_EQ(store.size(), 2u);
+  EXPECT_THAT(store.ForOrigin("https://example.com")[0].password, Eq("new"));
+
+  EXPECT_FALSE(store.Remove("https://example.com", "nobody"));
+  EXPECT_TRUE(store.Remove("https://example.com", "alice"));
+  EXPECT_EQ(store.size(), 1u);
+  store.Clear();
+  EXPECT_TRUE(store.All().empty());
+
+  // Saving an empty store round-trips to an empty store.
+  const auto saved = store.Save();
+  ASSERT_TRUE(saved.has_value()) << (saved.has_value() ? "" : saved.error().message());
+  PasswordStore reloaded(tp.path());
+  ASSERT_TRUE(reloaded.Load().has_value());
+  EXPECT_TRUE(reloaded.All().empty());
+}
 
 } // namespace
 } // namespace neko::storage
