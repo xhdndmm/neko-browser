@@ -5,6 +5,7 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <iterator>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -28,7 +29,11 @@ std::string ReadAll(const fs::path& file)
   if (!in.is_open()) {
     return {};
   }
-  return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  // rdbuf(), not istreambuf_iterator: GCC 13 reports a false-positive
+  // -Wnull-dereference in libstdc++ under -O2 + -Werror (CI tsan job).
+  std::ostringstream buffer;
+  buffer << in.rdbuf();
+  return buffer.str();
 }
 
 // Leftover temporary files ("<target>.tmp.*") next to the destination.

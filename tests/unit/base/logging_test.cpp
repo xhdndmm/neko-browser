@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <iterator>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -110,7 +111,11 @@ TEST(LoggingTest, FileSinkWritesLines)
 
   std::ifstream in(file);
   ASSERT_TRUE(in.is_open());
-  const std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  // rdbuf(), not istreambuf_iterator: GCC 13 reports a false-positive
+  // -Wnull-dereference in libstdc++ under -O2 + -Werror (CI tsan job).
+  std::ostringstream buffer;
+  buffer << in.rdbuf();
+  const std::string content = buffer.str();
   in.close();
   EXPECT_NE(content.find("line one"), std::string::npos);
   EXPECT_NE(content.find("line two"), std::string::npos);

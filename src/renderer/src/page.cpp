@@ -15,6 +15,7 @@
 #include <cstring>
 #include <fstream>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -583,8 +584,11 @@ base::Result<void> Page::LoadFile(std::string_view path)
   if (!in.is_open()) {
     return base::Err(base::Error::Io("cannot open file: " + std::string(path)));
   }
-  std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-  return LoadHtml(content);
+  // rdbuf(), not istreambuf_iterator: GCC 13 reports a false-positive
+  // -Wnull-dereference in libstdc++ under -O2 + -Werror (CI tsan job).
+  std::ostringstream buffer;
+  buffer << in.rdbuf();
+  return LoadHtml(buffer.str());
 }
 
 std::unique_lock<std::recursive_mutex> Page::AcquireDomLock()

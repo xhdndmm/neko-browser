@@ -23,6 +23,7 @@
 #include <iterator>
 #include <map>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -1721,8 +1722,16 @@ std::vector<uint8_t> LoadSystemFontBytes()
     if (!file) {
       continue;
     }
-    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)),
-                               std::istreambuf_iterator<char>());
+    // rdbuf(), not istreambuf_iterator: GCC 13 reports a false-positive
+    // -Wnull-dereference in libstdc++ under -O2 + -Werror (CI tsan job).
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    const std::string data = buffer.str();
+    std::vector<uint8_t> bytes;
+    bytes.reserve(data.size());
+    for (char byte : data) {
+      bytes.push_back(static_cast<uint8_t>(byte));
+    }
     if (!bytes.empty()) {
       return bytes;
     }
@@ -1934,7 +1943,11 @@ TEST(BrowserControllerTest, PageVideoDecodesAndAutoplays)
   // Read the committed H.264 fixture (NEKO_TEST_PAGES_DIR from CMake).
   std::ifstream clip(std::string(NEKO_TEST_PAGES_DIR) + "/sample_8x6_h264.mp4", std::ios::binary);
   ASSERT_TRUE(clip.good());
-  const std::string bytes((std::istreambuf_iterator<char>(clip)), std::istreambuf_iterator<char>());
+  // rdbuf(), not istreambuf_iterator: GCC 13 reports a false-positive
+  // -Wnull-dereference in libstdc++ under -O2 + -Werror (CI tsan job).
+  std::ostringstream buffer;
+  buffer << clip.rdbuf();
+  const std::string bytes = buffer.str();
   ASSERT_FALSE(bytes.empty());
 
   TempProfile tp;

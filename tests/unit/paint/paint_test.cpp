@@ -19,6 +19,7 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 
@@ -289,7 +290,11 @@ TEST(RasterizerTest, WritePpm)
 
   std::ifstream in(file, std::ios::binary);
   ASSERT_TRUE(in.is_open());
-  std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  // rdbuf(), not istreambuf_iterator: GCC 13 reports a false-positive
+  // -Wnull-dereference in libstdc++ under -O2 + -Werror (CI tsan job).
+  std::ostringstream buffer;
+  buffer << in.rdbuf();
+  std::string content = buffer.str();
   in.close();
   EXPECT_EQ(content.substr(0, 11), "P6\n4 3\n255\n");
   // 11-byte header + 4*3*3 bytes of RGB data.
