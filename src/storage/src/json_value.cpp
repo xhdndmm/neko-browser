@@ -175,6 +175,18 @@ base::Result<JsonValue> ParseArray(std::string_view s, std::size_t& pos, std::si
   }
 }
 
+// GCC 15/16 at -O2 mis-analyses libstdc++'s std::variant union storage when a
+// JsonValue holding an object is moved into Result<JsonValue>: it reports a
+// read of the inactive std::string alternative's _M_p inside
+// basic_string::_M_data() as "may be used uninitialized".  The generated move
+// visitor only ever touches the active alternative, the same code is
+// warning-free at -O0/-O3 and under Clang, and the runtime is ASan/UBSan/TSan
+// clean; silence just that false positive (same policy as
+// src/image/src/svg_decoder.cpp).
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
 base::Result<JsonValue> ParseObject(std::string_view s, std::size_t& pos, std::size_t depth)
 {
   ++pos; // '{'
@@ -217,6 +229,9 @@ base::Result<JsonValue> ParseObject(std::string_view s, std::size_t& pos, std::s
     ++pos;
   }
 }
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 base::Result<JsonValue> ParseValue(std::string_view s, std::size_t& pos, std::size_t depth)
 {
