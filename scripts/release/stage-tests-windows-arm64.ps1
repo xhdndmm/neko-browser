@@ -3,13 +3,13 @@
 # Windows ARM64 由 x64 runner 用 MSVC 交叉编译完成，产物无法在 x64 上执行，
 # 因此把运行 ctest 所需的部分连同运行库（全部为 ARM64 二进制）打成一个
 # 自包含载荷上传 artifact，由 test-windows-arm64 任务在原生 ARM64 runner
-# （windows-11-arm）上还原并运行；还原逻辑见 test-windows-arm64.ps1。
+# （windows-11-vs2026-arm）上还原并运行；还原逻辑见 test-windows-arm64.ps1。
 #
 # 为什么载荷里必须保留构建树的相对布局：ctest 的 GoogleTest PRE_TEST 发现
 # 脚本与 add_test 命令把构建机绝对路径写进了生成文件（测试可执行文件、工作
 # 目录、源目录 tests/pages、CMake 的 GoogleTest 模块），测试二进制里还编译进
 # 了 NEKO_TEST_PAGES_DIR / NEKO_BROWSER_BIN。构建机（windows-2025）的工作区是
-# D:\a\<repo>\<repo>，ARM64 runner（windows-11-arm）是 C:\a\<repo>\<repo>
+# D:\a\<repo>\<repo>，ARM64 runner（windows-11-vs2026-arm）是 C:\a\<repo>\<repo>
 # ——除盘符外布局相同，还原脚本会把构建机的盘符别名到本 runner 的盘符根
 # （见 test-windows-arm64.ps1），这些路径因此原样成立；CMake 模块另行携带一份，
 # 由还原脚本放回它被写死的绝对路径。

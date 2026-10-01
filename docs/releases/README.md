@@ -40,16 +40,16 @@ release   合并产物、生成 SHA256SUMS、创建（或更新）GitHub Release
 
 | 平台 | 架构 | Runner | GUI |
 | --- | --- | --- | --- |
-| Linux | x86_64 | `ubuntu-26.04` | 含 Qt6 GUI |
-| Linux | arm64 | `ubuntu-26.04-arm` | 含 Qt6 GUI |
+| Linux | x86_64 | `ubuntu-24.04` | 含 Qt6 GUI |
+| Linux | arm64 | `ubuntu-24.04-arm` | 含 Qt6 GUI |
 | Windows | x86_64 | `windows-2025` | 含 Qt6 GUI（自带 Qt 运行库） |
-| Windows | arm64 | 构建 `windows-2025`（x64 宿主交叉编译），测试 `windows-11-arm` | 含 Qt6 GUI（自带 Qt 运行库） |
+| Windows | arm64 | 构建 `windows-2025`（x64 宿主交叉编译），测试 `windows-11-vs2026-arm` | 含 Qt6 GUI（自带 Qt 运行库） |
 | macOS | x86_64 | `macos-15-intel` | 含 Qt6 GUI |
 | macOS | arm64 | `macos-15` | 含 Qt6 GUI |
 
 Windows 构建全部使用 x64 runner：x86_64 为原生构建，ARM64 用 MSVC 交叉编译到
 ARM64（Qt 也用官方 ARM64 交叉编译包，宿主工具来自同版本 x64 包）；ARM64 的
-测试在原生 ARM64 runner（`windows-11-arm`）上运行——构建任务把自包含测试载荷
+测试在原生 ARM64 runner（`windows-11-vs2026-arm`）上运行——构建任务把自包含测试载荷
 打成 artifact，测试任务按相同工作区布局还原后跑 ctest。
 Linux/macOS 使用 runner 原生架构与系统包管理器（apt / Homebrew）。
 macOS 发布 runner 固定在 macos-15 一代：包内 Homebrew 依赖的部署目标由构建
@@ -80,7 +80,7 @@ Windows 链接方式（见 [ADR 0019](../architecture/adr/0019-release-runtime-p
   部署目标）可以恢复 13.3，见「后续工作」。
 - **Windows**：`_WIN32_WINNT=_WINVER=0x0A00`（Windows 10 1809）在 CMake 层统一
   定义；零安装校验（ADR 0019）额外保证导入表中不存在包外 DLL。
-- **Linux**：产物不捆绑 glibc，因此基线 = 构建镜像的 glibc（当前 `ubuntu-26.04`）。
+- **Linux**：产物不捆绑 glibc，因此基线 = 构建镜像的 glibc（当前 `ubuntu-24.04`）。
   `scripts/release/package-unix.sh` 自动用 `getconf GNU_LIBC_VERSION` 取值并通过
   `tools/check_glibc_baseline.sh` 校验：包内任何 ELF 的最高 `GLIBC_x.y` 符号需求
   不得超过该值（防止预编译的第三方二进制把基线拖高）。需要声明更低支持面时
@@ -170,7 +170,7 @@ Release 页面同时附带 `SHA256SUMS`（`sha256sum --check SHA256SUMS` 校验�
 ### 已知限制
 
 - **Windows ARM64 测试在独立 runner 上运行**：构建仍是 `windows-2025`（x64 宿主
-  交叉编译），测试载荷上传后在 `windows-11-arm`（原生 ARM64）上运行 ctest；
+  交叉编译），测试载荷上传后在 `windows-11-vs2026-arm`（原生 ARM64）上运行 ctest；
   两个 runner 的工作区盘符不同（x64 镜像 `D:\a\<repo>\<repo>`，ARM64 镜像
   `C:\a\<repo>\<repo>`——ARM64 镜像的第二块盘没有挂载，见
   actions/runner-images#14088），还原脚本先把构建机的盘符别名到本 runner 的
@@ -179,7 +179,7 @@ Release 页面同时附带 `SHA256SUMS`（`sha256sum --check SHA256SUMS` 校验�
   `scripts/release/stage-tests-windows-arm64.ps1` / `test-windows-arm64.ps1`）。
   ARM64 的 Qt 运行库按固定清单手工部署（Qt 交叉编译包不含 windeployqt）：
   3 个 Qt DLL + 平台/样式/图像格式插件。
-- **Linux glibc 基线**：产物在 `ubuntu-26.04` 上构建，需要目标机的 glibc 不低于
+- **Linux glibc 基线**：产物在 `ubuntu-24.04` 上构建，需要目标机的 glibc 不低于
   构建环境；更旧的发行版不受支持（glibc 与显卡驱动始终来自目标机，见 ADR 0019）。
 - **macOS 发布包下限 = 15.0（非代码下限）**：包内依赖全部来自 Homebrew，其
   minos 由构建系统版本决定，因此 macos-15 发布 runner 上整包下限是 15.0；

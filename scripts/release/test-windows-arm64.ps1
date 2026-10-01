@@ -1,4 +1,4 @@
-# release.yml（test-windows-arm64 任务，runs-on: windows-11-arm）：
+# release.yml（test-windows-arm64 任务，runs-on: windows-11-vs2026-arm）：
 # 在原生 ARM64 runner 上运行 windows-arm64 交叉编译产物的测试套件。
 #
 # 测试载荷由 stage-tests-windows-arm64.ps1 在 x64 构建任务里打包（artifact
@@ -6,7 +6,7 @@
 # NEKO_TEST_PAGES_DIR / NEKO_BROWSER_BIN）里写死了构建机的绝对路径，本脚本
 # 负责让它们在本 runner 上成立：
 #   1. 把构建机的工作区路径在本 runner 上还原出来（Windows 镜像的工作区盘符
-#      不统一：x64 构建镜像在 D:，windows-11-arm 在 C:；只允许盘符不同），
+#      不统一：x64 构建镜像在 D:，windows-11-vs2026-arm 在 C:；只允许盘符不同），
 #      再按相同相对布局把载荷还原到 build/release；
 #   2. 把载荷携带的 CMake GoogleTest 模块放回生成文件里写死的绝对路径；
 #      若写死的 cmake.exe 路径不存在（镜像的 CMake 安装方式/版本可能不同），
@@ -37,7 +37,7 @@ function Resolve-WorkspacePath {
 # add_test 命令与 CMake 模块路径，测试二进制里的 NEKO_TEST_PAGES_DIR /
 # NEKO_BROWSER_BIN 等编译期常量），必须原样可解析。Windows 镜像的工作区盘符
 # 并不统一：windows-2025（交叉编译任务）是 D:\a\<repo>\<repo>，
-# windows-11-arm 是 C:\a\<repo>\<repo>（ARM64 镜像的第二块盘没有挂载，见
+# windows-11-vs2026-arm 是 C:\a\<repo>\<repo>（ARM64 镜像的第二块盘没有挂载，见
 # actions/runner-images#14088），盘符以外的布局相同。于是把构建机的盘符别名
 # 到本 runner 的盘符根——两边指向同一棵 checkout，写死的路径原样成立，既不改写
 # 生成文件，也不给二进制打补丁。

@@ -21,25 +21,25 @@ name: release
 # 步骤（上传产物、创建 Release）。约定见 docs/development/ci-scripts.md。
 #
 # 平台矩阵（Windows 构建全部使用 x64 runner；arm64 用 MSVC 交叉编译到 ARM64）：
-#   linux   x86_64  ubuntu-26.04
-#   linux   arm64   ubuntu-26.04-arm
+#   linux   x86_64  ubuntu-24.04
+#   linux   arm64   ubuntu-24.04-arm
 #   windows x86_64  windows-2025      （MSVC + vcpkg + Qt6 GUI，原生 x64）
 #   windows arm64   windows-2025      （MSVC 交叉编译到 ARM64 + Qt6 交叉编译包）
-#   windows arm64 测试 windows-11-arm （原生 ARM64，运行交叉编译产物的 ctest）
+#   windows arm64 测试 windows-11-vs2026-arm （原生 ARM64，运行交叉编译产物的 ctest）
 #   macos   x86_64  macos-15-intel
 #   macos   arm64   macos-15
 #
 # macOS 发布任务固定在 macos-15 一代 runner 上：包内 Homebrew 依赖（Qt/FFmpeg/
 # OpenSSL…）的部署目标取自构建系统版本（bottle 按其系统代次构建、源码构建默认
 # 取宿主/SDK 版本，Homebrew 自身还会清除 MACOSX_DEPLOYMENT_TARGET），因此
-# macos-26 上整包实际下限会被拖到 26.0。矩阵里的 min_macos = 发布包声明下限
+# macos-15 上整包实际下限会被拖到 26.0。矩阵里的 min_macos = 发布包声明下限
 # （当前 = runner 系统版本 15.0），打包脚本逐文件校验；代码自身的构建目标仍保持
 # 13.3（CMake 默认）。用自建依赖（可自行指定部署目标）后可恢复更低声明，见
 # docs/releases/README.md。
 #
 # 已知限制（同步记录在 docs/releases/README.md）：
 #   - Windows ARM64 产物由 x64 runner 交叉编译，x64 上无法执行；测试由独立的
-#     test-windows-arm64 任务在原生 windows-11-arm runner 上运行（自包含的测试
+#     test-windows-arm64 任务在原生 windows-11-vs2026-arm runner 上运行（自包含的测试
 #     载荷由构建任务打包上传，见 scripts/release/stage-tests-windows-arm64.ps1）；
 #   - 产物为「零安装」形态（ADR 0019）：Windows 除 Qt（官方只提供动态库）与
 #     FFmpeg（LGPL 要求保持动态链接，ADR 0014）外全部静态链接，Qt/FFmpeg/VC
@@ -67,7 +67,7 @@ jobs:
   # ---------------------------------------------------------------------------
   prepare:
     name: prepare
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
@@ -92,12 +92,12 @@ jobs:
       matrix:
         include:
           - name: linux-x86_64
-            os: ubuntu-26.04
+            os: ubuntu-24.04
             platform: linux
             arch: x86_64
             archive_ext: tar.gz
           - name: linux-arm64
-            os: ubuntu-26.04-arm
+            os: ubuntu-24.04-arm
             platform: linux
             arch: arm64
             archive_ext: tar.gz
@@ -137,7 +137,7 @@ jobs:
             qt_host_dir: msvc2022_64
           - name: macos-x86_64
             # 固定在 macos-15 一代：Homebrew 依赖的部署目标 = 构建系统版本，
-            # macos-26 会把包内 macOS 下限拖到 26.0（见文件头注释）。
+            # macos-15 会把包内 macOS 下限拖到 26.0（见文件头注释）。
             os: macos-15-intel
             platform: macos
             arch: x86_64
@@ -223,7 +223,7 @@ jobs:
 
       # Windows ARM64 由 x64 runner 交叉编译，产物无法在 x64 上执行：这里跳过
       # ctest，改为打包自包含测试载荷，由 test-windows-arm64 任务在原生
-      # windows-11-arm runner 上运行（载荷为什么必须保留绝对构建路径见脚本头注释）。
+      # windows-11-vs2026-arm runner 上运行（载荷为什么必须保留绝对构建路径见脚本头注释）。
       - name: Test
         if: ${{ !(matrix.platform == 'windows' && matrix.arch == 'arm64') }}
         run: ctest --preset release
@@ -304,7 +304,7 @@ jobs:
   test-windows-arm64:
     name: test-windows-arm64
     needs: build
-    runs-on: windows-11-arm
+    runs-on: windows-11-vs2026-arm
     steps:
       - uses: actions/checkout@v7
 
@@ -333,7 +333,7 @@ jobs:
     needs: [prepare, build, test-windows-arm64]
     # 只在标签推送时发布；workflow_dispatch 仅做演练构建。
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:

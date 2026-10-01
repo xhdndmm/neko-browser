@@ -145,7 +145,7 @@ XWayland（2026-09 rc2 用户实测）。`*-server` 插件族属于合成器，�
   产物）。
 - 代价：包体积显著增大（Linux/macOS 含 Qt 与 FFmpeg 运行库，tar.gz 数十
   MB）；发布 CI 增加少量打包/冒烟时间；Linux 产物的 glibc 基线等于构建
-  runner（当前 `ubuntu-26.04`）。
+  runner（当前 `ubuntu-24.04`）。
 - **已知合规注意事项**：Linux/macOS 捆绑的 FFmpeg 运行库来自发行版/Homebrew
   构建，可能包含发行版启用的 GPL 组件；后续工作是为发布构建自有 LGPL
   运行时（FFmpeg 最小特性集），并同步更新依赖政策。
