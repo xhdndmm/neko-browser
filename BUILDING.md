@@ -171,6 +171,13 @@ bash tools/package_runtime_macos.sh <staging-dir> <version>   # macOS（GUI 打�
 rpath / install name；glibc 与系统框架始终来自目标机。本地开发构建
 （`debug` / `release` preset）不经过这些脚本，仍使用系统包。
 
+Linux 打包宿主还需要 `qt6-wayland`（`scripts/release/install-deps-linux.sh`
+已安装）：产物会把 `platforms/libqwayland*.so` 与
+`wayland-{shell-integration,decoration-client,graphics-integration-client}`
+三个客户端插件族一起捆绑。只捆绑平台插件而缺插件族的包在 Wayland 会话无法启动
+（Qt 报 `No shell integration named "xdg-shell" found`），因此
+`tools/package_runtime_linux.sh` 在缺插件族时会直接失败。
+
 发布工作流（`.github/workflows/release.yml`）各步骤的脚本在 `scripts/release/`
 （Windows 为 `.ps1`，Linux/macOS 为 `.sh`）；本地想复现某一步时可直接运行对应
 脚本，例如 `bash scripts/release/resolve-version.sh`。整体约定见

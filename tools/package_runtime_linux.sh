@@ -114,16 +114,21 @@ collect_deps() {
 # missing ("No shell integration named \"xdg-shell\" found" followed by
 # "Could not load the Qt platform plugin \"wayland\"") and the GUI silently
 # falls back to XWayland -- or cannot start at all on a Wayland-only session.
+# A package that bundles a Wayland platform plugin without these families is
+# broken on Wayland (rc3 shipped exactly that), so a missing family fails the
+# packaging instead of being skipped.
 # The *-server families are for compositors and stay out: their dependencies
 # (Qt6WaylandCompositor) are not part of a browser runtime.
 copy_wayland_plugins() {
-  local src="$1" family plugin count=0
+  local src="$1" family plugin count=0 missing=0
   for family in \
     wayland-shell-integration \
     wayland-decoration-client \
     wayland-graphics-integration-client; do
     if [ ! -d "$src/$family" ]; then
-      echo "warning: $src/$family not found; the Wayland platform plugin needs it" >&2
+      echo "error: $src/$family not found; the bundled Wayland platform plugin" >&2
+      echo "       cannot work without it (install qt6-wayland on the build host)" >&2
+      missing=1
       continue
     fi
     mkdir -p "$PLUGIN_DIR/$family"
@@ -134,6 +139,7 @@ copy_wayland_plugins() {
     done
   done
   echo "info: copied $count Wayland plugin(s)"
+  [ "$missing" -eq 0 ]
 }
 
 copy_plugins() {
@@ -174,11 +180,26 @@ copy_plugins() {
     echo "warning: platforms/libqxcb.so not found under $src;" >&2
     echo "         the GUI needs an X11 platform plugin" >&2
   fi
-  if [ -f "$PLUGIN_DIR/platforms/libqwayland.so" ]; then
-    copy_wayland_plugins "$src"
+  # The Wayland platform plugin file name depends on the Qt build: Arch and
+  # newer Qt ship a single platforms/libqwayland.so, while Ubuntu 24.04 (Qt
+  # 6.4) ships the legacy pair platforms/libqwayland-generic.so /
+  # platforms/libqwayland-egl.so.  Any of them needs the client plugin families
+  # above; gating on one exact file name skipped the families on CI and
+  # produced a package whose GUI cannot start on Wayland (rc3: "No shell
+  # integration named \"xdg-shell\" found").
+  local wayland_platform=""
+  for candidate in libqwayland.so libqwayland-generic.so libqwayland-egl.so; do
+    if [ -f "$PLUGIN_DIR/platforms/$candidate" ]; then
+      wayland_platform="$candidate"
+      break
+    fi
+  done
+  if [ -n "$wayland_platform" ]; then
+    copy_wayland_plugins "$src" || return 1
   else
-    echo "warning: platforms/libqwayland.so not found under $src;" >&2
+    echo "warning: no Wayland platform plugin found under $src;" >&2
     echo "         the GUI will not run on a Wayland-only session" >&2
+    echo "         (install qt6-wayland on the build host to bundle it)" >&2
   fi
 }
 
