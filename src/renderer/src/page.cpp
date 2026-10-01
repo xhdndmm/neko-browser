@@ -1077,11 +1077,19 @@ void Page::RasterizeFull(paint::Rasterizer& raster, float y_offset, base::Thread
 void Page::RasterizeInto(paint::Rasterizer& raster, int band_y0, int band_y1, float y_offset) const
 {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
+  // Clear first: without a layout tree the band must still show the canvas
+  // background, exactly like a full-page Rasterize() of the same page (the
+  // band-by-band screenshot path relies on this for empty documents).
+  const css::Color background = CanvasBackgroundColor();
+  raster.ClearBand(band_y0, band_y1, background);
   if (root_ == nullptr) {
     return;
   }
-  const css::Color background = CanvasBackgroundColor();
-  raster.ClearBand(band_y0, band_y1, background);
+  // Set the font registry here too: the GUI reuses one rasterizer it already
+  // configured, but the banded screenshot path hands in a fresh band buffer,
+  // and without this the text would silently fall back to the 8x8 bitmap
+  // font instead of matching a full-page rasterization.
+  raster.SetFontRegistry(&fonts_);
   raster.SetVisibleBand(band_y0, band_y1);
   raster.SetScrollOffset(y_offset);
   raster.Rasterize(EnsureDisplayList());

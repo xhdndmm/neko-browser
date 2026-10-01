@@ -23,6 +23,7 @@
 #include "neko/media/audio.h"
 #include "neko/media/video.h"
 #include "neko/network/http.h"
+#include "neko/paint/ppm_writer.h"
 #include "neko/paint/rasterizer.h"
 #include "neko/pdf/pdf.h"
 #include "neko/renderer/page.h"
@@ -787,8 +788,33 @@ int main(int argc, char** argv)
       const float content_height =
           page.layout_root() != nullptr ? page.layout_root()->height : kMinHeight;
       const int height = std::max(kMinHeight, static_cast<int>(content_height) + 40);
-      neko::paint::Rasterizer image = page.Rasterize(800, height);
-      const auto written = neko::paint::WritePpm(parsed.options.screenshot_path.value(), image);
+      // Rasterize band by band instead of allocating one full-page RGBA
+      // buffer: a page hundreds of thousands of pixels tall (real pages can
+      // be) would otherwise need gigabytes even though the screenshot itself
+      // is written row by row.  PpmWriter streams the encoded rows out, so
+      // peak memory stays within one band.  The output is byte identical to
+      // a single full-page rasterization.  Each band re-walks the display
+      // list, so the band height also sets the memory/CPU trade-off: 4096
+      // rows cap the band buffer at 800 * 4096 * 4 = 13 MiB, and a page
+      // 460k rows tall only pays for ~112 passes over the list.
+      constexpr int kBandHeight = 4096;
+      auto writer =
+          neko::paint::PpmWriter::Create(parsed.options.screenshot_path.value(), 800, height);
+      if (!writer) {
+        std::cerr << "error: " << writer.error().message() << "\n";
+        return 1;
+      }
+      neko::paint::Rasterizer band(800, std::min(kBandHeight, height));
+      for (int y0 = 0; y0 < height; y0 += kBandHeight) {
+        const int rows = std::min(kBandHeight, height - y0);
+        page.RasterizeInto(band, 0, rows, static_cast<float>(y0));
+        const auto appended = writer.value().AppendRows(band.pixels().data(), rows);
+        if (!appended) {
+          std::cerr << "error: " << appended.error().message() << "\n";
+          return 1;
+        }
+      }
+      const auto written = writer.value().Finish();
       if (!written) {
         std::cerr << "error: " << written.error().message() << "\n";
         return 1;

@@ -110,6 +110,7 @@ gtest_discover_tests(neko_layout_tests DISCOVERY_MODE PRE_TEST)
 # -----------------------------------------------------------------------------
 add_executable(neko_paint_tests
   paint/paint_test.cpp
+  paint/ppm_writer_test.cpp
 )
 target_link_libraries(neko_paint_tests PRIVATE neko::paint neko::html neko::base gtest_main)
 apply_compiler_warnings(neko_paint_tests)

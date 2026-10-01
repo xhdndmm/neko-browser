@@ -8,12 +8,12 @@
 #include "neko/graphics/utf8.h"
 #include "neko/image/image.h"
 #include "neko/paint/font8x8.h"
+#include "neko/paint/ppm_writer.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <fstream>
 #include <future>
 #include <string>
 #include <string_view>
@@ -25,14 +25,6 @@ namespace {
 int Clamp(int value, int lo, int hi)
 {
   return value < lo ? lo : (value > hi ? hi : value);
-}
-
-// Byte offset of a pixel in the RGBA buffer.
-std::size_t PixelOffset(int x, int y, int width)
-{
-  return (static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
-          static_cast<std::size_t>(x)) *
-         4;
 }
 
 // Blends a source color onto a destination pixel using integer fixed-point
@@ -352,12 +344,19 @@ void Rasterizer::FillRect(float x, float y, float width, float height, css::Colo
   if (!ApplyClip(x, y, width, height)) {
     return;
   }
-  // Shift up by the scroll offset; scrolled-out content is clipped by Clamp.
+  // Shift up by the scroll offset, then clip the span to the buffer.  Note
+  // this is a *clip*, not a clamp of both endpoints: content entirely below
+  // the buffer (the common case for the banded screenshot path, where the
+  // buffer is one band tall) must be discarded, not squashed onto the last
+  // row.
   y -= scroll_offset_;
-  const int x0 = Clamp(static_cast<int>(std::floor(x)), 0, width_ - 1);
-  const int y0 = Clamp(static_cast<int>(std::floor(y)), 0, height_ - 1);
-  const int x1 = Clamp(static_cast<int>(std::ceil(x + width)), 0, width_);
-  const int y1 = Clamp(static_cast<int>(std::ceil(y + height)), 0, height_);
+  const int x0 = std::max(0, static_cast<int>(std::floor(x)));
+  const int y0 = std::max(0, static_cast<int>(std::floor(y)));
+  const int x1 = std::min(width_, static_cast<int>(std::ceil(x + width)));
+  const int y1 = std::min(height_, static_cast<int>(std::ceil(y + height)));
+  if (x0 >= x1 || y0 >= y1) {
+    return;
+  }
   int band_y0 = y0;
   int band_y1 = y1;
   ClampToBand(band_y0, band_y1);
@@ -380,13 +379,17 @@ void Rasterizer::FillRoundRect(
     FillRect(x, y, width, height, color);
     return;
   }
-  // Shift up by the scroll offset; scrolled-out content is clipped by Clamp.
+  // Shift up by the scroll offset, then clip the span to the buffer (a clip,
+  // not an endpoint clamp -- see FillRect).
   y -= scroll_offset_;
   radius = std::min(radius, std::min(width, height) / 2.0f);
-  const int x0 = Clamp(static_cast<int>(std::floor(x)), 0, width_ - 1);
-  const int y0 = Clamp(static_cast<int>(std::floor(y)), 0, height_ - 1);
-  const int x1 = Clamp(static_cast<int>(std::ceil(x + width)), 0, width_);
-  const int y1 = Clamp(static_cast<int>(std::ceil(y + height)), 0, height_);
+  const int x0 = std::max(0, static_cast<int>(std::floor(x)));
+  const int y0 = std::max(0, static_cast<int>(std::floor(y)));
+  const int x1 = std::min(width_, static_cast<int>(std::ceil(x + width)));
+  const int y1 = std::min(height_, static_cast<int>(std::ceil(y + height)));
+  if (x0 >= x1 || y0 >= y1) {
+    return;
+  }
   const float left = x + radius;
   const float right = x + width - radius;
   const float top = y + radius;
@@ -665,32 +668,15 @@ void Rasterizer::BlendGlyph(int x, int y, const graphics::GlyphBitmap& glyph, cs
 
 base::Result<void> WritePpm(std::string_view path, const Rasterizer& image)
 {
-  std::ofstream out(std::string(path), std::ios::binary);
-  if (!out.is_open()) {
-    return base::Err(base::Error::Io("cannot open output file: " + std::string(path)));
+  auto writer = PpmWriter::Create(path, image.width(), image.height());
+  if (!writer.has_value()) {
+    return base::Err(writer.error());
   }
-  out << "P6\n" << image.width() << " " << image.height() << "\n255\n";
-  for (int y = 0; y < image.height(); ++y) {
-    for (int x = 0; x < image.width(); ++x) {
-      const std::size_t offset = PixelOffset(x, y, image.width());
-      const uint8_t r = image.pixels()[offset];
-      const uint8_t g = image.pixels()[offset + 1];
-      const uint8_t b = image.pixels()[offset + 2];
-      const uint8_t a = image.pixels()[offset + 3];
-      // Composite over white.
-      const float alpha = static_cast<float>(a) / 255.0f;
-      auto composite = [alpha](uint8_t c) -> uint8_t {
-        return static_cast<uint8_t>(static_cast<float>(c) * alpha + 255.0f * (1.0f - alpha) + 0.5f);
-      };
-      out.put(static_cast<char>(composite(r)));
-      out.put(static_cast<char>(composite(g)));
-      out.put(static_cast<char>(composite(b)));
-    }
+  const auto written = writer.value().AppendRows(image.pixels().data(), image.height());
+  if (!written.has_value()) {
+    return written;
   }
-  if (!out.good()) {
-    return base::Err(base::Error::Io("write failed: " + std::string(path)));
-  }
-  return base::Ok();
+  return writer.value().Finish();
 }
 
 } // namespace neko::paint

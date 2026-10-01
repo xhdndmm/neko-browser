@@ -51,6 +51,21 @@ ctest --preset debug
 - 字体度量依赖系统字体栈，跨平台断言要留出合理容差，并优先比较引擎内部一致的两条路径
   （例如 SVG 文本整形与 layout 文本测量走同一个 advance 来源）。
 
+## 内存与占用测量
+
+`tools/measure_rss.py` 用 wait4(2) 的 rusage 测量任意命令的子进程峰值 RSS，无第三方
+依赖（Linux/macOS；Windows 不受支持，用 `Get-Process <name> | Select PeakWorkingSet64`）：
+
+```bash
+python3 tools/measure_rss.py --label dump-dom -- build/release/bin/neko_browser \
+    --url file://$PWD/tests/pages/forms.html --dump-dom
+python3 tools/measure_rss.py --json -- <command>   # 机器可读输出
+```
+
+内存敏感路径的回归（例如截图的分带光栅化）应同时断言“输出与整页光栅化逐字节一致”
+（`PageTest.BandedRasterizeMatchesFullRasterization`）与峰值 RSS——只看输出相等
+无法发现缓冲区膨胀。
+
 ## Sanitizer 测试
 
 ```bash

@@ -6,8 +6,10 @@
 #include "neko/paint/rasterizer.h"
 #include "neko/renderer/page.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -15,6 +17,7 @@
 #include <string>
 #include <thread>
 #include <tuple>
+#include <vector>
 
 namespace neko::renderer {
 namespace {
@@ -988,6 +991,80 @@ TEST(PageTest, ExternalStylesheetUpdateBuildsLayoutImmediately)
   ASSERT_TRUE(geometry.has_value());
   EXPECT_FLOAT_EQ(geometry->width, 240.0f);
   EXPECT_FLOAT_EQ(geometry->height, 30.0f);
+}
+
+TEST(PageTest, RasterizeIntoClearsBackgroundWithoutLayout)
+{
+  // The banded screenshot path rasterizes through RasterizeInto() without
+  // requiring a layout tree first: an empty document must still produce the
+  // canvas background, exactly like a full-page Rasterize() would.
+  Page page;
+  paint::Rasterizer band(16, 8);
+  band.Clear(css::Color{0, 0, 0, 255}); // dirty buffer, must be overwritten
+  page.RasterizeInto(band, 0, 8, 0.0f);
+  for (int y = 0; y < 8; ++y) {
+    for (int x = 0; x < 16; ++x) {
+      const std::size_t offset =
+          (static_cast<std::size_t>(y) * 16 + static_cast<std::size_t>(x)) * 4;
+      EXPECT_EQ(band.pixels()[offset + 0], 255);
+      EXPECT_EQ(band.pixels()[offset + 1], 255);
+      EXPECT_EQ(band.pixels()[offset + 2], 255);
+      EXPECT_EQ(band.pixels()[offset + 3], 255);
+    }
+  }
+}
+
+TEST(PageTest, BandedRasterizeMatchesFullRasterization)
+{
+  // The CLI screenshot path rasterizes tall pages band by band through
+  // RasterizeInto() to keep peak memory within one band.  The stitched bands
+  // must be pixel-identical to one full-page rasterization.
+  Page page;
+  ASSERT_TRUE(
+      page.LoadHtml("<body style=\"background-color:#ffffff\">"
+                    "<div style=\"background-color:#ff0000;width:300px;height:150px\">a</div>"
+                    "<div style=\"background-color:#00ff00;width:300px;height:150px\">b</div>"
+                    "<div style=\"background-color:#0000ff;width:300px;height:150px\">c</div>"
+                    "</body>")
+          .has_value());
+  page.Layout(400);
+
+  constexpr int kWidth = 400;
+  constexpr int kHeight = 430; // spans more than two 128-row bands
+  constexpr int kBandHeight = 128;
+
+  const paint::Rasterizer full = page.Rasterize(kWidth, kHeight);
+  paint::Rasterizer band(kWidth, kBandHeight);
+  const std::size_t row_bytes = static_cast<std::size_t>(kWidth) * 4;
+  std::vector<std::uint8_t> stitched(static_cast<std::size_t>(kWidth) * kHeight * 4);
+  for (int y0 = 0; y0 < kHeight; y0 += kBandHeight) {
+    const int rows = std::min(kBandHeight, kHeight - y0);
+    page.RasterizeInto(band, 0, rows, static_cast<float>(y0));
+    for (int y = 0; y < rows; ++y) {
+      for (int x = 0; x < kWidth; ++x) {
+        const std::size_t band_off = (static_cast<std::size_t>(y) * kWidth + x) * 4;
+        const std::size_t full_off = (static_cast<std::size_t>(y0 + y) * kWidth + x) * 4;
+        if (band.pixels()[band_off] != full.pixels()[full_off] ||
+            band.pixels()[band_off + 1] != full.pixels()[full_off + 1] ||
+            band.pixels()[band_off + 2] != full.pixels()[full_off + 2] ||
+            band.pixels()[band_off + 3] != full.pixels()[full_off + 3]) {
+          FAIL() << "band y0=" << y0 << " pixel (" << x << ", " << y0 + y << "): band=("
+                 << static_cast<int>(band.pixels()[band_off]) << ","
+                 << static_cast<int>(band.pixels()[band_off + 1]) << ","
+                 << static_cast<int>(band.pixels()[band_off + 2]) << ","
+                 << static_cast<int>(band.pixels()[band_off + 3]) << ") full=("
+                 << static_cast<int>(full.pixels()[full_off]) << ","
+                 << static_cast<int>(full.pixels()[full_off + 1]) << ","
+                 << static_cast<int>(full.pixels()[full_off + 2]) << ","
+                 << static_cast<int>(full.pixels()[full_off + 3]) << ")";
+        }
+      }
+    }
+    std::copy_n(band.pixels().begin(),
+                static_cast<std::size_t>(rows) * row_bytes,
+                stitched.begin() + static_cast<std::size_t>(y0) * row_bytes);
+  }
+  EXPECT_EQ(stitched, full.pixels());
 }
 
 TEST(PageTest, ScrollBlitBandMatchesFullRasterization)

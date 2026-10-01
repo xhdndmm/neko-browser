@@ -213,8 +213,16 @@ graph LR
 - [x] **TextWidth 记忆化**（同 (text,px) 命中缓存，上限 4096）
 - [x] **合成器**：软件合成器抽象（ADR 0015）+ GUI 接线（图层 0 页面 +
       caret 覆盖层、脏矩形重合成、滚动带级 blit）
+- [x] **全页截图分带光栅化**（2026-10）：`--screenshot` 逐带光栅化 +
+      `paint::PpmWriter` 流式写出，峰值内存从整页 RGBA 缓冲降到一个带高；
+      20k 元素页面实测 1643 MiB → 245 MiB（输出逐字节不变），且消除了大缓冲
+      分配/清零开销；顺带修正了 `Rasterizer` 全缓冲下方内容的裁剪语义
+- [x] **内存测量工具** `tools/measure_rss.py`（wait4 rusage 峰值 RSS，
+      本地/CI 均可复现）
 - [ ] HTTP cache、增量布局、增量绘制、GPU 后端 —— **后续**
-- [ ] benchmark 基准建立（解析、布局、绘制、启动、内存）—— **后续**
+- [ ] benchmark 基准建立（解析、布局、绘制、启动、内存的持续回归门禁）—— **后续**
+- [ ] `ComputedStyle` 罕见字段侧存（grid/自定义属性已实测占每元素 ~370 B，
+      见 2026-10 分析）—— **后续**
 
 ## Phase 12 — Multi-process
 

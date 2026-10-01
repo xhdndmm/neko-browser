@@ -241,6 +241,42 @@ TEST(RasterizerTest, FreeTypeTextRendering)
   EXPECT_GT(dark_pixels, 5);
 }
 
+TEST(RasterizerTest, BandBufferWithScrollMatchesFullBufferRows)
+{
+  // The banded screenshot path uses a band-height buffer plus SetVisibleBand /
+  // SetScrollOffset instead of one full-page buffer.  Verify the mechanics at
+  // the Rasterizer level first: each band must reproduce the corresponding
+  // rows of a full-size render, including partial bands.
+  DisplayList list;
+  list.FillRect(0, 0, 32, 40, css::Color{255, 255, 255, 255}); // page background
+  list.FillRect(4, 4, 10, 10, css::Color{255, 0, 0, 255});     // red box
+  list.FillRect(4, 20, 10, 10, css::Color{0, 255, 0, 255});    // green box
+
+  Rasterizer full(32, 40);
+  full.Clear(css::Color{255, 255, 255, 255});
+  full.Rasterize(list);
+
+  const int band_heights[] = {16, 16, 8}; // 40 rows total
+  Rasterizer band(32, 16);
+  int y0 = 0;
+  for (const int rows : band_heights) {
+    band.ClearBand(0, rows, css::Color{255, 255, 255, 255});
+    band.SetVisibleBand(0, rows);
+    band.SetScrollOffset(static_cast<float>(y0));
+    band.Rasterize(list);
+    band.ResetVisibleBand();
+    for (int y = 0; y < rows; ++y) {
+      for (int x = 0; x < 32; ++x) {
+        const std::size_t band_off = (static_cast<std::size_t>(y) * 32 + x) * 4;
+        const std::size_t full_off = (static_cast<std::size_t>(y0 + y) * 32 + x) * 4;
+        ASSERT_EQ(Pixel(band, x, y), Pixel(full, x, y0 + y))
+            << "band y0=" << y0 << " pixel (" << x << ", " << y0 + y << ")";
+      }
+    }
+    y0 += rows;
+  }
+}
+
 TEST(RasterizerTest, WritePpm)
 {
   namespace fs = std::filesystem;
