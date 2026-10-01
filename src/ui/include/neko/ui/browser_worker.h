@@ -53,6 +53,10 @@ public:
   std::vector<storage::Cookie> SnapshotCookies() const;
   std::vector<browser::NetworkLogEntry> SnapshotNetworkLog() const;
   std::vector<browser::ConsoleEntry> SnapshotConsoleLog() const;
+  // Context-menu point query for one tab (thread-safe synchronous read).
+  browser::PointInfo QueryPoint(int tab_id, float doc_x, float doc_y) const;
+  // All preferences as (key, value) pairs (thread-safe).
+  std::vector<std::pair<std::string, std::string>> SnapshotPreferences() const;
   std::string profile_dir() const
   {
     return controller_.profile_dir();
@@ -101,6 +105,16 @@ public:
   void NewTab(const QString& url, bool activate);
   void CloseTab(int id);
   void ActivateTab(int id);
+  // Preferences (settings page): persist |key| = |value| on the worker
+  // thread; the change shows up in the next snapshot refresh.
+  void SetPreference(const QString& key, const QString& value);
+  // History management (history panel).
+  void RemoveHistoryEntry(const QString& url);
+  void ClearHistory();
+  // Removes finished download records from the list.
+  void ClearFinishedDownloads();
+  // The directory downloads are written to (empty when unset).
+  QString DownloadDir() const;
   void BookmarkActive();
   void RemoveBookmark(const QString& url);
   void Download(const QString& url);

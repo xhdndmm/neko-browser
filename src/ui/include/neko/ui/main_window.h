@@ -1,13 +1,17 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QStringList>
 #include <QVector>
 
+class QCheckBox;
+class QComboBox;
 class QLineEdit;
 class QListWidget;
 class QListWidgetItem;
 class QStackedWidget;
 class QTabBar;
+class QToolBar;
 class QTreeWidget;
 class QTreeWidgetItem;
 class QPlainTextEdit;
@@ -77,6 +81,39 @@ public:
   // The view for the active tab, or nullptr (for GUI tests that need direct
   // access to a WebView's scroll bar).
   WebView* ActiveView() const;
+  // Feature accessors (tests / automation).
+  QToolBar* BookmarkBarWidget() const
+  {
+    return bookmark_bar_;
+  }
+  QComboBox* SearchEngineComboWidget() const
+  {
+    return search_engine_combo_;
+  }
+  QLineEdit* HomePageEditWidget() const
+  {
+    return home_page_edit_;
+  }
+  QCheckBox* BookmarkBarCheckWidget() const
+  {
+    return bookmark_bar_check_;
+  }
+  QLineEdit* HistorySearchWidget() const
+  {
+    return history_search_;
+  }
+  QListWidget* HistoryListWidget() const
+  {
+    return history_list_;
+  }
+  QListWidget* DownloadListWidget() const
+  {
+    return download_list_;
+  }
+  QAction* HomeAction() const
+  {
+    return home_action_;
+  }
 
 private slots:
   void OnStateChanged();
@@ -92,6 +129,17 @@ private slots:
   void OnBookmarkActivated(QListWidgetItem* item);
   void OnConsoleCommand();
   void OnDomSelectionChanged();
+  // History panel management.
+  void OnHistoryDeleteSelected();
+  void OnHistoryClearAll();
+  // Downloads panel.
+  void OnDownloadActivated(QListWidgetItem* item);
+  void OnDownloadOpenFolder();
+  void OnDownloadClearFinished();
+  // Settings panel.
+  void OnSearchEngineChanged(int index);
+  void OnHomePageEdited();
+  void OnBookmarkBarToggled(bool visible);
 
 private:
   // Enter/Shift+Enter in the find input step the matches (handled here so the
@@ -99,14 +147,20 @@ private:
   bool eventFilter(QObject* watched, QEvent* event) override;
   void BuildUi();
   void BuildToolbar();
+  void BuildBookmarkBar();
   void BuildFindBar(QToolBar* toolbar);
   void ShowFindBar();
   void HideFindBar();
   void BuildDocks();
   void RefreshAll();
   void SyncTabs();
+  void SyncBookmarkBar();
   void RefreshDevTools();
   void RefreshLists();
+  // Persists one preference and refreshes the tab-independent UI (settings,
+  // bookmark bar) immediately.
+  void SetPreference(const QString& key, const QString& value);
+  QString Preference(const QString& key, const QString& fallback = QString()) const;
   void Navigate(const QString& input);
   void FocusAddressBar();
 
@@ -126,6 +180,8 @@ private:
   QLineEdit* address_ = nullptr;
   // Page-zoom indicator in the toolbar ("100%"); clicking it resets to 100%.
   QToolButton* zoom_button_ = nullptr;
+  // The toolbar's Home button (opens the home_page preference).
+  QAction* home_action_ = nullptr;
   // Find-in-page bar (Ctrl+F): query input, "n/m" status and its container
   // (hidden until Ctrl+F).
   QWidget* find_bar_ = nullptr;
@@ -153,10 +209,21 @@ private:
   QPlainTextEdit* js_console_view_ = nullptr; // JS REPL output (not cleared)
   QLineEdit* console_input_ = nullptr;
   QListWidget* history_list_ = nullptr;
+  QLineEdit* history_search_ = nullptr;
   QListWidget* bookmark_list_ = nullptr;
+  // The bookmark bar (a toolbar row under the main toolbar) and the signature
+  // of what it currently shows, so RefreshLists only rebuilds it on change.
+  QToolBar* bookmark_bar_ = nullptr;
+  QStringList bookmark_bar_signature_;
   QListWidget* download_list_ = nullptr;
   QLabel* settings_profile_ = nullptr;
   QLabel* settings_counts_ = nullptr;
+  QComboBox* search_engine_combo_ = nullptr;
+  QLineEdit* home_page_edit_ = nullptr;
+  QCheckBox* bookmark_bar_check_ = nullptr;
+  // True while RefreshLists writes the settings widgets programmatically, so
+  // the signals they emit are not mistaken for user edits.
+  bool syncing_settings_ = false;
 };
 
 } // namespace neko::ui

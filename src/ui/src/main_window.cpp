@@ -1,6 +1,8 @@
 #include "neko/ui/main_window.h"
 
 #include "neko/base/memory.h"
+#include "neko/browser/preferences_keys.h"
+#include "neko/browser/search_engines.h"
 #include "neko/dom/element.h"
 #include "neko/dom/node.h"
 #include "neko/style/computed_style.h"
@@ -9,7 +11,11 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
+#include <QComboBox>
+#include <QDesktopServices>
 #include <QDockWidget>
+#include <QFileInfo>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -21,6 +27,7 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QShortcut>
+#include <QSignalBlocker>
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QTabBar>
@@ -158,6 +165,7 @@ MainWindow::MainWindow(BrowserWorker* worker, QWidget* parent)
 void MainWindow::BuildUi()
 {
   BuildToolbar();
+  BuildBookmarkBar();
   BuildDocks();
 
   // Tab bar with a trailing "+" button (Ctrl+T / double-click also work).
@@ -195,6 +203,7 @@ void MainWindow::BuildToolbar()
 {
   auto* toolbar = addToolBar(tr("Navigation"));
   toolbar->setMovable(false);
+  toolbar->setObjectName(QStringLiteral("navigationToolbar"));
 
   auto* back = toolbar->addAction(tr("◀"), this, [this] {
     address_editing_ = false;
@@ -211,6 +220,15 @@ void MainWindow::BuildToolbar()
   back->setToolTip(tr("Back"));
   forward->setToolTip(tr("Forward"));
   reload->setToolTip(tr("Reload"));
+  auto* home = toolbar->addAction(tr("⌂"), this, [this] {
+    address_editing_ = false;
+    const QString home_page = Preference(FromUtf8(browser::prefs::kHomePage));
+    if (!home_page.isEmpty()) {
+      Navigate(home_page);
+    }
+  });
+  home->setToolTip(tr("Home (set the home page in Settings)"));
+  home_action_ = home;
   toolbar->addSeparator();
 
   address_ = new QLineEdit(this);
@@ -241,6 +259,89 @@ void MainWindow::BuildToolbar()
   zoom_in->setToolTip(tr("Zoom in (Ctrl+=)"));
 
   BuildFindBar(toolbar);
+}
+
+QString MainWindow::Preference(const QString& key, const QString& fallback) const
+{
+  const auto preferences = worker_->SnapshotPreferences();
+  const std::string wanted = key.toStdString();
+  for (const auto& [entry_key, entry_value] : preferences) {
+    if (entry_key == wanted) {
+      return FromUtf8(entry_value);
+    }
+  }
+  return fallback;
+}
+
+void MainWindow::SetPreference(const QString& key, const QString& value)
+{
+  worker_->SetPreference(key, value);
+  // Apply the settings that affect the chrome immediately (the worker
+  // confirms through the next StateChanged, which also re-syncs the widgets).
+  if (key == FromUtf8(browser::prefs::kShowBookmarkBar) && bookmark_bar_ != nullptr) {
+    bookmark_bar_->setVisible(value != QLatin1String("0"));
+  }
+}
+
+void MainWindow::BuildBookmarkBar()
+{
+  bookmark_bar_ = new QToolBar(tr("Bookmarks"), this);
+  bookmark_bar_->setMovable(false);
+  bookmark_bar_->setContextMenuPolicy(Qt::CustomContextMenu);
+  connect(bookmark_bar_, &QToolBar::customContextMenuRequested, this, [this](const QPoint& pos) {
+    QAction* action = bookmark_bar_->actionAt(pos);
+    if (action == nullptr || action->data().toString().isEmpty()) {
+      return;
+    }
+    const QString url = action->data().toString();
+    QMenu menu(bookmark_bar_);
+    QAction* open_new = menu.addAction(tr("Open in New Tab"));
+    QAction* remove = menu.addAction(tr("Remove Bookmark"));
+    const QAction* chosen = menu.exec(bookmark_bar_->mapToGlobal(pos));
+    if (chosen == open_new) {
+      worker_->NewTab(url, /*activate=*/false);
+    } else if (chosen == remove) {
+      worker_->RemoveBookmark(url);
+    }
+  });
+  // The bookmark bar is a second toolbar row under the navigation toolbar;
+  // visibility follows the show_bookmark_bar preference (default on).
+  addToolBarBreak(Qt::TopToolBarArea);
+  addToolBar(Qt::TopToolBarArea, bookmark_bar_);
+  bookmark_bar_->setVisible(Preference(FromUtf8(browser::prefs::kShowBookmarkBar), "1") !=
+                            QLatin1String("0"));
+}
+
+void MainWindow::SyncBookmarkBar()
+{
+  if (bookmark_bar_ == nullptr) {
+    return;
+  }
+  const auto bookmarks = worker_->SnapshotBookmarks();
+  // RefreshLists runs on every StateChanged (including hover/scroll), so only
+  // rebuild the buttons when the bookmark set actually changed.
+  QStringList signature;
+  signature.reserve(static_cast<int>(bookmarks.size()));
+  for (const auto& b : bookmarks) {
+    signature.push_back(FromUtf8(b.url));
+    signature.push_back(FromUtf8(b.title));
+    signature.push_back(FromUtf8(b.folder));
+  }
+  if (signature == bookmark_bar_signature_) {
+    return;
+  }
+  bookmark_bar_signature_ = signature;
+  bookmark_bar_->clear();
+  for (const auto& b : bookmarks) {
+    const QString url = FromUtf8(b.url);
+    const QString title = FromUtf8(b.title.empty() ? b.url : b.title);
+    QAction* action = bookmark_bar_->addAction(
+        title.size() > 30 ? title.left(30) + QStringLiteral("\u2026") : title, this, [this, url] {
+          Navigate(url);
+        });
+    action->setData(url);
+    action->setToolTip(url);
+  }
 }
 
 void MainWindow::BuildFindBar(QToolBar* toolbar)
@@ -407,11 +508,31 @@ void MainWindow::BuildDocks()
   devtools_dock->setWidget(devtools);
   addDockWidget(Qt::RightDockWidgetArea, devtools_dock);
 
-  // --- History ---
-  history_list_ = new QListWidget(this);
+  // --- History --- (search box + delete/clear)
+  auto* history_widget = new QWidget(this);
+  auto* history_layout = new QVBoxLayout(history_widget);
+  history_layout->setContentsMargins(0, 0, 0, 0);
+  history_layout->setSpacing(0);
+  history_search_ = new QLineEdit(history_widget);
+  history_search_->setPlaceholderText(tr("Search history"));
+  history_search_->setClearButtonEnabled(true);
+  connect(history_search_, &QLineEdit::textChanged, this, [this] { RefreshLists(); });
+  history_list_ = new QListWidget(history_widget);
   connect(history_list_, &QListWidget::itemActivated, this, &MainWindow::OnHistoryActivated);
+  auto* history_buttons = new QWidget(history_widget);
+  auto* history_button_layout = new QHBoxLayout(history_buttons);
+  history_button_layout->setContentsMargins(0, 0, 0, 0);
+  auto* history_delete = new QPushButton(tr("Delete"), history_buttons);
+  connect(history_delete, &QPushButton::clicked, this, &MainWindow::OnHistoryDeleteSelected);
+  auto* history_clear = new QPushButton(tr("Clear all"), history_buttons);
+  connect(history_clear, &QPushButton::clicked, this, &MainWindow::OnHistoryClearAll);
+  history_button_layout->addWidget(history_delete);
+  history_button_layout->addWidget(history_clear);
+  history_layout->addWidget(history_search_);
+  history_layout->addWidget(history_list_, 1);
+  history_layout->addWidget(history_buttons);
   auto* history_dock = new QDockWidget(tr("History"), this);
-  history_dock->setWidget(history_list_);
+  history_dock->setWidget(history_widget);
   addDockWidget(Qt::RightDockWidgetArea, history_dock);
 
   // --- Bookmarks ---
@@ -434,15 +555,53 @@ void MainWindow::BuildDocks()
   bookmark_dock->setWidget(bookmark_list_);
   addDockWidget(Qt::RightDockWidgetArea, bookmark_dock);
 
-  // --- Downloads ---
-  download_list_ = new QListWidget(this);
+  // --- Downloads --- (double-click opens; open-folder / clear buttons)
+  auto* download_widget = new QWidget(this);
+  auto* download_layout = new QVBoxLayout(download_widget);
+  download_layout->setContentsMargins(0, 0, 0, 0);
+  download_layout->setSpacing(0);
+  download_list_ = new QListWidget(download_widget);
+  connect(download_list_, &QListWidget::itemDoubleClicked, this, &MainWindow::OnDownloadActivated);
+  auto* download_buttons = new QWidget(download_widget);
+  auto* download_button_layout = new QHBoxLayout(download_buttons);
+  download_button_layout->setContentsMargins(0, 0, 0, 0);
+  auto* download_folder = new QPushButton(tr("Open folder"), download_buttons);
+  connect(download_folder, &QPushButton::clicked, this, &MainWindow::OnDownloadOpenFolder);
+  auto* download_clear = new QPushButton(tr("Clear finished"), download_buttons);
+  connect(download_clear, &QPushButton::clicked, this, &MainWindow::OnDownloadClearFinished);
+  download_button_layout->addWidget(download_folder);
+  download_button_layout->addWidget(download_clear);
+  download_layout->addWidget(download_list_, 1);
+  download_layout->addWidget(download_buttons);
   auto* download_dock = new QDockWidget(tr("Downloads"), this);
-  download_dock->setWidget(download_list_);
+  download_dock->setWidget(download_widget);
   addDockWidget(Qt::RightDockWidgetArea, download_dock);
 
   // --- Settings ---
   auto* settings = new QWidget(this);
   auto* settings_layout = new QVBoxLayout(settings);
+
+  settings_layout->addWidget(new QLabel(tr("Home page"), settings));
+  home_page_edit_ = new QLineEdit(settings);
+  home_page_edit_->setPlaceholderText(tr("https://... (opened by the Home button)"));
+  connect(home_page_edit_, &QLineEdit::editingFinished, this, &MainWindow::OnHomePageEdited);
+  settings_layout->addWidget(home_page_edit_);
+
+  settings_layout->addWidget(new QLabel(tr("Default search engine"), settings));
+  search_engine_combo_ = new QComboBox(settings);
+  for (const browser::SearchEngine& engine : browser::BuiltinSearchEngines()) {
+    search_engine_combo_->addItem(FromUtf8(engine.name), FromUtf8(engine.id));
+  }
+  connect(search_engine_combo_,
+          QOverload<int>::of(&QComboBox::currentIndexChanged),
+          this,
+          &MainWindow::OnSearchEngineChanged);
+  settings_layout->addWidget(search_engine_combo_);
+
+  bookmark_bar_check_ = new QCheckBox(tr("Show bookmark bar"), settings);
+  connect(bookmark_bar_check_, &QCheckBox::toggled, this, &MainWindow::OnBookmarkBarToggled);
+  settings_layout->addWidget(bookmark_bar_check_);
+
   settings_profile_ = new QLabel(settings);
   settings_counts_ = new QLabel(settings);
   auto* clear = new QPushButton(tr("Clear cookies, history and bookmarks"), settings);
@@ -577,6 +736,79 @@ void MainWindow::OnHistoryActivated(QListWidgetItem* item)
 void MainWindow::OnBookmarkActivated(QListWidgetItem* item)
 {
   Navigate(item->data(Qt::UserRole).toString());
+}
+
+void MainWindow::OnHistoryDeleteSelected()
+{
+  QListWidgetItem* item = history_list_->currentItem();
+  if (item == nullptr) {
+    return;
+  }
+  const QString url = item->data(Qt::UserRole).toString();
+  if (!url.isEmpty()) {
+    worker_->RemoveHistoryEntry(url);
+  }
+}
+
+void MainWindow::OnHistoryClearAll()
+{
+  if (QMessageBox::question(this, tr("Clear history"), tr("Remove the entire browsing history?")) ==
+      QMessageBox::Yes) {
+    worker_->ClearHistory();
+  }
+}
+
+void MainWindow::OnDownloadActivated(QListWidgetItem* item)
+{
+  if (item == nullptr) {
+    return;
+  }
+  const QString path = item->data(Qt::UserRole).toString();
+  if (path.isEmpty() || !QFileInfo::exists(path)) {
+    statusBar()->showMessage(tr("The downloaded file is not available"), 3000);
+    return;
+  }
+  QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+}
+
+void MainWindow::OnDownloadOpenFolder()
+{
+  const QString dir = worker_->DownloadDir();
+  if (!dir.isEmpty()) {
+    QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+  }
+}
+
+void MainWindow::OnDownloadClearFinished()
+{
+  worker_->ClearFinishedDownloads();
+}
+
+void MainWindow::OnSearchEngineChanged(int index)
+{
+  if (syncing_settings_ || index < 0) {
+    return;
+  }
+  const QString id = search_engine_combo_->itemData(index).toString();
+  if (!id.isEmpty()) {
+    SetPreference(FromUtf8(browser::prefs::kSearchEngine), id);
+  }
+}
+
+void MainWindow::OnHomePageEdited()
+{
+  if (syncing_settings_) {
+    return;
+  }
+  SetPreference(FromUtf8(browser::prefs::kHomePage), home_page_edit_->text().trimmed());
+}
+
+void MainWindow::OnBookmarkBarToggled(bool visible)
+{
+  if (syncing_settings_) {
+    return;
+  }
+  SetPreference(FromUtf8(browser::prefs::kShowBookmarkBar), visible ? "1" : "0");
 }
 
 void MainWindow::OnConsoleCommand()
@@ -784,13 +1016,19 @@ void MainWindow::RefreshLists()
   const auto bookmarks = worker_->SnapshotBookmarks();
   const auto downloads = worker_->SnapshotDownloads();
 
-  // History.
+  // History, filtered by the search box.
+  const QString filter = history_search_ != nullptr ? history_search_->text().trimmed() : QString();
   history_list_->clear();
   for (const auto& entry : history) {
-    auto* item =
-        new QListWidgetItem(FromUtf8(entry.title.empty() ? entry.url : entry.title), history_list_);
-    item->setToolTip(FromUtf8(entry.url));
-    item->setData(Qt::UserRole, FromUtf8(entry.url));
+    const QString title = FromUtf8(entry.title.empty() ? entry.url : entry.title);
+    const QString url = FromUtf8(entry.url);
+    if (!filter.isEmpty() && !title.contains(filter, Qt::CaseInsensitive) &&
+        !url.contains(filter, Qt::CaseInsensitive)) {
+      continue;
+    }
+    auto* item = new QListWidgetItem(title, history_list_);
+    item->setToolTip(url);
+    item->setData(Qt::UserRole, url);
   }
 
   // Bookmarks.
@@ -803,16 +1041,29 @@ void MainWindow::RefreshLists()
     item->setData(Qt::UserRole, FromUtf8(b.url));
   }
 
-  // Downloads.
+  // Downloads (double-click opens the file; the path rides in UserRole).
   download_list_->clear();
   for (const auto& d : downloads) {
-    download_list_->addItem(QStringLiteral("%1  %2  %3 bytes")
-                                .arg(FromUtf8(browser::ToString(d.state)))
-                                .arg(FromUtf8(d.url))
-                                .arg(static_cast<qulonglong>(d.received_bytes)));
+    const QString total =
+        d.total_bytes < 0 ? tr("?") : QString::number(static_cast<qulonglong>(d.total_bytes));
+    auto* item =
+        new QListWidgetItem(QStringLiteral("%1  %2  %3 / %4 bytes")
+                                .arg(FromUtf8(browser::ToString(d.state)),
+                                     FromUtf8(d.url),
+                                     QString::number(static_cast<qulonglong>(d.received_bytes)),
+                                     total),
+                            download_list_);
+    if (!d.filename.empty()) {
+      item->setData(Qt::UserRole, FromUtf8(d.filename));
+    }
+    if (!d.error.empty()) {
+      item->setToolTip(FromUtf8(d.error));
+    }
   }
 
-  // Settings.
+  // Settings (write the widgets programmatically; |syncing_settings_| keeps
+  // the change signals from being mistaken for user edits; the home-page
+  // editor is left alone while it has focus).
   if (settings_profile_ != nullptr) {
     settings_profile_->setText(tr("Profile: %1").arg(FromUtf8(worker_->profile_dir())));
     settings_counts_->setText(tr("Cookies: %1   History: %2   Bookmarks: %3   Downloads: %4")
@@ -821,6 +1072,28 @@ void MainWindow::RefreshLists()
                                   .arg(bookmarks.size())
                                   .arg(downloads.size()));
   }
+  syncing_settings_ = true;
+  if (search_engine_combo_ != nullptr) {
+    const QString engine =
+        Preference(FromUtf8(browser::prefs::kSearchEngine), QStringLiteral("duckduckgo"));
+    const int index = search_engine_combo_->findData(engine);
+    if (index >= 0 && search_engine_combo_->currentIndex() != index) {
+      search_engine_combo_->setCurrentIndex(index);
+    }
+  }
+  if (home_page_edit_ != nullptr && !home_page_edit_->hasFocus()) {
+    const QString home = Preference(FromUtf8(browser::prefs::kHomePage));
+    if (home_page_edit_->text() != home) {
+      home_page_edit_->setText(home);
+    }
+  }
+  if (bookmark_bar_check_ != nullptr) {
+    bookmark_bar_check_->setChecked(Preference(FromUtf8(browser::prefs::kShowBookmarkBar), "1") !=
+                                    QLatin1String("0"));
+  }
+  syncing_settings_ = false;
+
+  SyncBookmarkBar();
 }
 
 void MainWindow::PopulateDomTree(QTreeWidget* tree)

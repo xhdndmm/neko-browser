@@ -127,6 +127,16 @@ std::vector<browser::ConsoleEntry> BrowserWorker::SnapshotConsoleLog() const
   return controller_.SnapshotConsoleLog();
 }
 
+browser::PointInfo BrowserWorker::QueryPoint(int tab_id, float doc_x, float doc_y) const
+{
+  return controller_.QueryPoint(tab_id, doc_x, doc_y);
+}
+
+std::vector<std::pair<std::string, std::string>> BrowserWorker::SnapshotPreferences() const
+{
+  return controller_.SnapshotPreferences();
+}
+
 void BrowserWorker::NavigateActive(const QString& input)
 {
   Post([this, input = input.toStdString()] { (void)controller_.NavigateActive(input); });
@@ -280,6 +290,33 @@ void BrowserWorker::NewTab(const QString& url, bool activate)
 void BrowserWorker::CloseTab(int id)
 {
   Post([this, id] { controller_.CloseTab(id); });
+}
+
+void BrowserWorker::SetPreference(const QString& key, const QString& value)
+{
+  Post([this, key = key.toStdString(), value = value.toStdString()] {
+    controller_.SetPreference(key, value);
+  });
+}
+
+void BrowserWorker::RemoveHistoryEntry(const QString& url)
+{
+  Post([this, url = url.toStdString()] { controller_.RemoveHistoryEntry(url); });
+}
+
+void BrowserWorker::ClearHistory()
+{
+  Post([this] { controller_.ClearHistory(); });
+}
+
+void BrowserWorker::ClearFinishedDownloads()
+{
+  Post([this] { (void)controller_.ClearFinishedDownloads(); });
+}
+
+QString BrowserWorker::DownloadDir() const
+{
+  return QString::fromStdString(controller_.download_dir());
 }
 
 void BrowserWorker::ActivateTab(int id)

@@ -12,15 +12,22 @@
 #include "neko/ui/web_view.h"
 
 #include <QApplication>
+#include <QCheckBox>
+#include <QClipboard>
+#include <QComboBox>
+#include <QGuiApplication>
 #include <QImage>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPixmap>
 #include <QPlainTextEdit>
 #include <QScrollBar>
 #include <QTabBar>
+#include <QToolBar>
 #include <QToolButton>
 #include <QWheelEvent>
 #include <QWidget>
@@ -405,6 +412,255 @@ TEST(UiSmokeTest, KeyboardShortcutOpensAndClosesTabs)
   SendKey(&window, Qt::Key_W, Qt::ControlModifier);
   ASSERT_TRUE(WaitFor([&] { return window.TabBarWidget()->count() <= initial; }));
   EXPECT_EQ(window.TabBarWidget()->count(), initial);
+}
+
+// ---------------------------------------------------------------------------
+// Browser chrome: settings, bookmark bar, history management, context menu
+// ---------------------------------------------------------------------------
+
+TEST(UiSmokeTest, SearchEngineSettingPersists)
+{
+  TempProfile tp;
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.show();
+  ASSERT_TRUE(WaitFor([&] { return window.TabBarWidget()->count() >= 1; }));
+  ASSERT_NE(window.SearchEngineComboWidget(), nullptr);
+
+  const int bing = window.SearchEngineComboWidget()->findData(QStringLiteral("bing"));
+  ASSERT_GE(bing, 0);
+  window.SearchEngineComboWidget()->setCurrentIndex(bing);
+  EXPECT_TRUE(WaitFor([&] {
+    for (const auto& [key, value] : worker.SnapshotPreferences()) {
+      if (key == "search_engine") {
+        return value == "bing";
+      }
+    }
+    return false;
+  }));
+}
+
+TEST(UiSmokeTest, BookmarkBarShowsBookmarksAndNavigates)
+{
+  TempProfile tp;
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.show();
+  ASSERT_TRUE(WaitFor([&] { return window.TabBarWidget()->count() >= 1; }));
+
+  const std::filesystem::path dir =
+      std::filesystem::temp_directory_path() / ("neko-bmbar-" + std::to_string(CurrentProcessId()));
+  std::filesystem::create_directories(dir);
+  const std::filesystem::path page_a = dir / "bm-a.html";
+  const std::filesystem::path page_b = dir / "bm-b.html";
+  ASSERT_TRUE(
+      neko::storage::WriteFileAtomic(
+          page_a.string(), "<html><head><title>Bookmarked A</title></head><body>a</body></html>")
+          .has_value());
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(
+                  page_b.string(), "<html><head><title>Other B</title></head><body>b</body></html>")
+                  .has_value());
+
+  worker.NavigateActive(QString::fromStdString(page_a.string()));
+  ASSERT_TRUE(WaitFor([&] {
+    const auto tab = worker.SnapshotActiveTab();
+    return tab.page != nullptr && !tab.loading;
+  }));
+  worker.BookmarkActive();
+  ASSERT_TRUE(WaitFor([&] { return !worker.SnapshotBookmarks().empty(); }));
+
+  QToolBar* bar = window.BookmarkBarWidget();
+  ASSERT_NE(bar, nullptr);
+  QAction* bookmark_action = nullptr;
+  EXPECT_TRUE(WaitFor([&] {
+    for (QAction* action : bar->actions()) {
+      if (action->data().toString().contains("bm-a.html")) {
+        bookmark_action = action;
+        return true;
+      }
+    }
+    return false;
+  }));
+  ASSERT_NE(bookmark_action, nullptr);
+
+  // Navigate away, then click the bookmark in the bar to come back.
+  worker.NavigateActive(QString::fromStdString(page_b.string()));
+  ASSERT_TRUE(WaitFor([&] { return worker.SnapshotActiveTab().title == "Other B"; }));
+  bookmark_action->trigger();
+  EXPECT_TRUE(WaitFor([&] { return worker.SnapshotActiveTab().title == "Bookmarked A"; }));
+
+  std::filesystem::remove_all(dir);
+}
+
+TEST(UiSmokeTest, BookmarkBarVisibilityFollowsPreference)
+{
+  TempProfile tp;
+  {
+    neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+    neko::ui::MainWindow window(&worker);
+    window.show();
+    ASSERT_TRUE(WaitFor([&] { return window.TabBarWidget()->count() >= 1; }));
+    ASSERT_NE(window.BookmarkBarCheckWidget(), nullptr);
+    ASSERT_TRUE(window.BookmarkBarWidget()->isVisible());
+
+    window.BookmarkBarCheckWidget()->setChecked(false);
+    EXPECT_TRUE(WaitFor([&] { return !window.BookmarkBarWidget()->isVisible(); }));
+    EXPECT_TRUE(WaitFor([&] {
+      for (const auto& [key, value] : worker.SnapshotPreferences()) {
+        if (key == "show_bookmark_bar") {
+          return value == "0";
+        }
+      }
+      return false;
+    }));
+  }
+  {
+    // A fresh worker on the same profile restores the hidden bar.
+    neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+    neko::ui::MainWindow window(&worker);
+    window.show();
+    ASSERT_TRUE(WaitFor([&] { return window.TabBarWidget()->count() >= 1; }));
+    EXPECT_FALSE(window.BookmarkBarWidget()->isVisible());
+  }
+}
+
+TEST(UiSmokeTest, HistorySearchAndDelete)
+{
+  TempProfile tp;
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.show();
+  ASSERT_TRUE(WaitFor([&] { return window.TabBarWidget()->count() >= 1; }));
+
+  const std::filesystem::path dir =
+      std::filesystem::temp_directory_path() / ("neko-hist-" + std::to_string(CurrentProcessId()));
+  std::filesystem::create_directories(dir);
+  const std::filesystem::path page_a = dir / "hist-a.html";
+  const std::filesystem::path page_b = dir / "hist-b.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(
+                  page_a.string(), "<html><head><title>Hist A</title></head><body>a</body></html>")
+                  .has_value());
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(
+                  page_b.string(), "<html><head><title>Hist B</title></head><body>b</body></html>")
+                  .has_value());
+  worker.NavigateActive(QString::fromStdString(page_a.string()));
+  ASSERT_TRUE(WaitFor([&] { return worker.SnapshotActiveTab().title == "Hist A"; }));
+  worker.NavigateActive(QString::fromStdString(page_b.string()));
+  ASSERT_TRUE(WaitFor([&] { return worker.SnapshotActiveTab().title == "Hist B"; }));
+  ASSERT_TRUE(WaitFor([&] { return worker.SnapshotHistory().size() >= 2; }));
+
+  // Filtering narrows the list to the matching page.
+  ASSERT_NE(window.HistorySearchWidget(), nullptr);
+  window.HistorySearchWidget()->setText(QStringLiteral("hist-a"));
+  QCoreApplication::processEvents();
+  EXPECT_EQ(window.HistoryListWidget()->count(), 1);
+  EXPECT_TRUE(
+      window.HistoryListWidget()->item(0)->data(Qt::UserRole).toString().contains("hist-a"));
+
+  // Deleting the selected entry removes it from the store.
+  window.HistoryListWidget()->setCurrentRow(0);
+  QMetaObject::invokeMethod(&window, "OnHistoryDeleteSelected");
+  EXPECT_TRUE(WaitFor([&] {
+    for (const auto& entry : worker.SnapshotHistory()) {
+      if (entry.url.find("hist-a") != std::string::npos) {
+        return false;
+      }
+    }
+    return true;
+  }));
+
+  window.HistorySearchWidget()->clear();
+  QCoreApplication::processEvents();
+  std::filesystem::remove_all(dir);
+}
+
+TEST(UiSmokeTest, ContextMenuOffersLinkActions)
+{
+  TempProfile tp;
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.show();
+  ASSERT_TRUE(WaitFor([&] { return window.TabBarWidget()->count() >= 1; }));
+
+  const std::filesystem::path dir =
+      std::filesystem::temp_directory_path() / ("neko-ctx-" + std::to_string(CurrentProcessId()));
+  std::filesystem::create_directories(dir);
+  const std::filesystem::path page_a = dir / "ctx-a.html";
+  const std::filesystem::path page_b = dir / "ctx-b.html";
+  ASSERT_TRUE(
+      neko::storage::WriteFileAtomic(page_a.string(),
+                                     "<html><head><title>Ctx A</title></head><body>"
+                                     "<a id=\"link\" href=\"ctx-b.html\">go</a></body></html>")
+          .has_value());
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(
+                  page_b.string(), "<html><head><title>Ctx B</title></head><body>b</body></html>")
+                  .has_value());
+
+  worker.NavigateActive(QString::fromStdString(page_a.string()));
+  ASSERT_TRUE(WaitFor([&] { return worker.SnapshotActiveTab().title == "Ctx A"; }));
+  // The context menu hit-tests in the worker's document coordinates, so wait
+  // until the worker has laid the page out for the real viewport width (1:1
+  // with device pixels at the default zoom); the probe below then measures at
+  // the same width the hit test uses.
+  neko::ui::WebView* view = window.ActiveView();
+  ASSERT_NE(view, nullptr);
+  const int viewport_width = view->viewport()->width();
+  ASSERT_TRUE(WaitFor([&] {
+    const neko::browser::TabSnapshot snapshot = worker.SnapshotActiveTab();
+    return snapshot.frame != nullptr && snapshot.frame->width == viewport_width;
+  }));
+  const neko::browser::TabSnapshot framed = worker.SnapshotActiveTab();
+
+  // Compute the link's viewport position from the same engine the view uses
+  // (the frame is 1:1 with document pixels at scroll offset 0).
+  neko::renderer::Page probe;
+  ASSERT_TRUE(probe.LoadHtml(neko::storage::ReadFile(page_a.string()).value()).has_value());
+  probe.Layout(static_cast<float>(framed.frame->width), static_cast<float>(framed.frame->height));
+  neko::dom::Element* link = neko::dom::QuerySelector(*probe.document(), "#link");
+  ASSERT_NE(link, nullptr);
+  const auto geometry = probe.ElementBoxGeometry(*link);
+  ASSERT_TRUE(geometry.has_value());
+  const QPoint point(static_cast<int>(geometry->x + geometry->width / 2.0F),
+                     static_cast<int>(geometry->y + geometry->height / 2.0F));
+  // Sanity-check the coordinates against the worker's own hit test before
+  // exercising the menu.
+  const neko::browser::PointInfo hit =
+      worker.QueryPoint(framed.id, static_cast<float>(point.x()), static_cast<float>(point.y()));
+  ASSERT_FALSE(hit.link_url.empty()) << "probe coordinates must hit the link";
+
+  QMenu* menu = view->CreatePageContextMenu(point);
+  ASSERT_NE(menu, nullptr);
+  QStringList entries;
+  QAction* open_link = nullptr;
+  QAction* copy_link = nullptr;
+  for (QAction* action : menu->actions()) {
+    entries << action->text();
+    if (action->text() == QStringLiteral("Open Link in New Tab")) {
+      open_link = action;
+    }
+    if (action->text() == QStringLiteral("Copy Link Address")) {
+      copy_link = action;
+    }
+  }
+  EXPECT_TRUE(entries.contains(QStringLiteral("Open Link in New Tab")));
+  EXPECT_TRUE(entries.contains(QStringLiteral("Copy Link Address")));
+  EXPECT_TRUE(entries.contains(QStringLiteral("Back")));
+
+  // Copy Link Address puts the resolved target on the clipboard.
+  ASSERT_NE(copy_link, nullptr);
+  copy_link->trigger();
+  EXPECT_TRUE(QGuiApplication::clipboard()->text().contains("ctx-b.html"));
+
+  // Open Link in New Tab opens the second page in a new tab.
+  ASSERT_NE(open_link, nullptr);
+  open_link->trigger();
+  EXPECT_TRUE(WaitFor([&] { return window.TabBarWidget()->count() == 2; }));
+  // The menu is owned by the caller (parented to the window so that the
+  // WebView rebuild triggered by opening the tab cannot destroy it mid-flight);
+  // delete it synchronously, without another event-loop turn.
+  delete menu;
+
+  std::filesystem::remove_all(dir);
 }
 
 // Regression: closing a tab must release its Page (DOM, style store, display

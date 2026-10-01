@@ -10,6 +10,7 @@
 
 class QPlainTextEdit;
 class QKeyEvent;
+class QMenu;
 
 namespace neko::ui {
 
@@ -66,6 +67,16 @@ private:
   // and produces the frame) and applies the worker-reported hover cursor.
   void ReportViewport();
   void ApplyFrameCursor();
+
+public:
+  // Builds the page context menu for a viewport position (hyperlink, image
+  // and navigation entries).  The caller pops it up; kept separate from
+  // ShowPageContextMenu so tests can inspect the entries without opening a
+  // modal menu.  Returns nullptr when there is no active HTML tab.
+  QMenu* CreatePageContextMenu(const QPoint& viewport_pos);
+
+private:
+  void ShowPageContextMenu(const QPoint& global_pos, const QPoint& viewport_pos);
 
   BrowserWorker* worker_;
   int tab_id_ = -1;

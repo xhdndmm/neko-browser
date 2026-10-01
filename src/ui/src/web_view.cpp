@@ -3,9 +3,13 @@
 #include "neko/base/memory.h"
 #include "neko/ui/browser_worker.h"
 
+#include <QClipboard>
+#include <QContextMenuEvent>
 #include <QCursor>
 #include <QEvent>
+#include <QGuiApplication>
 #include <QImage>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPlainTextEdit>
@@ -266,10 +270,104 @@ bool WebView::viewportEvent(QEvent* event)
       setFocus(Qt::MouseFocusReason);
       HandleLinkClick(mouse->position());
     }
+  } else if (event->type() == QEvent::ContextMenu) {
+    const auto* context = static_cast<QContextMenuEvent*>(event);
+    ShowPageContextMenu(context->globalPos(), context->pos());
+    return true;
   } else if (event->type() == QEvent::Leave) {
     HandleHoverClear();
   }
   return QAbstractScrollArea::viewportEvent(event);
+}
+
+QMenu* WebView::CreatePageContextMenu(const QPoint& viewport_pos)
+{
+  if (snapshot_.id < 0 || snapshot_.content_type != browser::ContentType::kHtml) {
+    return nullptr;
+  }
+  // Document coordinates, exactly like clicks and hover (the layout tree is
+  // in document space; the view adds the scroll offset).
+  const float doc_x = static_cast<float>(viewport_pos.x());
+  const float doc_y = static_cast<float>(viewport_pos.y()) + ScrollY();
+  const browser::PointInfo info = worker_->QueryPoint(tab_id_, doc_x, doc_y);
+
+  // Deliberately parented to the window, not to this WebView: MainWindow
+  // rebuilds its WebViews whenever the set of tab ids changes (SyncTabs), so
+  // an entry of this menu that opens a tab would otherwise destroy the menu
+  // while it is still being executed.  The window outlives every menu.
+  auto* menu = new QMenu(window());
+  QAction* open_link = nullptr;
+  QAction* copy_link = nullptr;
+  if (!info.link_url.empty()) {
+    open_link = menu->addAction(tr("Open Link in New Tab"));
+    copy_link = menu->addAction(tr("Copy Link Address"));
+    menu->addSeparator();
+  }
+  QAction* open_image = nullptr;
+  QAction* copy_image = nullptr;
+  if (!info.image_url.empty()) {
+    open_image = menu->addAction(tr("Open Image in New Tab"));
+    copy_image = menu->addAction(tr("Copy Image Address"));
+    menu->addSeparator();
+  }
+  QAction* back = menu->addAction(tr("Back"));
+  QAction* forward = menu->addAction(tr("Forward"));
+  QAction* reload = menu->addAction(tr("Reload"));
+  menu->addSeparator();
+  QAction* copy_page = menu->addAction(tr("Copy Page URL"));
+
+  const QString link_url = QString::fromUtf8(info.link_url.c_str());
+  const QString image_url = QString::fromUtf8(info.image_url.c_str());
+  const QString page_url = QString::fromUtf8(snapshot_.url.c_str());
+  // The worker pointer is captured by value: triggering "Open Link in New Tab"
+  // posts a command that can rebuild the WebViews (including this one) before
+  // the handler returns, so the handler must not dereference |this| after the
+  // call.
+  BrowserWorker* worker = worker_;
+  connect(menu,
+          &QMenu::triggered,
+          this,
+          [worker,
+           open_link,
+           copy_link,
+           open_image,
+           copy_image,
+           back,
+           forward,
+           reload,
+           copy_page,
+           link_url,
+           image_url,
+           page_url](QAction* action) {
+            if (action == open_link) {
+              worker->NewTab(link_url, /*activate=*/false);
+            } else if (action == copy_link) {
+              QGuiApplication::clipboard()->setText(link_url);
+            } else if (action == open_image) {
+              worker->NewTab(image_url, /*activate=*/false);
+            } else if (action == copy_image) {
+              QGuiApplication::clipboard()->setText(image_url);
+            } else if (action == back) {
+              worker->Back();
+            } else if (action == forward) {
+              worker->Forward();
+            } else if (action == reload) {
+              worker->Reload();
+            } else if (action == copy_page && !page_url.isEmpty()) {
+              QGuiApplication::clipboard()->setText(page_url);
+            }
+          });
+  return menu;
+}
+
+void WebView::ShowPageContextMenu(const QPoint& global_pos, const QPoint& viewport_pos)
+{
+  QMenu* menu = CreatePageContextMenu(viewport_pos);
+  if (menu == nullptr) {
+    return;
+  }
+  menu->exec(global_pos);
+  menu->deleteLater();
 }
 
 float WebView::ScrollY() const
