@@ -9,6 +9,9 @@
 # 用法：scripts/release/package-unix.sh <linux|macos> <version>
 #
 # 环境：PACKAGE —— 产物目录名（workflow 的 env 提供）
+#       MIN_MACOS —— macOS 发布包声明的最低系统版本（workflow 矩阵按 runner
+#       传入；仅 macOS 使用，见 tools/package_runtime_macos.sh 与
+#       docs/releases/README.md）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

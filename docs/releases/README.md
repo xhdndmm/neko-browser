@@ -44,14 +44,16 @@ release   合并产物、生成 SHA256SUMS、创建（或更新）GitHub Release
 | Linux | arm64 | `ubuntu-26.04-arm` | 含 Qt6 GUI |
 | Windows | x86_64 | `windows-2025` | 含 Qt6 GUI（自带 Qt 运行库） |
 | Windows | arm64 | 构建 `windows-2025`（x64 宿主交叉编译），测试 `windows-11-arm` | 含 Qt6 GUI（自带 Qt 运行库） |
-| macOS | x86_64 | `macos-26-intel` | 含 Qt6 GUI |
-| macOS | arm64 | `macos-26` | 含 Qt6 GUI |
+| macOS | x86_64 | `macos-15-intel` | 含 Qt6 GUI |
+| macOS | arm64 | `macos-15` | 含 Qt6 GUI |
 
 Windows 构建全部使用 x64 runner：x86_64 为原生构建，ARM64 用 MSVC 交叉编译到
 ARM64（Qt 也用官方 ARM64 交叉编译包，宿主工具来自同版本 x64 包）；ARM64 的
 测试在原生 ARM64 runner（`windows-11-arm`）上运行——构建任务把自包含测试载荷
 打成 artifact，测试任务按相同工作区布局还原后跑 ctest。
 Linux/macOS 使用 runner 原生架构与系统包管理器（apt / Homebrew）。
+macOS 发布 runner 固定在 macos-15 一代：包内 Homebrew 依赖的部署目标由构建
+系统决定，换到更新的 runner 会把整包实际下限一起抬高（见下）。
 打包前会校验产物架构（Windows 解析 PE Machine，Linux/macOS 用 `file`），
 架构与矩阵不符即失败——避免在交叉编译配置下悄悄产出 x64 产物。
 
@@ -65,12 +67,17 @@ Windows 链接方式（见 [ADR 0019](../architecture/adr/0019-release-runtime-p
 产物声明的操作系统下限与校验方式（详细政策见 [BUILDING.md](../../BUILDING.md)
 「最低操作系统版本」）：
 
-- **macOS**：`CMAKE_OSX_DEPLOYMENT_TARGET=13.3`（高于 Qt 6.8 自身的 13.0 基线：
-  libc++ 的 `<format>` 需要 macOS 13.3 才提供的浮点 `std::to_chars`，低于 13.3
-  会在配置阶段直接失败；可在配置时提高）。
-  打包脚本对包内每个 Mach-O 校验 `LC_BUILD_VERSION minos` ≤ 声明值
-  （`MIN_MACOS` 可覆盖声明，默认 13.3）。Homebrew 依赖为 runner 自身系统构建，
-  若某个依赖超出声明值，打包直接失败并列出文件——不得静默发布与文档不符的产物。
+- **macOS**：代码的构建目标是 `CMAKE_OSX_DEPLOYMENT_TARGET=13.3`（高于 Qt 6.8
+  自身的 13.0 基线：libc++ 的 `<format>` 需要 macOS 13.3 才提供的浮点
+  `std::to_chars`，低于 13.3 会在配置阶段直接失败；可在配置时提高）。
+  **发布包声明的最低版本是 15.0**：包内 Homebrew 依赖（Qt/FFmpeg/OpenSSL…）
+  的部署目标取自构建系统版本（bottle 按其系统代次构建、源码构建默认取宿主 /
+  SDK 版本，Homebrew 自身还会清除 `MACOSX_DEPLOYMENT_TARGET`），macos-15
+  runner 上无法产出低于 15.0 的依赖。release.yml 矩阵的 `min_macos` 把声明值
+  传给打包脚本（`MIN_MACOS`），脚本对包内每个 Mach-O 校验
+  `LC_BUILD_VERSION minos` ≤ 声明值；超标即失败并列出文件——不得静默发布与
+  文档不符的产物，也不允许声明值随 runner 代际悄悄提高。用自建依赖（自行指定
+  部署目标）可以恢复 13.3，见「后续工作」。
 - **Windows**：`_WIN32_WINNT=_WINVER=0x0A00`（Windows 10 1809）在 CMake 层统一
   定义；零安装校验（ADR 0019）额外保证导入表中不存在包外 DLL。
 - **Linux**：产物不捆绑 glibc，因此基线 = 构建镜像的 glibc（当前 `ubuntu-26.04`）。
@@ -174,6 +181,10 @@ Release 页面同时附带 `SHA256SUMS`（`sha256sum --check SHA256SUMS` 校验�
   3 个 Qt DLL + 平台/样式/图像格式插件。
 - **Linux glibc 基线**：产物在 `ubuntu-26.04` 上构建，需要目标机的 glibc 不低于
   构建环境；更旧的发行版不受支持（glibc 与显卡驱动始终来自目标机，见 ADR 0019）。
+- **macOS 发布包下限 = 15.0（非代码下限）**：包内依赖全部来自 Homebrew，其
+  minos 由构建系统版本决定，因此 macos-15 发布 runner 上整包下限是 15.0；
+  macOS 13.3/14 仍可自行从源码构建（CMake 构建目标 13.3），只是不受发布包
+  支持。自建运行时依赖后可恢复更低声明，见「后续工作」。
 - **捆绑的 FFmpeg 来自发行版/Homebrew 构建**：其中可能包含发行版启用的 GPL
   组件；后续计划为发布构建自有 LGPL 运行时（最小特性集）。
 - **未签名 / 未公证**：macOS 首次运行可能需要
@@ -189,6 +200,8 @@ Release 页面同时附带 `SHA256SUMS`（`sha256sum --check SHA256SUMS` 校验�
 - 代码签名（Windows）与公证（macOS）
 - 调试符号包 / symbol server
 - 自有 LGPL FFmpeg 运行时（替代发行版/Homebrew 构建）
+- macOS 自建依赖运行时：自行指定部署目标（`MACOSX_DEPLOYMENT_TARGET=13.3`），
+  摆脱 Homebrew「部署目标 = 构建系统版本」的限制，恢复 13.3 下限声明
 - `project(VERSION)` 与标签的同步自动化
 
 ## 发布历史

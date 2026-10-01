@@ -52,14 +52,18 @@ if [ ! -d "$BIN_DIR" ]; then
 fi
 mkdir -p "$LIB_DIR"
 
-# Minimum macOS version this release claims to support.  Kept in sync with the
-# CMake default (CMAKE_OSX_DEPLOYMENT_TARGET=13.3 in the top-level
-# CMakeLists.txt; libc++ <format> needs the floating-point std::to_chars entry
-# point introduced in macOS 13.3 -- see BUILDING.md); override with
-# MIN_MACOS=<version> when building against another floor.  The finished
-# package is checked against it below: Homebrew libraries are built for the
-# runner's own macOS, so a drifting dependency would otherwise silently raise
-# the real minimum while the README still advertises the declared one.
+# Minimum macOS version the finished package claims to support; the check
+# below fails when any bundled Mach-O records a higher LC_BUILD_VERSION
+# minos.  The default matches the CMake target
+# (CMAKE_OSX_DEPLOYMENT_TARGET=13.3 in the top-level CMakeLists.txt; libc++
+# <format> needs the floating-point std::to_chars entry point introduced in
+# macOS 13.3 -- see BUILDING.md).  The release workflow overrides it per
+# runner: Homebrew builds its libraries for the build system's own macOS
+# (bottles per OS generation, source builds with the host/SDK deployment
+# target), so on the macos-15 release runners the bundled dependency floor is
+# 15.0 and the package must declare that -- see docs/releases/README.md.
+# Never raise this silently: the whole point of the check is that the archive
+# does not promise a system it cannot launch on.
 MIN_MACOS="${MIN_MACOS:-13.3}"
 
 BREW_PREFIX="$(brew --prefix 2>/dev/null || echo /usr/local)"
@@ -610,8 +614,9 @@ verify() {
 # declared one: the archive would then refuse to launch on the system it
 # claims to support.  Our own binaries get their minos from
 # CMAKE_OSX_DEPLOYMENT_TARGET (top-level CMakeLists.txt); this check mainly
-# guards the bundled dependencies, which are built by Homebrew for the
-# runner's own macOS and could otherwise raise the real floor silently.
+# guards the bundled dependencies, whose minos tracks the Homebrew build
+# system -- that is why the release matrix declares the runner's version
+# (15.0) as the floor instead of the 13.3 build target.
 verify_min_os() {
   local f declared highest="" highest_file="" rc=0
   while IFS= read -r -d '' f; do
