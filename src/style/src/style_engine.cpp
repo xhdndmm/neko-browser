@@ -30,13 +30,15 @@ constexpr int kMaxGridCount = 1000;
 
 // Clamps a CSS number used as a grid repetition count or span length into
 // [0, kMaxGridCount].  NaN maps to 0; anything above the ceiling is clamped
-// rather than rejected so the declaration stays usable.
-int ClampGridCount(double value)
+// rather than rejected so the declaration stays usable.  The parameter is
+// float because that is the precision `css::CssValue::number` carries;
+// widening it to double would trip clang's -Wdouble-promotion (-Werror).
+int ClampGridCount(float value)
 {
-  if (!(value >= 0.0)) { // also catches NaN
+  if (!(value >= 0.0f)) { // also catches NaN
     return 0;
   }
-  if (value > static_cast<double>(kMaxGridCount)) {
+  if (value > static_cast<float>(kMaxGridCount)) {
     return kMaxGridCount;
   }
   return static_cast<int>(value);
@@ -45,15 +47,15 @@ int ClampGridCount(double value)
 // Clamps a grid *line* number.  Negative values are legitimate (CSS Grid 1
 // 8.3: -1 is the last line, -2 the one before it), so the magnitude is bounded
 // rather than the value itself.
-int ClampGridLine(double value)
+int ClampGridLine(float value)
 {
   if (!(value == value)) { // NaN
     return 0;
   }
-  if (value > static_cast<double>(kMaxGridCount)) {
+  if (value > static_cast<float>(kMaxGridCount)) {
     return kMaxGridCount;
   }
-  if (value < -static_cast<double>(kMaxGridCount)) {
+  if (value < -static_cast<float>(kMaxGridCount)) {
     return -kMaxGridCount;
   }
   return static_cast<int>(value);

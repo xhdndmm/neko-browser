@@ -10,6 +10,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -1065,7 +1066,13 @@ TEST(PageTest, BandedRasterizeMatchesFullRasterization)
     }
     std::copy_n(band.pixels().begin(),
                 static_cast<std::size_t>(rows) * row_bytes,
-                stitched.begin() + static_cast<std::size_t>(y0) * row_bytes);
+                // The iterator offset must be the signed difference_type: a
+                // std::size_t operand trips clang -Wsign-conversion at the
+                // operator+ call.  GCC does not diagnose the conversion through
+                // the libstdc++ system header, which is why the earlier
+                // GCC-only re-check missed it.
+                stitched.begin() +
+                    static_cast<std::ptrdiff_t>(static_cast<std::size_t>(y0) * row_bytes));
   }
   EXPECT_EQ(stitched, full.pixels());
 }
