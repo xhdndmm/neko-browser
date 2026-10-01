@@ -131,6 +131,11 @@ public:
   {
     return password_dismiss_action_;
   }
+  // Language picker in the settings panel (tests / automation).
+  QComboBox* LanguageComboWidget() const
+  {
+    return language_combo_;
+  }
 
 private slots:
   void OnStateChanged();
@@ -157,6 +162,7 @@ private slots:
   void OnSearchEngineChanged(int index);
   void OnHomePageEdited();
   void OnBookmarkBarToggled(bool visible);
+  void OnLanguageChanged(int index);
   // Password manager: the save prompt and the settings login list.
   void OnPasswordSaveClicked();
   void OnPasswordDismissClicked();
@@ -245,6 +251,8 @@ private:
   QComboBox* search_engine_combo_ = nullptr;
   QLineEdit* home_page_edit_ = nullptr;
   QCheckBox* bookmark_bar_check_ = nullptr;
+  // UI language picker ("System default" + the shipped catalogs).
+  QComboBox* language_combo_ = nullptr;
   // Password save prompt (hidden unless the active page has a pending login).
   QToolBar* password_bar_ = nullptr;
   QLabel* password_bar_label_ = nullptr;

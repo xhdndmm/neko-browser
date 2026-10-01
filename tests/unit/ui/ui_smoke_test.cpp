@@ -9,6 +9,7 @@
 #include "neko/storage/file_util.h"
 #include "neko/storage/password_store.h"
 #include "neko/ui/browser_worker.h"
+#include "neko/ui/i18n.h"
 #include "neko/ui/main_window.h"
 #include "neko/ui/web_view.h"
 
@@ -31,6 +32,7 @@
 #include <QTabBar>
 #include <QToolBar>
 #include <QToolButton>
+#include <QTranslator>
 #include <QWheelEvent>
 #include <QWidget>
 #include <QtTest>
@@ -1907,6 +1909,105 @@ TEST(UiSmokeTest, SavedLoginsSettingsListShowsAndDeletes)
     ASSERT_TRUE(store.Load().has_value());
     EXPECT_TRUE(store.All().empty());
   }
+}
+
+// ---------------------------------------------------------------------------
+// Internationalization
+// ---------------------------------------------------------------------------
+
+TEST(UiSmokeTest, TranslationCatalogsLoadAndTranslate)
+{
+  // Every shipped language must have a loadable catalog carrying real
+  // translations (spot-checked through the MainWindow context).
+  neko::ui::i18n::EnsureTranslationResources();
+  const std::vector<neko::ui::i18n::Language>& languages = neko::ui::i18n::SupportedLanguages();
+  EXPECT_GE(languages.size(), 7u);
+  for (const neko::ui::i18n::Language& language : languages) {
+    const std::string id(language.id);
+    if (id == "en") {
+      EXPECT_TRUE(neko::ui::i18n::CatalogPath(id).empty());
+      continue;
+    }
+    QTranslator translator;
+    const std::string path = neko::ui::i18n::CatalogPath(id);
+    ASSERT_TRUE(translator.load(QString::fromStdString(path))) << path;
+    QCoreApplication::installTranslator(&translator);
+    const QString settings = QCoreApplication::translate("neko::ui::MainWindow", "Settings");
+    QCoreApplication::removeTranslator(&translator);
+    EXPECT_NE(settings, QStringLiteral("Settings")) << id;
+  }
+}
+
+TEST(UiSmokeTest, ResolveLanguageIdFollowsPreferenceOrSystem)
+{
+  using neko::ui::i18n::IsRightToLeft;
+  using neko::ui::i18n::IsSupportedLanguage;
+  using neko::ui::i18n::ResolveLanguageId;
+  EXPECT_EQ(ResolveLanguageId("ja"), "ja");
+  EXPECT_EQ(ResolveLanguageId("zh_TW"), "zh_TW");
+  EXPECT_EQ(ResolveLanguageId("ar"), "ar");
+  EXPECT_EQ(ResolveLanguageId("en"), "en");
+  // Unknown (or empty) preferences follow the system locale; whatever this
+  // machine reports, the result must be a selectable language.
+  const std::string from_system = ResolveLanguageId("klingon");
+  EXPECT_TRUE(IsSupportedLanguage(from_system));
+  EXPECT_EQ(ResolveLanguageId(""), from_system);
+  EXPECT_TRUE(IsRightToLeft("ar"));
+  EXPECT_FALSE(IsRightToLeft("ru"));
+  EXPECT_FALSE(IsRightToLeft("en"));
+}
+
+TEST(UiSmokeTest, ApplyLanguageInstallsTranslatorAndFlipsDirection)
+{
+  // Arabic: the application flips to RTL and the UI translator is installed.
+  const std::string effective = neko::ui::i18n::ApplyLanguage(*qApp, "ar");
+  EXPECT_EQ(effective, "ar");
+  EXPECT_EQ(QApplication::layoutDirection(), Qt::RightToLeft);
+  EXPECT_NE(QCoreApplication::translate("neko::ui::MainWindow", "Settings"),
+            QStringLiteral("Settings"));
+
+  // Switching back to English (the source language) removes the translator
+  // and restores the default direction, so the rest of the suite runs on the
+  // untranslated source strings.
+  EXPECT_EQ(neko::ui::i18n::ApplyLanguage(*qApp, "en"), "en");
+  EXPECT_EQ(QApplication::layoutDirection(), Qt::LeftToRight);
+  EXPECT_EQ(QCoreApplication::translate("neko::ui::MainWindow", "Settings"),
+            QStringLiteral("Settings"));
+}
+
+TEST(UiSmokeTest, LanguageSelectionPersists)
+{
+  TempProfile tp;
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.resize(1024, 768);
+  window.show();
+  for (int i = 0; i < 10; ++i) {
+    QCoreApplication::processEvents();
+  }
+
+  QComboBox* combo = window.LanguageComboWidget();
+  ASSERT_NE(combo, nullptr);
+  // "System default" plus every shipped language.
+  EXPECT_EQ(combo->count(), static_cast<int>(neko::ui::i18n::SupportedLanguages().size()) + 1);
+  EXPECT_EQ(combo->itemData(0).toString(), QString());
+
+  // Selecting a language stores the preference (it is applied at startup).
+  const int japanese = combo->findData(QStringLiteral("ja"));
+  ASSERT_GE(japanese, 0);
+  combo->setCurrentIndex(japanese);
+  EXPECT_TRUE(WaitFor([&] {
+    for (const auto& [key, value] : worker.SnapshotPreferences()) {
+      if (key == "language") {
+        return value == "ja";
+      }
+    }
+    return false;
+  }));
+
+  // The settings sync keeps the widget on the stored value across refreshes.
+  QCoreApplication::processEvents();
+  EXPECT_EQ(combo->currentData().toString(), QStringLiteral("ja"));
 }
 
 } // namespace

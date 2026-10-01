@@ -7,7 +7,10 @@
 // end-to-end visual validation in CI and locally.  With --renderer-process the
 // page is rendered by a renderer child (ADR 0016 M2).
 
+#include "neko/browser/preferences_keys.h"
+#include "neko/storage/preferences.h"
 #include "neko/ui/browser_worker.h"
+#include "neko/ui/i18n.h"
 #include "neko/ui/main_window.h"
 #include "neko/ui/web_view.h"
 
@@ -41,6 +44,14 @@ int main(int argc, char** argv)
   }
   QApplication app(argc, argv);
   QApplication::setApplicationName("Neko Browser Screenshot");
+
+  // Same language loading as the real GUI (the screenshot tool shares its
+  // profile), so localized windows can be captured for validation.
+  {
+    neko::storage::PreferencesStore preferences(DefaultProfileDir().toStdString());
+    (void)preferences.Load();
+    neko::ui::i18n::ApplyLanguage(app, preferences.Get(neko::browser::prefs::kLanguage));
+  }
 
   neko::browser::RendererOptions renderer;
   QString url = QStringLiteral("about:blank");

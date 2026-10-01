@@ -10,7 +10,10 @@
 //                        take the browser down.
 
 #include "neko/base/logging.h"
+#include "neko/browser/preferences_keys.h"
+#include "neko/storage/preferences.h"
 #include "neko/ui/browser_worker.h"
+#include "neko/ui/i18n.h"
 #include "neko/ui/main_window.h"
 
 #include <QApplication>
@@ -65,6 +68,16 @@ int main(int argc, char** argv)
 
   const QString profile = DefaultProfileDir();
   QDir().mkpath(profile);
+
+  // Install the UI language before the window (and every widget string) is
+  // created.  The choice is a profile preference; empty follows the system
+  // locale.  Reading the store directly here is deliberate: the translator
+  // must exist before the BrowserWorker/main window are constructed.
+  {
+    neko::storage::PreferencesStore preferences(profile.toStdString());
+    (void)preferences.Load();
+    neko::ui::i18n::ApplyLanguage(app, preferences.Get(neko::browser::prefs::kLanguage));
+  }
 
   neko::ui::BrowserWorker worker(profile, nullptr, renderer);
   neko::ui::MainWindow window(&worker);

@@ -7,6 +7,7 @@
 #include "neko/dom/node.h"
 #include "neko/style/computed_style.h"
 #include "neko/ui/browser_worker.h"
+#include "neko/ui/i18n.h"
 #include "neko/ui/web_view.h"
 
 #include <QAction>
@@ -617,6 +618,19 @@ void MainWindow::BuildDocks()
           &MainWindow::OnSearchEngineChanged);
   settings_layout->addWidget(search_engine_combo_);
 
+  settings_layout->addWidget(new QLabel(tr("Language"), settings));
+  language_combo_ = new QComboBox(settings);
+  // Empty data = follow the system locale (the default).
+  language_combo_->addItem(tr("System default"), QString());
+  for (const i18n::Language& language : i18n::SupportedLanguages()) {
+    language_combo_->addItem(FromUtf8(language.native_name), FromUtf8(language.id));
+  }
+  connect(language_combo_,
+          QOverload<int>::of(&QComboBox::currentIndexChanged),
+          this,
+          &MainWindow::OnLanguageChanged);
+  settings_layout->addWidget(language_combo_);
+
   bookmark_bar_check_ = new QCheckBox(tr("Show bookmark bar"), settings);
   connect(bookmark_bar_check_, &QCheckBox::toggled, this, &MainWindow::OnBookmarkBarToggled);
   settings_layout->addWidget(bookmark_bar_check_);
@@ -837,6 +851,19 @@ void MainWindow::OnBookmarkBarToggled(bool visible)
     return;
   }
   SetPreference(FromUtf8(browser::prefs::kShowBookmarkBar), visible ? "1" : "0");
+}
+
+void MainWindow::OnLanguageChanged(int index)
+{
+  if (syncing_settings_ || index < 0) {
+    return;
+  }
+  // The translator is installed at startup, before any widget exists;
+  // re-translating the live window (every label, tooltip and dock title) is a
+  // restart-sized change, so the preference is applied on the next launch.
+  SetPreference(FromUtf8(browser::prefs::kLanguage), language_combo_->itemData(index).toString());
+  statusBar()->showMessage(tr("The language change takes effect after restarting the browser."),
+                           5000);
 }
 
 void MainWindow::OnPasswordSaveClicked()
@@ -1136,6 +1163,13 @@ void MainWindow::RefreshLists()
     const int index = search_engine_combo_->findData(engine);
     if (index >= 0 && search_engine_combo_->currentIndex() != index) {
       search_engine_combo_->setCurrentIndex(index);
+    }
+  }
+  if (language_combo_ != nullptr) {
+    const QString language = Preference(FromUtf8(browser::prefs::kLanguage));
+    const int index = language_combo_->findData(language);
+    if (index >= 0 && language_combo_->currentIndex() != index) {
+      language_combo_->setCurrentIndex(index);
     }
   }
   if (home_page_edit_ != nullptr && !home_page_edit_->hasFocus()) {
