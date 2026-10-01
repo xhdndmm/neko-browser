@@ -32,7 +32,7 @@ name: release
 # macOS 发布任务固定在 macos-15 一代 runner 上：包内 Homebrew 依赖（Qt/FFmpeg/
 # OpenSSL…）的部署目标取自构建系统版本（bottle 按其系统代次构建、源码构建默认
 # 取宿主/SDK 版本，Homebrew 自身还会清除 MACOSX_DEPLOYMENT_TARGET），因此
-# macos-15 上整包实际下限会被拖到 26.0。矩阵里的 min_macos = 发布包声明下限
+# macos-26 上整包实际下限会被拖到 26.0。矩阵里的 min_macos = 发布包声明下限
 # （当前 = runner 系统版本 15.0），打包脚本逐文件校验；代码自身的构建目标仍保持
 # 13.3（CMake 默认）。用自建依赖（可自行指定部署目标）后可恢复更低声明，见
 # docs/releases/README.md。
@@ -137,7 +137,7 @@ jobs:
             qt_host_dir: msvc2022_64
           - name: macos-x86_64
             # 固定在 macos-15 一代：Homebrew 依赖的部署目标 = 构建系统版本，
-            # macos-15 会把包内 macOS 下限拖到 26.0（见文件头注释）。
+            # macos-26 会把包内 macOS 下限拖到 26.0（见文件头注释）。
             os: macos-15-intel
             platform: macos
             arch: x86_64
