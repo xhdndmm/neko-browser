@@ -274,6 +274,86 @@ bool StartsWith(std::string_view s, std::string_view prefix)
   return s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix;
 }
 
+// ---------------------------------------------------------------------------
+// Password-manager form inspection helpers.  The caller holds the page's DOM
+// lock (or owns the document outright, as in LoadBytes before publication).
+// ---------------------------------------------------------------------------
+
+// The <input> elements under |root| in document order (pre-order walk).
+std::vector<dom::Element*> CollectInputs(dom::Node& root)
+{
+  std::vector<dom::Element*> inputs;
+  std::vector<dom::Node*> stack;
+  auto push_children = [&stack](dom::Node& n) {
+    std::vector<dom::Node*> children;
+    for (dom::Node* c : n.ChildNodes()) {
+      children.push_back(c);
+    }
+    for (auto it = children.rbegin(); it != children.rend(); ++it) {
+      stack.push_back(*it);
+    }
+  };
+  push_children(root);
+  while (!stack.empty()) {
+    dom::Node* n = stack.back();
+    stack.pop_back();
+    if (n->node_type() != dom::NodeType::kElement) {
+      continue;
+    }
+    dom::Element& e = static_cast<dom::Element&>(*n);
+    push_children(e);
+    if (e.tag_name() == "input") {
+      inputs.push_back(&e);
+    }
+  }
+  return inputs;
+}
+
+// Lowercased input type; a missing attribute means "text".
+std::string InputType(const dom::Element& input)
+{
+  return ToLower(input.GetAttribute("type").value_or("text"));
+}
+
+// Text-entry controls that can hold a username.
+bool IsUsernameInputType(std::string_view type)
+{
+  return type == "text" || type == "search" || type == "email" || type == "url" || type == "tel";
+}
+
+// The nearest preceding text-ish input of |password| within the same form
+// (page-level controls count as one anonymous form).  |inputs| is the
+// document-order input list |password| belongs to.
+dom::Element* FindUsernameInput(const std::vector<dom::Element*>& inputs, dom::Element* password)
+{
+  const auto form_of = [](dom::Element* element) -> dom::Element* {
+    for (dom::Node* n = element->parent(); n != nullptr; n = n->parent()) {
+      if (n->node_type() != dom::NodeType::kElement) {
+        continue;
+      }
+      dom::Element& e = static_cast<dom::Element&>(*n);
+      if (e.tag_name() == "form") {
+        return &e;
+      }
+    }
+    return nullptr;
+  };
+  dom::Element* password_form = form_of(password);
+  dom::Element* best = nullptr;
+  for (dom::Element* input : inputs) {
+    if (input == password) {
+      break;
+    }
+    if (form_of(input) != password_form) {
+      continue;
+    }
+    if (IsUsernameInputType(InputType(*input))) {
+      best = input;
+    }
+  }
+  return best;
+}
+
 // Guards the synchronous navigation chain against runaway JS-driven loops (a
 // page that keeps assigning window.location, or two pages that redirect to
 // each other).  Each hop is a real network fetch; the cap mirrors the HTTP
@@ -361,6 +441,11 @@ TabSnapshot ToSnapshot(const Tab& tab)
   s.find_match_count = tab.find_match_count;
   s.find_current_index = tab.find_index;
   s.find_current_match = tab.find_match;
+  if (tab.pending_credential.has_value()) {
+    s.has_pending_credential = true;
+    s.pending_credential_origin = tab.pending_credential->origin;
+    s.pending_credential_username = tab.pending_credential->username;
+  }
   return s;
 }
 
@@ -410,7 +495,7 @@ BrowserController::BrowserController(std::string profile_dir,
     : profile_dir_(std::move(profile_dir)), fetch_(std::move(fetch)),
       renderer_(std::move(renderer)), cookies_(profile_dir_), history_(profile_dir_),
       bookmarks_(profile_dir_), local_storage_(profile_dir_), indexed_db_(profile_dir_),
-      preferences_(profile_dir_), downloads_(profile_dir_ + "/downloads")
+      preferences_(profile_dir_), passwords_(profile_dir_), downloads_(profile_dir_ + "/downloads")
 {
   if (renderer_.enabled) {
     renderer_executable_ =
@@ -1170,6 +1255,7 @@ void BrowserController::SubmitForm(int tab_id, dom::Element* form)
   // Everything that reads the live document happens under the DOM lock; the
   // navigation deliberately happens *after* the lock is released.
   std::string target;
+  std::optional<PendingCredential> captured;
   {
     const std::unique_lock<std::recursive_mutex> dom_lock = tab->page->AcquireDomLock();
     // Cancelable submit event; the page can preventDefault() to block it.
@@ -1180,12 +1266,24 @@ void BrowserController::SubmitForm(int tab_id, dom::Element* form)
     // Encode the named controls (application/x-www-form-urlencoded) and
     // navigate to the action with the data as the query string (GET).
     const std::string data = CollectFormData(*form);
+    // Password manager: capture the login this submission would offer to
+    // save (the origin gate below skips file:/data: documents).
+    captured = CredentialFromForm(*form);
     const std::string action = std::string(form->GetAttribute("action").value_or(""));
     target = ResolveUrlAgainstBase(action, tab->url);
     if (target.empty()) {
       target = tab->url;
     }
     target += (target.find('?') != std::string::npos ? "&" : "?") + data;
+  }
+  // Publish the captured login (if any) before navigating: the save prompt
+  // belongs to this submission, not to whatever page comes next.
+  if (captured.has_value()) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!tab->origin.empty() && tab->origin != "null") {
+      captured->origin = tab->origin;
+      tab->pending_credential = std::move(captured);
+    }
   }
   // Navigate *outside* the DOM lock.  Navigate() replaces the tab's Page, which
   // destroys the Page this lock was taken on; unlocking it afterwards was a
@@ -2117,6 +2215,11 @@ void BrowserController::LoadBytes(Tab& tab,
       return;
     }
 
+    // Password manager: fill a saved login into the page's form before it is
+    // published, so the first frame already shows it.  The renderer-process
+    // path returned above (the child owns the DOM in that mode).
+    AutofillLoginForms(*new_page, origin);
+
     // Publish first so the UI paints text immediately; <img>/<video>
     // subresources load on the pool afterwards and pop in through the
     // page-version invalidation + periodic refresh (a single failing CDN
@@ -2351,6 +2454,7 @@ base::Result<void> BrowserController::Load()
   auto r4 = local_storage_.Load();
   auto r5 = indexed_db_.Load();
   auto r6 = preferences_.Load();
+  auto r7 = passwords_.Load();
   if (!r1)
     return r1.error();
   if (!r2)
@@ -2361,7 +2465,9 @@ base::Result<void> BrowserController::Load()
     return r4.error();
   if (!r5)
     return r5.error();
-  return r6;
+  if (!r6)
+    return r6.error();
+  return r7;
 }
 
 base::Result<void> BrowserController::Save()
@@ -2489,6 +2595,124 @@ PointInfo BrowserController::QueryPoint(int tab_id, float doc_x, float doc_y) co
   return info;
 }
 
+void BrowserController::AutofillLoginForms(renderer::Page& page, const std::string& origin)
+{
+  if (origin.empty() || origin == "null") {
+    return;
+  }
+  const std::vector<storage::Credential> saved = passwords_.ForOrigin(origin);
+  if (saved.empty()) {
+    return;
+  }
+  const std::unique_lock<std::recursive_mutex> dom_lock = page.AcquireDomLock();
+  dom::Document* doc = page.document();
+  if (doc == nullptr) {
+    return;
+  }
+  const std::vector<dom::Element*> inputs = CollectInputs(*doc);
+  for (dom::Element* input : inputs) {
+    if (InputType(*input) != "password") {
+      continue;
+    }
+    const std::string existing = std::string(input->GetAttribute("value").value_or(""));
+    if (!existing.empty()) {
+      return; // the page (or the user) already filled this form: leave it alone
+    }
+    const storage::Credential& credential = saved.front();
+    input->SetAttribute("value", credential.password);
+    if (dom::Element* username = FindUsernameInput(inputs, input); username != nullptr) {
+      const std::string existing_user = std::string(username->GetAttribute("value").value_or(""));
+      if (existing_user.empty() && !credential.username.empty()) {
+        username->SetAttribute("value", credential.username);
+      }
+    }
+    return; // first login form only
+  }
+}
+
+std::optional<PendingCredential>
+BrowserController::CredentialFromForm(const dom::Element& form) const
+{
+  const std::vector<dom::Element*> inputs = CollectInputs(const_cast<dom::Element&>(form));
+  dom::Element* password = nullptr;
+  std::string password_value;
+  for (dom::Element* input : inputs) {
+    if (InputType(*input) != "password") {
+      continue;
+    }
+    std::string value = std::string(input->GetAttribute("value").value_or(""));
+    if (!value.empty()) {
+      password = input;
+      password_value = std::move(value);
+      break;
+    }
+  }
+  if (password == nullptr) {
+    return std::nullopt;
+  }
+  PendingCredential credential;
+  if (const dom::Element* username = FindUsernameInput(inputs, password); username != nullptr) {
+    credential.username = std::string(username->GetAttribute("value").value_or(""));
+  }
+  credential.password = std::move(password_value);
+  return credential;
+}
+
+std::vector<SavedLogin> BrowserController::SavedLogins() const
+{
+  const std::vector<storage::Credential> all = passwords_.All();
+  std::vector<SavedLogin> out;
+  out.reserve(all.size());
+  for (const storage::Credential& credential : all) {
+    out.push_back(SavedLogin{credential.origin, credential.username});
+  }
+  return out;
+}
+
+bool BrowserController::RemoveSavedLogin(const std::string& origin, const std::string& username)
+{
+  const bool removed = passwords_.Remove(origin, username);
+  if (removed) {
+    const auto saved = passwords_.Save();
+    if (!saved.has_value()) {
+      NEKO_LOG_WARNING("failed to persist removed login: " + saved.error().message());
+    }
+  }
+  return removed;
+}
+
+void BrowserController::SavePendingCredential(int tab_id)
+{
+  Tab* tab = FindTab(tab_id);
+  if (tab == nullptr) {
+    return;
+  }
+  std::optional<PendingCredential> credential;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    credential = std::move(tab->pending_credential);
+    tab->pending_credential.reset();
+  }
+  if (!credential.has_value()) {
+    return;
+  }
+  passwords_.Add(credential->origin, credential->username, credential->password);
+  const auto saved = passwords_.Save();
+  if (!saved.has_value()) {
+    NEKO_LOG_WARNING("failed to persist saved login: " + saved.error().message());
+  }
+}
+
+void BrowserController::DismissPendingCredential(int tab_id)
+{
+  Tab* tab = FindTab(tab_id);
+  if (tab == nullptr) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  tab->pending_credential.reset();
+}
+
 void BrowserController::RemoveBookmark(const std::string& url)
 {
   const auto all = bookmarks_.All();
@@ -2508,6 +2732,7 @@ void BrowserController::ClearAllStorage()
   bookmarks_.Clear();
   local_storage_.ClearAll();
   indexed_db_.ClearAll();
+  passwords_.Clear();
   ClearNetworkLog();
   (void)Save();
 }

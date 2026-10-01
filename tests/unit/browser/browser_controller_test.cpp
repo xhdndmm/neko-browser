@@ -3510,5 +3510,214 @@ TEST(DownloadManagerTest, RecordsFailure)
   EXPECT_FALSE(manager.items()[1].error.empty());
 }
 
+// ---------------------------------------------------------------------------
+// Password manager
+// ---------------------------------------------------------------------------
+
+// The login page used by the password-manager tests: a form with a username,
+// a password field (optionally pre-filled) and a submit button.
+std::string LoginPageHtml(const std::string& prefill_password = "")
+{
+  const std::string pw_attr = prefill_password.empty() ? "" : " value=\"" + prefill_password + "\"";
+  return "<html><body><h1>Sign in</h1>"
+         "<form action=\"/welcome\">"
+         "<input name=\"user\" type=\"text\">"
+         "<input name=\"pw\" type=\"password\"" +
+         pw_attr +
+         ">"
+         "<button type=\"submit\">Sign in</button>"
+         "</form></body></html>";
+}
+
+// Fills the form's username/password and submits it by clicking the submit
+// button (mirrors a user signing in).
+void SubmitLoginForm(BrowserController& controller,
+                     Tab& tab,
+                     const std::string& username,
+                     const std::string& password)
+{
+  tab.page->Layout(800, 600);
+  const std::vector<dom::Element*> inputs = dom::QuerySelectorAll(*tab.page->document(), "input");
+  dom::Element* user = nullptr;
+  dom::Element* pw = nullptr;
+  for (dom::Element* input : inputs) {
+    if (std::string(input->GetAttribute("type").value_or("")) == "password") {
+      pw = input;
+    } else if (user == nullptr) {
+      user = input;
+    }
+  }
+  ASSERT_NE(pw, nullptr);
+  if (user != nullptr) {
+    user->SetAttribute("value", username);
+  }
+  pw->SetAttribute("value", password);
+  dom::Element* button = dom::QuerySelector(*tab.page->document(), "button");
+  ASSERT_NE(button, nullptr);
+  float x = 0;
+  float y = 0;
+  ASSERT_TRUE(FindElementRunPoint(*tab.page->layout_root(), button, x, y));
+  EXPECT_TRUE(controller.DispatchPointerClick(tab.id, x, y));
+}
+
+TEST(BrowserControllerTest, PasswordManagerCapturesAndFillsSavedLogin)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/login",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}}, LoginPageHtml()});
+  fetch.Add("http://example.com/welcome",
+            FakeFetcher::Route{
+                200, {{"content-type", "text/html"}}, "<html><body>Welcome</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/login").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+
+  SubmitLoginForm(controller, *tab, "alice", "s3cret");
+  // The submission captured the login (and navigated to /welcome).
+  ASSERT_TRUE(tab->pending_credential.has_value());
+  EXPECT_EQ(tab->pending_credential->origin, "http://example.com");
+  EXPECT_EQ(tab->pending_credential->username, "alice");
+  EXPECT_EQ(tab->pending_credential->password, "s3cret");
+  // The snapshot exposes only the displayable summary, never the password.
+  const TabSnapshot snap = controller.SnapshotTab(tab->id);
+  EXPECT_TRUE(snap.has_pending_credential);
+  EXPECT_EQ(snap.pending_credential_origin, "http://example.com");
+  EXPECT_EQ(snap.pending_credential_username, "alice");
+
+  // Confirm the save: the pending state clears and the login is listed.
+  controller.SavePendingCredential(tab->id);
+  EXPECT_FALSE(tab->pending_credential.has_value());
+  const std::vector<SavedLogin> saved = controller.SavedLogins();
+  ASSERT_EQ(saved.size(), 1u);
+  EXPECT_EQ(saved[0].origin, "http://example.com");
+  EXPECT_EQ(saved[0].username, "alice");
+
+  // Revisit the login page: both fields come back pre-filled.
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/login").has_value());
+  Tab* tab2 = controller.ActiveTab();
+  ASSERT_NE(tab2, nullptr);
+  const std::vector<dom::Element*> inputs = dom::QuerySelectorAll(*tab2->page->document(), "input");
+  ASSERT_EQ(inputs.size(), 2u);
+  EXPECT_EQ(std::string(inputs[0]->GetAttribute("value").value_or("")), "alice");
+  EXPECT_EQ(std::string(inputs[1]->GetAttribute("value").value_or("")), "s3cret");
+}
+
+TEST(BrowserControllerTest, PasswordManagerPersistsAcrossControllers)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/login",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}}, LoginPageHtml()});
+  fetch.Add("http://example.com/welcome",
+            FakeFetcher::Route{
+                200, {{"content-type", "text/html"}}, "<html><body>Welcome</body></html>"});
+  int tab_id = 0;
+  {
+    BrowserController controller(tp.path(), std::ref(fetch));
+    controller.NewTab();
+    ASSERT_TRUE(controller.NavigateActive("http://example.com/login").has_value());
+    tab_id = controller.ActiveTab()->id;
+    SubmitLoginForm(controller, *controller.ActiveTab(), "alice", "s3cret");
+    controller.SavePendingCredential(tab_id);
+
+    // An explicit dismissal drops the capture without saving it.
+    ASSERT_TRUE(controller.NavigateActive("http://example.com/login").has_value());
+    SubmitLoginForm(controller, *controller.ActiveTab(), "bob", "other");
+    controller.DismissPendingCredential(tab_id);
+    EXPECT_FALSE(controller.ActiveTab()->pending_credential.has_value());
+    EXPECT_EQ(controller.SavedLogins().size(), 1u);
+  }
+
+  // A fresh controller on the same profile loads the saved login from disk.
+  BrowserController second(tp.path(), std::ref(fetch));
+  ASSERT_TRUE(second.Load().has_value());
+  const std::vector<SavedLogin> saved = second.SavedLogins();
+  ASSERT_EQ(saved.size(), 1u);
+  EXPECT_EQ(saved[0].username, "alice");
+
+  // Removing it persists the removal.
+  EXPECT_TRUE(second.RemoveSavedLogin("http://example.com", "alice"));
+  EXPECT_TRUE(second.SavedLogins().empty());
+  BrowserController third(tp.path(), std::ref(fetch));
+  ASSERT_TRUE(third.Load().has_value());
+  EXPECT_TRUE(third.SavedLogins().empty());
+}
+
+TEST(BrowserControllerTest, PasswordManagerDoesNotFillForeignOrigin)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/login",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}}, LoginPageHtml()});
+  fetch.Add("http://example.com/welcome",
+            FakeFetcher::Route{
+                200, {{"content-type", "text/html"}}, "<html><body>Welcome</body></html>"});
+  fetch.Add("http://other.example/login",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}}, LoginPageHtml()});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/login").has_value());
+  SubmitLoginForm(controller, *controller.ActiveTab(), "alice", "s3cret");
+  controller.SavePendingCredential(controller.ActiveTab()->id);
+
+  // The same form on another origin stays untouched (exact origin match).
+  ASSERT_TRUE(controller.NavigateActive("http://other.example/login").has_value());
+  const std::vector<dom::Element*> inputs =
+      dom::QuerySelectorAll(*controller.ActiveTab()->page->document(), "input");
+  ASSERT_EQ(inputs.size(), 2u);
+  EXPECT_EQ(std::string(inputs[0]->GetAttribute("value").value_or("")), "");
+  EXPECT_EQ(std::string(inputs[1]->GetAttribute("value").value_or("")), "");
+}
+
+TEST(BrowserControllerTest, PasswordManagerDoesNotOverwriteExistingValue)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/login",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}}, LoginPageHtml()});
+  fetch.Add("http://example.com/welcome",
+            FakeFetcher::Route{
+                200, {{"content-type", "text/html"}}, "<html><body>Welcome</body></html>"});
+  // The same login page, but the password comes pre-filled by the page (or the
+  // user already typed something).
+  fetch.Add("http://example.com/login2",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               LoginPageHtml(/*prefill_password=*/"typed-by-user")});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/login").has_value());
+  SubmitLoginForm(controller, *controller.ActiveTab(), "alice", "s3cret");
+  controller.SavePendingCredential(controller.ActiveTab()->id);
+
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/login2").has_value());
+  const std::vector<dom::Element*> inputs =
+      dom::QuerySelectorAll(*controller.ActiveTab()->page->document(), "input");
+  ASSERT_EQ(inputs.size(), 2u);
+  EXPECT_EQ(std::string(inputs[0]->GetAttribute("value").value_or("")), "");
+  EXPECT_EQ(std::string(inputs[1]->GetAttribute("value").value_or("")), "typed-by-user");
+}
+
+TEST(BrowserControllerTest, PasswordManagerSkipsOriginlessDocuments)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  const int tab_id = controller.ActiveTab()->id;
+  ASSERT_TRUE(
+      controller.LoadDocument(tab_id, LoginPageHtml(), "text/html", "file:///tmp/neko-login.html")
+          .has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  SubmitLoginForm(controller, *tab, "alice", "s3cret");
+  // file: documents have an opaque origin: the submission is never captured.
+  EXPECT_FALSE(tab->pending_credential.has_value());
+  EXPECT_TRUE(controller.SavedLogins().empty());
+}
+
 } // namespace
 } // namespace neko::browser

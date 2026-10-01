@@ -15,12 +15,14 @@
 #include "neko/storage/history_store.h"
 #include "neko/storage/indexed_db.h"
 #include "neko/storage/local_storage.h"
+#include "neko/storage/password_store.h"
 #include "neko/storage/preferences.h"
 
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -44,6 +46,24 @@ enum class ContentType
 };
 
 std::string_view ToString(ContentType type);
+
+// A login captured from a form submission, offered to the user for saving.
+// Carries the plaintext password only for the moment between the submit and
+// the user's decision; it never enters a TabSnapshot.
+struct PendingCredential
+{
+  std::string origin;
+  std::string username;
+  std::string password;
+};
+
+// A saved login as shown in the settings panel: displayable fields only, the
+// password never leaves the store.
+struct SavedLogin
+{
+  std::string origin;
+  std::string username;
+};
 
 // One tab: its navigation history and the current page state.
 //
@@ -155,6 +175,12 @@ struct Tab
   // "https://example.com"), used by the Same-Origin Policy.  "null" for
   // non-URL content and pages whose URL has no origin.  Worker thread only.
   std::string origin;
+
+  // A login form submission captured by the password manager, waiting for the
+  // user's save/dismiss decision (SavePendingCredential /
+  // DismissPendingCredential).  Written on the worker thread; the GUI reads a
+  // displayable summary through the snapshot (under the controller mutex).
+  std::optional<PendingCredential> pending_credential;
 
   bool CanGoBack() const
   {
@@ -272,6 +298,13 @@ struct TabSnapshot
   int find_match_count = 0;
   int find_current_index = -1;
   renderer::FindMatch find_current_match;
+
+  // Password manager: the page submitted a login form that is not saved yet.
+  // Only a displayable summary travels in the snapshot; the credential itself
+  // is consumed through SavePendingCredential/DismissPendingCredential.
+  bool has_pending_credential = false;
+  std::string pending_credential_origin;
+  std::string pending_credential_username;
 };
 
 // A network request record for DevTools.
@@ -435,6 +468,20 @@ public:
   std::vector<std::pair<std::string, std::string>> SnapshotPreferences() const;
   // Worker thread: sets |key| and persists the store atomically.
   void SetPreference(std::string_view key, std::string_view value);
+
+  // -------------------------------------------------------------------------
+  // Password manager
+  // -------------------------------------------------------------------------
+  // Saved logins for the settings panel (displayable summary only).
+  // Thread-safe, like the Snapshot* reads.
+  std::vector<SavedLogin> SavedLogins() const;
+  // Worker thread: deletes one saved login and persists the store.
+  bool RemoveSavedLogin(const std::string& origin, const std::string& username);
+  // Worker thread: stores the tab's pending credential (a submitted login
+  // form) and clears the pending state.
+  void SavePendingCredential(int tab_id);
+  // Worker thread: drops the tab's pending credential without saving it.
+  void DismissPendingCredential(int tab_id);
 
   // -------------------------------------------------------------------------
   // Navigation
@@ -651,6 +698,15 @@ private:
   // (frame production, mouseout dispatch).
   void ResolveHover(Tab& tab);
 
+  // ---- Password manager (worker thread) ---------------------------------
+  // Fills the first password form of |page| with the saved credential for
+  // |origin| (no-op without a saved login, for origin-less documents, or when
+  // the field already has a value).
+  void AutofillLoginForms(renderer::Page& page, const std::string& origin);
+  // Extracts the login a form submission would offer to save.  Caller holds
+  // the page's DOM lock; returns nullopt when the form has no filled password.
+  std::optional<PendingCredential> CredentialFromForm(const dom::Element& form) const;
+
   std::string profile_dir_;
   FetchFn fetch_;
   RendererOptions renderer_;
@@ -680,6 +736,7 @@ private:
   storage::LocalStorage local_storage_;
   storage::IndexedDbStore indexed_db_;
   storage::PreferencesStore preferences_;
+  storage::PasswordStore passwords_;
   DownloadManager downloads_;
 
   std::vector<NetworkLogEntry> network_log_;
