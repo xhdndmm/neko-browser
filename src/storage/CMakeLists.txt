@@ -3,6 +3,7 @@
 #
 # Self-implemented, line-oriented stores with atomic writes:
 #   cookies.txt  / history.txt  / bookmarks.txt  / local_storage.txt
+#   preferences.txt
 # No external dependencies.  See docs/architecture/architecture.md.
 # =============================================================================
 
@@ -13,6 +14,7 @@ add_library(neko_storage
   src/history_store.cpp
   src/bookmark_store.cpp
   src/local_storage.cpp
+  src/preferences.cpp
   src/json_value.cpp
   src/indexed_db.cpp
 )

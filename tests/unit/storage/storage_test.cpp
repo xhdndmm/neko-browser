@@ -8,6 +8,7 @@
 #include "neko/storage/file_util.h"
 #include "neko/storage/history_store.h"
 #include "neko/storage/local_storage.h"
+#include "neko/storage/preferences.h"
 #include "neko/url/url.h"
 
 #include "gmock/gmock.h"
@@ -681,6 +682,68 @@ TEST(FileUtilTest, WriteReplacesExistingContent)
   ASSERT_TRUE(WriteFileAtomic(path, "one").has_value());
   ASSERT_TRUE(WriteFileAtomic(path, "two").has_value());
   EXPECT_THAT(ReadFile(path).value(), Eq("two"));
+}
+
+// ---------------------------------------------------------------------------
+// PreferencesStore
+// ---------------------------------------------------------------------------
+
+TEST(PreferencesStoreTest, RoundTripsValuesAndPreservesUnknownKeys)
+{
+  TempProfile tp;
+  {
+    PreferencesStore prefs(tp.path());
+    ASSERT_TRUE(prefs.Load().has_value());
+    EXPECT_THAT(prefs.Get("missing", "fallback"), Eq("fallback"));
+    prefs.Set("search_engine", "duckduckgo");
+    prefs.Set("home_page", "https://example.com/a=b\nc%20"); // '='、换行、'%' 都要能存活
+    ASSERT_TRUE(prefs.Save().has_value());
+  }
+  {
+    PreferencesStore prefs(tp.path());
+    ASSERT_TRUE(prefs.Load().has_value());
+    EXPECT_THAT(prefs.Get("search_engine"), Eq("duckduckgo"));
+    EXPECT_THAT(prefs.Get("home_page"), Eq("https://example.com/a=b\nc%20"));
+    EXPECT_TRUE(prefs.Has("home_page"));
+    EXPECT_TRUE(prefs.Unset("home_page"));
+    EXPECT_FALSE(prefs.Has("home_page"));
+    ASSERT_TRUE(prefs.Save().has_value());
+  }
+  {
+    PreferencesStore prefs(tp.path());
+    ASSERT_TRUE(prefs.Load().has_value());
+    EXPECT_FALSE(prefs.Has("home_page"));
+    EXPECT_THAT(prefs.Get("search_engine"), Eq("duckduckgo"));
+    EXPECT_EQ(prefs.All().size(), 1u);
+  }
+}
+
+TEST(PreferencesStoreTest, SkipsMalformedLinesWithoutLosingOthers)
+{
+  TempProfile tp;
+  const std::string file = tp.path() + "/preferences.txt";
+  ASSERT_TRUE(WriteFileAtomic(file, "good=1\nbroken-line\nbad%=2\n# comment\nkey=99%zz\nafter=2\n")
+                  .has_value());
+  PreferencesStore prefs(tp.path());
+  ASSERT_TRUE(prefs.Load().has_value());
+  EXPECT_THAT(prefs.Get("good"), Eq("1"));
+  EXPECT_THAT(prefs.Get("after"), Eq("2"));
+  // "bad%..."：key 的百分号转义非法 -> 跳过整行。
+  EXPECT_FALSE(prefs.Has("bad%"));
+  // "key=99%zz"：value 的转义非法 -> 跳过整行。
+  EXPECT_FALSE(prefs.Has("key"));
+  EXPECT_EQ(prefs.All().size(), 2u);
+}
+
+TEST(PreferencesStoreTest, LastOccurrenceWins)
+{
+  TempProfile tp;
+  const std::string file = tp.path() + "/preferences.txt";
+  ASSERT_TRUE(WriteFileAtomic(file, "engine=one\nengine=two\n").has_value());
+  PreferencesStore prefs(tp.path());
+  ASSERT_TRUE(prefs.Load().has_value());
+  EXPECT_THAT(prefs.Get("engine"), Eq("two"));
+  EXPECT_EQ(prefs.All().size(), 1u);
 }
 
 #ifndef _WIN32
