@@ -53,12 +53,14 @@ fi
 mkdir -p "$LIB_DIR"
 
 # Minimum macOS version this release claims to support.  Kept in sync with the
-# CMake default (CMAKE_OSX_DEPLOYMENT_TARGET, see BUILDING.md); override with
+# CMake default (CMAKE_OSX_DEPLOYMENT_TARGET=13.3 in the top-level
+# CMakeLists.txt; libc++ <format> needs the floating-point std::to_chars entry
+# point introduced in macOS 13.3 -- see BUILDING.md); override with
 # MIN_MACOS=<version> when building against another floor.  The finished
 # package is checked against it below: Homebrew libraries are built for the
 # runner's own macOS, so a drifting dependency would otherwise silently raise
 # the real minimum while the README still advertises the declared one.
-MIN_MACOS="${MIN_MACOS:-13.0}"
+MIN_MACOS="${MIN_MACOS:-13.3}"
 
 BREW_PREFIX="$(brew --prefix 2>/dev/null || echo /usr/local)"
 QT_PREFIX="${QT_PREFIX:-}"

@@ -14,16 +14,17 @@
 
 ## 最低操作系统版本
 
-发布产物声明并校验以下最低系统版本（对应 Qt 6.8 的支持范围；发布侧的说明见
+发布产物声明并校验以下最低系统版本（Windows 下限对应 Qt 6.8 的支持范围；
+macOS 下限高于 Qt 6.8 自身要求，以覆盖 libc++ 的 `<format>`；发布侧的说明见
 [docs/releases/README.md](docs/releases/README.md)）：
 
 | 平台 | 最低版本 | 如何声明 / 校验 |
 | --- | --- | --- |
-| macOS | 13.0 | 顶层 `CMakeLists.txt` 在 `project()` 前设置 `CMAKE_OSX_DEPLOYMENT_TARGET=13.0`，每个 Mach-O 都会记录 `LC_BUILD_VERSION minos`；可用 `-DCMAKE_OSX_DEPLOYMENT_TARGET=<x.y>` 覆盖。打包脚本校验包内**所有**文件的 minos 不超过声明值（Homebrew 依赖可能拖高，见下） |
+| macOS | 13.3 | 顶层 `CMakeLists.txt` 在 `project()` 前设置 `CMAKE_OSX_DEPLOYMENT_TARGET=13.3`，每个 Mach-O 都会记录 `LC_BUILD_VERSION minos`。比 Qt 6.8 自身的 13.0 基线高：libc++ 的 `<format>` 用 `std::to_chars` 实现浮点格式化，该入口自 macOS 13.3 才提供，且类型擦除的参数分派使每个 `std::format` 调用都会实例化这条路径，低于 13.3 在配置阶段即被拒绝。可用 `-DCMAKE_OSX_DEPLOYMENT_TARGET=<x.y>`（≥ 13.3）覆盖。打包脚本校验包内**所有**文件的 minos 不超过声明值（Homebrew 依赖可能拖高，见下） |
 | Windows | 10 1809（build 17763） | `CMakeLists.txt` 对所有目标定义 `_WIN32_WINNT=_WINVER=0x0A00`，防止工具链 SDK 默认值悄悄抬高 API 下限；发布打包另有 PE 导入表传递闭包校验（ADR 0019） |
 | Linux | 构建发行版的 glibc（当前发布镜像 = `ubuntu-26.04`） | glibc 永不捆绑（NSS/DNS 需要宿主 libc），因此产物基线 = 构建环境的 glibc。`tools/check_glibc_baseline.sh` 校验包内没有任何 ELF 要求高于基线；**要降低基线必须换用更老的构建发行版**（例如在 Ubuntu 22.04 容器里构建），不能用新镜像构建更老的目标 |
 
-macOS 打包校验使用 `MIN_MACOS` 环境变量覆盖声明值（默认 13.0，与 CMake 默认一致）；
+macOS 打包校验使用 `MIN_MACOS` 环境变量覆盖声明值（默认 13.3，与 CMake 默认一致）；
 Homebrew 的库是为构建 runner 自身的 macOS 构建的，若某个依赖的 minos 高于声明值，
 打包会失败并列出文件——此时要么更换依赖来源，要么显式提高声明的最低版本。
 

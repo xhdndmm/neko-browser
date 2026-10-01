@@ -14,14 +14,30 @@ cmake_minimum_required(VERSION 3.24)
 # Platform version baselines (see BUILDING.md "最低操作系统版本")
 # -----------------------------------------------------------------------------
 # macOS: declare the deployment target *before* project() so every target the
-# build creates records it as LC_BUILD_VERSION minos.  Default: macOS 13, the
-# oldest release Qt 6.8 supports.  Override by configuring with
-# -DCMAKE_OSX_DEPLOYMENT_TARGET=<version> when building against another floor.
+# build creates records it as LC_BUILD_VERSION minos.  Default: macOS 13.3 --
+# higher than Qt 6.8's own 13.0 baseline, because libc++ implements std::format's
+# floating-point path with std::to_chars<float/double/long double>, which Apple
+# only provides from macOS 13.3.  The type-erased argument visitor instantiates
+# that path for *every* std::format call (even with no floating-point
+# arguments), so the logging subsystem -- and every NEKO_LOGF user -- needs the
+# 13.3 floor to compile.
 if(APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
   set(CMAKE_OSX_DEPLOYMENT_TARGET
-      "13.0"
+      "13.3"
       CACHE STRING
-      "Minimum macOS version (Qt 6.8 baseline; see BUILDING.md)")
+      "Minimum macOS version (libc++ <format> baseline; see BUILDING.md)")
+endif()
+
+# Reject an overridden floor below 13.3 early: the build would otherwise stop
+# deep inside libc++ with "'to_chars' is unavailable: introduced in macOS 13.3"
+# while compiling src/base/src/logging.cpp.
+if(APPLE AND (NOT CMAKE_OSX_DEPLOYMENT_TARGET
+              OR CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS "13.3"))
+  message(FATAL_ERROR
+    "neko-browser requires macOS 13.3 or newer "
+    "(CMAKE_OSX_DEPLOYMENT_TARGET is '${CMAKE_OSX_DEPLOYMENT_TARGET}'): "
+    "libc++ <format> uses the floating-point std::to_chars entry point "
+    "introduced in macOS 13.3. See BUILDING.md.")
 endif()
 
 project(

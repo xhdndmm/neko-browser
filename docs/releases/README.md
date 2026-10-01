@@ -65,9 +65,11 @@ Windows 链接方式（见 [ADR 0019](../architecture/adr/0019-release-runtime-p
 产物声明的操作系统下限与校验方式（详细政策见 [BUILDING.md](../../BUILDING.md)
 「最低操作系统版本」）：
 
-- **macOS**：`CMAKE_OSX_DEPLOYMENT_TARGET=13.0`（Qt 6.8 基线，可在配置时覆盖）。
+- **macOS**：`CMAKE_OSX_DEPLOYMENT_TARGET=13.3`（高于 Qt 6.8 自身的 13.0 基线：
+  libc++ 的 `<format>` 需要 macOS 13.3 才提供的浮点 `std::to_chars`，低于 13.3
+  会在配置阶段直接失败；可在配置时提高）。
   打包脚本对包内每个 Mach-O 校验 `LC_BUILD_VERSION minos` ≤ 声明值
-  （`MIN_MACOS` 可覆盖声明，默认 13.0）。Homebrew 依赖为 runner 自身系统构建，
+  （`MIN_MACOS` 可覆盖声明，默认 13.3）。Homebrew 依赖为 runner 自身系统构建，
   若某个依赖超出声明值，打包直接失败并列出文件——不得静默发布与文档不符的产物。
 - **Windows**：`_WIN32_WINNT=_WINVER=0x0A00`（Windows 10 1809）在 CMake 层统一
   定义；零安装校验（ADR 0019）额外保证导入表中不存在包外 DLL。
