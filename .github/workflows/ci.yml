@@ -149,7 +149,7 @@ jobs:
         run: cmake --build --preset tsan --parallel
 
       - name: Test
-        run: setarch $(uname -m) -R ctest --preset tsan
+        run: setarch "$(uname -m)" -R ctest --preset tsan
 
   # ---------------------------------------------------------------------------
   # Code coverage
