@@ -6,7 +6,9 @@
 #include "neko/base/thread_pool.h"
 #include "neko/browser/hyperlink.h"
 #include "neko/browser/page_scripts.h"
+#include "neko/browser/preferences_keys.h"
 #include "neko/browser/renderer_host.h"
+#include "neko/browser/search_engines.h"
 #include "neko/css/parser.h"
 #include "neko/dom/element.h"
 #include "neko/dom/query.h"
@@ -408,7 +410,7 @@ BrowserController::BrowserController(std::string profile_dir,
     : profile_dir_(std::move(profile_dir)), fetch_(std::move(fetch)),
       renderer_(std::move(renderer)), cookies_(profile_dir_), history_(profile_dir_),
       bookmarks_(profile_dir_), local_storage_(profile_dir_), indexed_db_(profile_dir_),
-      downloads_(profile_dir_ + "/downloads")
+      preferences_(profile_dir_), downloads_(profile_dir_ + "/downloads")
 {
   if (renderer_.enabled) {
     renderer_executable_ =
@@ -618,6 +620,15 @@ std::string BrowserController::ResolveInput(const std::string& input) const
   std::string s = std::string(Trim(input));
   if (s.empty())
     return {};
+#ifdef _WIN32
+  // Drive-letter and UNC paths are filesystem paths, not URLs: "C:\dir\a.html"
+  // parses as the one-letter scheme "c", and the http://-prefixing rule below
+  // would turn it into a bogus URL.  Hand it through unchanged; NavigateToUrl
+  // routes it to the filesystem.
+  if (IsWindowsLocalPath(s)) {
+    return s;
+  }
+#endif
   // Absolute URL already?
   auto parsed = url::Url::Parse(s);
   if (parsed.has_value())
@@ -627,8 +638,26 @@ std::string BrowserController::ResolveInput(const std::string& input) const
       s.find('.') != std::string::npos) {
     return "http://" + s;
   }
+  // Anything with whitespace, or a single word without a dot or path
+  // separator, is a search query ("weather", "hello world"): resolve it
+  // through the configured search engine (Settings > Default search engine).
+  const bool looks_like_path =
+      s.find('/') != std::string::npos || s.find('\\') != std::string::npos;
+  if (s.find(' ') != std::string::npos || (!looks_like_path && s.find('.') == std::string::npos)) {
+    return SearchUrlFor(s);
+  }
   // Treat as a local path.
   return s;
+}
+
+std::string BrowserController::SearchUrlFor(std::string_view query) const
+{
+  const std::string custom = GetPreference(prefs::kSearchEngineTemplate);
+  if (!custom.empty()) {
+    return BuildSearchUrl(custom, query);
+  }
+  const std::string id = GetPreference(prefs::kSearchEngine);
+  return BuildSearchUrl(DefaultSearchEngine(id).url_template, query);
 }
 
 void BrowserController::NavigateToUrl(Tab& tab, const std::string& url_string)
@@ -2321,6 +2350,7 @@ base::Result<void> BrowserController::Load()
   auto r3 = bookmarks_.Load();
   auto r4 = local_storage_.Load();
   auto r5 = indexed_db_.Load();
+  auto r6 = preferences_.Load();
   if (!r1)
     return r1.error();
   if (!r2)
@@ -2329,7 +2359,9 @@ base::Result<void> BrowserController::Load()
     return r3.error();
   if (!r4)
     return r4.error();
-  return r5;
+  if (!r5)
+    return r5.error();
+  return r6;
 }
 
 base::Result<void> BrowserController::Save()
@@ -2340,6 +2372,7 @@ base::Result<void> BrowserController::Save()
   auto r3 = bookmarks_.Save();
   auto r4 = local_storage_.Save();
   auto r5 = indexed_db_.Save();
+  auto r6 = preferences_.Save();
   if (!r1)
     return r1.error();
   if (!r2)
@@ -2348,7 +2381,9 @@ base::Result<void> BrowserController::Save()
     return r3.error();
   if (!r4)
     return r4.error();
-  return r5;
+  if (!r5)
+    return r5.error();
+  return r6;
 }
 
 // ---------------------------------------------------------------------------
@@ -2359,6 +2394,99 @@ base::Result<Download> BrowserController::StartDownload(const url::Url& url,
                                                         std::string_view cookie_header)
 {
   return downloads_.Start(url, cookie_header);
+}
+
+std::string BrowserController::GetPreference(std::string_view key, std::string_view fallback) const
+{
+  // PreferencesStore is internally synchronized; safe from any thread.
+  return preferences_.Get(key, fallback);
+}
+
+std::vector<std::pair<std::string, std::string>> BrowserController::SnapshotPreferences() const
+{
+  return preferences_.All();
+}
+
+void BrowserController::SetPreference(std::string_view key, std::string_view value)
+{
+  preferences_.Set(key, value);
+  const auto saved = preferences_.Save();
+  if (!saved) {
+    NEKO_LOG_WARNING("failed to persist preference '" + std::string(key) +
+                     "': " + saved.error().message());
+  }
+}
+
+size_t BrowserController::ClearFinishedDownloads()
+{
+  return downloads_.ClearFinished();
+}
+
+void BrowserController::RemoveHistoryEntry(const std::string& url)
+{
+  if (history_.Remove(url)) {
+    const auto saved = history_.Save();
+    if (!saved) {
+      NEKO_LOG_WARNING("failed to persist history removal: " + saved.error().message());
+    }
+  }
+}
+
+void BrowserController::ClearHistory()
+{
+  history_.Clear();
+  const auto saved = history_.Save();
+  if (!saved) {
+    NEKO_LOG_WARNING("failed to persist history clear: " + saved.error().message());
+  }
+}
+
+PointInfo BrowserController::QueryPoint(int tab_id, float doc_x, float doc_y) const
+{
+  // Grab the page handle and URL under the controller lock, then release it:
+  // Page::ElementAt takes the Page's own DOM lock, and the lock order is Page
+  // before controller, never the other way around (see mutex_ comment).
+  std::shared_ptr<renderer::Page> page;
+  std::string base_url;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = std::find_if(
+        tabs_.begin(), tabs_.end(), [tab_id](const auto& t) { return t->id == tab_id; });
+    if (it == tabs_.end()) {
+      return {};
+    }
+    page = (*it)->page;
+    base_url = (*it)->url;
+  }
+  if (page == nullptr) {
+    // Renderer-process mode (or non-HTML content): no in-process DOM to
+    // hit-test, so the menu falls back to its basic entries.
+    return {};
+  }
+  // Hit-test and read the element's attributes while holding the page's DOM
+  // lock: ElementAt hands back a raw pointer into the document, and the worker
+  // thread may replace or mutate that document concurrently (navigation,
+  // scripts), which previously left the pointer dangling before
+  // HyperlinkTarget walked it.  The lock is recursive, so ElementAt may
+  // re-acquire it internally.
+  const std::unique_lock<std::recursive_mutex> dom_lock = page->AcquireDomLock();
+  const dom::Element* element = page->ElementAt(doc_x, doc_y);
+  if (element == nullptr) {
+    return {};
+  }
+  PointInfo info;
+  if (const std::optional<std::string> link = HyperlinkTarget(element, base_url)) {
+    info.link_url = *link;
+  }
+  if (element->tag_name() == "img") {
+    const auto src = element->GetAttribute("src");
+    if (src.has_value()) {
+      if (const std::optional<std::string> resolved = ResolveReference(*src, base_url)) {
+        info.image_url = *resolved;
+      }
+    }
+  }
+  return info;
 }
 
 void BrowserController::RemoveBookmark(const std::string& url)

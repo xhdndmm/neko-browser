@@ -3009,6 +3009,46 @@ TEST(BrowserControllerTest, ResolveInput)
   EXPECT_EQ(controller.ResolveInput(""), "");
 }
 
+TEST(BrowserControllerTest, ResolveInputSearchesUnknownInput)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  BrowserController controller(tp.path(), std::ref(fetch));
+  // A single word, or anything with whitespace, is a search query through the
+  // default engine (DuckDuckGo); the query is percent-encoded.
+  EXPECT_EQ(controller.ResolveInput("weather"), "https://duckduckgo.com/?q=weather");
+  EXPECT_EQ(controller.ResolveInput("hello world"), "https://duckduckgo.com/?q=hello%20world");
+  EXPECT_EQ(controller.ResolveInput("中文 搜索"),
+            "https://duckduckgo.com/?q=%E4%B8%AD%E6%96%87%20%E6%90%9C%E7%B4%A2");
+  // Path-like input stays a local path; bare hostnames still get http://.
+  EXPECT_EQ(controller.ResolveInput("tests/pages/x.html"), "tests/pages/x.html");
+  EXPECT_EQ(controller.ResolveInput("example.com"), "http://example.com");
+
+  // The engine id redirects the target...
+  controller.SetPreference("search_engine", "bing");
+  EXPECT_EQ(controller.ResolveInput("weather"), "https://www.bing.com/search?q=weather");
+  // ...and an explicit template overrides the built-in engine entirely.
+  controller.SetPreference("search_engine_template", "https://example.org/find?q=%s&lang=zh");
+  EXPECT_EQ(controller.ResolveInput("a b"), "https://example.org/find?q=a%20b&lang=zh");
+}
+
+TEST(BrowserControllerTest, PreferencesPersistAcrossControllers)
+{
+  TempProfile tp;
+  {
+    BrowserController controller(tp.path());
+    controller.SetPreference("home_page", "https://example.net/");
+    EXPECT_EQ(controller.GetPreference("home_page"), "https://example.net/");
+    EXPECT_EQ(controller.GetPreference("unset", "fallback"), "fallback");
+  }
+  {
+    BrowserController controller(tp.path());
+    ASSERT_TRUE(controller.Load().has_value());
+    EXPECT_EQ(controller.GetPreference("home_page"), "https://example.net/");
+    EXPECT_EQ(controller.SnapshotPreferences().size(), 1u);
+  }
+}
+
 TEST(BrowserControllerTest, BookmarkActiveTab)
 {
   TempProfile tp;

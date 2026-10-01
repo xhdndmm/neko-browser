@@ -86,6 +86,20 @@ const Download* DownloadManager::Find(int64_t id) const
   return it == items_.end() ? nullptr : &*it;
 }
 
+size_t DownloadManager::ClearFinished()
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  const size_t before = items_.size();
+  items_.erase(std::remove_if(items_.begin(),
+                              items_.end(),
+                              [](const Download& d) {
+                                return d.state != DownloadState::kPending &&
+                                       d.state != DownloadState::kInProgress;
+                              }),
+               items_.end());
+  return before - items_.size();
+}
+
 base::Result<Download> DownloadManager::Start(const url::Url& url, std::string_view cookie_header)
 {
   Download record;

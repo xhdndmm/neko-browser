@@ -71,6 +71,11 @@ public:
   }
   const Download* Find(int64_t id) const;
 
+  // Removes every record that is no longer running (completed, failed or
+  // cancelled).  In-flight downloads stay listed.  Returns the number of
+  // records removed.
+  size_t ClearFinished();
+
   const std::string& download_dir() const
   {
     return download_dir_;

@@ -27,6 +27,7 @@ add_library(neko_browser_core
   src/renderer_protocol.cpp
   src/renderer_session.cpp
   src/renderer_session_host.cpp
+  src/search_engines.cpp
 )
 add_library(neko::browser ALIAS neko_browser_core)
 target_compile_features(neko_browser_core PUBLIC cxx_std_20)

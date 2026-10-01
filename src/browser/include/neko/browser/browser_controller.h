@@ -15,6 +15,7 @@
 #include "neko/storage/history_store.h"
 #include "neko/storage/indexed_db.h"
 #include "neko/storage/local_storage.h"
+#include "neko/storage/preferences.h"
 
 #include <cstdint>
 #include <functional>
@@ -285,6 +286,15 @@ struct NetworkLogEntry
   int64_t timestamp = 0;
 };
 
+// What a document point hit-tests to, for the page context menu.  |link_url|
+// is the absolute target of the nearest enclosing <a href>; |image_url| the
+// absolute source when the point sits on an <img>.  Empty = none.
+struct PointInfo
+{
+  std::string link_url;
+  std::string image_url;
+};
+
 // A console/DevTools message.
 struct ConsoleEntry
 {
@@ -409,6 +419,23 @@ public:
   std::vector<NetworkLogEntry> SnapshotNetworkLog() const;
   std::vector<ConsoleEntry> SnapshotConsoleLog() const;
 
+  // What sits under a document point, for the page context menu.  Empty
+  // strings mean "none".  Thread-safe (like the Snapshot* reads); works only
+  // for in-process HTML tabs -- in renderer-process mode the DOM lives in the
+  // child, so both fields come back empty.
+  PointInfo QueryPoint(int tab_id, float doc_x, float doc_y) const;
+
+  // -------------------------------------------------------------------------
+  // Preferences (home page, search engine, bookmark-bar visibility, ...)
+  // -------------------------------------------------------------------------
+  // One preference value; thread-safe, safe during navigation.  See
+  // preferences_keys.h for the well-known keys.
+  std::string GetPreference(std::string_view key, std::string_view fallback = {}) const;
+  // All preferences as (key, value) pairs for the settings UI.  Thread-safe.
+  std::vector<std::pair<std::string, std::string>> SnapshotPreferences() const;
+  // Worker thread: sets |key| and persists the store atomically.
+  void SetPreference(std::string_view key, std::string_view value);
+
   // -------------------------------------------------------------------------
   // Navigation
   // -------------------------------------------------------------------------
@@ -528,7 +555,18 @@ public:
 
   // Worker-thread store operations (lock internally).
   base::Result<Download> StartDownload(const url::Url& url, std::string_view cookie_header);
+  // Removes every download record that is no longer running (worker thread or
+  // any thread; the manager is internally synchronized).
+  size_t ClearFinishedDownloads();
+  // The directory downloads are written to (constant for the profile's life).
+  const std::string& download_dir() const
+  {
+    return downloads_.download_dir();
+  }
   void RemoveBookmark(const std::string& url);
+  // History management (worker thread).
+  void RemoveHistoryEntry(const std::string& url);
+  void ClearHistory();
   void ClearAllStorage();
   std::string CookieHeader(const url::Url& url, int64_t now) const;
 
@@ -572,6 +610,9 @@ public:
 
 private:
   void FetchAndLoad(Tab& tab, const url::Url& url);
+  // The search URL for |query|: the custom search_engine_template preference
+  // when set, otherwise the configured built-in engine's template.
+  std::string SearchUrlFor(std::string_view query) const;
   void LoadBytes(Tab& tab,
                  std::string_view bytes,
                  std::string_view content_type,
@@ -638,6 +679,7 @@ private:
   storage::BookmarkStore bookmarks_;
   storage::LocalStorage local_storage_;
   storage::IndexedDbStore indexed_db_;
+  storage::PreferencesStore preferences_;
   DownloadManager downloads_;
 
   std::vector<NetworkLogEntry> network_log_;
