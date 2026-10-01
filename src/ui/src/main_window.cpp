@@ -112,13 +112,17 @@ MainWindow::MainWindow(BrowserWorker* worker, QWidget* parent)
           &QApplication::focusChanged,
           this,
           [self = QPointer<MainWindow>(this)](QWidget* old, QWidget* now) {
-            if (self == nullptr) {
+            // Resolve the guarded pointer once: GCC's -Wnull-dereference
+            // cannot correlate the QPointer's repeated implicit conversions
+            // (`self == nullptr` vs `self->...`) and flags the guarded uses.
+            MainWindow* window = self.data();
+            if (window == nullptr) {
               return;
             }
-            if (now == self->address_) {
-              self->address_editing_ = true;
-            } else if (old == self->address_) {
-              self->address_editing_ = false;
+            if (now == window->address_) {
+              window->address_editing_ = true;
+            } else if (old == window->address_) {
+              window->address_editing_ = false;
             }
           });
 

@@ -260,7 +260,10 @@ TEST(PdfTest, FollowsPrevXrefChain)
   // exists in revision 1, and revision 2's xref points /Prev at revision 1.
   // Offsets are computed manually against the combined file.
   auto pad = [](size_t v) {
-    char buf[16];
+    // Wide enough for the full size_t range ("%010zu" can need up to 20
+    // digits plus NUL); 16 bytes made -Wformat-truncation fire in the -O2
+    // sanitizer/tsan builds.
+    char buf[32];
     std::snprintf(buf, sizeof(buf), "%010zu", v);
     return std::string(buf);
   };
