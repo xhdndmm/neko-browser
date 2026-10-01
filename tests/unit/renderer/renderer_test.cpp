@@ -7,6 +7,7 @@
 #include "neko/renderer/page.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -1035,28 +1036,30 @@ TEST(PageTest, BandedRasterizeMatchesFullRasterization)
 
   const paint::Rasterizer full = page.Rasterize(kWidth, kHeight);
   paint::Rasterizer band(kWidth, kBandHeight);
-  const std::size_t row_bytes = static_cast<std::size_t>(kWidth) * 4;
-  std::vector<std::uint8_t> stitched(static_cast<std::size_t>(kWidth) * kHeight * 4);
+  const auto width = static_cast<std::size_t>(kWidth);
+  const std::size_t row_bytes = width * 4;
+  std::vector<std::uint8_t> stitched(static_cast<std::size_t>(kHeight) * row_bytes);
+  const auto pixel_at = [](const paint::Rasterizer& raster, std::size_t x, std::size_t y) {
+    const std::size_t offset = (y * static_cast<std::size_t>(raster.width()) + x) * 4;
+    return std::array<std::uint8_t, 4>{raster.pixels()[offset],
+                                       raster.pixels()[offset + 1],
+                                       raster.pixels()[offset + 2],
+                                       raster.pixels()[offset + 3]};
+  };
   for (int y0 = 0; y0 < kHeight; y0 += kBandHeight) {
     const int rows = std::min(kBandHeight, kHeight - y0);
     page.RasterizeInto(band, 0, rows, static_cast<float>(y0));
-    for (int y = 0; y < rows; ++y) {
-      for (int x = 0; x < kWidth; ++x) {
-        const std::size_t band_off = (static_cast<std::size_t>(y) * kWidth + x) * 4;
-        const std::size_t full_off = (static_cast<std::size_t>(y0 + y) * kWidth + x) * 4;
-        if (band.pixels()[band_off] != full.pixels()[full_off] ||
-            band.pixels()[band_off + 1] != full.pixels()[full_off + 1] ||
-            band.pixels()[band_off + 2] != full.pixels()[full_off + 2] ||
-            band.pixels()[band_off + 3] != full.pixels()[full_off + 3]) {
-          FAIL() << "band y0=" << y0 << " pixel (" << x << ", " << y0 + y << "): band=("
-                 << static_cast<int>(band.pixels()[band_off]) << ","
-                 << static_cast<int>(band.pixels()[band_off + 1]) << ","
-                 << static_cast<int>(band.pixels()[band_off + 2]) << ","
-                 << static_cast<int>(band.pixels()[band_off + 3]) << ") full=("
-                 << static_cast<int>(full.pixels()[full_off]) << ","
-                 << static_cast<int>(full.pixels()[full_off + 1]) << ","
-                 << static_cast<int>(full.pixels()[full_off + 2]) << ","
-                 << static_cast<int>(full.pixels()[full_off + 3]) << ")";
+    for (std::size_t y = 0; y < static_cast<std::size_t>(rows); ++y) {
+      for (std::size_t x = 0; x < width; ++x) {
+        const auto band_pixel = pixel_at(band, x, y);
+        const auto full_pixel = pixel_at(full, x, static_cast<std::size_t>(y0) + y);
+        if (band_pixel != full_pixel) {
+          FAIL() << "band y0=" << y0 << " pixel (" << x << ", " << static_cast<std::size_t>(y0) + y
+                 << "): band=(" << static_cast<int>(band_pixel[0]) << ","
+                 << static_cast<int>(band_pixel[1]) << "," << static_cast<int>(band_pixel[2]) << ","
+                 << static_cast<int>(band_pixel[3]) << ") full=(" << static_cast<int>(full_pixel[0])
+                 << "," << static_cast<int>(full_pixel[1]) << "," << static_cast<int>(full_pixel[2])
+                 << "," << static_cast<int>(full_pixel[3]) << ")";
         }
       }
     }

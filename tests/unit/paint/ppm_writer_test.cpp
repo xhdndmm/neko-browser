@@ -46,7 +46,8 @@ int CountTempFiles(const fs::path& dir)
 // A deterministic RGBA pattern so band boundaries are visible in the data.
 std::vector<std::uint8_t> Pattern(int width, int height)
 {
-  std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) * height * 4);
+  std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) *
+                                   static_cast<std::size_t>(height) * 4);
   for (std::size_t i = 0; i < pixels.size(); ++i) {
     pixels[i] = static_cast<std::uint8_t>((i * 37 + 11) % 256);
   }
@@ -128,7 +129,8 @@ TEST(PpmWriterTest, BandedAppendsMatchASingleAppend)
     const int bands[] = {5, 1, 12, 19};
     int written = 0;
     for (const int rows : bands) {
-      const std::uint8_t* start = pixels.data() + static_cast<std::size_t>(written) * width * 4;
+      const std::uint8_t* start =
+          pixels.data() + static_cast<std::size_t>(written) * static_cast<std::size_t>(width) * 4;
       ASSERT_TRUE(writer.value().AppendRows(start, rows).has_value());
       written += rows;
     }

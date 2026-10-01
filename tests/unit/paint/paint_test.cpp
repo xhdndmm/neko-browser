@@ -267,8 +267,6 @@ TEST(RasterizerTest, BandBufferWithScrollMatchesFullBufferRows)
     band.ResetVisibleBand();
     for (int y = 0; y < rows; ++y) {
       for (int x = 0; x < 32; ++x) {
-        const std::size_t band_off = (static_cast<std::size_t>(y) * 32 + x) * 4;
-        const std::size_t full_off = (static_cast<std::size_t>(y0 + y) * 32 + x) * 4;
         ASSERT_EQ(Pixel(band, x, y), Pixel(full, x, y0 + y))
             << "band y0=" << y0 << " pixel (" << x << ", " << y0 + y << ")";
       }
