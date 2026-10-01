@@ -219,6 +219,10 @@ graph LR
       分配/清零开销；顺带修正了 `Rasterizer` 全缓冲下方内容的裁剪语义
 - [x] **内存测量工具** `tools/measure_rss.py`（wait4 rusage 峰值 RSS，
       本地/CI 均可复现）
+- [x] **释放内存归还 OS**（2026-10）：`base::ReleaseFreeMemory()`（glibc
+      `malloc_trim` / macOS `malloc_zone_pressure_relief`）挂在关闭标签页与
+      导航替换文档之后（worker 侧与 GUI 侧引用释放后各一处）；GUI 实测关闭
+      载入 125 MiB 的页面标签后 RSS 释放 ~86%（修复前 ~1%）
 - [ ] HTTP cache、增量布局、增量绘制、GPU 后端 —— **后续**
 - [ ] benchmark 基准建立（解析、布局、绘制、启动、内存的持续回归门禁）—— **后续**
 - [ ] `ComputedStyle` 罕见字段侧存（grid/自定义属性已实测占每元素 ~370 B，

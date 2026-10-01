@@ -1,5 +1,6 @@
 #include "neko/ui/main_window.h"
 
+#include "neko/base/memory.h"
 #include "neko/dom/element.h"
 #include "neko/dom/node.h"
 #include "neko/style/computed_style.h"
@@ -641,6 +642,11 @@ void MainWindow::SyncTabs()
     }
     views_.clear();
     view_ids_.clear();
+    // The old views held the last GUI references to the closed tabs' Pages
+    // and frames; hand their freed memory back to the OS (see
+    // base::ReleaseFreeMemory -- glibc otherwise keeps it resident and the
+    // RSS does not fall after closing a tab).
+    neko::base::ReleaseFreeMemory();
     for (const auto& tab : tabs) {
       auto* view = new WebView(worker_, tab.id, this);
       views_.append(view);

@@ -1,5 +1,6 @@
 #include "neko/ui/web_view.h"
 
+#include "neko/base/memory.h"
 #include "neko/ui/browser_worker.h"
 
 #include <QCursor>
@@ -11,6 +12,7 @@
 #include <QScrollBar>
 #include <QVBoxLayout>
 #include <QWheelEvent>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -48,13 +50,26 @@ WebView::WebView(BrowserWorker* worker, int tab_id, QWidget* parent)
 
 void WebView::Refresh()
 {
+  // If this refresh replaces the tab's document (navigation), the previous
+  // document's memory should return to the OS once its last reference dies.
+  // Only *document* replacement triggers this: frame updates (scrolling,
+  // animation ticks) are far too frequent for a heap trim.
+  std::shared_ptr<renderer::Page> previous_page = snapshot_.page;
   snapshot_ = worker_->SnapshotTab(tab_id_);
+  const bool document_replaced = previous_page != nullptr && previous_page != snapshot_.page;
+  // Drop the local reference before trimming so the old Page is destroyed
+  // first (see base::ReleaseFreeMemory).
+  previous_page.reset();
+
   // A navigation resets the local scroll position; the worker re-renders at
   // the new offset.  The DOM is owned by the worker thread (ADR 0020), so the
   // GUI detects a navigation by the URL rather than by a document version.
   if (snapshot_.url != frame_url_) {
     frame_url_ = snapshot_.url;
     verticalScrollBar()->setValue(0);
+  }
+  if (document_replaced) {
+    base::ReleaseFreeMemory();
   }
   UpdateTextOverlay();
   UpdateScrollRange();

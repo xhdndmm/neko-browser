@@ -12,6 +12,7 @@ add_library(neko_base
   src/string_util.cpp
   src/utf8.cpp
   src/encoding.cpp
+  src/memory.cpp
   src/thread_pool.cpp
 )
 add_library(neko::base ALIAS neko_base)

@@ -66,6 +66,15 @@ python3 tools/measure_rss.py --json -- <command>   # 机器可读输出
 （`PageTest.BandedRasterizeMatchesFullRasterization`）与峰值 RSS——只看输出相等
 无法发现缓冲区膨胀。
 
+对象生命周期与实际内存归还是两件事，GUI 场景分开验证：
+
+- `UiSmokeTest.ClosingTabReleasesThePage` / `ClosingTabInWindowReleasesThePage`
+  用 `weak_ptr` 断言关闭标签页后 `Page` 被销毁（跨平台、确定性）；
+- `UiSmokeTest.ClosingTabsReturnsMemory`（Linux + glibc）断言关闭后 RSS 确实下降：
+  glibc 会把已释放的块留在 per-thread arena 中，必须由 `base::ReleaseFreeMemory()`
+  （`malloc_trim`）显式归还给 OS，否则对象已释放而 RSS 不动。断言很宽松
+  （仅在载入增量 > 20 MiB 时要求释放 ≥ 1/4），sanitizer 构建只打印不断言。
+
 ## Sanitizer 测试
 
 ```bash

@@ -1,6 +1,7 @@
 #include "neko/browser/browser_controller.h"
 
 #include "neko/base/logging.h"
+#include "neko/base/memory.h"
 #include "neko/base/string_util.h"
 #include "neko/base/thread_pool.h"
 #include "neko/browser/hyperlink.h"
@@ -361,6 +362,23 @@ TabSnapshot ToSnapshot(const Tab& tab)
   return s;
 }
 
+// Returns the allocator's free pages to the OS when the enclosing operation
+// ends (see base::ReleaseFreeMemory).  Wrapped around operations that replace
+// or drop a tab's document: without it the previous DOM, style store and
+// images stay resident in the glibc arenas even though they were already
+// freed (measured in the GUI: a closed tab released ~1 MiB of its ~126 MiB).
+class HeapTrimOnExit
+{
+public:
+  HeapTrimOnExit() = default;
+  HeapTrimOnExit(const HeapTrimOnExit&) = delete;
+  HeapTrimOnExit& operator=(const HeapTrimOnExit&) = delete;
+  ~HeapTrimOnExit()
+  {
+    base::ReleaseFreeMemory();
+  }
+};
+
 } // namespace
 
 std::string_view ToString(ContentType type)
@@ -483,6 +501,10 @@ void BrowserController::CloseTab(int id)
     }
   }
   retired.reset();
+  // The closed tab's document (DOM, style store, images, frame buffers) is
+  // destroyed just above; hand its arena pages back to the OS so closing a
+  // tab actually lowers the process footprint (see base::ReleaseFreeMemory).
+  base::ReleaseFreeMemory();
 }
 
 int BrowserController::active_tab() const
@@ -611,6 +633,11 @@ std::string BrowserController::ResolveInput(const std::string& input) const
 
 void BrowserController::NavigateToUrl(Tab& tab, const std::string& url_string)
 {
+  // Every exit path below replaces the tab's document (or its error page);
+  // release the previous document's arena pages when the navigation is done.
+  // See base::ReleaseFreeMemory and HeapTrimOnExit.
+  [[maybe_unused]] const HeapTrimOnExit trim_heap_on_exit;
+
   // Record the requested URL up front (under the controller mutex, like every
   // other Tab field write).  A navigation triggered from inside LoadBytes
   // (a page script assigning window.location) runs synchronously through this
@@ -1151,6 +1178,10 @@ base::Result<void> BrowserController::LoadDocument(int tab_id,
                                                    std::string_view content_type,
                                                    const std::string& final_url)
 {
+  // Loading replaces the tab's document; release the previous one's arena
+  // pages when done (same reasoning as NavigateToUrl).
+  [[maybe_unused]] const HeapTrimOnExit trim_heap_on_exit;
+
   Tab* tab = FindTab(tab_id);
   if (tab == nullptr) {
     return base::Err(base::Error::InvalidArgument("no such tab"));

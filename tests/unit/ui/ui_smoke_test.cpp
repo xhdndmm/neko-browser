@@ -27,10 +27,23 @@
 #include <QtTest>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
+#include <memory>
 #include <string>
 #include <thread>
+
+// True in ASan/TSan builds: their allocators replace malloc and do not
+// implement the glibc heap trim, so RSS assertions would be meaningless.
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+#define NEKO_TEST_SANITIZED 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+#define NEKO_TEST_SANITIZED 1
+#endif
+#endif
 
 #ifdef _WIN32
 #include <process.h>
@@ -392,6 +405,176 @@ TEST(UiSmokeTest, KeyboardShortcutOpensAndClosesTabs)
   SendKey(&window, Qt::Key_W, Qt::ControlModifier);
   ASSERT_TRUE(WaitFor([&] { return window.TabBarWidget()->count() <= initial; }));
   EXPECT_EQ(window.TabBarWidget()->count(), initial);
+}
+
+// Regression: closing a tab must release its Page (DOM, style store, display
+// list, frame buffers).  A stale reference here means every closed tab keeps
+// its whole page alive for the browser's lifetime.
+TEST(UiSmokeTest, ClosingTabReleasesThePage)
+{
+  TempProfile tp;
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+
+  // Enough content that keeping it alive is meaningful (and visible).
+  std::string html = "<html><head><title>Leak probe</title></head><body>";
+  for (int i = 0; i < 2000; ++i) {
+    html += "<div class=\"row\"><span>Item " + std::to_string(i) + "</span></div>";
+  }
+  html += "</body></html>";
+  const std::filesystem::path page =
+      std::filesystem::temp_directory_path() /
+      ("neko-close-tab-" + std::to_string(CurrentProcessId()) + ".html");
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(page.string(), html).has_value());
+
+  worker.NewTab(QString::fromStdString(page.string()), true);
+  std::weak_ptr<neko::renderer::Page> weak;
+  int id = -1;
+  ASSERT_TRUE(WaitFor([&] {
+    const neko::browser::TabSnapshot snapshot = worker.SnapshotActiveTab();
+    if (snapshot.id < 0 || snapshot.page == nullptr || snapshot.loading) {
+      return false;
+    }
+    weak = snapshot.page;
+    id = snapshot.id;
+    return true;
+  }));
+  ASSERT_EQ(weak.expired(), false);
+
+  worker.CloseTab(id);
+  // The page must be destroyed while the browser keeps running -- not merely
+  // at worker destruction.
+  EXPECT_TRUE(WaitFor([&] { return weak.expired(); }, 5000))
+      << "the closed tab's Page is still referenced somewhere";
+
+  std::filesystem::remove(page);
+}
+
+// Same contract through the full GUI stack (MainWindow + WebView): closing
+// the window's tab must drop every reference the widgets hold to the page.
+TEST(UiSmokeTest, ClosingTabInWindowReleasesThePage)
+{
+  TempProfile tp;
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.show();
+  ASSERT_TRUE(WaitFor([&] { return window.TabBarWidget()->count() >= 1; }));
+
+  std::string html = "<html><head><title>Window leak probe</title></head><body>";
+  for (int i = 0; i < 2000; ++i) {
+    html += "<div class=\"row\"><span>Item " + std::to_string(i) + "</span></div>";
+  }
+  html += "</body></html>";
+  const std::filesystem::path page =
+      std::filesystem::temp_directory_path() /
+      ("neko-close-tab-window-" + std::to_string(CurrentProcessId()) + ".html");
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(page.string(), html).has_value());
+
+  window.TabBarWidget()->setCurrentIndex(0);
+  worker.NavigateActive(QString::fromStdString(page.string()));
+  std::weak_ptr<neko::renderer::Page> weak;
+  ASSERT_TRUE(WaitFor([&] {
+    const neko::browser::TabSnapshot snapshot = worker.SnapshotActiveTab();
+    if (snapshot.page == nullptr || snapshot.loading) {
+      return false;
+    }
+    weak = snapshot.page;
+    return true;
+  }));
+  ASSERT_EQ(weak.expired(), false);
+
+  SendKey(&window, Qt::Key_W, Qt::ControlModifier);
+  EXPECT_TRUE(WaitFor([&] { return weak.expired(); }, 5000))
+      << "the closed tab's Page is still referenced by the GUI stack";
+
+  std::filesystem::remove(page);
+}
+
+#if defined(__linux__)
+// Current process RSS in KiB; used by the memory-return observation below.
+long CurrentRssKb()
+{
+  std::ifstream status("/proc/self/status");
+  std::string line;
+  while (std::getline(status, line)) {
+    if (line.rfind("VmRSS:", 0) == 0) {
+      return std::stol(line.substr(6));
+    }
+  }
+  return -1;
+}
+#endif
+
+// Regression + observation (Linux/glibc): loading a heavy page in the GUI and
+// closing its tab must return the freed memory to the OS.  Object lifetime is
+// covered by the tests above; this checks the allocator side.  The controller
+// calls base::ReleaseFreeMemory() when a tab closes because glibc otherwise
+// keeps the freed DOM/style/image blocks in its arenas and the RSS barely
+// moves (measured before the fix: 1 MiB released of 126 MiB loaded).
+// Sanitizer allocators do not implement the trim, so those builds only print
+// the numbers; the ratio is asserted only when the load actually grew the
+// resident set by a meaningful amount.
+TEST(UiSmokeTest, ClosingTabsReturnsMemory)
+{
+#if !defined(__linux__) || !defined(__GLIBC__)
+  GTEST_SKIP() << "RSS assertion requires Linux + glibc";
+#else
+  TempProfile tp;
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.show();
+  ASSERT_TRUE(WaitFor([&] { return window.TabBarWidget()->count() >= 1; }));
+
+  std::string html = "<html><head><title>Memory probe</title></head><body>";
+  for (int i = 0; i < 10000; ++i) {
+    html += "<div class=\"row\"><span>Item " + std::to_string(i) + "</span></div>";
+  }
+  html += "</body></html>";
+  const std::filesystem::path page =
+      std::filesystem::temp_directory_path() /
+      ("neko-mem-probe-" + std::to_string(CurrentProcessId()) + ".html");
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(page.string(), html).has_value());
+
+  const long rss_before = CurrentRssKb();
+  window.TabBarWidget()->setCurrentIndex(0);
+  worker.NavigateActive(QString::fromStdString(page.string()));
+  ASSERT_TRUE(WaitFor(
+      [&] {
+        const neko::browser::TabSnapshot snapshot = worker.SnapshotActiveTab();
+        return snapshot.page != nullptr && !snapshot.loading;
+      },
+      15000));
+  for (int i = 0; i < 10; ++i) {
+    QCoreApplication::processEvents();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  const long rss_loaded = CurrentRssKb();
+
+  SendKey(&window, Qt::Key_W, Qt::ControlModifier);
+  ASSERT_TRUE(WaitFor([&] { return window.TabBarWidget()->count() == 1; }));
+  for (int i = 0; i < 25; ++i) {
+    QCoreApplication::processEvents();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  const long rss_closed = CurrentRssKb();
+
+  const long gained = rss_loaded - rss_before;
+  const long released = rss_loaded - rss_closed;
+  std::fprintf(stderr,
+               "[mem-probe] RSS before=%ld KiB, after load=%ld KiB (+%ld), "
+               "after close=%ld KiB (released %ld KiB)\n",
+               rss_before,
+               rss_loaded,
+               gained,
+               rss_closed,
+               released);
+
+#if !defined(NEKO_TEST_SANITIZED)
+  if (gained > 20 * 1024) {
+    EXPECT_GE(released, gained / 4) << "closing the tab must return freed pages to the OS";
+  }
+#endif
+  std::filesystem::remove(page);
+#endif
 }
 
 // Page zoom: the keyboard shortcuts step the active tab's factor, the toolbar
