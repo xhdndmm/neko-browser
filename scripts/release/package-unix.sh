@@ -28,6 +28,12 @@ fi
 cp LICENSE README.md "$PACKAGE/"
 
 if [ "$platform" = "linux" ]; then
+  # glibc 基线 = 构建宿主的 glibc。校验包内没有任何文件要求更高（例如
+  # 引入预编译依赖时把基线拖高）——基线随构建环境变化，不允许悄悄变化。
+  # 需要声明更低的支持面时显式传入 GLIBC_BASELINE=<x.y>，见
+  # docs/releases/README.md。
+  GLIBC_BASELINE="${GLIBC_BASELINE:-$(getconf GNU_LIBC_VERSION | awk '{print $2}')}"
+  export GLIBC_BASELINE
   bash tools/package_runtime_linux.sh "$PACKAGE"
   gui_bin="$PACKAGE/bin/neko_browser_gui"
 else

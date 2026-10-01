@@ -29,6 +29,7 @@ set -euo pipefail
 
 STAGE_DIR="${1:?usage: tools/package_runtime_linux.sh <staging-dir>}"
 STAGE_DIR="$(cd "$STAGE_DIR" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="$STAGE_DIR/bin"
 LIB_DIR="$STAGE_DIR/lib"
 PLUGIN_DIR="$STAGE_DIR/plugins"
@@ -211,7 +212,23 @@ patch_rpaths() {
   done < <(find "$dir" -type f -print0)
 }
 
-# --- 4. verification ---------------------------------------------------------
+# --- 4. symbol stripping ------------------------------------------------------
+
+# Release archives do not need symbols.  --strip-unneeded keeps the dynamic
+# symbol table (the loader needs it) and drops everything else, so bundled
+# libraries that were not stripped by their own packaging and the local build
+# outputs both shrink.  The step is idempotent: dependencies that are already
+# stripped (most distro packages) are unaffected.  Runs after patchelf so the
+# rewritten RPATHs are not touched again.
+strip_symbols() {
+  local f
+  while IFS= read -r -d '' f; do
+    is_elf "$f" || continue
+    strip --strip-unneeded "$f"
+  done < <(find "$STAGE_DIR" -type f -print0)
+}
+
+# --- 5. verification ---------------------------------------------------------
 
 verify() {
   local rc=0 f dep deps canon
@@ -262,7 +279,19 @@ patch_rpaths "$LIB_DIR" '$ORIGIN'
 # shellcheck disable=SC2016
 patch_rpaths "$PLUGIN_DIR" '$ORIGIN/../../lib'
 
+echo "==> Stripping symbols"
+strip_symbols
+
 echo "==> Verifying runtime closure"
 verify
+
+# Optional: fail when any bundled file needs a glibc newer than the declared
+# baseline (the release pipeline passes the build host's glibc, so a future
+# pre-compiled dependency from a newer environment cannot slip in).  See
+# tools/check_glibc_baseline.sh and docs/releases/README.md.
+if [ -n "${GLIBC_BASELINE:-}" ]; then
+  echo "==> Checking glibc baseline (GLIBC_$GLIBC_BASELINE)"
+  bash "$SCRIPT_DIR/check_glibc_baseline.sh" "$STAGE_DIR" "$GLIBC_BASELINE"
+fi
 
 echo "==> OK: $(find "$LIB_DIR" -maxdepth 1 -type f | wc -l) libraries bundled into lib/"
