@@ -123,6 +123,11 @@ CC=clang CXX=clang++ cmake --preset debug
     交叉编译 ARM64 时额外用 `-A ARM64 -DVCPKG_TARGET_TRIPLET=arm64-windows`、
     Qt 的 `win64_msvc2022_arm64_cross_compiled` 包与 `-DQT_HOST_PATH=<x64 Qt>`。
     不需要 GUI 时加 `-DNEKO_BUILD_UI=OFF`。
+  - **翻译（i18n）**：编译好的翻译目录（`.qm`）已随仓库提交，常规构建
+    **不需要** Qt Linguist（连 aqtinstall 的 `qtbase` 包也能构建——CMake
+    在找不到工具时直接使用提交的 `.qm`）。只修改/新增 UI 字符串时才需要
+    `lupdate`/`lrelease`（Debian/Ubuntu 的 `qt6-tools`），见
+    [docs/development/i18n.md](docs/development/i18n.md)。
 - 参见 [dependency-policy.md](docs/development/dependency-policy.md)。
 - 离线或受限网络环境：可预先下载 tarball 并设置
   `CMAKE_FETCHCONTENT_SOURCE_DIR_GOOGLETEST` / `CMAKE_FETCHCONTENT_SOURCE_DIR_QUICKJS`

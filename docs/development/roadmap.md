@@ -148,6 +148,9 @@ graph LR
     提交捕获为 pending 提示条确认保存、按精确 origin 自动填充登录表单、
     仅 origin/username 可见的登录列表与删除；威胁模型见
     `docs/security/security-model.md`
+  - 多语言界面（i18n）：简繁中文/日/韩/阿/俄 6 套目录 + 英文源，
+    启动按偏好或系统 locale 装载，阿拉伯语 RTL 全镜像，设置面板语言
+    选择（重启生效）；详见 `docs/development/i18n.md`
 - [x] 无头模式可用：offscreen 平台 + 截图工具 `neko_gui_screenshot`
 - [ ] 键盘/鼠标完整交互、高 DPI 细节、加载进度条 —— 后续
 - [ ] 像素级渲染对比测试 —— 后续

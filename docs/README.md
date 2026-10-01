@@ -35,6 +35,8 @@ neko-browser 的文档体系。文档是项目的一等公民 —— 改动架�
 - [开发路线图](development/roadmap.md) —— 分阶段计划与里程碑
 - [依赖策略](development/dependency-policy.md)
 - [编码风格](development/coding-style.md)
+- [国际化（i18n）](development/i18n.md) —— 翻译流程、语言选择、RTL 与
+  无 Qt Linguist 环境的构建 fallback
 - [Sanitizer 使用](development/sanitizers.md)
 - [CI / 发布脚本（scripts/）](development/ci-scripts.md) —— workflow 与脚本的分工、
   约定与本地校验方法
