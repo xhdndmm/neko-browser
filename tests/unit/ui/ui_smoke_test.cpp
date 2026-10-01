@@ -7,6 +7,7 @@
 #include "neko/dom/query.h"
 #include "neko/layout/layout_tree.h"
 #include "neko/storage/file_util.h"
+#include "neko/storage/password_store.h"
 #include "neko/ui/browser_worker.h"
 #include "neko/ui/main_window.h"
 #include "neko/ui/web_view.h"
@@ -25,6 +26,7 @@
 #include <QMouseEvent>
 #include <QPixmap>
 #include <QPlainTextEdit>
+#include <QPushButton>
 #include <QScrollBar>
 #include <QTabBar>
 #include <QToolBar>
@@ -1855,6 +1857,56 @@ TEST(UiSmokeTest, RendererProcessModeClickAndHoverReachTheChild)
         return false;
       },
       10000));
+}
+
+TEST(UiSmokeTest, SavedLoginsSettingsListShowsAndDeletes)
+{
+  TempProfile tp;
+  // Seed the encrypted password store directly: this UI test has no HTTP
+  // server to produce a real form submission, and the settings list only
+  // needs a stored login to display.
+  {
+    neko::storage::PasswordStore store(tp.path());
+    ASSERT_TRUE(store.Load().has_value());
+    store.Add("https://example.com", "alice", "s3cret");
+    const auto saved = store.Save();
+    ASSERT_TRUE(saved.has_value()) << (saved.has_value() ? "" : saved.error().message());
+  }
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.resize(1024, 768);
+  window.show();
+  for (int i = 0; i < 10; ++i) {
+    QCoreApplication::processEvents();
+  }
+
+  QListWidget* list = window.PasswordListWidget();
+  ASSERT_NE(list, nullptr);
+  ASSERT_EQ(list->count(), 1);
+  EXPECT_TRUE(list->item(0)->text().contains(QStringLiteral("example.com")));
+  EXPECT_TRUE(list->item(0)->text().contains(QStringLiteral("alice")));
+  // The password itself must never appear in the UI.
+  EXPECT_FALSE(list->item(0)->text().contains(QStringLiteral("s3cret")));
+
+  // The save prompt stays hidden while no login is pending.
+  ASSERT_NE(window.PasswordBarWidget(), nullptr);
+  EXPECT_FALSE(window.PasswordBarWidget()->isVisible());
+
+  // Delete the selected login: the removal round-trips through the worker and
+  // the list refreshes to empty.
+  list->setCurrentRow(0);
+  auto* delete_button = window.findChild<QPushButton*>(QStringLiteral("passwordDeleteButton"));
+  ASSERT_NE(delete_button, nullptr);
+  delete_button->click();
+  ASSERT_TRUE(WaitFor([&] { return list->count() == 0; }));
+  EXPECT_TRUE(worker.SavedLogins().empty());
+  // And the removal reaches the disk (a fresh store sees no records).
+  {
+    neko::storage::PasswordStore store(tp.path());
+    ASSERT_TRUE(store.Load().has_value());
+    EXPECT_TRUE(store.All().empty());
+  }
 }
 
 } // namespace

@@ -114,6 +114,23 @@ public:
   {
     return home_action_;
   }
+  // Password manager (tests / automation).
+  QToolBar* PasswordBarWidget() const
+  {
+    return password_bar_;
+  }
+  QListWidget* PasswordListWidget() const
+  {
+    return password_list_;
+  }
+  QAction* PasswordSaveAction() const
+  {
+    return password_save_action_;
+  }
+  QAction* PasswordDismissAction() const
+  {
+    return password_dismiss_action_;
+  }
 
 private slots:
   void OnStateChanged();
@@ -140,6 +157,10 @@ private slots:
   void OnSearchEngineChanged(int index);
   void OnHomePageEdited();
   void OnBookmarkBarToggled(bool visible);
+  // Password manager: the save prompt and the settings login list.
+  void OnPasswordSaveClicked();
+  void OnPasswordDismissClicked();
+  void OnSavedLoginDelete();
 
 private:
   // Enter/Shift+Enter in the find input step the matches (handled here so the
@@ -148,6 +169,9 @@ private:
   void BuildUi();
   void BuildToolbar();
   void BuildBookmarkBar();
+  // The password save prompt (a toolbar row above the bookmark bar; hidden
+  // until the active page submits a login).
+  void BuildPasswordBar();
   void BuildFindBar(QToolBar* toolbar);
   void ShowFindBar();
   void HideFindBar();
@@ -221,6 +245,15 @@ private:
   QComboBox* search_engine_combo_ = nullptr;
   QLineEdit* home_page_edit_ = nullptr;
   QCheckBox* bookmark_bar_check_ = nullptr;
+  // Password save prompt (hidden unless the active page has a pending login).
+  QToolBar* password_bar_ = nullptr;
+  QLabel* password_bar_label_ = nullptr;
+  QAction* password_save_action_ = nullptr;
+  QAction* password_dismiss_action_ = nullptr;
+  // Saved-logins list in the settings panel + the signature of what it shows,
+  // so RefreshLists only rebuilds it on change.
+  QListWidget* password_list_ = nullptr;
+  QStringList password_list_signature_;
   // True while RefreshLists writes the settings widgets programmatically, so
   // the signals they emit are not mistaken for user edits.
   bool syncing_settings_ = false;

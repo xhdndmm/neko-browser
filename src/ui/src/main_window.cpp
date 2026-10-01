@@ -165,6 +165,7 @@ MainWindow::MainWindow(BrowserWorker* worker, QWidget* parent)
 void MainWindow::BuildUi()
 {
   BuildToolbar();
+  BuildPasswordBar();
   BuildBookmarkBar();
   BuildDocks();
 
@@ -281,6 +282,24 @@ void MainWindow::SetPreference(const QString& key, const QString& value)
   if (key == FromUtf8(browser::prefs::kShowBookmarkBar) && bookmark_bar_ != nullptr) {
     bookmark_bar_->setVisible(value != QLatin1String("0"));
   }
+}
+
+void MainWindow::BuildPasswordBar()
+{
+  password_bar_ = new QToolBar(tr("Save password"), this);
+  password_bar_->setMovable(false);
+  password_bar_label_ = new QLabel(password_bar_);
+  password_bar_->addWidget(password_bar_label_);
+  password_save_action_ = password_bar_->addAction(tr("Save"));
+  connect(password_save_action_, &QAction::triggered, this, &MainWindow::OnPasswordSaveClicked);
+  password_dismiss_action_ = password_bar_->addAction(tr("Not now"));
+  connect(
+      password_dismiss_action_, &QAction::triggered, this, &MainWindow::OnPasswordDismissClicked);
+  // A dedicated toolbar row directly under the navigation toolbar; hidden
+  // until the active page submits a login form.
+  addToolBarBreak(Qt::TopToolBarArea);
+  addToolBar(Qt::TopToolBarArea, password_bar_);
+  password_bar_->setVisible(false);
 }
 
 void MainWindow::BuildBookmarkBar()
@@ -602,6 +621,15 @@ void MainWindow::BuildDocks()
   connect(bookmark_bar_check_, &QCheckBox::toggled, this, &MainWindow::OnBookmarkBarToggled);
   settings_layout->addWidget(bookmark_bar_check_);
 
+  settings_layout->addWidget(new QLabel(tr("Saved logins"), settings));
+  password_list_ = new QListWidget(settings);
+  password_list_->setMaximumHeight(110);
+  settings_layout->addWidget(password_list_);
+  auto* password_delete = new QPushButton(tr("Delete selected login"), settings);
+  password_delete->setObjectName(QStringLiteral("passwordDeleteButton"));
+  connect(password_delete, &QPushButton::clicked, this, &MainWindow::OnSavedLoginDelete);
+  settings_layout->addWidget(password_delete);
+
   settings_profile_ = new QLabel(settings);
   settings_counts_ = new QLabel(settings);
   auto* clear = new QPushButton(tr("Clear cookies, history and bookmarks"), settings);
@@ -809,6 +837,35 @@ void MainWindow::OnBookmarkBarToggled(bool visible)
     return;
   }
   SetPreference(FromUtf8(browser::prefs::kShowBookmarkBar), visible ? "1" : "0");
+}
+
+void MainWindow::OnPasswordSaveClicked()
+{
+  const browser::TabSnapshot active = worker_->SnapshotActiveTab();
+  if (active.id >= 0 && active.has_pending_credential) {
+    worker_->SavePendingCredential(active.id);
+  }
+}
+
+void MainWindow::OnPasswordDismissClicked()
+{
+  const browser::TabSnapshot active = worker_->SnapshotActiveTab();
+  if (active.id >= 0 && active.has_pending_credential) {
+    worker_->DismissPendingCredential(active.id);
+  }
+}
+
+void MainWindow::OnSavedLoginDelete()
+{
+  if (password_list_ == nullptr) {
+    return;
+  }
+  QListWidgetItem* item = password_list_->currentItem();
+  if (item == nullptr) {
+    return;
+  }
+  worker_->RemoveSavedLogin(item->data(Qt::UserRole).toString(),
+                            item->data(Qt::UserRole + 1).toString());
 }
 
 void MainWindow::OnConsoleCommand()
@@ -1092,6 +1149,42 @@ void MainWindow::RefreshLists()
                                     QLatin1String("0"));
   }
   syncing_settings_ = false;
+
+  // Password save prompt for the active tab (hidden unless a login form was
+  // just submitted).
+  if (password_bar_ != nullptr) {
+    const browser::TabSnapshot active = worker_->SnapshotActiveTab();
+    if (active.has_pending_credential) {
+      password_bar_label_->setText(tr("Save password for %1 (%2)?")
+                                       .arg(FromUtf8(active.pending_credential_origin),
+                                            FromUtf8(active.pending_credential_username)));
+      password_bar_->setVisible(true);
+    } else {
+      password_bar_->setVisible(false);
+    }
+  }
+
+  // Saved logins (settings panel); rebuilt only when the set changed.
+  if (password_list_ != nullptr) {
+    const std::vector<browser::SavedLogin> logins = worker_->SavedLogins();
+    QStringList signature;
+    signature.reserve(static_cast<qsizetype>(logins.size()));
+    for (const browser::SavedLogin& login : logins) {
+      signature.push_back(FromUtf8(login.origin));
+      signature.push_back(FromUtf8(login.username));
+    }
+    if (signature != password_list_signature_) {
+      password_list_signature_ = signature;
+      password_list_->clear();
+      for (const browser::SavedLogin& login : logins) {
+        auto* item = new QListWidgetItem(
+            QStringLiteral("%1 \u2014 %2").arg(FromUtf8(login.origin), FromUtf8(login.username)),
+            password_list_);
+        item->setData(Qt::UserRole, FromUtf8(login.origin));
+        item->setData(Qt::UserRole + 1, FromUtf8(login.username));
+      }
+    }
+  }
 
   SyncBookmarkBar();
 }

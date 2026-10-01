@@ -319,6 +319,28 @@ QString BrowserWorker::DownloadDir() const
   return QString::fromStdString(controller_.download_dir());
 }
 
+std::vector<browser::SavedLogin> BrowserWorker::SavedLogins() const
+{
+  return controller_.SavedLogins();
+}
+
+void BrowserWorker::RemoveSavedLogin(const QString& origin, const QString& username)
+{
+  Post([this, origin = origin.toStdString(), username = username.toStdString()] {
+    (void)controller_.RemoveSavedLogin(origin, username);
+  });
+}
+
+void BrowserWorker::SavePendingCredential(int tab_id)
+{
+  Post([this, tab_id] { controller_.SavePendingCredential(tab_id); });
+}
+
+void BrowserWorker::DismissPendingCredential(int tab_id)
+{
+  Post([this, tab_id] { controller_.DismissPendingCredential(tab_id); });
+}
+
 void BrowserWorker::ActivateTab(int id)
 {
   Post([this, id] { controller_.ActivateTab(id); });

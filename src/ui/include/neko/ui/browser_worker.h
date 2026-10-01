@@ -115,6 +115,14 @@ public:
   void ClearFinishedDownloads();
   // The directory downloads are written to (empty when unset).
   QString DownloadDir() const;
+  // Password manager: saved logins for the settings panel (origin + username
+  // only, never the password).  Thread-safe synchronous read.
+  std::vector<browser::SavedLogin> SavedLogins() const;
+  // Deletes one saved login (worker thread; persists the store).
+  void RemoveSavedLogin(const QString& origin, const QString& username);
+  // Stores the tab's pending submitted login / drops it without saving.
+  void SavePendingCredential(int tab_id);
+  void DismissPendingCredential(int tab_id);
   void BookmarkActive();
   void RemoveBookmark(const QString& url);
   void Download(const QString& url);
