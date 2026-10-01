@@ -827,12 +827,7 @@ TEST(BrowserControllerTest, PumpScriptTimersRunsSetTimeout)
   fetch.Add("http://example.com/",
             FakeFetcher::Route{200,
                                {{"content-type", "text/html"}},
-                               "<html><body>"
-                               "<script>"
-                               "window._runs = 0;"
-                               "setTimeout(function(){ window._runs++; }, 1);"
-                               "</script>"
-                               "</body></html>"});
+                               "<html><body><script>window._runs = 0;</script></body></html>"});
 
   BrowserController controller(tp.path(), std::ref(fetch));
   controller.NewTab();
@@ -841,22 +836,30 @@ TEST(BrowserControllerTest, PumpScriptTimersRunsSetTimeout)
   Tab* tab = controller.ActiveTab();
   ASSERT_NE(tab, nullptr);
   ASSERT_NE(tab->script_runtime, nullptr);
-  // No timers run before the deadline.
-  controller.PumpScriptTimers();
-  auto runs = tab->script_runtime->Evaluate("window._runs");
-  ASSERT_TRUE(runs.has_value());
-  auto num = runs.value().ToNumber();
-  ASSERT_TRUE(num.has_value());
-  EXPECT_DOUBLE_EQ(num.value(), 0.0);
+  const auto read = [&]() {
+    const auto v = tab->script_runtime->Evaluate("window._runs");
+    EXPECT_TRUE(v.has_value());
+    return v.has_value() ? v.value().ToNumber().value_or(-1.0) : -1.0;
+  };
 
-  // After the deadline, pumping runs the timer.
-  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  // The timers are scheduled here, after the load, for the same reason as in
+  // FrameIsProducedAndRefreshedByDomChanges below: a page-inline
+  // `setTimeout(..., 1)` races the load (which can outlast the deadline on a
+  // slow or instrumented runner), so "did not run yet" would not be
+  // deterministic.
+  //
+  // Not yet due: an hour out, so the pump provably cannot run it.
+  ASSERT_TRUE(tab->script_runtime->Evaluate("setTimeout(function(){ window._runs++; }, 3600000)")
+                  .has_value());
   controller.PumpScriptTimers();
-  runs = tab->script_runtime->Evaluate("window._runs");
-  ASSERT_TRUE(runs.has_value());
-  num = runs.value().ToNumber();
-  ASSERT_TRUE(num.has_value());
-  EXPECT_DOUBLE_EQ(num.value(), 1.0);
+  EXPECT_DOUBLE_EQ(read(), 0.0);
+
+  // Due: a zero-delay timer is already expired when it is scheduled, so
+  // exactly one pump runs it -- no sleeping, no wall-clock bet.
+  ASSERT_TRUE(
+      tab->script_runtime->Evaluate("setTimeout(function(){ window._runs++; }, 0)").has_value());
+  controller.PumpScriptTimers();
+  EXPECT_DOUBLE_EQ(read(), 1.0);
 }
 
 TEST(BrowserControllerTest, PumpScriptTimersUntilQuietRunsDeferredWork)
