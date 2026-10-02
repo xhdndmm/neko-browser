@@ -789,6 +789,57 @@ TEST(StyleTest, WidthHeightAndBackground)
   EXPECT_EQ(style.background_color.value(), (css::Color{255, 0, 0, 255}));
 }
 
+// background-repeat / background-position keywords must survive parsing:
+// news.cctv.com builds its section backdrops from 1px strips tiled with
+// `repeat-x left top`, and losing the repeat flag made the painter smear the
+// strip across the whole section (the reported layout collapse).
+TEST(StyleTest, BackgroundRepeatAndPositionKeywords)
+{
+  auto doc = MakeDoc(
+      "<body><div style=\"background: #f5f5f5 url(tile.jpg) repeat-x left top\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& style = Style(engine, *doc, "div");
+  EXPECT_TRUE(style.background_repeat_x);
+  EXPECT_FALSE(style.background_repeat_y);
+  EXPECT_FLOAT_EQ(style.background_position_x, 0.0F);
+  EXPECT_FLOAT_EQ(style.background_position_y, 0.0F);
+  ASSERT_TRUE(style.background_color.has_value());
+  EXPECT_EQ(style.background_color.value(), (css::Color{0xf5, 0xf5, 0xf5, 255}));
+
+  // A no-repeat centered banner (the site's ind02 case).
+  auto doc2 = MakeDoc(
+      "<body><div style=\"background: url(banner.jpg) no-repeat center top\">x</div></body>");
+  StyleEngine engine2;
+  engine2.ApplyStyles(*doc2);
+  const ComputedStyle& style2 = Style(engine2, *doc2, "div");
+  EXPECT_FALSE(style2.background_repeat_x);
+  EXPECT_FALSE(style2.background_repeat_y);
+  EXPECT_FLOAT_EQ(style2.background_position_x, 0.5F);
+  EXPECT_FLOAT_EQ(style2.background_position_y, 0.0F);
+
+  // Longhands, with the two-value repeat form (x then y) and a percentage.
+  auto doc3 = MakeDoc("<body><div style=\"background-repeat: repeat no-repeat; "
+                      "background-position: 25% bottom\">x</div></body>");
+  StyleEngine engine3;
+  engine3.ApplyStyles(*doc3);
+  const ComputedStyle& style3 = Style(engine3, *doc3, "div");
+  EXPECT_TRUE(style3.background_repeat_x);
+  EXPECT_FALSE(style3.background_repeat_y);
+  EXPECT_FLOAT_EQ(style3.background_position_x, 0.25F);
+  EXPECT_FLOAT_EQ(style3.background_position_y, 1.0F);
+
+  // A shorthand without keywords resets the whole family (initial: repeat
+  // both axes, position left top).
+  auto doc4 = MakeDoc(
+      "<body><div style=\"background-repeat: no-repeat; background: url(x.png)\">y</div></body>");
+  StyleEngine engine4;
+  engine4.ApplyStyles(*doc4);
+  const ComputedStyle& style4 = Style(engine4, *doc4, "div");
+  EXPECT_TRUE(style4.background_repeat_x);
+  EXPECT_TRUE(style4.background_repeat_y);
+}
+
 TEST(StyleTest, MarginShorthand)
 {
   auto doc = MakeDoc("<body><div style=\"margin: 1em 2em\">x</div></body>");

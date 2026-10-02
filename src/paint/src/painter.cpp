@@ -4,6 +4,7 @@
 #include "neko/paint/display_list.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace neko::paint {
 namespace {
@@ -262,12 +263,69 @@ void Painter::PaintBoxSelf(const layout::LayoutBox& box, DisplayList& list) cons
     }
 
     // CSS background-image paints over the background color (e.g. Bing's
-    // wallpaper).  A missing or not-yet-decoded image is skipped; cover keeps
-    // the image filling the box without distortion.
+    // wallpaper).  A missing or not-yet-decoded image is skipped.
     if (!box.background_image_url.empty() && box.background_image != nullptr &&
         !box.background_image->empty()) {
-      list.DrawImage(
-          box.x, box.y, box.width, box.height, *box.background_image, style::ObjectFit::kCover);
+      const image::Image& bg_image = *box.background_image;
+      const bool repeat_x = box.style.background_repeat_x;
+      const bool repeat_y = box.style.background_repeat_y;
+      if (!repeat_x && !repeat_y) {
+        // no-repeat keeps the previous cover draw (a background-size: cover
+        // approximation that wallpaper-style pages rely on).
+        list.DrawImage(box.x, box.y, box.width, box.height, bg_image, style::ObjectFit::kCover);
+      } else {
+        // Tiled background (CSS Backgrounds 3 §2.4): natural-size tiles,
+        // positioned by the keyword fractions, clipped to the border box.
+        // news.cctv.com tiles 1px-wide gradient strips (repeat-x) as its
+        // section backdrops; drawing one pixel with cover painted whole
+        // sections a flat smeared color and buried the content.
+        const float tile_w = static_cast<float>(bg_image.width);
+        const float tile_h = static_cast<float>(bg_image.height);
+        // A 1px axis repeated along itself is identical to one stretched
+        // draw (every column/row of the source is the same); collapse it so
+        // a 1px strip does not emit one command per pixel of box width.
+        const bool stretch_x = repeat_x && bg_image.width == 1;
+        const bool stretch_y = repeat_y && bg_image.height == 1;
+        constexpr int kMaxTilesPerAxis = 4096; // guard for huge pages
+        const float phase_x =
+            stretch_x ? 0.0F : (box.width - tile_w) * box.style.background_position_x;
+        const float phase_y =
+            stretch_y ? 0.0F : (box.height - tile_h) * box.style.background_position_y;
+        // Repeated axes extend the tile grid backwards so the strip before a
+        // positive phase is covered too (CSS paints the whole area, the
+        // position only sets the pattern phase); a non-repeated axis keeps
+        // its exact position.
+        const float start_x =
+            repeat_x && phase_x > 0 ? phase_x - std::ceil(phase_x / tile_w) * tile_w : phase_x;
+        const float start_y =
+            repeat_y && phase_y > 0 ? phase_y - std::ceil(phase_y / tile_h) * tile_h : phase_y;
+        const int cols =
+            stretch_x  ? 1
+            : repeat_x ? std::clamp(static_cast<int>(std::ceil((box.width - start_x) / tile_w)),
+                                    1,
+                                    kMaxTilesPerAxis)
+                       : 1;
+        const int rows =
+            stretch_y  ? 1
+            : repeat_y ? std::clamp(static_cast<int>(std::ceil((box.height - start_y) / tile_h)),
+                                    1,
+                                    kMaxTilesPerAxis)
+                       : 1;
+        const float draw_w = stretch_x ? box.width : tile_w;
+        const float draw_h = stretch_y ? box.height : tile_h;
+        list.PushClip(box.x, box.y, box.width, box.height);
+        for (int row = 0; row < rows; ++row) {
+          for (int col = 0; col < cols; ++col) {
+            list.DrawImage(box.x + start_x + static_cast<float>(col) * tile_w,
+                           box.y + start_y + static_cast<float>(row) * tile_h,
+                           draw_w,
+                           draw_h,
+                           bg_image,
+                           style::ObjectFit::kFill);
+          }
+        }
+        list.PopClip();
+      }
     }
 
     // Border.

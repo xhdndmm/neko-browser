@@ -348,6 +348,19 @@ struct ComputedStyle
   // same mechanism as <img>; layout/paint render it over the box's background.
   std::optional<std::string> background_image;
 
+  // CSS background-repeat (CSS Backgrounds 3 §2.3): whether the image tiles
+  // along each axis.  Default: repeat on both.  Real pages build section
+  // backdrops from 1px-wide gradient strips tiled with `repeat-x`
+  // (news.cctv.com); stretching such a strip across the box smears it into a
+  // flat color.
+  bool background_repeat_x = true;
+  bool background_repeat_y = true;
+  // background-position keywords resolved to fractions of the leftover space
+  // (left/top = 0, center = 0.5, right/bottom = 1); default left top.  Only
+  // keyword and percentage forms are modelled; lengths fall back to left/top.
+  float background_position_x = 0.0F;
+  float background_position_y = 0.0F;
+
   // aspect-ratio (CSS Box Sizing 4): width / height ratio (e.g. 1 for a
   // square, 16/9 for 16:9).  With a definite width (or height) and the other
   // axis auto, layout derives the auto axis from the ratio.  nullopt = auto.

@@ -60,6 +60,89 @@ TEST(PageTest, WebFontClaimsAreRecordedOnce)
   EXPECT_TRUE(page.ClaimWebFont("https://cdn.example.com/b.woff2"));
 }
 
+// CSS background-repeat tiles the image at its natural size along the
+// repeated axis (news.cctv.com paints sections with 1px strips tiled
+// repeat-x; the old unconditional cover draw stretched one pixel across the
+// whole box and smeared the page into a flat color).
+TEST(PageTest, BackgroundRepeatXTilesAtNaturalSize)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<html><body style=\"margin:0;background:#ffffff\">"
+                            "<div style=\"width:100px;height:40px;"
+                            "background:url(t.png) repeat-x left top\"></div>"
+                            "</body></html>")
+                  .has_value());
+  dom::Element* div = dom::QuerySelector(*page.document(), "div");
+  ASSERT_NE(div, nullptr);
+  // A 3x2 tile with one distinct color per column: red, green, blue.
+  image::Image tile;
+  tile.width = 3;
+  tile.height = 2;
+  tile.rgba.assign(3 * 2 * 4, 255);
+  const auto set_pixel = [&tile](int x, int y, uint8_t r, uint8_t g, uint8_t b) {
+    const std::size_t o = (static_cast<std::size_t>(y) * 3 + static_cast<std::size_t>(x)) * 4;
+    tile.rgba[o] = r;
+    tile.rgba[o + 1] = g;
+    tile.rgba[o + 2] = b;
+  };
+  for (int y = 0; y < 2; ++y) {
+    set_pixel(0, y, 255, 0, 0);
+    set_pixel(1, y, 0, 255, 0);
+    set_pixel(2, y, 0, 0, 255);
+  }
+  page.SetElementImage(*div, std::move(tile));
+  page.Layout(200);
+  paint::Rasterizer raster = page.Rasterize(200, 60);
+  const auto pixel = [&raster](std::size_t x, std::size_t y) {
+    const std::size_t p = (y * static_cast<std::size_t>(raster.width()) + x) * 4;
+    return std::array<uint8_t, 3>{
+        raster.pixels()[p], raster.pixels()[p + 1], raster.pixels()[p + 2]};
+  };
+  // Columns repeat every 3px across the 100px box.
+  EXPECT_EQ(pixel(0, 0), (std::array<uint8_t, 3>{255, 0, 0}));
+  EXPECT_EQ(pixel(1, 0), (std::array<uint8_t, 3>{0, 255, 0}));
+  EXPECT_EQ(pixel(2, 0), (std::array<uint8_t, 3>{0, 0, 255}));
+  EXPECT_EQ(pixel(3, 0), (std::array<uint8_t, 3>{255, 0, 0}));  // tiled
+  EXPECT_EQ(pixel(50, 1), (std::array<uint8_t, 3>{0, 0, 255})); // 50 % 3 == 2
+  // repeat-x tiles the 2px row only; below it the white canvas shows through.
+  EXPECT_EQ(pixel(50, 20), (std::array<uint8_t, 3>{255, 255, 255}));
+}
+
+// A 1px-wide strip repeated along x is rendered as one stretched draw (every
+// column of the source is the same) — but only for that 2px row; the old bug
+// was stretching it across the whole box in both axes.
+TEST(PageTest, OnePixelBackgroundStripStaysInItsRow)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<html><body style=\"margin:0;background:#ffffff\">"
+                            "<div style=\"width:100px;height:40px;"
+                            "background:url(s.png) repeat-x left top\"></div>"
+                            "</body></html>")
+                  .has_value());
+  dom::Element* div = dom::QuerySelector(*page.document(), "div");
+  ASSERT_NE(div, nullptr);
+  image::Image strip;
+  strip.width = 1;
+  strip.height = 2;
+  strip.rgba.assign(1 * 2 * 4, 255);
+  for (std::size_t i = 0; i < 2; ++i) {
+    strip.rgba[i * 4] = 0;
+    strip.rgba[i * 4 + 1] = 200;
+    strip.rgba[i * 4 + 2] = 0;
+  }
+  page.SetElementImage(*div, std::move(strip));
+  page.Layout(200);
+  paint::Rasterizer raster = page.Rasterize(200, 60);
+  const auto pixel = [&raster](std::size_t x, std::size_t y) {
+    const std::size_t p = (y * static_cast<std::size_t>(raster.width()) + x) * 4;
+    return std::array<uint8_t, 3>{
+        raster.pixels()[p], raster.pixels()[p + 1], raster.pixels()[p + 2]};
+  };
+  EXPECT_EQ(pixel(50, 0), (std::array<uint8_t, 3>{0, 200, 0}));
+  EXPECT_EQ(pixel(50, 1), (std::array<uint8_t, 3>{0, 200, 0}));
+  EXPECT_EQ(pixel(50, 2), (std::array<uint8_t, 3>{255, 255, 255}));
+}
+
 TEST(PageTest, RasterizeProducesImage)
 {
   Page page;

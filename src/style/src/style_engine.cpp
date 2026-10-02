@@ -2880,14 +2880,172 @@ void StyleEngine::ComputeElement(dom::Element& element,
       out.background_image = std::move(url);
     }
   }
+  // background-repeat / background-position.  Real pages build section
+  // backdrops from 1px-wide gradient strips tiled with `repeat-x`
+  // (news.cctv.com) and place banners with `no-repeat center top`; without
+  // the repeat flags the painter stretched a single pixel across the whole
+  // box and painted entire sections a flat smeared color.
+  //
+  // Tokenizes a background declaration value: url(...) payloads are removed
+  // (a file name may contain keyword substrings), the text is lowercased and
+  // split on whitespace; scanning stops at the first comma (only the first
+  // background layer is modelled).
+  const auto background_tokens = [](std::string_view value) {
+    std::string cleaned(value);
+    const std::size_t comma = cleaned.find(',');
+    if (comma != std::string::npos) {
+      cleaned.resize(comma);
+    }
+    std::string stripped;
+    stripped.reserve(cleaned.size());
+    std::size_t pos = 0;
+    while (pos < cleaned.size()) {
+      if (cleaned.compare(pos, 4, "url(") == 0) {
+        const std::size_t close = cleaned.find(')', pos);
+        if (close == std::string::npos) {
+          break;
+        }
+        pos = close + 1;
+        stripped.push_back(' ');
+        continue;
+      }
+      stripped.push_back(cleaned[pos]);
+      ++pos;
+    }
+    std::vector<std::string> tokens;
+    std::string current;
+    for (const char c : neko::base::ToLower(stripped)) {
+      if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+        if (!current.empty()) {
+          tokens.push_back(std::move(current));
+          current.clear();
+        }
+      } else {
+        current.push_back(c);
+      }
+    }
+    if (!current.empty()) {
+      tokens.push_back(std::move(current));
+    }
+    return tokens;
+  };
+  // repeat | repeat-x | repeat-y | no-repeat | repeat no-repeat (x then y).
+  const auto apply_background_repeat = [&](std::string_view value, bool from_shorthand) {
+    std::vector<std::string> axis_tokens;
+    for (const std::string& token : background_tokens(value)) {
+      if (token == "repeat-x") {
+        out.background_repeat_x = true;
+        out.background_repeat_y = false;
+        return true;
+      }
+      if (token == "repeat-y") {
+        out.background_repeat_x = false;
+        out.background_repeat_y = true;
+        return true;
+      }
+      if (token == "repeat" || token == "no-repeat") {
+        axis_tokens.push_back(token);
+      }
+    }
+    if (axis_tokens.empty()) {
+      if (from_shorthand) {
+        out.background_repeat_x = true; // shorthand resets the whole family
+        out.background_repeat_y = true;
+      }
+      return false;
+    }
+    const bool x = axis_tokens[0] == "repeat";
+    const bool y = axis_tokens.size() > 1 ? axis_tokens[1] == "repeat" : x;
+    out.background_repeat_x = x;
+    out.background_repeat_y = y;
+    return true;
+  };
+  // left|center|right top|center|bottom / percentages, any order; the free
+  // axis fills x first.  Lengths and calc() fall back to the default (a
+  // documented approximation).
+  const auto apply_background_position = [&](std::string_view value, bool from_shorthand) {
+    float x = 0.0F;
+    float y = 0.0F;
+    bool have_x = false;
+    bool have_y = false;
+    bool applied = false;
+    for (const std::string& token : background_tokens(value)) {
+      float fraction = 0.0F;
+      if (token == "top" || token == "bottom") {
+        y = token == "bottom" ? 1.0F : 0.0F;
+        have_y = true;
+        applied = true;
+        continue;
+      }
+      if (token == "left") {
+        fraction = 0.0F;
+      } else if (token == "right") {
+        fraction = 1.0F;
+      } else if (token == "center") {
+        fraction = 0.5F;
+      } else if (token.size() > 1 && token.back() == '%') {
+        try {
+          fraction = std::stof(token.substr(0, token.size() - 1)) / 100.0F;
+        } catch (const std::exception&) {
+          continue;
+        }
+        fraction = std::clamp(fraction, 0.0F, 1.0F);
+      } else {
+        continue;
+      }
+      if (!have_x) {
+        x = fraction;
+        have_x = true;
+      } else if (!have_y) {
+        y = fraction;
+        have_y = true;
+      }
+      applied = true;
+    }
+    if (!applied) {
+      if (from_shorthand) {
+        out.background_position_x = 0.0F; // shorthand resets the family
+        out.background_position_y = 0.0F;
+      }
+      return false;
+    }
+    out.background_position_x = x;
+    out.background_position_y = y;
+    return true;
+  };
+  if (const css::Declaration* d = find("background-repeat")) {
+    (void)apply_background_repeat(d->value, /*from_shorthand=*/false);
+  }
+  if (const css::Declaration* d = find("background-position")) {
+    (void)apply_background_position(d->value, /*from_shorthand=*/false);
+  }
   if (const css::Declaration* d = find("background")) {
     const css::CssValue v = css::ParseCssValue(d->value);
     if (v.type == css::CssValue::Type::kColor) {
       out.background_color = v.color;
+    } else {
+      // `background: #f5f5f5 url(...) repeat-x left top` — the color is one
+      // token among many and ParseCssValue only yields kColor when the whole
+      // value is a single color.  Hex tokens cover the shorthand form real
+      // sites use (news.cctv.com's section backdrops); rgb()/named colors in
+      // mixed shorthand lists stay unsupported.
+      for (const std::string& token : background_tokens(d->value)) {
+        if (!token.empty() && token[0] == '#') {
+          const css::CssValue token_value = css::ParseCssValue(token);
+          if (token_value.type == css::CssValue::Type::kColor) {
+            out.background_color = token_value.color;
+          }
+          break;
+        }
+      }
     }
     if (std::optional<std::string> url = extract_url(d->value)) {
       out.background_image = std::move(url);
     }
+    // The shorthand sets the whole background family: absent keywords reset
+    // repeat/position to their initial values.
+    (void)apply_background_repeat(d->value, /*from_shorthand=*/true);
+    (void)apply_background_position(d->value, /*from_shorthand=*/true);
   }
 
   // aspect-ratio (CSS Box Sizing 4): "1", "16 / 9" or "1 / 1" (single number
