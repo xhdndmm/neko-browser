@@ -376,6 +376,19 @@ public:
   // event type.
   void DispatchEvent(dom::Element& element, std::string_view type);
 
+  // Dispatches a non-bubbling synthetic event of |type| to |element|
+  // (listeners and the element's on<type> handler/IDL property fire; ancestors
+  // do not).  Used for the image "load"/"error" events browsers fire from
+  // their network layer.
+  void DispatchNonBubblingEvent(dom::Element& element, std::string_view type);
+
+  // Recomputes every live IntersectionObserver of this binder.  Browsers
+  // re-evaluate intersections on scroll and as layout changes; the browser
+  // layer calls this from its scroll handlers and timer pump, which is what
+  // activates lazy-loading wiring on real pages.  Returns true when any
+  // observer was live.
+  bool RefreshIntersectionObservers();
+
   // Dispatches a user-interaction event (e.g. "click", "submit", "keydown")
   // to |element| with full capture -> target -> bubble propagation and
   // cancelable=true.  Returns true when the event was NOT canceled (no

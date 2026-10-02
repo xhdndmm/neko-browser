@@ -528,6 +528,11 @@ void InstallAbortGlobals(JSContext* ctx, JSValue global, Impl& impl);
 void ForgetAbortRuntime(JSRuntime* rt);
 // IntersectionObserver (intersection_observer_binding.cpp).
 void InstallIntersectionObserverGlobal(JSContext* ctx, JSValue global, Impl& impl);
+// Recomputes every live IntersectionObserver of |ctx| (scroll / layout
+// driven; see intersection_observer_binding.cpp).  Returns true when any
+// observer was live (callers use this to know whether script callbacks may
+// have run).
+bool RefreshIntersectionObservers(JSContext* ctx);
 void ForgetIntersectionObserverRuntime(JSRuntime* rt);
 void InstallHeadersGlobal(JSContext* ctx, JSValue global);
 void ForgetHeadersRuntime(JSRuntime* rt);
@@ -1006,6 +1011,10 @@ struct Impl
   int RunPendingRaf();
   std::optional<std::chrono::steady_clock::time_point> NextTimerDeadline() const;
   void DispatchToNode(dom::Node* node, std::string_view type);
+  // Non-bubbling variant (like focus/blur and the media element events): the
+  // listeners/handlers on |node| fire, ancestors do not.  Used for the
+  // image "load"/"error" events, which must not reach e.g. <body onload>.
+  void DispatchNonBubblingToNode(dom::Node* node, std::string_view type);
   bool DispatchCancelableToNode(dom::Node* node, std::string_view type);
   bool DispatchKeyboardToNode(dom::Node* node,
                               std::string_view type,

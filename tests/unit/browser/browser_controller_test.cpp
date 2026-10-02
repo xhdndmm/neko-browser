@@ -2322,6 +2322,55 @@ TEST(BrowserControllerTest, ReusesOneFetchForDuplicatePageImageUrls)
       1);
 }
 
+// Lazy loading: a timer callback assigns img.src *after* the initial
+// subresource pass; the worker schedules a claimed pass for the new source and
+// the element's load event fires once the image is attached (bilibili's feed
+// depends on both).
+TEST(BrowserControllerTest, FetchesImageAssignedAfterTheInitialPass)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  const std::string png = MakePng();
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{
+                200,
+                {{"content-type", "text/html"}},
+                "<html><body><img id=\"late\">"
+                "<script>"
+                "var img = document.getElementById('late');"
+                "img.onload = function(){ document.body.setAttribute('data-late', 'loaded'); };"
+                "setTimeout(function(){ img.src = '/late.png'; }, 0);"
+                "</script></body></html>"});
+  fetch.Add("http://example.com/late.png",
+            FakeFetcher::Route{200, {{"content-type", "image/png"}}, png});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  ASSERT_NE(tab->page, nullptr);
+
+  // Drive the timer; the pump schedules the late fetch pass (the GUI does the
+  // same from its 50ms timer).
+  controller.PumpScriptTimersUntilQuiet();
+  bool ready = false;
+  for (int i = 0; i < 400 && !ready; ++i) {
+    // The pass runs on the pool; pumps deliver the image events it queues.
+    controller.PumpScriptTimers();
+    dom::Element* body = dom::QuerySelector(*tab->page->document(), "body");
+    const std::vector<dom::Element*> images = dom::QuerySelectorAll(*tab->page->document(), "img");
+    const bool attached = !images.empty() && tab->page->Find(*images[0]) != nullptr;
+    ready = body != nullptr && attached && body->GetAttribute("data-late").value_or("") == "loaded";
+    if (!ready) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  }
+  EXPECT_TRUE(ready) << "late-assigned image never fetched/attached/load-dispatched";
+  EXPECT_GE(fetch.RequestCount(), 2u); // document + late.png
+}
+
 // <script type="application/json"> is a data block (HTML §4.12.1): never
 // executed as code, and it does not stop the executable scripts around it.
 TEST(BrowserControllerTest, NonJsScriptTypesAreNotExecuted)

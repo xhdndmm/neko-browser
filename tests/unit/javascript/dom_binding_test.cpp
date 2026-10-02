@@ -4056,6 +4056,8 @@ public:
     </body></html>)")
                     .Parse();
     PageApis apis;
+    apis.viewport_size = []() { return std::pair<int, int>{800, 600}; };
+    apis.scroll_offset = [this]() { return std::pair<double, double>{0.0, scroll_y}; };
     apis.element_geometry = [](const dom::Element& element) -> std::optional<ElementGeometry> {
       const std::string id = std::string(element.GetAttribute("id").value_or(""));
       ElementGeometry g;
@@ -4070,6 +4072,17 @@ public:
       return g;
     };
     binder_ = std::make_unique<DomBinder>(*document_, apis);
+  }
+
+  // The page's scroll position (window.scrollY / the viewport root position);
+  // tests move it and call Refresh() the way the browser layer does.
+  double scroll_y = 0;
+
+  // Recomputes every observer, exactly like BrowserController's scroll
+  // handlers and timer pump.
+  bool Refresh()
+  {
+    return binder_->RefreshIntersectionObservers();
   }
 
   std::string Eval(const std::string& code)
@@ -4128,6 +4141,37 @@ TEST(IntersectionObserverTest, ObserveDeliversIntersectionEntry)
   EXPECT_EQ(h.Num("window.__seen[0].intersectionRatio"), 1.0);
   EXPECT_EQ(h.Num("window.__seen[0].boundingClientRect.y"), 12.0);
   EXPECT_EQ(h.Num("window.__seen[0].rootBounds.width"), 800.0);
+}
+
+// Scrolling moves the viewport root: RefreshIntersectionObservers recomputes
+// every observer (BrowserController calls it from its scroll handlers and
+// timer pump — that is what activates lazy-loading wiring on real pages).
+TEST(IntersectionObserverTest, RefreshFollowsTheScrolledViewport)
+{
+  IntersectionTestHarness h;
+  h.Run("window.__seen = []; var obs = new IntersectionObserver(function(entries){ "
+        "window.__seen = window.__seen.concat(entries); }); "
+        "obs.observe(document.getElementById('low'));");
+  // 'low' sits at y=5000, below the initial 800x600 viewport.
+  ASSERT_EQ(h.Eval("String(window.__seen[0].isIntersecting)"), "false");
+  EXPECT_EQ(h.Num("window.__seen[0].rootBounds.y"), 0.0);
+
+  // Scrolling down brings it into view; the refresh delivers the change.
+  h.scroll_y = 4600;
+  EXPECT_TRUE(h.Refresh());
+  ASSERT_EQ(h.Num("window.__seen.length"), 2.0);
+  EXPECT_EQ(h.Eval("String(window.__seen[1].isIntersecting)"), "true");
+  EXPECT_EQ(h.Num("window.__seen[1].rootBounds.y"), 4600.0);
+
+  // Scrolling back out flips it again.
+  h.scroll_y = 0;
+  (void)h.Refresh();
+  ASSERT_EQ(h.Num("window.__seen.length"), 3.0);
+  EXPECT_EQ(h.Eval("String(window.__seen[2].isIntersecting)"), "false");
+
+  // A refresh with no change delivers no extra entry (no spurious callbacks).
+  (void)h.Refresh();
+  EXPECT_EQ(h.Num("window.__seen.length"), 3.0);
 }
 
 TEST(IntersectionObserverTest, FirstReportFiresForNonIntersectingTarget)

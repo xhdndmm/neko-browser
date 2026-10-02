@@ -79,6 +79,16 @@ void DomBinder::DispatchEvent(dom::Element& element, std::string_view type)
   impl_->DispatchEvent(element, type);
 }
 
+void DomBinder::DispatchNonBubblingEvent(dom::Element& element, std::string_view type)
+{
+  impl_->DispatchNonBubblingToNode(&element, type);
+}
+
+bool DomBinder::RefreshIntersectionObservers()
+{
+  return ::neko::javascript::RefreshIntersectionObservers(impl_->ctx);
+}
+
 bool DomBinder::DispatchCancelableEvent(dom::Element& element, std::string_view type)
 {
   return impl_->DispatchCancelableToNode(&element, type);

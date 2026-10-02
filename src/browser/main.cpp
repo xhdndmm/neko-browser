@@ -80,11 +80,40 @@ std::string DefaultProfileDir()
 #endif
 }
 
+// Dispatches the image "load"/"error" events a subresource pass queued on the
+// page and returns how many were delivered.  The CLI drives the binder
+// directly, so it drains the queue here instead of through
+// BrowserController::FirePendingImageEvents.  Elements replaced since the
+// fetch (navigation, innerHTML) are skipped; draining without a binder still
+// resets the queue.
+std::size_t FirePendingImageEvents(neko::renderer::Page& page,
+                                   neko::javascript::DomBinder* script_runtime)
+{
+  const std::vector<std::pair<const neko::dom::Element*, bool>> events =
+      page.TakePendingImageEvents();
+  if (script_runtime == nullptr) {
+    return 0; // no scripts: nothing observes the events
+  }
+  std::size_t fired = 0;
+  for (const auto& [element, loaded] : events) {
+    if (!page.ContainsElement(element)) {
+      continue;
+    }
+    script_runtime->DispatchNonBubblingEvent(*const_cast<neko::dom::Element*>(element),
+                                             loaded ? "load" : "error");
+    ++fired;
+  }
+  return fired;
+}
+
 // |script_runtime|, when non-null, receives the page's JS binder so the caller
 // can drive the event loop after the load (see PumpUntilQuiet in main()).
 // |document_fetch|, when set, replaces the in-process network stack for the
 // top-level document fetch (network-process mode, ADR 0016 M3a); it is
 // forwarded to recursive script navigations.
+// |final_url|, when non-null, receives the URL the document ended up at
+// (post-redirect), which the caller uses as the base for a late subresource
+// pass after the script/timer pump (lazy-loaded images).
 neko::base::Result<void> LoadTarget(
     neko::renderer::Page& page,
     const std::string& target,
@@ -93,7 +122,8 @@ neko::base::Result<void> LoadTarget(
     int depth = 0,
     std::shared_ptr<neko::javascript::DomBinder>* script_runtime = nullptr,
     const std::function<neko::base::Result<neko::network::HttpResponse>(const neko::url::Url&)>&
-        document_fetch = {});
+        document_fetch = {},
+    std::string* final_url = nullptr);
 
 // Loads a bare local path (no scheme) into the page and fetches its
 // subresources against an absolute file:// base so relative URLs resolve.
@@ -105,7 +135,8 @@ neko::base::Result<void> LoadLocalTarget(
     int depth,
     std::shared_ptr<neko::javascript::DomBinder>* script_runtime,
     const std::function<neko::base::Result<neko::network::HttpResponse>(const neko::url::Url&)>&
-        document_fetch)
+        document_fetch,
+    std::string* final_url = nullptr)
 {
   const auto r = page.LoadFile(target);
   if (!r) {
@@ -139,8 +170,14 @@ neko::base::Result<void> LoadLocalTarget(
   }
   if (!requested.url.empty()) {
     NEKO_LOG_INFO("script navigated to " + requested.url);
-    return LoadTarget(
-        page, requested.url, local_storage, indexed_db, depth + 1, script_runtime, document_fetch);
+    return LoadTarget(page,
+                      requested.url,
+                      local_storage,
+                      indexed_db,
+                      depth + 1,
+                      script_runtime,
+                      document_fetch,
+                      final_url);
   }
   // Local page (opened by path without a scheme): fetch its subresources
   // against an absolute file:// base so relative URLs resolve.
@@ -150,6 +187,10 @@ neko::base::Result<void> LoadLocalTarget(
   neko::browser::FetchExternalStylesheets(page, base_url, FetchAny, pool);
   neko::browser::FetchPageImages(page, base_url, FetchAny, pool);
   neko::browser::FetchPageVideos(page, base_url, FetchAny, pool);
+  FirePendingImageEvents(page, script_runtime != nullptr ? script_runtime->get() : nullptr);
+  if (final_url != nullptr) {
+    *final_url = base_url;
+  }
   return neko::base::Ok();
 }
 
@@ -166,7 +207,8 @@ neko::base::Result<void> LoadTarget(
     int depth,
     std::shared_ptr<neko::javascript::DomBinder>* script_runtime,
     const std::function<neko::base::Result<neko::network::HttpResponse>(const neko::url::Url&)>&
-        document_fetch)
+        document_fetch,
+    std::string* final_url)
 {
   constexpr int kMaxNavigationDepth = 20;
   if (depth >= kMaxNavigationDepth) {
@@ -181,7 +223,7 @@ neko::base::Result<void> LoadTarget(
   // the same path forms the browser process does).
   if (neko::browser::IsWindowsLocalPath(target)) {
     return LoadLocalTarget(
-        page, target, local_storage, indexed_db, depth, script_runtime, document_fetch);
+        page, target, local_storage, indexed_db, depth, script_runtime, document_fetch, final_url);
   }
 #endif
   const auto parsed = neko::url::Url::Parse(target);
@@ -252,7 +294,8 @@ neko::base::Result<void> LoadTarget(
                           indexed_db,
                           depth + 1,
                           script_runtime,
-                          document_fetch);
+                          document_fetch,
+                          final_url);
       }
       if (requested.is_reload) {
         NEKO_LOG_INFO("script reloaded " + url.Serialize());
@@ -285,6 +328,12 @@ neko::base::Result<void> LoadTarget(
           url.Serialize(),
           [](const neko::url::Url& u, std::string_view) { return neko::network::HttpGet(u); },
           pool);
+      // Deliver the queued image load/error events: page onload="..."
+      // attributes and listeners flip placeholder/fallback state off them.
+      FirePendingImageEvents(page, script_runtime != nullptr ? script_runtime->get() : nullptr);
+      if (final_url != nullptr) {
+        *final_url = url.Serialize();
+      }
       return neko::base::Ok();
     }
     if (url.scheme() == "file") {
@@ -328,7 +377,8 @@ neko::base::Result<void> LoadTarget(
                           indexed_db,
                           depth + 1,
                           script_runtime,
-                          document_fetch);
+                          document_fetch,
+                          final_url);
       }
       // Fetch the page's subresources: relative URLs resolve against the
       // file:// base so local pages behave like served ones.
@@ -337,6 +387,10 @@ neko::base::Result<void> LoadTarget(
       neko::browser::FetchWebFonts(page, url.Serialize(), FetchAny, pool);
       neko::browser::FetchPageImages(page, url.Serialize(), FetchAny, pool);
       neko::browser::FetchPageVideos(page, url.Serialize(), FetchAny, pool);
+      FirePendingImageEvents(page, script_runtime != nullptr ? script_runtime->get() : nullptr);
+      if (final_url != nullptr) {
+        *final_url = url.Serialize();
+      }
       return neko::base::Ok();
     }
     return neko::base::Err(
@@ -344,7 +398,7 @@ neko::base::Result<void> LoadTarget(
   }
   // Not a URL at all: a bare local path.
   return LoadLocalTarget(
-      page, target, local_storage, indexed_db, depth, script_runtime, document_fetch);
+      page, target, local_storage, indexed_db, depth, script_runtime, document_fetch, final_url);
 }
 
 // Writes an image::Image as a binary PPM (P6), compositing alpha over white.
@@ -787,13 +841,15 @@ int main(int argc, char** argv)
       };
     }
     std::shared_ptr<neko::javascript::DomBinder> script_runtime;
+    std::string loaded_base_url;
     const neko::base::Result<void> loaded = LoadTarget(page,
                                                        parsed.options.url.value(),
                                                        &local_storage,
                                                        &indexed_db,
                                                        /*depth=*/0,
                                                        &script_runtime,
-                                                       document_fetch);
+                                                       document_fetch,
+                                                       &loaded_base_url);
     if (!loaded) {
       std::cerr << "error: " << loaded.error().message() << "\n";
       return 1;
@@ -812,6 +868,31 @@ int main(int argc, char** argv)
       if (script_runtime->TakeDomDirty()) {
         // Timers mutated the DOM; re-run the cascade so the measured layout
         // reflects it.
+        page.ReapplyStyles();
+      }
+    }
+    // Lazy-loaded images: pages assign img.src / background-image from timer
+    // and event callbacks *after* the initial subresource pass inside
+    // LoadTarget, so those sources were never fetched and the screenshot
+    // showed placeholders (bilibili's feed).  ClaimPendingImageSources skips
+    // everything the initial pass claimed, so this fetches only what the
+    // callbacks added.  Each round also delivers the queued load/error events:
+    // a handler may assign a fallback source (one extra round picks it up),
+    // and a round that fires nothing means the page settled.  Claimed sources
+    // keep the steady state free of re-downloads.
+    if (!loaded_base_url.empty()) {
+      neko::base::ThreadPool late_pool;
+      neko::javascript::DomBinder* binder =
+          script_runtime != nullptr ? script_runtime.get() : nullptr;
+      constexpr int kMaxRounds = 3;
+      for (int round = 0; round < kMaxRounds; ++round) {
+        neko::browser::FetchPageImages(page, loaded_base_url, FetchAny, late_pool);
+        if (FirePendingImageEvents(page, binder) == 0) {
+          break;
+        }
+      }
+      if (binder != nullptr && binder->TakeDomDirty()) {
+        // onload/onerror handlers may have toggled classes or inline styles.
         page.ReapplyStyles();
       }
     }

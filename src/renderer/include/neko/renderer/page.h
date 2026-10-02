@@ -20,6 +20,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -239,6 +240,24 @@ public:
     SetElementImage(&element, std::move(image), std::move(animation));
   }
 
+  // Records that the fetch/decode of an <img> element's current source
+  // failed; the browser layer turns this into the element's "error" event.
+  void NoteImageLoadFailed(const dom::Element* element);
+
+  // Drains the image "load"/"error" events queued by SetElementImage(s) and
+  // NoteImageLoadFailed, in completion order (second = true for load).
+  // Browsers fire these events from their network layer; the engine's image
+  // fetcher runs on pool threads while the DOM binder is script-thread
+  // confined, so the events are marshalled through the page and dispatched by
+  // the browser/CLI layer on the script thread.  Draining (even without a
+  // script runtime) also keeps the queue from growing.
+  std::vector<std::pair<const dom::Element*, bool>> TakePendingImageEvents();
+
+  // True when |element| still belongs to the current document.  Late passes
+  // validate element pointers with this before dispatching queued events (a
+  // navigation or a scripted innerHTML may have replaced the subtree).
+  bool ContainsElement(const dom::Element* element) const;
+
   // Paints an axis-aligned rectangle into an element's Canvas 2D backing
   // store using source-over compositing. The store is created at the HTML
   // default size (300x150) on first use.
@@ -349,6 +368,18 @@ public:
   // non-owning and must be revalidated before a later asynchronous update.
   std::vector<std::pair<const dom::Element*, std::string>> ImageSources() const;
 
+  // Like ImageSources(), but marks each returned (element, URL) pair as
+  // claimed so later passes skip it.  Subresource fetchers use this to make
+  // repeat passes cheap: the first pass after a load claims every static
+  // source, and the passes scheduled from the script/timer pump pick up
+  // exactly the sources a page assigned later (lazy loading, src swaps,
+  // scripted background-image changes).  Keyed per element *and* URL: an
+  // element whose source changes is a new claim, while an unchanged source is
+  // never fetched twice; a URL shared by several elements is claimed for each
+  // of them (the fetcher still groups by URL, so the network sees one request
+  // per pass).
+  std::vector<std::pair<const dom::Element*, std::string>> ClaimPendingImageSources();
+
   std::string DumpDom() const;
   std::string DumpLayoutTree() const;
 
@@ -364,6 +395,9 @@ private:
   void LoadHtmlImpl(std::string_view bytes, base::encoding::Charset charset);
   // Re-runs the cascade and invalidates layout/paint; caller must hold mutex_.
   void ReapplyStylesLocked();
+  // Collects <img src> and computed background-image sources; caller must
+  // hold mutex_.  Shared by ImageSources() and ClaimPendingImageSources().
+  std::vector<std::pair<const dom::Element*, std::string>> CollectImageSourcesLocked() const;
   // Rebuilds the layout tree; caller must hold mutex_.
   void LayoutLocked(float viewport_width, float viewport_height, bool apply_styles = true);
   void BumpVersion()
@@ -382,6 +416,13 @@ private:
 
   graphics::FontRegistry fonts_;
   std::unordered_map<const dom::Element*, image::Image> images_;
+  // (element → claimed source URLs) for ClaimPendingImageSources: what each
+  // element has already asked a fetch pass to load.  Cleared with |images_|
+  // when the document is replaced.
+  std::unordered_map<const dom::Element*, std::unordered_set<std::string>> claimed_image_sources_;
+  // Image load/error events queued by the fetch layer, drained on the script
+  // thread (see TakePendingImageEvents).
+  std::vector<std::pair<const dom::Element*, bool>> pending_image_events_;
   // Keys of web fonts already registered (dedup across reload passes).
   std::set<std::string> loaded_webfont_keys_;
 

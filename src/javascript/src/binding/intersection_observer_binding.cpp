@@ -15,16 +15,20 @@
 //
 // Documented honest limitations:
 //   * The root is the viewport (engine-default 800x600) or a single Element.
-//   * Scroll offsets are not modelled in the JS layer (getBoundingClientRect
-//     is in document coordinates), so intersections are re-evaluated when
-//     observe()/unobserve()/disconnect() run and when the observer's own state
-//     changes — not on every scroll step.  Scroll-driven updates need scroll
-//     modelling, which is future work.
+//   * Intersections are re-evaluated when observe()/unobserve()/disconnect()
+//     run and whenever the browser layer requests a refresh (see
+//     RefreshIntersectionObservers).
 //   * `threshold` is read but treated as 0 (any intersection counts), and the
 //     `root`/`rootMargin`/`thresholds` read-only properties are not exposed.
 //   * Each entry reports target / isIntersecting / intersectionRatio /
 //     boundingClientRect / intersectionRect / rootBounds / time; isVisible is
 //     always false.
+//   * Scroll is modelled through the browser layer (PageApis::viewport_size /
+//     scroll_offset): the viewport root is the visible band in document
+//     coordinates, and RefreshIntersectionObservers() recomputes every live
+//     observer (the browser calls it on scroll and from the timer pump, which
+//     is what activates lazy-loading wiring on real pages).  Without those
+//     callbacks the engine default 800x600@0 is used.
 
 #include "binding_internal.h"
 
@@ -40,6 +44,7 @@
 #include <quickjs.h>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -85,11 +90,28 @@ struct IoWrapper
   bool delivery_pending = false;
 };
 
+// Live observers per runtime for RefreshObserversForContext: the browser layer
+// recomputes every observed target when the viewport scrolls or the timer pump
+// runs (that is what activates lazy-loading wiring on real pages).  The
+// constructor registers, IoFinalizer removes, so the registry never holds a
+// collected observer; the mutex covers concurrent runtimes (tests create one
+// per binder).
+std::mutex g_io_observers_mutex;
+std::unordered_map<JSRuntime*, std::vector<IoWrapper*>> g_io_observers;
+
 void IoFinalizer(JSRuntime* rt, JSValue obj)
 {
   auto* w = static_cast<IoWrapper*>(JS_GetOpaque(obj, g_intersection_observer_class_id));
   if (w == nullptr) {
     return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(g_io_observers_mutex);
+    const auto it = g_io_observers.find(rt);
+    if (it != g_io_observers.end()) {
+      std::vector<IoWrapper*>& live = it->second;
+      live.erase(std::remove(live.begin(), live.end(), w), live.end());
+    }
   }
   JS_FreeValueRT(rt, w->callback);
   JS_FreeValueRT(rt, w->self);
@@ -274,8 +296,23 @@ std::optional<Rect> RootRect(JSContext* ctx, IoWrapper* w)
 {
   Rect base;
   if (JS_IsUndefined(w->root)) {
-    // Viewport root: engine-default 800x600 (matches innerWidth/innerHeight).
-    base = Rect{0, 0, 800, 600};
+    // Viewport root: the visible band in document coordinates.  Element rects
+    // are document-coordinate border boxes (PageApis::element_geometry), so
+    // the scrolled viewport is [scroll_y, scroll_y + viewport_height].  The
+    // engine default 800x600@0 matches innerWidth/innerHeight defaults when
+    // the browser layer wires no callbacks.
+    int width = 800;
+    int height = 600;
+    if (w->impl->apis.viewport_size) {
+      const std::pair<int, int> size = w->impl->apis.viewport_size();
+      width = size.first;
+      height = size.second;
+    }
+    double scroll_y = 0;
+    if (w->impl->apis.scroll_offset) {
+      scroll_y = w->impl->apis.scroll_offset().second;
+    }
+    base = Rect{0, scroll_y, static_cast<double>(width), scroll_y + height};
   } else {
     dom::Element* el = AsElement(UnwrapNode(ctx, w->root));
     if (el == nullptr) {
@@ -488,8 +525,15 @@ JSValue IntersectionObserverConstructor(JSContext* ctx,
     JS_FreeValue(ctx, root);
     JSValue rm = JS_GetPropertyStr(ctx, argv[1], "rootMargin");
     if (JS_IsString(rm)) {
+      int root_w = 800;
+      int root_h = 600;
+      if (impl->apis.viewport_size) {
+        const std::pair<int, int> size = impl->apis.viewport_size();
+        root_w = size.first;
+        root_h = size.second;
+      }
       bool ok = false;
-      ParseRootMargin(w, ArgString(ctx, rm, &ok), 800, 600);
+      ParseRootMargin(w, ArgString(ctx, rm, &ok), root_w, root_h);
     }
     JS_FreeValue(ctx, rm);
     // `threshold` is accepted but treated as 0 (any intersection counts).
@@ -503,10 +547,55 @@ JSValue IntersectionObserverConstructor(JSContext* ctx,
   }
   JS_SetOpaque(obj, w);
   w->self = JS_DupValue(ctx, obj);
+  {
+    std::lock_guard<std::mutex> lock(g_io_observers_mutex);
+    g_io_observers[JS_GetRuntime(ctx)].push_back(w);
+  }
   return obj;
 }
 
+// Recomputes every live observer registered on |ctx|'s runtime.  Called by
+// the browser layer on scroll and from the timer pump (see
+// DomBinder::RefreshIntersectionObservers).  Returns true when any observer
+// was live (delivery jobs ran in that case).
+bool RefreshObserversForContext(JSContext* ctx)
+{
+  std::vector<IoWrapper*> observers;
+  {
+    std::lock_guard<std::mutex> lock(g_io_observers_mutex);
+    const auto it = g_io_observers.find(JS_GetRuntime(ctx));
+    if (it == g_io_observers.end()) {
+      return false;
+    }
+    observers = it->second;
+  }
+  Impl* impl = nullptr;
+  for (IoWrapper* w : observers) {
+    // The registry is per runtime and interpreters never run two contexts of
+    // one runtime concurrently; filtering guards against a future multi-
+    // context setup all the same.
+    if (w->impl == nullptr || w->impl->ctx != ctx) {
+      continue;
+    }
+    impl = w->impl;
+    ComputeAndEnqueue(ctx, w);
+  }
+  if (impl == nullptr) {
+    return false;
+  }
+  // Deliver the queued entries now: the callbacks are the point of the
+  // refresh (lazy loading), and jobs would otherwise wait for the next
+  // script run.
+  impl->engine.RunPendingJobs();
+  return true;
+}
+
 } // namespace
+
+bool RefreshIntersectionObservers(JSContext* ctx)
+{
+  return RefreshObserversForContext(ctx);
+}
 
 void InstallIntersectionObserverGlobal(JSContext* ctx, JSValue global, Impl& impl)
 {

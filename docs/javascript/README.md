@@ -225,10 +225,31 @@ www.bilibili.com 首页（Vue 3 SSR + hydration + 大量异步 chunk）作为真
    LoginInfo emitter 的 `emit` 路径依赖；createEvent 支持常见接口名并抛
    `NotSupportedError`，init*Event 含 `InvalidStateError` 语义。
 
-**已知残余（下一步）**：懒加载站点在首屏后**动态设置 `img.src` 不触发新的
-图片抓取**（首屏图片仅在页面载入后统一抓取一次；静态 src 与直接 `<img>`
-均正常，已用隔离探针定位）。bilibili 的卡片缩略图因此显示占位背景。
-渲染层面残余的头部吸顶/绝对定位重叠属于布局引擎已知限制。
+**后续批次（2026-10，动态图片子资源）**：懒加载站点在首屏后动态设置
+`img.src`/背景图，此前不会被抓取（首屏图片仅在载入后统一抓取一次），且
+`img` 的 **load/error 事件从未派发**（站点靠 `onload` 移除占位、`onerror`
+走回退/换源）。现已修复：
+
+- **认领式晚到抓取**：`Page::ClaimPendingImageSources` 按 (元素, URL)
+  记忆每个源只处理一次；浏览器层在滚动/交互/定时器回调产生的 DOM 变更后
+  调度复用池的增量 pass（`BrowserController::SchedulePendingImageFetch`，
+  按标签页合并并发，中途有新变更则再跑一轮），CLI 在安静泵后跑
+  最多 3 轮“抓取→派发事件”（覆盖一次回退换源）。稳态代价 = 一次 DOM 行走、
+  零请求。
+- **`img` load/error 事件**：抓取层把 (元素, 成功/失败) 经 Page 队列
+  归纳，脚本线程上以**非冒泡**事件派发（不会误触 `<body onload>`）。
+- **滚动感知 IntersectionObserver**：视口根是文档坐标下的可见带
+  （`viewport_size` + `scroll_offset`），新增注册表 +
+  `RefreshIntersectionObservers()`（返回是否有存活观察者），浏览器层在
+  滚动处理与 50ms 定时泵中调用并当场投递回调——这是真实站点懒加载的
+  驱动源。旧限制（“只在 observe() 时计算一次”）已移除。
+
+验证：滚动探针（`intersecting` 随 `scroll_y` 翻转、无变化不重复回调）、
+动态 `src` 探针（静态/动态图片均渲染）、`load`/`error` 探针
+（`start|a-load|b-err`）、浏览器集成测试（定时器换源 → 晚到抓取 + load
+事件到页）。**剩余**：bilibili 卡片封面多数仍为占位——其图片组件按视口
+邻近惰性挂载，需真实滚动/交互（CLI 无滚动，等同浏览器不滚动行为）；
+GUI 侧滚动已能驱动 IO 重算并级联到抓取与事件。
 
 ## 所有权与生命周期
 

@@ -986,6 +986,7 @@ bool BrowserController::DispatchPointerClick(int tab_id, float doc_x, float doc_
     // default action (which may navigate away).
     if (tab->script_runtime->TakeDomDirty()) {
       tab->page->ReapplyStyles();
+      SchedulePendingImageFetch(*tab);
     }
     if (!not_canceled) {
       return true; // preventDefault: the page handled the click.
@@ -1072,6 +1073,7 @@ void BrowserController::DispatchHover(int tab_id, float doc_x, float doc_y)
   // A hover handler may mutate the DOM; reflect it.
   if (tab->script_runtime != nullptr && tab->script_runtime->TakeDomDirty()) {
     tab->page->ReapplyStyles();
+    SchedulePendingImageFetch(*tab);
   }
 }
 
@@ -1170,6 +1172,7 @@ bool BrowserController::DispatchWheel(int tab_id, double delta_y)
   // it so the change appears without waiting for the next navigation.
   if (tab->script_runtime->TakeDomDirty()) {
     tab->page->ReapplyStyles();
+    SchedulePendingImageFetch(*tab);
   }
   return not_canceled;
 }
@@ -1284,6 +1287,7 @@ bool BrowserController::DispatchKeyboard(int tab_id,
   // value edit always rebuilds, even on pages with no scripts.
   if (value_changed || (tab->script_runtime != nullptr && tab->script_runtime->TakeDomDirty())) {
     tab->page->ReapplyStyles();
+    SchedulePendingImageFetch(*tab);
   }
   return not_canceled;
 }
@@ -1408,6 +1412,73 @@ void BrowserController::ResolveHover(Tab& tab)
   tab.hovered_element = const_cast<dom::Element*>(tab.page->ElementAt(tab.hover_x, tab.hover_y));
 }
 
+std::size_t BrowserController::FirePendingImageEvents(Tab& tab)
+{
+  if (tab.page == nullptr) {
+    return 0;
+  }
+  std::vector<std::pair<const dom::Element*, bool>> events = tab.page->TakePendingImageEvents();
+  if (events.empty() || tab.script_runtime == nullptr) {
+    // Without a binder there is nobody to notify; draining above still keeps
+    // the queue bounded on script-less pages.
+    return 0;
+  }
+  const std::shared_ptr<renderer::Page> page = tab.page;
+  std::size_t fired = 0;
+  for (const auto& [element, loaded] : events) {
+    // A previous event's script may have navigated (page replaced) — and even
+    // within the same document the element may have been removed meanwhile.
+    if (tab.page != page || !page->ContainsElement(element)) {
+      continue;
+    }
+    tab.script_runtime->DispatchNonBubblingEvent(*const_cast<dom::Element*>(element),
+                                                 loaded ? "load" : "error");
+    ++fired;
+  }
+  return fired;
+}
+
+void BrowserController::SchedulePendingImageFetch(Tab& tab)
+{
+  if (tab.page == nullptr) {
+    return;
+  }
+  if (tab.image_fetch_state == nullptr) {
+    tab.image_fetch_state = std::make_shared<Tab::ImageFetchState>();
+  }
+  const std::shared_ptr<Tab::ImageFetchState> state = tab.image_fetch_state;
+  if (state->in_flight.load()) {
+    // A pass is running: remember that one more is needed (a source may have
+    // appeared after the running pass collected its claims).
+    state->again.store(true);
+    return;
+  }
+  state->again.store(false);
+  state->in_flight.store(true);
+  const std::shared_ptr<renderer::Page> page = tab.page;
+  const std::string base_url = tab.url;
+  const int tab_id = tab.id;
+  // Same fetcher the load-time subresource pass uses (cookies follow the
+  // resource URL).  [this] is bounded by the pool draining on destruction;
+  // the state/page handles outlive the tab if it is navigated away.
+  const auto fetch = [this](const url::Url& resource_url, std::string_view) {
+    return fetch_(resource_url, CookieHeader(resource_url, NowUnix()));
+  };
+  pool_->Post([this, tab_id, state, page, base_url, fetch, pool = pool_.get()]() {
+    do {
+      FetchPageImages(*page, base_url, fetch, *pool);
+    } while (state->again.exchange(false));
+    state->in_flight.store(false);
+    if (state->again.exchange(false)) {
+      // A change landed between the last pass and clearing the flag: schedule
+      // once more (claims make it a cheap no-op when it was stale).
+      if (Tab* tab_again = FindTab(tab_id); tab_again != nullptr) {
+        SchedulePendingImageFetch(*tab_again);
+      }
+    }
+  });
+}
+
 void BrowserController::ProduceFrame(Tab& tab)
 {
   if (tab.content_type != ContentType::kHtml || tab.page == nullptr) {
@@ -1493,9 +1564,13 @@ int BrowserController::PumpScriptTimersUntilQuiet(int max_iterations)
       ::neko::browser::PumpScriptTimersUntilQuiet(*tab->script_runtime, max_iterations);
   if (iterations > 0 && tab->page != nullptr) {
     // Timers may have mutated the DOM; re-run the cascade so the next
-    // Layout/Rasterize reflects the new state.
+    // Layout/Rasterize reflects the new state, and pick up image sources the
+    // callbacks assigned (lazy loading after the initial pass).
     tab->page->ReapplyStyles();
+    SchedulePendingImageFetch(*tab);
   }
+  // Deliver any image load/error events the pool queued during the pump.
+  FirePendingImageEvents(*tab);
   return iterations;
 }
 
@@ -1504,6 +1579,24 @@ void BrowserController::PumpScriptTimers()
   Tab* tab = ActiveTab();
   if (tab == nullptr) {
     return;
+  }
+  // Images attached by the pool since the last pump fire their load/error
+  // events first: page scripts often hang state (placeholder removal,
+  // fallback swaps) off them, and any DOM they touch must land before the
+  // frame is produced below.  The IntersectionObserver refresh re-evaluates
+  // observed targets as content arrives and the page scrolls.  Both are
+  // gated so a pump with no observers, no queued events and no timers stays a
+  // no-op (the leftover DOM-dirty flag from an earlier operation must not be
+  // turned into a version bump by this ambient check).
+  const std::size_t image_events = FirePendingImageEvents(*tab);
+  bool io_active = false;
+  if (tab->script_runtime != nullptr && tab->page != nullptr) {
+    io_active = tab->script_runtime->RefreshIntersectionObservers();
+  }
+  if ((image_events > 0 || io_active) && tab->script_runtime != nullptr && tab->page != nullptr &&
+      tab->script_runtime->TakeDomDirty()) {
+    tab->page->ReapplyStyles();
+    SchedulePendingImageFetch(*tab);
   }
   // Keep the Page alive for as long as the lock is held.  Declared *before*
   // |dom_lock| on purpose: locals are destroyed in reverse declaration order, so
@@ -1538,8 +1631,11 @@ void BrowserController::PumpScriptTimers()
   if (tab->script_runtime != nullptr && tab->script_runtime->RunPendingTimers() > 0 &&
       tab->page != nullptr) {
     // Timers may have mutated the DOM; re-run the cascade so the next
-    // Layout/Rasterize reflects the new state.
+    // Layout/Rasterize reflects the new state, and fetch the image sources
+    // assigned by lazy-loading callbacks (a claimed pass: steady state is one
+    // DOM walk, no requests).
     tab->page->ReapplyStyles();
+    SchedulePendingImageFetch(*tab);
   }
   // Animated images (GIF) advance on the same frame clock; a changed frame
   // bumps the page version so the UI repaints.
@@ -1611,7 +1707,21 @@ void BrowserController::SetTabScrollOffset(int tab_id, float y)
       }
     }
   }
-  if (tab == nullptr || tab->session == nullptr || !IsRemoteTab(*tab)) {
+  if (tab == nullptr) {
+    return;
+  }
+  if (!IsRemoteTab(*tab)) {
+    // In-process: the DOM is here, so the new scroll position is what the
+    // page observes.  Re-evaluate IntersectionObserver wiring (lazy-loading
+    // scaffolding on real pages hangs off it) and pick up the image sources
+    // the resulting callbacks assigned.
+    if (tab->script_runtime != nullptr && tab->page != nullptr) {
+      tab->script_runtime->RefreshIntersectionObservers();
+      if (tab->script_runtime->TakeDomDirty()) {
+        tab->page->ReapplyStyles();
+        SchedulePendingImageFetch(*tab);
+      }
+    }
     return;
   }
   // Renderer mode: keep the child's viewport offset (window.scrollY) in sync
@@ -3084,7 +3194,10 @@ void FetchPageImages(renderer::Page& page,
 
   // Depth-first walk collecting <img src> and CSS background-image
   // subresources.  background-image URLs come from the computed style (the
-  // cascade has run by the time this is called, after scripts).
+  // cascade has run by the time this is called, after scripts).  The claim
+  // marks each (element, URL) pair: repeat passes — scheduled from the script
+  // pump for lazy-loaded sources — only process what changed, so the steady
+  // state costs one DOM walk and no requests.
   struct PendingImage
   {
     const dom::Element* element = nullptr;
@@ -3110,7 +3223,7 @@ void FetchPageImages(renderer::Page& page,
     }
     pending.push_back(PendingImage{element, target.value().Serialize()});
   };
-  for (const auto& [element, raw_url] : page.ImageSources()) {
+  for (const auto& [element, raw_url] : page.ClaimPendingImageSources()) {
     collect_url(element, raw_url);
   }
   if (pending.empty()) {
@@ -3192,6 +3305,11 @@ void FetchPageImages(renderer::Page& page,
     auto decoded = fetch_and_decode(groups[0].url);
     if (!decoded) {
       NEKO_LOG_WARNING("img: fetch/decode failed for " + groups[0].url);
+      // The page sees the failure (browsers fire the element's "error" event;
+      // sites hang fallback/placeholder logic off it).
+      for (const dom::Element* element : groups[0].elements) {
+        page.NoteImageLoadFailed(element);
+      }
       return;
     }
     page.SetElementImages(groups[0].elements, decoded.value().image, decoded.value().animation);
@@ -3210,6 +3328,9 @@ void FetchPageImages(renderer::Page& page,
     auto decoded = futures[i].get();
     if (!decoded) {
       NEKO_LOG_WARNING("img: fetch/decode failed for " + groups[i].url);
+      for (const dom::Element* element : groups[i].elements) {
+        page.NoteImageLoadFailed(element);
+      }
       continue;
     }
     page.SetElementImages(groups[i].elements, decoded.value().image, decoded.value().animation);

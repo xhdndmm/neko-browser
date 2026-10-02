@@ -262,6 +262,8 @@ void Page::LoadHtmlImpl(std::string_view bytes, base::encoding::Charset charset)
   root_.reset();
   // The old DOM is gone; image entries keyed by element address are stale.
   images_.clear();
+  claimed_image_sources_.clear();
+  pending_image_events_.clear();
   animation_states_.clear();
   display_list_.reset();
   BumpVersion();
@@ -345,6 +347,24 @@ bool Page::TryGetComputedStyle(const dom::Element* element,
 std::vector<std::pair<const dom::Element*, std::string>> Page::ImageSources() const
 {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
+  return CollectImageSourcesLocked();
+}
+
+std::vector<std::pair<const dom::Element*, std::string>> Page::ClaimPendingImageSources()
+{
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  std::vector<std::pair<const dom::Element*, std::string>> pending;
+  for (auto& [element, url] : CollectImageSourcesLocked()) {
+    auto& claimed = claimed_image_sources_[element];
+    if (claimed.insert(url).second) {
+      pending.emplace_back(element, std::move(url));
+    }
+  }
+  return pending;
+}
+
+std::vector<std::pair<const dom::Element*, std::string>> Page::CollectImageSourcesLocked() const
+{
   std::vector<std::pair<const dom::Element*, std::string>> sources;
   if (document_ == nullptr) {
     return sources;
@@ -671,6 +691,7 @@ void Page::SetElementImage(const dom::Element* element,
   video_states_.erase(element); // a static image replaces any video frame
   root_.reset();                // the replaced box's intrinsic size may have changed
   display_list_.reset();
+  pending_image_events_.emplace_back(element, true); // <img> load event, see below
   BumpVersion();
 }
 
@@ -708,6 +729,7 @@ void Page::SetElementImages(const std::vector<const dom::Element*>& elements,
       animation_states_.erase(element);
     }
     video_states_.erase(element);
+    pending_image_events_.emplace_back(element, true);
     attached = true;
   }
   if (!attached) {
@@ -716,6 +738,43 @@ void Page::SetElementImages(const std::vector<const dom::Element*>& elements,
   root_.reset();
   display_list_.reset();
   BumpVersion();
+}
+
+void Page::NoteImageLoadFailed(const dom::Element* element)
+{
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  if (element == nullptr || document_ == nullptr) {
+    return;
+  }
+  pending_image_events_.emplace_back(element, false);
+}
+
+std::vector<std::pair<const dom::Element*, bool>> Page::TakePendingImageEvents()
+{
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  std::vector<std::pair<const dom::Element*, bool>> events;
+  events.swap(pending_image_events_);
+  return events;
+}
+
+bool Page::ContainsElement(const dom::Element* element) const
+{
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  if (element == nullptr || document_ == nullptr) {
+    return false;
+  }
+  std::vector<const dom::Node*> stack{document_.get()};
+  while (!stack.empty()) {
+    const dom::Node* node = stack.back();
+    stack.pop_back();
+    if (node == element) {
+      return true;
+    }
+    for (const dom::Node* child : node->ChildNodes()) {
+      stack.push_back(child);
+    }
+  }
+  return false;
 }
 
 void Page::FillCanvasRect(const dom::Element& element,

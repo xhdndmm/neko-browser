@@ -41,7 +41,9 @@
 
 - HarfBuzz 文本整形
 - 精确字体基线（`<img>` 的 baseline 对齐近似为文本底边，未含 descender）
-- 图片增量加载/懒加载、alt 文本渲染、srcset
+- ~~图片增量加载/懒加载~~（2026-10 已实现：认领式晚到抓取 + `img` load/error
+  事件 + 滚动感知 IntersectionObserver，见兼容性矩阵“图片子资源生命周期”
+  与“IntersectionObserver”）；alt 文本渲染、srcset/sizes 选择仍未实现
 - `text-align` 对齐、连字符断行、CJK 逐字断行
 - 完整系统字体目录扫描（当前内置候选路径表；具体名按文件名匹配）
 - `<video>` 播放的音频轨道、controls 与缓冲（视频帧动画已接入，见渲染器 `Page::AdvanceAnimations`）

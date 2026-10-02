@@ -2454,6 +2454,19 @@ void Impl::DispatchToNode(dom::Node* node, std::string_view type)
   engine.RunPendingJobs();
 }
 
+void Impl::DispatchNonBubblingToNode(dom::Node* node, std::string_view type)
+{
+  if (node == nullptr) {
+    return;
+  }
+  // Browsers fire img load/error on the element only (bubbles = false) — a
+  // bubbling dispatch would wrongly trigger <body onload> once per image.
+  JSValue event = MakeEvent(std::string(type), /*bubbles=*/false, /*cancelable=*/false);
+  (void)DispatchPropagated(node, event);
+  JS_FreeValue(ctx, event);
+  engine.RunPendingJobs();
+}
+
 void Impl::DispatchEvent(dom::Element& element, std::string_view type)
 {
   DispatchToNode(&element, type);

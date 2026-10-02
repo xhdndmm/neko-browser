@@ -19,6 +19,7 @@
 #include "neko/storage/password_store.h"
 #include "neko/storage/preferences.h"
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -95,6 +96,17 @@ struct Tab
   // in-memory, partitioned by origin, survives navigations within the tab and
   // dies with it.  Worker thread only.
   storage::SessionStorage session_storage;
+
+  // Coalescing state for SchedulePendingImageFetch.  Shared with the in-flight
+  // pool task so the task can clear/refire it even when the tab is gone
+  // (reachable from the GUI or a worker swap).  Worker thread only; the
+  // atomics are read/written by the pool task as well.
+  struct ImageFetchState
+  {
+    std::atomic<bool> in_flight{false};
+    std::atomic<bool> again{false};
+  };
+  std::shared_ptr<ImageFetchState> image_fetch_state;
 
   // Direct navigation to an animated GIF: the full frame set plus the playback
   // position, advanced on the same frame clock as page animations
@@ -722,6 +734,21 @@ private:
   // stored raw pointer may dangle; callers re-resolve before any deferred use
   // (frame production, mouseout dispatch).
   void ResolveHover(Tab& tab);
+
+  // ---- Late subresource passes (worker thread) ---------------------------
+  // Schedules a pool pass that fetches image sources a page assigned after
+  // the initial load pass (lazy loading, src swaps, scripted background-image
+  // changes) and attaches them to their elements.  Claimed sources make the
+  // pass a cheap no-op when nothing changed; concurrent schedules are
+  // coalesced per tab, with one re-run when a change lands mid-pass.
+  void SchedulePendingImageFetch(Tab& tab);
+
+  // Dispatches the image "load"/"error" events the fetch layer queued on the
+  // tab's page (browsers fire these from their network stack; our fetcher
+  // runs on pool threads, so the events are marshalled through the page and
+  // delivered here on the script thread).  Returns the number of events
+  // dispatched.  Worker thread only.
+  std::size_t FirePendingImageEvents(Tab& tab);
 
   // ---- Password manager (worker thread) ---------------------------------
   // Fills the first password form of |page| with the saved credential for
