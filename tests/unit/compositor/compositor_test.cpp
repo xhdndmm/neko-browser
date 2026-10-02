@@ -290,30 +290,44 @@ TEST(SoftwareCompositorTest, LayerPlacementOffsetComposites)
 }
 
 // ---------------------------------------------------------------------------
-// GPU compositor (ADR 0017).  The device backends are not implemented, so the
-// tests pin down what does exist: the software fallback, the capability probe,
-// and the upload/draw ledger that a real backend will drive.
+// GPU compositor (ADR 0017).  The device backend exists on machines with a
+// usable GPU; these tests pin down the parts that must hold everywhere: the
+// software fallback, the capability probe's internal consistency, and the
+// upload/draw ledger that real backends drive.  Device-specific behavior
+// (pixel parity, sub-rectangle uploads, readback) lives in gpu_backend_test.cpp
+// and skips itself when no device is available.
 // ---------------------------------------------------------------------------
 
-TEST(GpuCompositorTest, ProbeReportsNoBackendWithoutDevice)
+TEST(GpuCompositorTest, ProbeIsInternallyConsistent)
 {
   const GpuCapabilities caps = ProbeGpuCapabilities();
-  // No platform backend is wired yet; reporting availability would make the
-  // compositor take a path that cannot present.
-  EXPECT_FALSE(caps.available);
-  EXPECT_EQ(caps.backend, GpuBackend::None);
+  if (caps.available) {
+    // A usable device must identify itself and report its limits.
+    EXPECT_NE(caps.backend, GpuBackend::None);
+    EXPECT_FALSE(caps.renderer.empty());
+    EXPECT_GT(caps.max_texture_size, 0);
+  } else {
+    // No device: the probe must not name a backend it cannot drive.
+    EXPECT_EQ(caps.backend, GpuBackend::None);
+  }
 }
 
-TEST(GpuCompositorTest, CreateFallsBackToSoftware)
+TEST(GpuCompositorTest, CreateMatchesProbedAvailability)
 {
+  const GpuCapabilities caps = ProbeGpuCapabilities();
   auto compositor = GpuCompositor::Create(8, 4);
   ASSERT_NE(compositor, nullptr);
-  // The fallback is a real software compositor, not a broken GPU stand-in.
-  auto* software = dynamic_cast<SoftwareCompositor*>(compositor.get());
-  EXPECT_NE(software, nullptr);
   EXPECT_EQ(compositor->Output().width(), 8);
   EXPECT_EQ(compositor->Output().height(), 4);
+  if (caps.available) {
+    // The GPU path is a real compositor, not a broken stand-in.
+    EXPECT_NE(dynamic_cast<GpuCompositor*>(compositor.get()), nullptr);
+  } else {
+    // The fallback is a real software compositor, not a broken GPU stand-in.
+    EXPECT_NE(dynamic_cast<SoftwareCompositor*>(compositor.get()), nullptr);
+  }
 
+  // Forced software is deterministic on every machine.
   auto forced = GpuCompositor::Create(2, 2, /*force_software=*/true);
   EXPECT_NE(dynamic_cast<SoftwareCompositor*>(forced.get()), nullptr);
 }

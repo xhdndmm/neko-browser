@@ -9,13 +9,27 @@
 
 namespace neko::compositor {
 
+// Which device API a GpuContext drives.  The probe reports one of these; the
+// compositor itself never needs to know.
+enum class GpuBackend
+{
+  None,     // no GPU API available
+  OpenGL,   // desktop OpenGL 3.3+ / OpenGL ES 3.0+
+  Vulkan,   // Vulkan 1.1+
+  Metal,    // Apple Metal (macOS)
+  Direct3D, // Direct3D 11 (Windows)
+};
+
+const char* GpuBackendName(GpuBackend backend);
+
 // A GPU context: the engine's thin wrapper over a platform graphics API.
 //
-// STATUS: PARTIALLY IMPLEMENTED.  The interface, the handle types and the
-// no-op fallback context are real; the per-platform backends
-// (GL 3.3 / Vulkan 1.1 / Metal / D3D11) are NOT IMPLEMENTED.  Everything the
-// compositor needs is expressed here so a backend can be dropped in without
-// changing GpuCompositor.
+// STATUS: PARTIALLY IMPLEMENTED.  The interface and the no-op fallback context
+// are real, and the Linux EGL/OpenGL backend (egl_gpu_context.cpp) is real and
+// tested; the Vulkan / Metal / Direct3D backends and window-system (swapchain)
+// presentation are NOT IMPLEMENTED.  Everything the compositor needs is
+// expressed here so further backends can be dropped in without changing
+// GpuCompositor.
 //
 // Design notes
 // ------------
@@ -32,6 +46,16 @@ enum class GpuPrimitive
   TexturedQuad, // the only primitive the compositor uses today
 };
 
+// How the source texture combines with the pixels already in the frame.
+// kCopy is a raw overwrite (compositor layer 0, mirroring
+// Surface::CopyFrom); kOver is straight-alpha "source over" (compositor
+// layers 1+, mirroring Surface::BlendOver).
+enum class GpuBlendMode
+{
+  kCopy,
+  kOver,
+};
+
 // Describes one draw call.  Texture coordinates are normalized 0..1.
 struct GpuDrawCall
 {
@@ -42,6 +66,7 @@ struct GpuDrawCall
   float width = 0.0f;
   float height = 0.0f;
   float opacity = 1.0f;
+  GpuBlendMode blend = GpuBlendMode::kOver;
 };
 
 // A minimal GPU device abstraction.  Backends implement this; the compositor
@@ -55,6 +80,7 @@ public:
   GpuContext& operator=(const GpuContext&) = delete;
 
   // Human-readable identity, for diagnostics and the DevTools GPU panel.
+  virtual GpuBackend backend() const = 0;
   virtual std::string renderer() const = 0;
   virtual std::string vendor() const = 0;
   virtual std::string version() const = 0;
@@ -98,6 +124,13 @@ protected:
   GpuContext() = default;
 };
 
+// Creates the best available GPU device context on this platform (ADR 0017's
+// single device-creation seam).  Returns nullptr when no backend can produce a
+// working context, in which case callers use the software compositor — never a
+// broken GPU stand-in.  The Linux EGL/OpenGL backend is implemented today;
+// Vulkan/Metal/Direct3D return nullptr until implemented.
+std::unique_ptr<GpuContext> CreateBestGpuContext();
+
 // A context that satisfies the interface without a device: every operation
 // either succeeds trivially (ResizeSurface/BeginFrame/Draw) or returns a NOT
 // IMPLEMENTED error (textures, present, readback).  The compositor uses it in
@@ -106,6 +139,10 @@ protected:
 class NullGpuContext final : public GpuContext
 {
 public:
+  GpuBackend backend() const override
+  {
+    return GpuBackend::None;
+  }
   std::string renderer() const override
   {
     return "none";
@@ -169,6 +206,10 @@ public:
     std::vector<std::uint8_t> pixels; // RGBA8888
   };
 
+  GpuBackend backend() const override
+  {
+    return GpuBackend::None;
+  }
   std::string renderer() const override
   {
     return "recording";

@@ -1,6 +1,7 @@
 # 开发路线图
 
-> 最后更新：2026-09（渲染器会话 M2、平台 Web API、真实视口、自研 DNS、`data:` URL 落地）
+> 最后更新：2026-10（GPU 真实后端：Linux EGL/OpenGL 3.3 core，与软件合成
+> 逐字节一致；此前：渲染器会话 M2、平台 Web API、真实视口、自研 DNS、`data:` URL 落地）
 
 ## 总原则
 
@@ -99,8 +100,12 @@ graph LR
 - [x] 图像解码（PNG/JPEG/GIF/WebP/AVIF/SVG）
 - [x] **@font-face 网络字体（Phase 6 扩展）**：解析/抓取/FreeType 注册/
       family 匹配优先于系统字体 —— **PARTIAL**（无 unicode-range/local()）
-- [x] 软件合成器抽象（ADR 0015，`neko::compositor`，GUI 已接线）
-- [ ] GPU 后端 —— 后续
+- [x] 软件合成器抽象（ADR 0015，`neko::compositor`；ADR 0020 后 GUI 改为
+      不可变帧直绘，合成器作为渲染管线缝保留）
+- [x] **GPU 后端（Linux EGL/OpenGL 3.3 core，ADR 0017）**：运行时加载
+      （dlopen，无构建期图形依赖）、headless 三路（surfaceless/GBM/默认显示）、
+      整数 shader 与软件合成**逐字节一致**（5 个设备测试，无 GPU 自动跳过）
+      —— **PARTIAL**（Vulkan/Metal/D3D11、swapchain 呈现、GPU 进程未实现）
 
 **里程碑 M1–M6 达成**：`neko_browser --url http://example.com/ --screenshot out.ppm`
 可抓取、解析、样式化、布局并光栅化真实网页（已在本地端到端验证）。
@@ -227,8 +232,9 @@ graph LR
 - [x] **滚动 blit**：WebView 视口光栅缓存，滚动仅内存搬移 + 补绘露出带
 - [x] **`<style>` 解析缓存**：StyleEngine 按文本内容记忆化
 - [x] **TextWidth 记忆化**（同 (text,px) 命中缓存，上限 4096）
-- [x] **合成器**：软件合成器抽象（ADR 0015）+ GUI 接线（图层 0 页面 +
-      caret 覆盖层、脏矩形重合成、滚动带级 blit）
+- [x] **合成器**：软件合成器抽象（ADR 0015）+ **Linux GPU 后端**（ADR 0017）；
+      GUI 接线是 ADR 0020 之前的历史状态（现为不可变帧直绘），重接线随
+      图层化渲染推进
 - [x] **全页截图分带光栅化**（2026-10）：`--screenshot` 逐带光栅化 +
       `paint::PpmWriter` 流式写出，峰值内存从整页 RGBA 缓冲降到一个带高；
       20k 元素页面实测 1643 MiB → 245 MiB（输出逐字节不变），且消除了大缓冲
@@ -239,7 +245,7 @@ graph LR
       `malloc_trim` / macOS `malloc_zone_pressure_relief`）挂在关闭标签页与
       导航替换文档之后（worker 侧与 GUI 侧引用释放后各一处）；GUI 实测关闭
       载入 125 MiB 的页面标签后 RSS 释放 ~86%（修复前 ~1%）
-- [ ] HTTP cache、增量布局、增量绘制、GPU 后端 —— **后续**
+- [ ] HTTP cache、增量布局、增量绘制、GPU 光栅化/窗口呈现 —— **后续**
 - [ ] benchmark 基准建立（解析、布局、绘制、启动、内存的持续回归门禁）—— **后续**
 - [ ] `ComputedStyle` 罕见字段侧存（grid/自定义属性已实测占每元素 ~370 B，
       见 2026-10 分析）—— **后续**
@@ -257,7 +263,7 @@ graph LR
       会话（同站复用、跨站/崩溃后重建）；GUI `--renderer-process` 下 WebView 绘制
       子进程帧并转发交互（视口尺寸上报、滚动条取子进程内容高度、hover 来自子进程）
 - [ ] M3：Network 进程（HTTP/TLS/DNS 搬出 Browser；cookie 裁决留在 Browser）
-- [ ] M4：GPU 进程（SoftwareCompositor 的 GPU 后端 + 共享内存大帧传输）
+- [ ] M4：GPU 进程（GPU 后端已就位；进程宿主 + 共享内存大帧传输未开始）
 - [ ] M5：沙箱（Linux seccomp/namespace、Windows AppContainer、macOS
       sandbox-exec）+ 站点隔离
 - [ ] 崩溃处理与沙箱

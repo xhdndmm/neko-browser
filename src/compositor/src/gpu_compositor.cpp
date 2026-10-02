@@ -12,11 +12,18 @@
 //     the ledger without a device.
 //   * The capability probe and the software-fallback factory.
 //
+// What is real since the Linux backend landed:
+//   * ProbeGpuCapabilities() creates a real EGL/OpenGL context (when the
+//     platform can provide one) and reports its identity and limits.
+//   * Create() builds a GpuCompositor around that context; the device path
+//     uploads dirty layers and composes them with the same fixed-point math
+//     the software compositor uses (verified byte-for-byte on the GPU).
+//
 // What is NOT IMPLEMENTED:
-//   * An actual platform backend (GL/Vulkan/Metal/D3D11).  ProbeGpuCapabilities()
-//     reports "not available" on every platform today, so Create() returns the
-//     software path; the device upload/draw calls are only exercised through
-//     the recording context.
+//   * Non-Linux backends (Vulkan/Metal/Direct3D) and window-system swapchain
+//     presentation: the compositor's presentable output is still the CPU
+//     surface (ADR 0017); the device output is read back through
+//     GpuContext::Readback for verification and headless screenshots.
 
 #include "neko/compositor/gpu_compositor.h"
 
@@ -33,7 +40,7 @@ void LogDeviceNotImplementedOnce(bool* warned)
     return;
   }
   *warned = true;
-  NEKO_LOG_WARNING("GPU device path is not implemented; compositing on the CPU");
+  NEKO_LOG_WARNING("GPU device operation failed; compositing on the CPU");
 }
 
 } // namespace
@@ -57,14 +64,25 @@ const char* GpuBackendName(GpuBackend backend)
 
 GpuCapabilities ProbeGpuCapabilities()
 {
-  // No platform backend is wired yet.  Deliberately honest: reporting
-  // "available" here would make the compositor take a path that cannot present
-  // a frame, which is worse than the software fallback.
-  //
-  // The probe is centralized so a backend can be added later without touching
-  // call sites: implement a GpuContext factory per platform, probe it here,
-  // and return the real capabilities.
-  return GpuCapabilities{};
+  // Create and immediately destroy a real context: probing by asking the
+  // device avoids claiming capabilities the compositor could not actually use.
+  std::unique_ptr<GpuContext> context = CreateBestGpuContext();
+  if (!context) {
+    return GpuCapabilities{};
+  }
+
+  GpuCapabilities caps;
+  caps.available = true;
+  caps.backend = context->backend();
+  caps.renderer = context->renderer();
+  caps.vendor = context->vendor();
+  caps.version = context->version();
+  caps.max_texture_size = context->max_texture_size();
+  // OpenGL 3.3 core (the only backend today) guarantees non-power-of-two
+  // textures; future GLES2-level backends must query this honestly.
+  caps.supports_npot_textures = true;
+  caps.hardware_accelerated = context->hardware_accelerated();
+  return caps;
 }
 
 // ---------------------------------------------------------------------------
@@ -81,23 +99,31 @@ GpuCompositor::~GpuCompositor() = default;
 
 std::unique_ptr<Compositor> GpuCompositor::Create(int width, int height, bool force_software)
 {
-  GpuCapabilities caps = force_software ? GpuCapabilities{} : ProbeGpuCapabilities();
-  if (!caps.available) {
-    // No device: the software compositor is the correct implementation, not a
-    // degraded stand-in.
-    return std::make_unique<SoftwareCompositor>(width, height);
+  if (!force_software) {
+    std::unique_ptr<GpuContext> context = CreateBestGpuContext();
+    if (context) {
+      // The device must accept the requested surface before we commit to the
+      // GPU path; a context that cannot size its surface is not usable.
+      if (context->ResizeSurface(width, height)) {
+        return std::unique_ptr<Compositor>(new GpuCompositor(width, height, std::move(context)));
+      }
+      NEKO_LOG_WARNING("GPU context could not resize its surface; using the software compositor");
+    }
   }
-
-  // A backend exists (true only when a platform implementation is added).  The
-  // construction order would be: create the device context, probe its limits,
-  // create the presentation surface, then hand the context to the compositor.
-  return std::unique_ptr<Compositor>(
-      new GpuCompositor(width, height, std::make_unique<NullGpuContext>()));
+  // No device: the software compositor is the correct implementation, not a
+  // degraded stand-in.
+  return std::make_unique<SoftwareCompositor>(width, height);
 }
 
 std::unique_ptr<GpuCompositor>
 GpuCompositor::CreateWithContext(int width, int height, std::unique_ptr<GpuContext> context)
 {
+  // The compositor's GPU path requires a sized device surface before the first
+  // frame; the CPU mirror remains correct even if this fails, so the failure
+  // is reported through the usual device-error path at present time.
+  if (context) {
+    (void)context->ResizeSurface(width, height);
+  }
   return std::unique_ptr<GpuCompositor>(new GpuCompositor(width, height, std::move(context)));
 }
 
@@ -213,6 +239,9 @@ void GpuCompositor::DrawLayers()
     call.width = static_cast<float>(layers_[i].width());
     call.height = static_cast<float>(layers_[i].height());
     call.opacity = i == 0 ? 1.0f : state.opacity;
+    // Layer 0 is a raw copy (Surface::CopyFrom), overlays blend
+    // (Surface::BlendOver); the device must not second-guess that difference.
+    call.blend = i == 0 ? GpuBlendMode::kCopy : GpuBlendMode::kOver;
     context_->Draw(call);
     ++draw_calls_;
   }

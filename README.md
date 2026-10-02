@@ -60,8 +60,10 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
 - **Layout**：盒模型、block/inline 布局、文字换行、relative 定位
 - **Paint**：显示列表 + 软件光栅化 + 8x8 位图字体 + PPM 输出
 - **合成器**：软件合成器抽象层（ADR 0015，`Surface` + `Compositor` 接口，
-  CPU 实现，图层/alpha/脏矩形/滚动 blit；GUI 已接线：页面层 + caret 覆盖层）
-  —— GPU 后端尚未实现
+  CPU 实现，图层/alpha/脏矩形/滚动 blit）；**真实 GPU 后端已落地**（ADR 0017：
+  Linux EGL/OpenGL 3.3 core，运行时加载、无显示服务器亦可用，与软件合成
+  **逐字节一致**，5 个设备测试）—— **其余平台后端与窗口 swapchain 呈现未实现**；
+  自 ADR 0020（不可变帧直绘）起 GUI 不再经过合成器（见兼容性矩阵）
 - **存储**：Cookie（RFC 6265 子集）、历史、书签 —— 自研行式文件 + 原子写入；
   **IndexedDB**：版本化数据库（open/onupgradeneeded）、对象存储
   （keyPath/autoIncrement）、事务 + add/put/get/delete/clear/count/getAll、
@@ -95,8 +97,10 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
   `--dump-bookmarks` / `--show-cookies` / `--download` / `--extract-pdf` /
   `--audio-info` / `--image-info` 等
 
-> **诚实声明**：**GPU 合成**（Compositor 缝已就位，仅有 CPU 软件实现）、
-> **完整多进程架构**均 **尚未实现**（M1+M2 已交付：Renderer 子进程 + IPC +
+> **诚实声明**：**GPU 合成**：Linux 真实后端已实现并验证（EGL/OpenGL 3.3
+> core，headless、设备回读与软件合成逐字节一致）；Vulkan/Metal/D3D11、
+> swapchain 窗口呈现与 GPU 进程尚未实现。
+> **完整多进程架构**尚未实现（M1+M2 已交付：Renderer 子进程 + IPC +
 > 渲染器会话 + GUI 隔离渲染模式；无沙箱/Network/GPU 进程，DevTools 数据
 > 未回传，见 ADR 0016）；
 > 视频解码已接入 FFmpeg（MP4/H.264、WebM/VP9 实测），`<video>` 元素

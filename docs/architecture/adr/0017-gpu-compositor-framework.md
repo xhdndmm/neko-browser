@@ -1,6 +1,6 @@
 # 架构决策记录 0017：GPU 合成框架（设备抽象 + 回退）
 
-- 状态：**Accepted**（2026-09）
+- 状态：**Accepted**（2026-09）；**后端落地**（2026-10：Linux EGL/OpenGL 3.3 core，真实设备测试通过）
 - 决策者：架构组
 
 ## 背景
@@ -40,6 +40,31 @@ AGENTS.md §23 要求长期支持 OpenGL/Vulkan/Metal/Direct3D 并"使用图形
 - **明确未实现**：平台后端（GL 3.3/Vulkan 1.1/Metal/D3D11）、swapchain
   呈现、共享内存回读路径。这些不会伪装：探测恒 false，`NullGpuContext`
   的失败路径有单元测试锁定（PASS/FAIL 语义清晰）。
+
+## 实现进展（2026-10）
+
+Linux 后端 `src/compositor/src/egl_gpu_context.cpp` 已实现，并接入
+`CreateBestGpuContext()` / `ProbeGpuCapabilities()` / `GpuCompositor::Create()`：
+
+- **运行时加载**：全部 EGL/GL 入口经 `dlopen`/`dlsym`/`eglGetProcAddress`
+  获取，构建不依赖 EGL/GL 头文件与库（无图形栈的 CI 也能编译与跳过测试）。
+- **headless 三路连接**：surfaceless 平台 → GBM render node → 默认显示
+  （X11/Wayland）；优先创建 pbuffer，`EGL_KHR_surfaceless_context` 兼容无
+  surface 情境；上下文要求 GL 3.3 core（`EGL_KHR_create_context`）。
+- **精确像素**：合成走单个全屏三角形的整数定点 fragment shader，逐字复刻
+  `Surface::BlendPixel` 的截断/四舍五入语义（RGBA8 归一化定点往返无损，
+  关闭 `GL_DITHER`）；设备回读与软件合成**逐字节一致**
+  （`GpuBackendTest.CompositionMatchesSoftwarePixelForPixel` 等 5 个测试，
+  无设备时自动 `GTEST_SKIP`）。
+- **诚实探测**：llvmpipe/softpipe 等软渲染器报告
+  `hardware_accelerated = false`；上下文创建失败时 `Create()` 返回
+  `SoftwareCompositor`，不假装有 GPU。
+- **纹理**：创建即零初始化（部分上传后内容确定）；支持子矩形上传（纹理
+  句柄不透明，子矩形裁剪规则与 `RecordingGpuContext` 一致）。
+
+仍未实现（按原决策）：Vulkan/Metal/D3D11 后端、窗口 swapchain 直接呈现
+（可见输出仍为 CPU Surface）、GPU 进程与共享内存回读（ADR 0016 M4）、
+合成器层的脏子矩形上传优化（后端原语已支持，`GpuCompositor` 仍整层上传）。
 
 ## 后果
 

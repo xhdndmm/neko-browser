@@ -2,7 +2,9 @@
 
 > 本文档诚实记录每个特性的支持状态。**禁止**把"接口存在"写成"已实现"。
 > 状态取值：Not Started / Planned / In Progress / Partial / Implemented / Tested。
-> 最后更新：2026-09（表单控件 Wave 1：`<input>` 按 §15.5 大小写不敏感分类 +
+> 最后更新：2026-10（GPU 合成：Linux EGL/OpenGL 真实后端落地，设备回读与
+> 软件合成逐字节一致；同时更正“合成器 GUI 已接线”的过时描述）
+> 此前：2026-09（表单控件 Wave 1：`<input>` 按 §15.5 大小写不敏感分类 +
 > 按 type 推导几何（删掉 170px 硬编码）、UA 表补 `display:inline-block` 与
 > `box-sizing:border-box`，架构见 ADR 0021，渲染回归页 `tests/pages/forms.html`；
 > 此前：平台 Web API：TextEncoder/atob/structuredClone 等；真实视口；自研 DNS；
@@ -65,8 +67,8 @@
 | 书签 | Tested | 29 存储单元测试 | 增删改、文件夹、持久化 |
 | 下载器 | Tested | Browser 套件 | Content-Disposition/URL 文件名、原子写入 |
 | 绘制 / 光栅化 | Tested | Paint 套件 | 纯色、边框、文字、PPM；**整数定点混合（替代浮点）**、**缓冲复用（Resize 不重分配）**、**分带 Clear/可见带裁剪**、**并行带栅格化**（`RasterizeParallel`，共享线程池，串/并行结果一致）、**滚动 blit**（`ShiftRows` 内存搬移复用上一帧像素，仅重绘露出带）；**行内元素背景**（`display:inline` 的 `background-color` 在字形后填充，矩形含 padding 的水平/垂直扩展——真实站点的图文覆盖层实测）；**未实现 `opacity`**（整棵子树的 group opacity）：用 opacity 做半透明覆盖层的页面按不透明渲染 |
-| 合成器（Compositor） | Tested | 17 软件合成器 + 9 GPU 合成器单元测试 + UI 冒烟/截图 | **软件合成器抽象（ADR 0015）**：`Surface`（RGBA8888 拷贝/alpha 混合/滚动原语）+ `Compositor` 接口（输出表面 + 有序图层、全量/脏矩形 `Composite(Rect)`、`ScrollOutput` 报告暴露带）；混合数学与 Rasterizer 一致；GUI 已接线（图层 0 = 光栅化页面，图层 1 = caret 覆盖层，闪烁/移动走脏矩形重合成，滚动为带级 blit）|
-| GPU 合成（GpuCompositor/GpuContext） | Partial | 9 GPU 合成器单元测试 | **ADR 0017 框架**：`GpuContext` 设备抽象（纹理创建/子矩形上传/绘制/呈现/回读）+ `GpuCompositor`（每图层纹理、脏层上传、每可见层一次 textured-quad draw、CPU 输出始终与软件合成器逐像素一致）+ `ProbeGpuCapabilities`（集中探测点）+ `NullGpuContext`（无设备时明确 NOT IMPLEMENTED）+ `RecordingGpuContext`（测试用记录器，验证上传/绘制账本）；`GpuCompositor::Create` 无可用设备时**返回 SoftwareCompositor**（不假装有 GPU）；**平台后端（GL/Vulkan/Metal/D3D11）未实现**，探测恒报 unavailable |
+| 合成器（Compositor） | Tested | 31 合成器单元测试（含 5 个真实设备测试） | **软件合成器抽象（ADR 0015）**：`Surface`（RGBA8888 拷贝/alpha 混合/滚动原语）+ `Compositor` 接口（输出表面 + 有序图层、全量/脏矩形 `Composite(Rect)`、`ScrollOutput` 报告暴露带）；混合数学与 Rasterizer 一致。**更正**：ADR 0020（worker 独占 DOM、GUI 消费不可变帧）之后 GUI 不再走合成器（WebView 直绘 `RemoteFrame`、caret 由 Qt 覆盖绘制），“GUI 已接线”是过时描述；模块作为渲染管线缝保留，重接线随图层化渲染推进 |
+| GPU 合成（GpuCompositor/GpuContext） | Partial | 9 GPU 合成器 + 5 设备测试（Linux EGL/OpenGL，本机 NVIDIA 实测；无 GPU 机器自动跳过） | **ADR 0017**：`GpuContext` 设备抽象（纹理创建/子矩形上传/绘制/呈现/回读）+ `GpuCompositor`（每图层纹理、脏层上传、每可见层一次 textured-quad draw、CPU 镜像输出始终与软件合成器逐像素一致）+ `ProbeGpuCapabilities`（集中探测点）+ `NullGpuContext`（无设备时明确 NOT IMPLEMENTED）+ `RecordingGpuContext`（测试用记录器，验证上传/绘制账本）；**Linux 真实后端已实现**（2026-10）：EGL surfaceless → GBM 设备 → 默认显示三路连接（运行时 dlopen，无构建期图形依赖）+ OpenGL 3.3 core，无窗口系统亦可用；整数定点 composition shader 与 `Surface::BlendPixel` **逐字节一致**（设备回读 vs 软件合成断言）；llvmpipe/softpipe 等软渲染器如实标注非硬件加速；`GpuCompositor::Create` 无可用设备时**返回 SoftwareCompositor**（不假装有 GPU）；**未实现**：Vulkan/Metal/D3D11 后端、窗口 swapchain 直接呈现（输出仍为 CPU Surface）、GPU 进程（ADR 0016 M4） |
 | 渲染管线缓存 | Tested | Renderer + UI 套件 | **显示列表缓存**（Painter 输出按版本号增量重建，仅在 DOM/样式变化时失效）、**WebView 视口光栅缓存**（滚动时 blit 复用，仅补绘露出带）；布局/绘制不再全量重做 |
 | 页面缩放（用户级） | Partial | 3 Renderer + 2 Browser + 2 会话协议 + 2 UI 测试 | **浏览器式页面缩放**（Ctrl+= / Ctrl+- / Ctrl+0）：布局按 viewport/zoom 的 CSS 像素运行、显示列表按 zoom 缩放、命中测试与 DOM 几何除以同一因子，因此脚本看到的 CSS 像素与浏览器一致；与 CSS `zoom` 属性相乘（`renderer::Page::SetUserZoom`，25%–500% 钳制）；阶梯 0.25/0.33/0.5/0.67/0.75/0.8/0.9/1/1.1/1.25/1.5/1.75/2/2.5/3/4/5；**两种执行模式都支持**（进程内直接重排；渲染进程模式经会话协议 `kSetZoom` 由子进程重排并回传新布局），导航保留该标签的缩放，工具栏百分比指示器 + 点击复位；未实现：重启后持久化、按 origin 记忆（profile 尚无偏好存储）；`window.innerWidth` 反映视口尺寸、不随页面缩放变化 |
 | 页面内查找（Ctrl+F） | Partial | 1 Renderer + 1 Browser + 3 会话协议/转发 + 1 UI 测试 | **浏览器式 find-in-page**：对**已布局文本 run** 检索（按文档顺序、ASCII 大小写不敏感），匹配矩形按字体度量精确定位到命中的字符（非整个 run），设备像素且随缩放；两种执行模式都支持（渲染进程模式经会话协议 `kFind` 由子进程检索并回传 count/index/矩形）；浏览器将命中项滚动到视口内（复用滚动 latch），GUI 在页面上叠加高亮（浏览器侧覆盖层，不改文档）；工具栏查找栏：Ctrl+F 打开、实时检索、Enter/Shift+Enter 前后跳转并回绕、n/m 计数、Esc 关闭并清理；导航后自动清理。未实现：同时高亮全部匹配（仅当前项）、跨 run/行断开的短语匹配、ASCII 以外的大小写折叠、正则/整词 |

@@ -13,28 +13,17 @@ namespace neko::compositor {
 // GPU-accelerated compositor backend (ADR 0017).
 //
 // STATUS: PARTIALLY IMPLEMENTED — the interface, layer bookkeeping, dirty-rect
-// handling, texture ledger and the software fallback are real and tested; an
-// actual platform GPU backend (GL/Vulkan/Metal/D3D11) is NOT IMPLEMENTED.
-// On machines without a usable GPU the factory returns a SoftwareCompositor
-// and callers see identical output.
+// handling, texture ledger, software fallback and the Linux EGL/OpenGL device
+// backend (egl_gpu_context.cpp) are real and tested; Vulkan/Metal/Direct3D and
+// window-system presentation are NOT IMPLEMENTED.  On machines without a usable
+// GPU the factory returns a SoftwareCompositor and callers see identical
+// output.
 //
-// Intended GPU design (mirrors Chromium's `cc` in miniature): one texture per
-// compositing layer, dirty sub-rectangle uploads, one textured quad per layer
-// with alpha blending into the swapchain image.  The compositor talks to the
-// device only through GpuContext, so a backend can be added without touching
-// this class; RecordingGpuContext lets the upload/draw ledger be tested today.
-
-// Whether the engine can create a working GPU context on this machine.
-enum class GpuBackend
-{
-  None,     // no GPU API available
-  OpenGL,   // desktop OpenGL 3.3+ / OpenGL ES 3.0+
-  Vulkan,   // Vulkan 1.1+
-  Metal,    // Apple Metal (macOS)
-  Direct3D, // Direct3D 11 (Windows)
-};
-
-const char* GpuBackendName(GpuBackend backend);
+// Design (mirrors Chromium's `cc` in miniature): one texture per compositing
+// layer, dirty sub-rectangle uploads, one textured quad per layer composed in
+// draw order.  The compositor talks to the device only through GpuContext, so
+// a backend can be added without touching this class; RecordingGpuContext lets
+// the upload/draw ledger be tested without a device.
 
 // Probed capabilities.  |available| false means the GPU path is unusable and
 // the compositor must fall back to software.
@@ -52,9 +41,9 @@ struct GpuCapabilities
 
 // Probes the platform for a usable GPU context.  Never throws; a machine
 // without a GPU (or without the required driver) yields {available = false}.
-// The probe is cheap and safe to call at startup.
-//
-// Implementation status: returns {available = false} on all platforms today.
+// The probe creates and immediately destroys a real context, so its cost is a
+// few milliseconds; callers that need the context itself should use
+// CreateBestGpuContext() instead.
 GpuCapabilities ProbeGpuCapabilities();
 
 // GPU compositor front end.  Presents the Compositor interface; every frame it

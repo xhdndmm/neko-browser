@@ -30,8 +30,12 @@
   缓冲 + 拷贝/混合/滚动原语）与 `Compositor` 接口（输出表面 + 有序图层：
   全量 `Composite`、脏矩形 `CompositeRect`、`ScrollOutput` 滚动 blit 并报告
   暴露带）；`SoftwareCompositor` 是 CPU 实现（混合数学与 Rasterizer 一致），
-  GUI 已接线：图层 0 = 光栅化页面，图层 1 = caret 覆盖层（闪烁/移动走
-  脏矩形重合成）；滚动仍为带级 blit（图层 0 与输出同步移动，无全视口重算）
+  滚动为带级 blit（图层 0 与输出同步移动，无全视口重算）。**GPU 后端
+  （ADR 0017，2026-10）**：Linux EGL/OpenGL 3.3 core，运行时加载、headless
+  （surfaceless/GBM/默认显示），整数 shader 与软件合成**逐字节一致**（设备
+  回读断言，无 GPU 自动跳过）。**注意**：ADR 0020 之后 GUI 走 worker 不可变帧
+  直绘（caret 由 Qt 覆盖绘制），不再经过合成器；合成器作为渲染管线缝保留，
+  重接线随图层化渲染推进
 
 ## 未实现
 
@@ -41,7 +45,8 @@
 - `text-align` 对齐、连字符断行、CJK 逐字断行
 - 完整系统字体目录扫描（当前内置候选路径表；具体名按文件名匹配）
 - `<video>` 播放的音频轨道、controls 与缓冲（视频帧动画已接入，见渲染器 `Page::AdvanceAnimations`）
-- GPU 合成后端（Compositor 缝已就位，见 ADR 0015；当前仅有 CPU 软件实现）
+- GPU 窗口呈现（swapchain）与 Vulkan/Metal/D3D11 后端（Linux EGL/OpenGL
+  已实现，见 ADR 0017）；GPU 光栅化
 - 布局增量失效（当前布局每次全量重算；显示列表/光栅化已增量）
 
 ## 外部资源时序
@@ -53,7 +58,8 @@
 ## 架构
 
 ```text
-Layout Tree → Paint → Display List → Rasterization → Compositor(SoftwareCompositor) → Surface → Window blit
-                 ↓                                        ↑
-             neko::graphics (FreeType 封装)          Layer 1: caret 等覆盖层
+当前 GUI 路径：Layout Tree → Paint → Display List → Rasterization → RemoteFrame → QImage（Qt 直绘）
+合成器缝（保留，未接 GUI）：Rasterization → Compositor（Software/GPU）→ Surface → Window blit
+                 ↓
+             neko::graphics (FreeType 封装)
 ```
