@@ -66,6 +66,66 @@ TEST(PageTest, RasterizeProducesImage)
   EXPECT_EQ(image.pixels()[offset + 2], 0);
 }
 
+TEST(PageTest, InlineSvgRasterizesIntoItsBox)
+{
+  // Inline SVG is a replaced element: the renderer rasterizes the subtree
+  // through the standalone SVG rasterizer (the icon used to reserve its box
+  // but paint nothing).
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body style=\"margin:0\">"
+                            "<svg width=\"16\" height=\"16\">"
+                            "<rect width=\"16\" height=\"16\" fill=\"#ff0000\"/>"
+                            "</svg></body>")
+                  .has_value());
+  page.Layout(100, 100);
+  paint::Rasterizer image = page.Rasterize(40, 40);
+  const std::size_t offset = (static_cast<std::size_t>(8) * 40 + 8) * 4;
+  EXPECT_EQ(image.pixels()[offset], 255) << "the red <rect> must be painted";
+  EXPECT_EQ(image.pixels()[offset + 1], 0);
+  EXPECT_EQ(image.pixels()[offset + 2], 0);
+  EXPECT_EQ(image.pixels()[offset + 3], 255);
+}
+
+TEST(PageTest, InlineSvgRasterizesAtItsUsedCssSize)
+{
+  // No width/height attributes: the serialized document is given the box's
+  // used size, so CSS-sized icons rasterize at their real pixel size (the
+  // standalone rasterizer only reads the attributes).
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body style=\"margin:0\">"
+                            "<style>#icon{width:24px;height:24px}</style>"
+                            "<svg id=\"icon\">"
+                            "<rect width=\"100%\" height=\"100%\" fill=\"#ff8800\"/>"
+                            "</svg></body>")
+                  .has_value());
+  page.Layout(100, 100);
+  paint::Rasterizer image = page.Rasterize(40, 40);
+  const std::size_t offset = (static_cast<std::size_t>(12) * 40 + 12) * 4;
+  EXPECT_EQ(image.pixels()[offset], 255);
+  EXPECT_EQ(image.pixels()[offset + 1], 136) << "#ff8800 painted at 24x24";
+  EXPECT_EQ(image.pixels()[offset + 2], 0);
+}
+
+TEST(PageTest, InlineSvgResolvesCurrentColor)
+{
+  // codeberg's Octicons and bilibili's trigger icons colour their paths with
+  // `fill="currentColor"`; the standalone rasterizer has no cascade, so the
+  // serializer substitutes the computed color.  The icon sits on the text
+  // baseline, so the sample point is inside the lower half of its box.
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body style=\"margin:0\">"
+                            "<svg width=\"10\" height=\"10\" style=\"color:#00ff00\">"
+                            "<rect width=\"10\" height=\"10\" fill=\"currentColor\"/>"
+                            "</svg></body>")
+                  .has_value());
+  page.Layout(100, 100);
+  paint::Rasterizer image = page.Rasterize(40, 40);
+  const std::size_t offset = (static_cast<std::size_t>(12) * 40 + 5) * 4;
+  EXPECT_EQ(image.pixels()[offset], 0);
+  EXPECT_EQ(image.pixels()[offset + 1], 255) << "currentColor resolved to the CSS color";
+  EXPECT_EQ(image.pixels()[offset + 2], 0);
+}
+
 TEST(PageTest, FocusedCaretGeometryIsThreadSafeAndInputOnly)
 {
   Page page;

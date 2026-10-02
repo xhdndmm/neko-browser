@@ -6,6 +6,7 @@
 # =============================================================================
 
 add_library(neko_renderer
+  src/inline_svg.cpp
   src/page.cpp
 )
 add_library(neko::renderer ALIAS neko_renderer)

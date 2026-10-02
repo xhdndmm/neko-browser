@@ -15,11 +15,13 @@
   在 `BuildBlock`（含表格单元格 / grid 项）、`BuildFloat`、`BuildFlexItem`
   中按 CSS 尺寸 > width/height 属性 > 固有尺寸（单轴给定时保持比例）定尺寸，
   并把解码像素挂到盒上供绘制（此前只留尺寸盒，封面画成灰块）
-- **inline `<svg>` 按替换元素布局**（2026-10）：`<svg width=18 height=18>` 图标
+- **inline `<svg>` 按替换元素布局并光栅化**（2026-10）：`<svg width=18 height=18>` 图标
   （bilibili 顶栏、Codeberg Octicons）此前按空 inline 盒量到 0×0——行内收集、
   flex 项、绝对定位、固有宽度测量（`MeasureContent`）全部走替换元素路径后，
-  图标占位正确、相邻文本不再收缩换行（回归 4 例）；**SVG 子树（path 等）不参与
-  布局也不栅格化**（图标为空白占位；SVG 作为独立图片解码是另一条路径）
+  图标占位正确、相邻文本不再收缩换行（回归 4 例）；**子树绘制**：布局后把
+  `<svg>` 序列化回独立 SVG 文档（根宽高=盒 used size、`currentColor` 按计算色
+  替换），经 `image::DecodeSvg` 光栅化并挂到盒/行内盒（缓存键：尺寸+颜色；
+  回归 3 例）；局限：无 `<use>`/clip-path（光栅化器范围）、子树属性突变不重栅格
 - **固有宽度测量两处修正**（2026-10）：① 替换元素在**没有任何 CSS width** 时
   可用 width 属性（presentational hint），有作者 width（即使用百分比）时忽略；
   ② 绝对/固定定位子树不参与 min/max-content（CSS Sizing 1 §5）——缺失时

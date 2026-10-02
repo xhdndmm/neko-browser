@@ -6,8 +6,11 @@
 #include "neko/css/color.h"
 #include "neko/graphics/font_selector.h"
 #include "neko/html/parser.h"
+#include "neko/image/svg_decoder.h"
 #include "neko/paint/painter.h"
 #include "neko/paint/svg_text_shaper.h"
+
+#include "inline_svg.h"
 
 #include <algorithm>
 #include <chrono>
@@ -276,6 +279,7 @@ void Page::LoadHtmlImpl(std::string_view bytes, base::encoding::Charset charset)
   // The old DOM is gone; image entries keyed by element address are stale.
   images_.clear();
   claimed_image_sources_.clear();
+  inline_svg_rasters_.clear();
   pending_image_events_.clear();
   animation_states_.clear();
   display_list_.reset();
@@ -662,6 +666,7 @@ void Page::LayoutLocked(float viewport_width, float viewport_height, bool apply_
   layout::LayoutEngine engine(styles_, &fonts_, this);
   root_ =
       engine.BuildLayoutTree(*document_, viewport_width / page_zoom_, viewport_height / page_zoom_);
+  RasterizeInlineSvgImagesLocked();
   display_list_.reset();
   BumpVersion();
 }
@@ -774,7 +779,113 @@ void UpdateAttachedImageInTree(layout::LayoutBox& box,
   }
 }
 
+// One laid-out inline <svg> occurrence: the element and the used content-box
+// size its bitmap must be rasterized at.
+struct InlineSvgHit
+{
+  const dom::Element* element = nullptr;
+  float width = 0;
+  float height = 0;
+};
+
+void CollectInlineSvgHits(const layout::LayoutBox& box, std::vector<InlineSvgHit>& hits)
+{
+  if (box.element != nullptr && box.element->tag_name() == "svg") {
+    const float w = box.content_width();
+    const float h = box.content_height();
+    if (w > 0 && h > 0) {
+      hits.push_back({box.element, w, h});
+    }
+  }
+  for (const layout::Line& line : box.lines) {
+    for (const layout::InlineBox& inline_box : line.boxes) {
+      if (inline_box.element != nullptr && inline_box.element->tag_name() == "svg" &&
+          inline_box.block_box == nullptr && inline_box.width > 0 && inline_box.height > 0) {
+        hits.push_back({inline_box.element, inline_box.width, inline_box.height});
+      }
+      if (inline_box.block_box != nullptr) {
+        CollectInlineSvgHits(*inline_box.block_box, hits);
+      }
+    }
+  }
+  for (const auto& child : box.children) {
+    CollectInlineSvgHits(*child, hits);
+  }
+  for (const auto& child : box.positioned_children) {
+    CollectInlineSvgHits(*child, hits);
+  }
+  for (const auto& f : box.floats) {
+    CollectInlineSvgHits(*f, hits);
+  }
+}
+
+// The computed `color` of an SVG element as #RRGGBB (see inline_svg.cpp).
+std::string SvgColorHex(const style::StyleEngine& styles, const dom::Element& element)
+{
+  static constexpr css::Color kDefault{0, 0, 0, 255};
+  const css::Color color = styles.StyleFor(element).color.value_or(kDefault);
+  char buffer[8];
+  std::snprintf(buffer,
+                sizeof(buffer),
+                "#%02X%02X%02X",
+                static_cast<unsigned>(color.r),
+                static_cast<unsigned>(color.g),
+                static_cast<unsigned>(color.b));
+  return std::string(buffer);
+}
+
 } // namespace
+
+void Page::RasterizeInlineSvgImagesLocked()
+{
+  if (root_ == nullptr || document_ == nullptr) {
+    return;
+  }
+  std::vector<InlineSvgHit> hits;
+  CollectInlineSvgHits(*root_, hits);
+  bool attached = false;
+  for (const InlineSvgHit& hit : hits) {
+    const std::string color = SvgColorHex(styles_, *hit.element);
+    const auto cached = inline_svg_rasters_.find(hit.element);
+    if (cached != inline_svg_rasters_.end() && cached->second.width == hit.width &&
+        cached->second.height == hit.height && cached->second.color == color) {
+      continue; // the attached bitmap (or the recorded failure) still matches
+    }
+    Page::InlineSvgRaster raster;
+    raster.width = hit.width;
+    raster.height = hit.height;
+    raster.color = color;
+    // Nothing to draw (an <svg> holding only <defs>-style bookkeeping): no
+    // bitmap, and no retry until the box or the color changes.
+    bool has_element_child = false;
+    for (const dom::Node* child : hit.element->ChildNodes()) {
+      if (child->node_type() == dom::NodeType::kElement) {
+        has_element_child = true;
+        break;
+      }
+    }
+    if (has_element_child) {
+      // CSS pixels, clamped to the rasterizer's dimension limit.
+      const float w = std::min(hit.width, 4096.0f);
+      const float h = std::min(hit.height, 4096.0f);
+      const std::string markup = SerializeInlineSvg(*hit.element, styles_, w, h);
+      const auto decoded = image::DecodeSvg(markup, MakeSvgTextShaper());
+      if (decoded.has_value() && !decoded.value().empty()) {
+        images_[hit.element] = decoded.value();
+        UpdateAttachedImageInTree(*root_,
+                                  *hit.element,
+                                  &images_.find(hit.element)->second,
+                                  /*replaced=*/true);
+        raster.ok = true;
+        attached = true;
+      }
+    }
+    inline_svg_rasters_[hit.element] = std::move(raster);
+  }
+  if (attached) {
+    display_list_.reset();
+  }
+}
 
 void Page::SetElementImage(const dom::Element* element,
                            image::Image image,

@@ -405,6 +405,10 @@ private:
   // Collects <img src> and computed background-image sources; caller must
   // hold mutex_.  Shared by ImageSources() and ClaimPendingImageSources().
   std::vector<std::pair<const dom::Element*, std::string>> CollectImageSourcesLocked() const;
+  // Rasterizes every laid-out inline <svg> element into its box through the
+  // standalone SVG rasterizer; caller must hold mutex_ and a fresh layout
+  // tree.  Sizes/colors are cached so frames do not re-decode per paint.
+  void RasterizeInlineSvgImagesLocked();
   // Rebuilds the layout tree; caller must hold mutex_.
   void LayoutLocked(float viewport_width, float viewport_height, bool apply_styles = true);
   void BumpVersion()
@@ -427,6 +431,18 @@ private:
   // element has already asked a fetch pass to load.  Cleared with |images_|
   // when the document is replaced.
   std::unordered_map<const dom::Element*, std::unordered_set<std::string>> claimed_image_sources_;
+  // Rasterized inline <svg> bitmaps: the used box size and the resolved color
+  // decide when the bitmap must be regenerated.  |ok| is false when the
+  // element had no drawable content or decoding failed (no retry until the
+  // key changes).
+  struct InlineSvgRaster
+  {
+    float width = 0;
+    float height = 0;
+    std::string color;
+    bool ok = false;
+  };
+  std::unordered_map<const dom::Element*, InlineSvgRaster> inline_svg_rasters_;
   // Image load/error events queued by the fetch layer, drained on the script
   // thread (see TakePendingImageEvents).
   std::vector<std::pair<const dom::Element*, bool>> pending_image_events_;
