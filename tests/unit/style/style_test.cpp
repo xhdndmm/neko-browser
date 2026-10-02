@@ -1183,6 +1183,136 @@ TEST(StyleTest, VarInsideCalcResolves)
   EXPECT_FLOAT_EQ(div.width.value().calc.offset, -20.0f);
 }
 
+TEST(StyleTest, CalcMultiplicationAndDivision)
+{
+  // CSS Values 4 §10.5: `*` needs at least one number operand, `/` a nonzero
+  // number.  Real pages compute heights as calc(2 * var(--line-height)); the
+  // parser used to reject the expression, zeroing the height.
+  auto doc = MakeDoc("<style>:root { --lh: 22px; }"
+                     "#a { width: calc(2 * 50px); }"
+                     "#b { width: calc(100% / 4); }"
+                     "#c { height: calc(2 * var(--lh)); }"
+                     "#d { height: calc(var(--lh) * 2 + 4px); }"
+                     "#e { width: calc(50% * 2); }"
+                     "#f { width: calc(3 * (10px + 20px)); }"
+                     "#g { width: calc(10px * 10px); }"
+                     "#h { width: calc(100% / 0); }"
+                     "</style>"
+                     "<body><div id=a>a</div><div id=b>b</div><div id=c>c</div><div id=d>d</div>"
+                     "<div id=e>e</div><div id=f>f</div><div id=g>g</div><div id=h>h</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& a = Style(engine, *doc, "#a");
+  ASSERT_TRUE(a.width.has_value());
+  EXPECT_TRUE(a.width.value().is_calc);
+  EXPECT_FLOAT_EQ(a.width.value().calc.offset, 100.0f);
+
+  const ComputedStyle& b = Style(engine, *doc, "#b");
+  ASSERT_TRUE(b.width.has_value());
+  EXPECT_FLOAT_EQ(b.width.value().calc.percent, 25.0f);
+
+  const ComputedStyle& c = Style(engine, *doc, "#c");
+  ASSERT_TRUE(c.height.has_value());
+  EXPECT_FLOAT_EQ(c.height.value().calc.offset, 44.0f);
+
+  const ComputedStyle& d = Style(engine, *doc, "#d");
+  ASSERT_TRUE(d.height.has_value());
+  EXPECT_FLOAT_EQ(d.height.value().calc.offset, 48.0f);
+
+  const ComputedStyle& e = Style(engine, *doc, "#e");
+  ASSERT_TRUE(e.width.has_value());
+  EXPECT_FLOAT_EQ(e.width.value().calc.percent, 100.0f);
+
+  const ComputedStyle& f = Style(engine, *doc, "#f");
+  ASSERT_TRUE(f.width.has_value());
+  EXPECT_FLOAT_EQ(f.width.value().calc.offset, 90.0f);
+
+  // length * length and division by zero are invalid: the declaration is
+  // dropped (no width).
+  EXPECT_FALSE(Style(engine, *doc, "#g").width.has_value());
+  EXPECT_FALSE(Style(engine, *doc, "#h").width.has_value());
+}
+
+TEST(StyleTest, WebkitBoxLegacyDisplayAndProperties)
+{
+  // The legacy 2009 flex container: display:-webkit-box is a block-level flex
+  // container; -webkit-box-orient/-flex/-pack/-align/-ordinal-group map onto
+  // the modern properties (the compatibility mapping Blink carried).
+  auto doc = MakeDoc(
+      "<style>"
+      "#a { display: -webkit-box; -webkit-box-orient: vertical; -webkit-box-flex: 2;"
+      "     -webkit-box-pack: center; -webkit-box-align: end; -webkit-box-ordinal-group: 3; }"
+      "#b { display: -webkit-inline-box; }"
+      "</style>"
+      "<body><div id=a>a</div><span id=b>b</span></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& a = Style(engine, *doc, "#a");
+  EXPECT_EQ(a.display, Display::kFlex);
+  EXPECT_EQ(a.flex_direction, FlexDirection::kColumn);
+  EXPECT_FLOAT_EQ(a.flex_grow, 2.0f);
+  EXPECT_EQ(a.justify_content, JustifyContent::kCenter);
+  EXPECT_EQ(a.align_items, AlignItems::kFlexEnd);
+  EXPECT_EQ(a.order, 3);
+
+  EXPECT_EQ(Style(engine, *doc, "#b").display, Display::kInlineFlex);
+}
+
+TEST(StyleTest, ModernFlexWinsOverLegacyBox)
+{
+  // An explicit modern declaration wins when both are present.
+  auto doc = MakeDoc("<style>#a { display: -webkit-box; -webkit-box-orient: vertical;"
+                     "           flex-direction: row; -webkit-box-flex: 2; flex-grow: 1; }"
+                     "</style><body><div id=a>a</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& a = Style(engine, *doc, "#a");
+  EXPECT_EQ(a.flex_direction, FlexDirection::kRow);
+  EXPECT_FLOAT_EQ(a.flex_grow, 1.0f);
+}
+
+TEST(StyleTest, VisibilityParsesAndInherits)
+{
+  // CSS 2.2 §11.2: visibility is inherited; a hidden container hides its
+  // subtree unless a descendant declares visible again.
+  auto doc = MakeDoc("<style>#hide { visibility: hidden; } #show { visibility: visible; }"
+                     "#collapse { visibility: collapse; }</style>"
+                     "<body><div id=hide><span id=inherit>x</span><span id=show>y</span></div>"
+                     "<div id=collapse>z</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  EXPECT_EQ(Style(engine, *doc, "#hide").visibility, Visibility::kHidden);
+  EXPECT_EQ(Style(engine, *doc, "#inherit").visibility, Visibility::kHidden);
+  EXPECT_EQ(Style(engine, *doc, "#show").visibility, Visibility::kVisible);
+  // collapse behaves as hidden on non-table boxes.
+  EXPECT_EQ(Style(engine, *doc, "#collapse").visibility, Visibility::kHidden);
+  EXPECT_EQ(Style(engine, *doc, "body").visibility, Visibility::kVisible);
+}
+
+TEST(StyleTest, GridGapAliases)
+{
+  // grid-gap / grid-row-gap / grid-column-gap alias gap / row-gap /
+  // column-gap (CSS Box Alignment 3 §8).  bilibili's feed grid uses grid-gap.
+  auto doc = MakeDoc("<style>#a { grid-gap: 20px 12px; } #b { grid-row-gap: 5px; }"
+                     "#c { grid-column-gap: 7px; }"
+                     "#d { grid-gap: 20px; gap: 4px; }</style>"
+                     "<body><div id=a>a</div><div id=b>b</div><div id=c>c</div>"
+                     "<div id=d>d</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  EXPECT_FLOAT_EQ(Style(engine, *doc, "#a").row_gap, 20.0f);
+  EXPECT_FLOAT_EQ(Style(engine, *doc, "#a").column_gap, 12.0f);
+  EXPECT_FLOAT_EQ(Style(engine, *doc, "#b").row_gap, 5.0f);
+  EXPECT_FLOAT_EQ(Style(engine, *doc, "#c").column_gap, 7.0f);
+  // The modern shorthand wins over the legacy alias.
+  EXPECT_FLOAT_EQ(Style(engine, *doc, "#d").row_gap, 4.0f);
+  EXPECT_FLOAT_EQ(Style(engine, *doc, "#d").column_gap, 4.0f);
+}
+
 TEST(StyleTest, AspectRatioParses)
 {
   auto doc = MakeDoc("<body><div id=\"a\" style=\"aspect-ratio: 1\">x</div>"

@@ -45,6 +45,10 @@ struct TextRun
   float font_size = 16;
   float width = 0; // measured advance width (real font or monospace fallback)
   css::Color color{0, 0, 0, 255};
+  // visibility: hidden on the run's source element (CSS 2.2 §11.2): the run
+  // keeps its layout space but is not painted.  Inherited, so a run of a
+  // hidden container is hidden unless the element declares visible again.
+  bool visible = true;
   bool underline = false;
   const dom::Element* element = nullptr; // source element (for hit-testing)
   // Inline element background + resolved padding (CSS 2.2 §8.4.1 / §10.1).

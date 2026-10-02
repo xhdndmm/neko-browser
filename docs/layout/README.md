@@ -53,7 +53,12 @@
   align-items，含阻止 stretch）、**min/max-width/height**（主轴/交叉轴夹取，
   min 优先于 max）、**auto 外边距**（主轴吸收自由空间并覆盖 justify-content；
   交叉轴吸收行内自由空间并覆盖 align-self）；嵌套 flex 可用；内联 flex 为
-  行内原子盒
+  行内原子盒。**2026-10（bilibili 驱动）**：替换项无 CSS 主轴尺寸时按替换
+  尺寸作基、交叉尺寸按已解析宽度 × 固有比例推导；替换项自动最小尺寸按 0
+  （允许图片缩进容器）；确定交叉尺寸容器的 stretch 精确拉伸（不再取 max）；
+  flex 项百分比高度在容器内容高确定时精确解析（与 absolute 填充一起构成
+  真实站点的 100% 高度链）；遗留 `display:-webkit-box` 映射为块级 flex 容器
+  （-webkit-box-orient/-flex/-pack/-align/-ordinal-group → flex 属性）
 - **grid（M1）**：display:grid；grid-template-columns/rows
   （px/%/fr/auto/min-content/max-content + repeat()）、row-major 自动放置
   （grid-auto-flow: row）、grid-column/row 行与 span 放置（含简写与 longhand）、
@@ -70,8 +75,9 @@
 
 ## 未实现
 
-- flexbox：百分比高度精确解析、flex 容器自身 min/max、max-width 截断后的
-  剩余自由空间再分配、`flex-basis: content`
+- flexbox：flex 容器自身 min/max、max-width 截断后的剩余自由空间再分配、
+  `flex-basis: content`、`-webkit-line-clamp` 独立生效（当前需配合确定高度，
+  由 overflow 裁剪实现两行标题）
 - grid：inline-grid、命名区域、`dense` 打包、`minmax()`、`grid-auto-flow`
   非 row、fr 行在容器高度不确定时的精确解析、网格项目内的绝对定位精确包含块
 - fixed/sticky、margin 折叠、z-index、百分比 offset

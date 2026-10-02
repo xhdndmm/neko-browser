@@ -328,11 +328,14 @@ struct SizeContext
 
 // A tiny recursive-descent parser for calc() expressions, which are linear
 // combinations of lengths and percentages:
-//   <sum>  := <term> (('+' | '-') <term>)*
-//   <term> := number[unit] | '(' <sum> ')'
-//   unit   := px | em | rem | % | vw | vh | vmin | vmax | (none)
-// Multiplication/division inside calc() are not implemented (documented
-// limitation).
+//   <sum>     := <product> (('+' | '-') <product>)*
+//   <product> := <atom> (('*' | '/') <atom>)*
+//   <atom>    := number[unit] | '(' <sum> ')'
+//   unit      := px | em | rem | % | vw | vh | vmin | vmax | (none)
+// Multiplication and division follow CSS Values and Units 4 §10.5: for `*` at
+// least one operand must be a pure number, for `/` the right operand must be a
+// pure number (and nonzero).  A number scales the other operand's px and
+// percent components; number * number yields a number.
 struct CalcParser
 {
   std::string_view s;
@@ -353,10 +356,56 @@ struct CalcParser
     return c >= '0' && c <= '9';
   }
 
+  static CalcTerm Scaled(const CalcTerm& term, float factor)
+  {
+    CalcTerm out = term;
+    out.offset *= factor;
+    out.percent *= factor;
+    return out; // is_number is preserved: number * number is a number
+  }
+
+  std::optional<CalcTerm> ParseProduct()
+  {
+    const std::optional<CalcTerm> first = ParseAtom();
+    if (!first.has_value()) {
+      return std::nullopt;
+    }
+    CalcTerm acc = first.value();
+    for (;;) {
+      SkipWs();
+      if (i >= s.size() || (s[i] != '*' && s[i] != '/')) {
+        break;
+      }
+      const char op = s[i];
+      ++i;
+      const std::optional<CalcTerm> rhs = ParseAtom();
+      if (!rhs.has_value()) {
+        return std::nullopt;
+      }
+      if (op == '*') {
+        if (acc.is_number) {
+          // number * <length/percentage/number>: scale the right operand.
+          const float factor = acc.offset;
+          acc = Scaled(rhs.value(), factor);
+        } else if (rhs->is_number) {
+          acc = Scaled(acc, rhs->offset);
+        } else {
+          return std::nullopt; // length * length is invalid
+        }
+      } else {
+        if (!rhs->is_number || rhs->offset == 0.0f) {
+          return std::nullopt; // only division by a nonzero number is valid
+        }
+        acc = Scaled(acc, 1.0f / rhs->offset);
+      }
+    }
+    return acc;
+  }
+
   std::optional<CalcTerm> ParseSum()
   {
     SkipWs();
-    const std::optional<CalcTerm> first = ParseTerm();
+    const std::optional<CalcTerm> first = ParseProduct();
     if (!first.has_value()) {
       return std::nullopt;
     }
@@ -371,7 +420,7 @@ struct CalcParser
         break;
       }
       ++i;
-      const std::optional<CalcTerm> rhs = ParseTerm();
+      const std::optional<CalcTerm> rhs = ParseProduct();
       if (!rhs.has_value()) {
         return std::nullopt;
       }
@@ -382,11 +431,13 @@ struct CalcParser
         acc.offset -= rhs->offset;
         acc.percent -= rhs->percent;
       }
+      // A sum stays a pure number only while every operand is one.
+      acc.is_number = acc.is_number && rhs->is_number;
     }
     return acc;
   }
 
-  std::optional<CalcTerm> ParseTerm()
+  std::optional<CalcTerm> ParseAtom()
   {
     SkipWs();
     // An optional "calc" keyword: "calc(expr)" is equivalent to "(expr)" and
@@ -465,6 +516,7 @@ struct CalcParser
       term.offset = number * std::max(ctx.viewport_width, ctx.viewport_height) / 100.0f;
     } else if (unit.empty()) {
       term.offset = number; // unitless (valid inside calc for 0 etc.)
+      term.is_number = true;
     } else {
       return std::nullopt; // unknown unit
     }
@@ -1723,6 +1775,8 @@ void StyleEngine::ComputeElement(dom::Element& element,
           (action == 3 || action == 4) ? ListStyleType::kDisc : inherited.list_style_type;
     } else if (property == "white-space") {
       out.white_space = (action == 3 || action == 4) ? WhiteSpace::kNormal : inherited.white_space;
+    } else if (property == "visibility") {
+      out.visibility = (action == 3 || action == 4) ? Visibility::kVisible : inherited.visibility;
     } else {
       return false;
     }
@@ -1741,6 +1795,7 @@ void StyleEngine::ComputeElement(dom::Element& element,
   out.text_decoration_underline = inherited.text_decoration_underline;
   out.list_style_type = inherited.list_style_type;
   out.white_space = inherited.white_space;
+  out.visibility = inherited.visibility;
   out.custom_properties = inherited.custom_properties;
 
   // Apply the CSS-wide keywords resolved above and drop them from |winners|
@@ -2007,6 +2062,23 @@ void StyleEngine::ComputeElement(dom::Element& element,
     }
   }
 
+  // visibility (CSS 2.2 §11.2).  Inherited (see resolve_inherited_subset), so
+  // a hidden container hides its subtree unless a descendant declares
+  // visibility:visible again.  `collapse` behaves as `hidden` for everything
+  // except table rows/columns in the spec; the table variants are NOT
+  // IMPLEMENTED and treated as hidden (browsers do the same on non-table
+  // boxes).
+  if (const css::Declaration* d = find("visibility")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kKeyword) {
+      if (v.text == "hidden" || v.text == "collapse") {
+        out.visibility = Visibility::kHidden;
+      } else if (v.text == "visible") {
+        out.visibility = Visibility::kVisible;
+      }
+    }
+  }
+
   // display.
   if (const css::Declaration* d = find("display")) {
     const css::CssValue v = css::ParseCssValue(d->value);
@@ -2025,6 +2097,18 @@ void StyleEngine::ComputeElement(dom::Element& element,
         out.display = Display::kInline;
       } else if (v.text == "inline-block") {
         out.display = Display::kInlineBlock;
+      } else if (v.text == "-webkit-box") {
+        // The legacy 2009 Flexible Box container (prefixed WebKit).  It is a
+        // block-level flex container; the layout engine's flex implementation
+        // handles the modern subset the legacy properties map onto (see the
+        // -webkit-box-* property handlers below).  Blink kept this mapping for
+        // compatibility; real pages (bilibili's video-card titles) depend on
+        // it.  `-webkit-line-clamp` alone is NOT IMPLEMENTED (see the
+        // compatibility matrix): clamping works when the box has a definite
+        // height or max-height, which is the common pattern.
+        out.display = Display::kFlex;
+      } else if (v.text == "-webkit-inline-box") {
+        out.display = Display::kInlineFlex;
       } else if (v.text == "none") {
         out.display = Display::kNone;
       } else if (v.text == "table") {
@@ -2080,6 +2164,70 @@ void StyleEngine::ComputeElement(dom::Element& element,
       } else if (v.text == "upper-roman") {
         out.list_style_type = ListStyleType::kUpperRoman;
       }
+    }
+  }
+
+  // Legacy 2009 Flexible Box properties (prefixed WebKit): -webkit-box-orient,
+  // -webkit-box-flex, -webkit-box-pack, -webkit-box-align and
+  // -webkit-box-ordinal-group.  They map onto the modern flex model (the same
+  // compatibility mapping Blink carried); the handlers run before their modern
+  // counterparts so an explicit flex-direction / flex-grow / justify-content /
+  // align-items / order declaration wins when both are present.
+  if (const css::Declaration* d = find("-webkit-box-orient")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kKeyword) {
+      if (v.text == "vertical" || v.text == "block-axis") {
+        out.flex_direction = FlexDirection::kColumn;
+      } else if (v.text == "horizontal" || v.text == "inline-axis") {
+        out.flex_direction = FlexDirection::kRow;
+      }
+    }
+  }
+  if (const css::Declaration* d = find("-webkit-box-flex")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kNumber) {
+      // Legacy flexible items absorb the free space proportionally to their
+      // box-flex values; approximating that with flex-grow over the content
+      // base size (flex-basis:auto) matches the legacy "preferred size plus
+      // share of the extra space" arithmetic for the one-flexible-item case
+      // that real pages use.
+      out.flex_grow = std::max(0.0f, v.number);
+    }
+  }
+  if (const css::Declaration* d = find("-webkit-box-pack")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kKeyword) {
+      if (v.text == "center") {
+        out.justify_content = JustifyContent::kCenter;
+      } else if (v.text == "end") {
+        out.justify_content = JustifyContent::kFlexEnd;
+      } else if (v.text == "justify") {
+        out.justify_content = JustifyContent::kSpaceBetween;
+      } else {
+        out.justify_content = JustifyContent::kFlexStart;
+      }
+    }
+  }
+  if (const css::Declaration* d = find("-webkit-box-align")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kKeyword) {
+      if (v.text == "center") {
+        out.align_items = AlignItems::kCenter;
+      } else if (v.text == "end") {
+        out.align_items = AlignItems::kFlexEnd;
+      } else if (v.text == "start") {
+        out.align_items = AlignItems::kFlexStart;
+      } else if (v.text == "baseline") {
+        out.align_items = AlignItems::kBaseline;
+      } else {
+        out.align_items = AlignItems::kStretch;
+      }
+    }
+  }
+  if (const css::Declaration* d = find("-webkit-box-ordinal-group")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kNumber) {
+      out.order = static_cast<int>(v.number);
     }
   }
 
@@ -2312,6 +2460,26 @@ void StyleEngine::ComputeElement(dom::Element& element,
     }
     return 0.0f;
   };
+  // Legacy aliases of the gap properties (CSS Box Alignment 3 §8: grid-gap,
+  // grid-row-gap and grid-column-gap alias gap, row-gap and column-gap).  They
+  // are applied before the modern properties so a modern declaration wins when
+  // both appear; real pages (bilibili's recommendation grid) still use
+  // `grid-gap`.
+  if (const css::Declaration* d = find("grid-gap")) {
+    const std::vector<std::string> parts = SplitWhitespace(d->value);
+    if (parts.size() >= 2) {
+      out.row_gap = parse_gap(parts[0]);
+      out.column_gap = parse_gap(parts[1]);
+    } else if (parts.size() == 1) {
+      out.row_gap = out.column_gap = parse_gap(parts[0]);
+    }
+  }
+  if (const css::Declaration* d = find("grid-row-gap")) {
+    out.row_gap = parse_gap(d->value);
+  }
+  if (const css::Declaration* d = find("grid-column-gap")) {
+    out.column_gap = parse_gap(d->value);
+  }
   if (const css::Declaration* d = find("gap")) {
     const std::vector<std::string> parts = SplitWhitespace(d->value);
     if (parts.size() >= 2) {

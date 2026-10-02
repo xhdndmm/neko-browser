@@ -107,6 +107,110 @@ DisplayList Painter::Paint() const
 
 void Painter::PaintBox(const layout::LayoutBox& box, DisplayList& list) const
 {
+  // visibility: hidden suppresses the box's own decorations and content but
+  // keeps its layout space; descendants that declare visibility: visible
+  // again still paint (CSS 2.2 §11.2), so the child recursion below is not
+  // gated here.
+  const bool visible = box.style.visibility != style::Visibility::kHidden;
+  if (visible) {
+    PaintBoxSelf(box, list);
+  }
+
+  // overflow: hidden/auto/scroll clips the box's content (and its
+  // descendants) to the padding box.  The box's own background/border paint
+  // above the clip boundary and are NOT clipped.
+  const bool clips = box.style.overflow != style::Overflow::kVisible;
+  if (clips) {
+    list.PushClip(box.content_x(), box.content_y(), box.content_width(), box.content_height());
+  }
+
+  // Block children (back to front).
+  for (const auto& child : box.children) {
+    PaintBox(*child, list);
+  }
+
+  // Floats paint above in-flow block children but below inline content
+  // (CSS2.1 Appendix E), so a float's background/text is not covered by a
+  // later block-level sibling.
+  for (const auto& f : box.floats) {
+    PaintBox(*f, list);
+  }
+
+  // Atomic inline boxes within lines.
+  for (const layout::Line& line : box.lines) {
+    for (const layout::InlineBox& inline_box : line.boxes) {
+      if (inline_box.block_box != nullptr) {
+        // An inline-block: paint its inner block layout (background, border,
+        // content and children).  It carries the element's own style.
+        PaintBox(*inline_box.block_box, list);
+      } else if (inline_box.image != nullptr && !inline_box.image->empty() &&
+                 inline_box.style.visibility != style::Visibility::kHidden) {
+        list.DrawImage(inline_box.x,
+                       inline_box.y,
+                       inline_box.width,
+                       inline_box.height,
+                       *inline_box.image,
+                       inline_box.style.object_fit);
+      }
+    }
+  }
+
+  // Inline element backgrounds (CSS 2.2 §8.4.1): fill behind each group of
+  // consecutive runs that share a source element carrying a background colour
+  // (e.g. a padded `background:#222` overlay link).  Runs whose source is the
+  // block itself duplicate the block's own background, which PaintBox already
+  // filled, so they are skipped.
+  for (const layout::Line& line : box.lines) {
+    for (std::size_t i = 0; i < line.runs.size();) {
+      const layout::TextRun& first = line.runs[i];
+      if (!first.visible || first.background.a == 0 || first.element == nullptr ||
+          first.element == box.element) {
+        ++i;
+        continue;
+      }
+      const dom::Element* element = first.element;
+      const std::uint8_t alpha = first.background.a;
+      float left = first.x - first.padding_left;
+      float right = first.x + first.width + first.padding_right;
+      std::size_t j = i + 1;
+      while (j < line.runs.size() && line.runs[j].element == element &&
+             line.runs[j].background.a == alpha) {
+        right = line.runs[j].x + line.runs[j].width + line.runs[j].padding_right;
+        ++j;
+      }
+      const float top = first.y - line.baseline_offset - first.padding_top;
+      const float height = line.height + first.padding_top + first.padding_bottom;
+      if (right > left && height > 0.0f) {
+        list.FillRect(left, top, right - left, height, first.background);
+      }
+      i = j;
+    }
+  }
+
+  // Inline text.
+  for (const layout::Line& line : box.lines) {
+    for (const layout::TextRun& run : line.runs) {
+      if (run.visible && !run.text.empty()) {
+        list.DrawText(run.x,
+                      run.y,
+                      run.text,
+                      run.font_size,
+                      run.color,
+                      run.underline,
+                      run.font_family,
+                      run.font_weight,
+                      run.font_italic);
+      }
+    }
+  }
+
+  if (clips) {
+    list.PopClip();
+  }
+}
+
+void Painter::PaintBoxSelf(const layout::LayoutBox& box, DisplayList& list) const
+{
   if (HasNativeButtonAppearance(box)) {
     // Native button look: buttonface background + outset border as the
     // default decorations.  Author background-color/border-color
@@ -191,96 +295,6 @@ void Painter::PaintBox(const layout::LayoutBox& box, DisplayList& list) const
                    box.content_height(),
                    *box.image,
                    box.style.object_fit);
-  }
-
-  // overflow: hidden/auto/scroll clips the box's content (and its
-  // descendants) to the padding box.  The box's own background/border paint
-  // above the clip boundary and are NOT clipped.
-  const bool clips = box.style.overflow != style::Overflow::kVisible;
-  if (clips) {
-    list.PushClip(box.content_x(), box.content_y(), box.content_width(), box.content_height());
-  }
-
-  // Block children (back to front).
-  for (const auto& child : box.children) {
-    PaintBox(*child, list);
-  }
-
-  // Floats paint above in-flow block children but below inline content
-  // (CSS2.1 Appendix E), so a float's background/text is not covered by a
-  // later block-level sibling.
-  for (const auto& f : box.floats) {
-    PaintBox(*f, list);
-  }
-
-  // Atomic inline boxes within lines.
-  for (const layout::Line& line : box.lines) {
-    for (const layout::InlineBox& inline_box : line.boxes) {
-      if (inline_box.block_box != nullptr) {
-        // An inline-block: paint its inner block layout (background, border,
-        // content and children).  It carries the element's own style.
-        PaintBox(*inline_box.block_box, list);
-      } else if (inline_box.image != nullptr && !inline_box.image->empty()) {
-        list.DrawImage(inline_box.x,
-                       inline_box.y,
-                       inline_box.width,
-                       inline_box.height,
-                       *inline_box.image,
-                       inline_box.style.object_fit);
-      }
-    }
-  }
-
-  // Inline element backgrounds (CSS 2.2 §8.4.1): fill behind each group of
-  // consecutive runs that share a source element carrying a background colour
-  // (e.g. a padded `background:#222` overlay link).  Runs whose source is the
-  // block itself duplicate the block's own background, which PaintBox already
-  // filled, so they are skipped.
-  for (const layout::Line& line : box.lines) {
-    for (std::size_t i = 0; i < line.runs.size();) {
-      const layout::TextRun& first = line.runs[i];
-      if (first.background.a == 0 || first.element == nullptr || first.element == box.element) {
-        ++i;
-        continue;
-      }
-      const dom::Element* element = first.element;
-      const std::uint8_t alpha = first.background.a;
-      float left = first.x - first.padding_left;
-      float right = first.x + first.width + first.padding_right;
-      std::size_t j = i + 1;
-      while (j < line.runs.size() && line.runs[j].element == element &&
-             line.runs[j].background.a == alpha) {
-        right = line.runs[j].x + line.runs[j].width + line.runs[j].padding_right;
-        ++j;
-      }
-      const float top = first.y - line.baseline_offset - first.padding_top;
-      const float height = line.height + first.padding_top + first.padding_bottom;
-      if (right > left && height > 0.0f) {
-        list.FillRect(left, top, right - left, height, first.background);
-      }
-      i = j;
-    }
-  }
-
-  // Inline text.
-  for (const layout::Line& line : box.lines) {
-    for (const layout::TextRun& run : line.runs) {
-      if (!run.text.empty()) {
-        list.DrawText(run.x,
-                      run.y,
-                      run.text,
-                      run.font_size,
-                      run.color,
-                      run.underline,
-                      run.font_family,
-                      run.font_weight,
-                      run.font_italic);
-      }
-    }
-  }
-
-  if (clips) {
-    list.PopClip();
   }
 }
 

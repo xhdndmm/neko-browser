@@ -133,8 +133,26 @@ bool IsCjkCodePoint(char32_t cp)
 }
 
 // Measures the advance width of |text| at |font_size| using the font selector
+// Number of UTF-8 code points in |text| (invalid bytes count as one each).
+// The monospace fallback model advances one glyph per code point; counting
+// bytes made every CJK character three advances wide.
+std::size_t CountCodePoints(std::string_view text)
+{
+  std::size_t count = 0;
+  std::size_t pos = 0;
+  while (pos < text.size()) {
+    const std::size_t before = pos;
+    char32_t cp = 0;
+    if (!base::DecodeUtf8Next(text, pos, cp) && pos == before) {
+      ++pos; // invalid byte: skip it so the loop always advances
+    }
+    ++count;
+  }
+  return count;
+}
+
 // for |family| when a registry is available; falls back to the monospace model
-// (font_size per character).
+// (font_size per code point).
 float MeasureTextWidth(const graphics::FontRegistry* registry,
                        std::string_view family,
                        int weight,
@@ -143,12 +161,20 @@ float MeasureTextWidth(const graphics::FontRegistry* registry,
                        float font_size)
 {
   if (registry == nullptr) {
-    return static_cast<float>(text.size()) * font_size;
+    return static_cast<float>(CountCodePoints(text)) * font_size;
   }
   return registry->SelectorFor(std::string(family), weight, italic)->TextWidth(text, font_size);
 }
 
-// Width of the widest space-separated word in |text| (the min-content width).
+// Width of the widest unbreakable unit in |text| (the min-content width).
+// Line-breaking opportunities follow the same rules as inline layout: runs of
+// non-space characters break at ASCII whitespace, and every East Asian
+// ideograph (or fullwidth/CJK punctuation character) is its own unit (CSS Text
+// 3 §5.1 treats CJK text as breakable between any two ideographs).  Splitting
+// at whitespace only made every CJK run measure as one unbreakable word, which
+// stopped flex items (min-width:auto) and other min-content consumers from
+// shrinking a CJK title below its full text width -- bilibili's title h3 as a
+// flex column then forced its card past the grid column width.
 float WidestWordWidth(const graphics::FontRegistry* registry,
                       std::string_view family,
                       int weight,
@@ -157,19 +183,49 @@ float WidestWordWidth(const graphics::FontRegistry* registry,
                       float font_size)
 {
   float widest = 0;
-  std::size_t start = 0;
-  while (start < text.size()) {
-    while (start < text.size() && IsWordBreak(text[start])) {
-      ++start;
+  std::size_t run_start = 0; // start of the unbreakable run being accumulated
+  std::size_t scan = 0;
+  while (scan < text.size()) {
+    const std::size_t unit_start = scan;
+    char32_t cp = 0;
+    if (!base::DecodeUtf8Next(text, scan, cp)) {
+      // Invalid byte: keep it inside the current run and step over it.
+      if (scan == unit_start) {
+        ++scan;
+      }
+      continue;
     }
-    if (start >= text.size()) {
-      break;
+    const bool space = cp < 0x80 && IsWordBreak(static_cast<char>(cp));
+    const bool ideograph = IsCjkCodePoint(cp);
+    if (!space && !ideograph) {
+      continue; // part of the current run
     }
-    const std::size_t end = text.find_first_of(" \t\n\r", start);
-    const std::string_view word =
-        text.substr(start, end == std::string_view::npos ? text.size() - start : end - start);
-    widest = std::max(widest, MeasureTextWidth(registry, family, weight, italic, word, font_size));
-    start = end == std::string_view::npos ? text.size() : end;
+    // Flush the run that ends here (if any).
+    if (unit_start > run_start) {
+      widest = std::max(widest,
+                        MeasureTextWidth(registry,
+                                         family,
+                                         weight,
+                                         italic,
+                                         text.substr(run_start, unit_start - run_start),
+                                         font_size));
+    }
+    if (ideograph) {
+      // A CJK breakable character is an unbreakable unit on its own.
+      widest = std::max(widest,
+                        MeasureTextWidth(registry,
+                                         family,
+                                         weight,
+                                         italic,
+                                         text.substr(unit_start, scan - unit_start),
+                                         font_size));
+    }
+    run_start = scan;
+  }
+  if (run_start < text.size()) {
+    widest = std::max(
+        widest,
+        MeasureTextWidth(registry, family, weight, italic, text.substr(run_start), font_size));
   }
   return widest;
 }
@@ -561,7 +617,7 @@ void LayoutLines(std::vector<InlineItem>& items,
                       const graphics::FontSelector* selector) {
     const float word_width = selector != nullptr
                                  ? selector->TextWidth(word, style.font_size)
-                                 : static_cast<float>(word.size()) * style.font_size;
+                                 : static_cast<float>(CountCodePoints(word)) * style.font_size;
     // Ensure the word fits on the current (or a lower) line; a word that
     // cannot fit even at a line start is pushed below any overlapping floats.
     // An item wider than the block itself is placed as-is (never dropped).
@@ -585,6 +641,7 @@ void LayoutLines(std::vector<InlineItem>& items,
     run.font_size = style.font_size;
     run.width = word_width;
     run.color = style.color.value_or(css::Color{0, 0, 0, 255});
+    run.visible = style.visibility != style::Visibility::kHidden;
     run.underline = style.text_decoration_underline;
     run.element = element;
     // Inline element background + padding (CSS 2.2 §8.4.1/§10.1).  Percentages
@@ -1085,15 +1142,22 @@ void ComputeReplacedSize(const style::ComputedStyle& style,
   }
 
   // Specified size: CSS width/height win over the width/height attributes
-  // (presentational hints, HTML spec).
+  // (presentational hints, HTML spec).  PERCENTAGE widths/heights are not
+  // resolved here: the used percentage needs the definite containing block
+  // this function does not receive (a percentage height resolved against the
+  // containing WIDTH made every `width:100%;height:100%` image square --
+  // bilibili's video covers were laid out 240x240 instead of 240x135 and the
+  // square boxes painted over the title area below them).  A percentage falls
+  // through to the attributes/intrinsic size; the aspect ratio then carries
+  // whichever axis the caller resolves.
   std::optional<float> spec_w;
   std::optional<float> spec_h;
-  if (style.width.has_value()) {
+  if (style.width.has_value() && !style.width.value().percent) {
     spec_w = ResolveSize(style.width.value(), containing_width);
   } else if (const std::optional<std::int64_t> attr = ParseNonNegativeInt(element, "width")) {
     spec_w = static_cast<float>(attr.value());
   }
-  if (style.height.has_value()) {
+  if (style.height.has_value() && !style.height.value().percent) {
     spec_h = ResolveSize(style.height.value(), containing_width);
   } else if (const std::optional<std::int64_t> attr = ParseNonNegativeInt(element, "height")) {
     spec_h = static_cast<float>(attr.value());
@@ -1401,7 +1465,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
     // (CSS2.2 10.3.9), with the containing block width used as "available".
     // The box is positioned at its margin edge (border-box top-left at x=y=0
     // plus margins), so its four borders stay on-screen.
-    std::unique_ptr<LayoutBox> BuildInlineBlock(dom::Element& element, float containing_width)
+    std::unique_ptr<LayoutBox>
+    BuildInlineBlock(dom::Element& element, float containing_width, float percent_base_height = 0)
     {
       auto box = std::make_unique<LayoutBox>();
       box->element = &element;
@@ -1432,16 +1497,41 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
 
       const float avail_width = box->width - box->border_left - box->border_right -
                                 box->padding_left - box->padding_right;
-      std::vector<AbsoluteChild> absolute_children;
-      float content_height = LayoutBlockContent(
-          *box, element, avail_width, 0, 0, avail_width, 0, kNoFloats, absolute_children);
       const float border_padding_h =
           box->border_top + box->border_bottom + box->padding_top + box->padding_bottom;
+      // Definite content height, known before content layout: a specified
+      // height, or a percentage against the block container's definite
+      // height (the containing block for an atomic inline; CSS 2.2 §10.5).
+      // Resolving it up front lets the content itself see it -- an
+      // inline-flex picture with height:100% resolves its own flex items'
+      // cross sizes instead of falling back to the image's intrinsic height.
+      float definite_height = 0;
+      if (box->style.height.has_value()) {
+        const style::SizeSpec& height = box->style.height.value();
+        if (!height.percent) {
+          definite_height =
+              SpecToContent(height, containing_width, border_padding_h, box->style.box_sizing);
+        } else if (percent_base_height > 0) {
+          definite_height =
+              SpecToContent(height, percent_base_height, border_padding_h, box->style.box_sizing);
+        }
+      }
+      std::vector<AbsoluteChild> absolute_children;
+      float content_height = LayoutBlockContent(*box,
+                                                element,
+                                                avail_width,
+                                                0,
+                                                0,
+                                                avail_width,
+                                                0,
+                                                kNoFloats,
+                                                absolute_children,
+                                                /*percent_base_h=*/definite_height,
+                                                /*definite_content_height=*/definite_height);
       if (box->style.height.has_value() && !box->style.height.value().percent) {
-        content_height = SpecToContent(box->style.height.value(),
-                                       containing_width,
-                                       border_padding_h,
-                                       box->style.box_sizing); // specified height wins (10.6.2)
+        content_height = definite_height; // specified height wins (10.6.2)
+      } else if (box->style.height.has_value() && definite_height > 0) {
+        content_height = definite_height; // definite percentage: exact
       } else if (box->style.aspect_ratio.has_value() && box->style.width.has_value()) {
         // aspect-ratio (CSS Box Sizing 4): definite width, auto height.
         content_height = content_width / box->style.aspect_ratio.value();
@@ -1674,6 +1764,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         run.x = box->x + box->border_left + box->padding_left;
         run.y = box->y + box->border_top + box->padding_top;
         run.color = is_placeholder ? css::Color{160, 160, 160, 255} : css::Color{0, 0, 0, 255};
+        run.visible = box->style.visibility != style::Visibility::kHidden;
         run.width = MeasureTextWidth(
             registry, run.font_family, run.font_weight, run.font_italic, run.text, run.font_size);
         run.element = &element;
@@ -1848,12 +1939,15 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
     // Collects inline content under |node| into |items|: text, <br>, atomic
     // replaced <img> boxes, inline-blocks (atomic block boxes), and inline
     // element recursion.  |style|/|element| apply to |node|'s text children.
-    // |containing_width| is the block container's content width.
+    // |containing_width| is the block container's content width;
+    // |percent_base_height| is its definite content height (0 = indefinite),
+    // the basis for an atomic inline box's percentage height.
     void CollectInline(dom::Node& node,
                        const style::ComputedStyle& style,
                        const dom::Element* element,
                        float containing_width,
-                       std::vector<InlineItem>& items)
+                       std::vector<InlineItem>& items,
+                       float percent_base_height = 0)
     {
       if (node.node_type() == dom::NodeType::kText) {
         CollectText(static_cast<const dom::Text&>(node).data(), style, element, items);
@@ -1915,7 +2009,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       if (child_style.display == style::Display::kInlineBlock &&
           (child_style.position == style::Position::kStatic ||
            child_style.position == style::Position::kRelative)) {
-        auto block_box = BuildInlineBlock(child_element, containing_width);
+        auto block_box = BuildInlineBlock(child_element, containing_width, percent_base_height);
         InlineItem item;
         item.style = &child_style;
         item.element = &child_element;
@@ -1934,7 +2028,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         // Inline-level flex container: an atomic inline box whose content is
         // a flex container (handled by LayoutFlexContent inside
         // BuildInlineBlock's LayoutBlockContent dispatch).
-        auto block_box = BuildInlineBlock(child_element, containing_width);
+        auto block_box = BuildInlineBlock(child_element, containing_width, percent_base_height);
         InlineItem item;
         item.style = &child_style;
         item.element = &child_element;
@@ -1953,7 +2047,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         // Inline-level grid container: an atomic inline box whose content is
         // a grid container (handled by LayoutGridContent inside
         // BuildInlineBlock's LayoutBlockContent dispatch).
-        auto block_box = BuildInlineBlock(child_element, containing_width);
+        auto block_box = BuildInlineBlock(child_element, containing_width, percent_base_height);
         InlineItem item;
         item.style = &child_style;
         item.element = &child_element;
@@ -1967,7 +2061,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         return;
       }
       for (dom::Node* child : node.ChildNodes()) {
-        CollectInline(*child, child_style, &child_element, containing_width, items);
+        CollectInline(
+            *child, child_style, &child_element, containing_width, items, percent_base_height);
       }
     }
 
@@ -1990,13 +2085,21 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
                              float cb_h,
                              const std::vector<const LayoutBox*>& parent_floats,
                              std::vector<AbsoluteChild>& absolute_children,
-                             float percent_base_h = 0)
+                             float percent_base_h = 0,
+                             float definite_content_height = 0)
     {
       // A flex container's children are flex items, not normal-flow content.
       if (box.style.display == style::Display::kFlex ||
           box.style.display == style::Display::kInlineFlex) {
-        return LayoutFlexContent(
-            box, element, avail_width, cb_x, cb_y, cb_w, cb_h, absolute_children);
+        return LayoutFlexContent(box,
+                                 element,
+                                 avail_width,
+                                 cb_x,
+                                 cb_y,
+                                 cb_w,
+                                 cb_h,
+                                 absolute_children,
+                                 definite_content_height);
       }
       // A grid container's children are grid items, not normal-flow content.
       if (box.style.display == style::Display::kGrid ||
@@ -2100,8 +2203,12 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         } else {
           // Inline element: its text (and atomic <img>/inline-block boxes)
           // flows into the current inline run (this box's lines).
-          CollectInline(
-              child_element, child_style, &child_element, avail_width, current_inline_items());
+          CollectInline(child_element,
+                        child_style,
+                        &child_element,
+                        avail_width,
+                        current_inline_items(),
+                        /*percent_base_height=*/percent_base_h);
         }
       }
 
@@ -2281,6 +2388,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
           run.font_italic = box.style.font_italic;
           run.font_size = box.style.font_size;
           run.color = box.style.color.value_or(css::Color{0, 0, 0, 255});
+          run.visible = box.style.visibility != style::Visibility::kHidden;
           run.element = &element;
           run.width = MeasureTextWidth(
               registry, run.font_family, run.font_weight, run.font_italic, run.text, run.font_size);
@@ -2476,7 +2584,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
                                             /*cb_h*/ 0.0f,
                                             parent_floats,
                                             absolute_children,
-                                            /*percent_base_h=*/definite_content_height);
+                                            /*percent_base_h=*/definite_content_height,
+                                            /*definite_content_height=*/definite_content_height);
       }
 
       if (replaced_media) {
@@ -2485,7 +2594,10 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       } else if (box->style.height.has_value()) {
         if (box->style.height.value().percent) {
           if (percent_base_h > 0) {
-            content_height = std::max(content_height, definite_content_height);
+            // A percentage height against a definite containing block height
+            // is exact: content taller than the box overflows (CSS 2.2
+            // §10.5; the carousel's overflow:hidden relies on it).
+            content_height = definite_content_height;
           }
           // else: a percentage height against an auto containing block is auto.
         } else {
@@ -2610,6 +2722,23 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
 
       const float avail = box->width - box->border_left - box->border_right - box->padding_left -
                           box->padding_right;
+      const float border_padding_h =
+          box->border_top + box->border_bottom + box->padding_top + box->padding_bottom;
+      // The item's definite content height, known before content layout, so
+      // that percentage-height descendants resolve against it (CSS 2.2 §10.5:
+      // a percentage resolves against a specified containing block height).
+      // Percentages resolve against the flex container's content height when
+      // definite (the caller passes it as cb_h; 0 = indefinite -> auto).
+      float definite_height = 0;
+      if (box->style.height.has_value()) {
+        const style::SizeSpec& height = box->style.height.value();
+        if (!height.percent) {
+          definite_height =
+              SpecToContent(height, containing_width, border_padding_h, box->style.box_sizing);
+        } else if (cb_h > 0) {
+          definite_height = SpecToContent(height, cb_h, border_padding_h, box->style.box_sizing);
+        }
+      }
       std::vector<AbsoluteChild> absolute_children;
       float content_height = 0;
       if (replaced_media) {
@@ -2617,20 +2746,43 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         // replaced size (the decoded pixels ride on the box for the painter).
         box->image = replaced_image;
         content_height = replaced_h;
+        // Aspect-ratio transfer (CSS Images 3 §5.1): when the main size was
+        // resolved by the flex algorithm and the cross size is indefinite
+        // (auto, or a percentage against an indefinite containing block),
+        // the replaced height follows the intrinsic ratio of the USED width.
+        // A 976x550 slide image shrunk to a 240px flex line is 135px tall,
+        // not its intrinsic 550px -- without this the image (a carousel
+        // slide or a cover picture inside a percentage chain) sized itself
+        // from its pixels and overflowed the clipped container.
+        const bool cross_indefinite =
+            !box->style.height.has_value() || (box->style.height.value().percent && cb_h <= 0);
+        if (forced_content_width.has_value() && replaced_w > 0 && cross_indefinite) {
+          content_height = replaced_h * (forced_content_width.value() / replaced_w);
+        }
       } else {
-        content_height = LayoutBlockContent(
-            *box, element, avail, cb_x, cb_y, cb_w, cb_h, kNoFloats, absolute_children);
+        content_height = LayoutBlockContent(*box,
+                                            element,
+                                            avail,
+                                            cb_x,
+                                            cb_y,
+                                            cb_w,
+                                            cb_h,
+                                            kNoFloats,
+                                            absolute_children,
+                                            /*percent_base_h=*/definite_height);
       }
-      const float border_padding_h =
-          box->border_top + box->border_bottom + box->padding_top + box->padding_bottom;
       if (forced_content_height.has_value()) {
         content_height = forced_content_height.value();
       } else if (box->style.height.has_value()) {
         const style::SizeSpec& height = box->style.height.value();
         if (!height.percent) {
-          content_height = std::max(
-              content_height,
-              SpecToContent(height, containing_width, border_padding_h, box->style.box_sizing));
+          content_height = std::max(content_height, definite_height);
+        } else if (definite_height > 0) {
+          // A definite percentage is exact: without this the item fell back
+          // to its content height, breaking a 100%-height chain (the
+          // carousel slide image sized itself from its intrinsic pixels
+          // instead of the slide area).
+          content_height = definite_height;
         }
       }
       // min/max-height clamp (CSS 2.2 §10.4); min wins over max.
@@ -2897,17 +3049,38 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         } else if (row ? s.width.has_value() : s.height.has_value()) {
           main_spec = row ? &s.width.value() : &s.height.value();
         }
+        const bool replaced_media = child_el.tag_name() == "img" ||
+                                    child_el.tag_name() == "video" ||
+                                    child_el.tag_name() == "canvas";
         if (main_spec != nullptr) {
           item.base_main =
               SpecToContent(*main_spec, avail_width, item.border_padding_main, s.box_sizing);
           item.base_from_spec = true;
+        } else if (replaced_media) {
+          // Replaced items without a CSS main size use their replaced size
+          // (decoded intrinsic size, else the width/height attributes).
+          // MeasureContent reports 0 for them, which collapsed an <img> in a
+          // flex row to zero width until a relayout followed the image load.
+          const image::Image* replaced_image = images != nullptr ? images->Find(child_el) : nullptr;
+          float replaced_w = 0;
+          float replaced_h = 0;
+          ComputeReplacedSize(s, child_el, replaced_image, avail_width, replaced_w, replaced_h);
+          item.base_main = row ? replaced_w : replaced_h;
         } else if (row) {
           item.base_main = MeasureContent(child_el, styles, registry).max;
         }
         if (row) {
           // Shrink floor: the item's min-content main size, but never below
-          // the resolved min-width (CSS Flexbox 1 §9.7).
-          item.min_main = MeasureContent(child_el, styles, registry).min;
+          // the resolved min-width (CSS Flexbox 1 §9.7).  A replaced item may
+          // shrink below its intrinsic size: the content scales, and keeping
+          // the intrinsic size as the floor left an <img> overflowing its
+          // stretched flex container (bilibili's header banner, an inline-flex
+          // picture holding the art image).  Documented approximation: the
+          // spec's automatic minimum for replaced items is the smaller of the
+          // specified and content size suggestions; treating it as 0 matches
+          // the practical "image shrinks to the container" behaviour real
+          // pages rely on.
+          item.min_main = replaced_media ? 0.0f : MeasureContent(child_el, styles, registry).min;
           if (item.min_main_clamp > item.min_main) {
             item.min_main = item.min_main_clamp;
           }
@@ -3050,7 +3223,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
                             float cb_y,
                             float cb_w,
                             float cb_h,
-                            std::vector<AbsoluteChild>& absolute_children)
+                            std::vector<AbsoluteChild>& absolute_children,
+                            float definite_content_height = 0)
     {
       const style::ComputedStyle& cs = box.style;
       const bool row = cs.flex_direction == style::FlexDirection::kRow ||
@@ -3070,19 +3244,45 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       const float container_bp_h =
           box.border_top + box.border_bottom + box.padding_top + box.padding_bottom;
       float container_main = avail_width;
-      if (!row && cs.height.has_value() && !cs.height.value().percent) {
-        container_main =
-            SpecToContent(cs.height.value(), avail_width, container_bp_h, cs.box_sizing);
+      bool main_definite = row;
+      if (!row) {
+        if (definite_content_height > 0) {
+          // Caller has already resolved the used height (an absolutely
+          // positioned container filling its containing block).
+          container_main = definite_content_height;
+          main_definite = true;
+        } else if (cs.height.has_value() && !cs.height.value().percent) {
+          container_main =
+              SpecToContent(cs.height.value(), avail_width, container_bp_h, cs.box_sizing);
+          main_definite = true;
+        }
       }
-      const bool main_definite = row || (cs.height.has_value() && !cs.height.value().percent);
       // Container cross size: for a column it is the (definite) content
-      // width; for a row it is the specified content height, else auto.
+      // width; for a row it is the specified content height, else auto.  A
+      // percentage height resolves against the containing block height when
+      // it is definite (cb_h > 0) -- e.g. an absolutely positioned inline-flex
+      // picture sized 100% x 100% of its banner; with an indefinite containing
+      // block the percentage is auto.  |definite_content_height| (nonzero)
+      // supplies the already-resolved used height of a container that fills
+      // its containing block but has no height declaration of its own.
       float container_cross = avail_width;
-      if (row && cs.height.has_value() && !cs.height.value().percent) {
-        container_cross =
-            SpecToContent(cs.height.value(), avail_width, container_bp_h, cs.box_sizing);
+      bool cross_definite = !row;
+      if (row) {
+        if (definite_content_height > 0) {
+          container_cross = definite_content_height;
+          cross_definite = true;
+        } else if (cs.height.has_value()) {
+          const style::SizeSpec& cross_height = cs.height.value();
+          if (!cross_height.percent) {
+            container_cross =
+                SpecToContent(cross_height, avail_width, container_bp_h, cs.box_sizing);
+            cross_definite = true;
+          } else if (cb_h > 0) {
+            container_cross = SpecToContent(cross_height, cb_h, container_bp_h, cs.box_sizing);
+            cross_definite = true;
+          }
+        }
       }
-      const bool cross_definite = !row || (cs.height.has_value() && !cs.height.value().percent);
 
       // ---- Collect and measure flex items (§9.2) ----
       std::vector<FlexItemData> items;
@@ -3121,8 +3321,12 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       // heights to their final main size ----
       for (FlexItemData& item : items) {
         if (row) {
+          // cb_h for the item's percentage heights: the flex container's
+          // content height when definite (cross_definite carries that), else
+          // 0 (indefinite -> percentage heights are auto).
+          const float item_cb_h = cross_definite ? container_cross : 0.0f;
           item.box = BuildFlexItemBox(
-              item, item.content_main, std::nullopt, avail_width, cb_x, cb_y, cb_w, cb_h);
+              item, item.content_main, std::nullopt, avail_width, cb_x, cb_y, cb_w, item_cb_h);
           item.content_cross = item.box->content_height();
         } else {
           item.box->height =
@@ -3289,16 +3493,21 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
           // space distributed to auto margins.
           const float eff_margin_main =
               it->margin_main + auto_main_share * static_cast<float>(it->auto_main_margins);
-          // Cross size: stretch items fill the line (auto cross margins
-          // override stretch, CSS Flexbox 1 §8.1).
+          // Cross size: stretch items fill the line exactly (auto cross
+          // margins override stretch, CSS Flexbox 1 §8.1).  The stretched
+          // size REPLACES the natural cross size -- taking the max left a
+          // replaced item (an <img> with an intrinsic aspect ratio) taller
+          // than its stretch target, so bilibili's header art image was not
+          // sized to its 100%-height banner.  Content taller than the filled
+          // line overflows, which is the spec behaviour.
           if (it->auto_cross_margins == 0 && eff_align == style::AlignItems::kStretch &&
               it->cross_auto) {
             const float target = line_cross[li] - it->margin_cross;
             if (row) {
-              it->box->height = std::max(it->box->height, target);
+              it->box->height = target;
               it->content_cross = it->box->content_height();
             } else {
-              it->box->width = std::max(it->box->width, target);
+              it->box->width = target;
               it->content_cross = it->box->content_width();
             }
           }
@@ -4109,20 +4318,49 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         content_height = replaced_h;
         box->image = img;
       } else {
+        // The vertical constraint equation (CSS 2.2 §10.6.4): top +
+        // margin-top + border/padding + height + margin-bottom + bottom =
+        // containing block height.  With height:auto and both insets
+        // definite the used height is known before content layout -- an
+        // absolute top:0;bottom:0 panel fills the remaining space, and the
+        // hint lets a flex container inside resolve its definite height (a
+        // 100%-height child chain; the carousel activity banner relied on
+        // it, otherwise the slide image fell back to its intrinsic height).
+        float definite_fill_height = 0;
+        const bool fills_vertically = !box->style.height.has_value() && cb_h > 0 &&
+                                      !box->style.top_auto && !box->style.bottom_auto;
+        if (fills_vertically) {
+          const float vertical_extras = box->margin_top + box->margin_bottom + border_padding_h;
+          definite_fill_height = std::max(0.0f, cb_h - top_inset - bottom_inset - vertical_extras);
+        }
         content_height = LayoutBlockContent(*box,
                                             element,
                                             avail_width,
                                             box->border_left,
                                             box->border_top,
                                             avail_width,
-                                            /*cb_h*/ 0.0f,
+                                            /*cb_h*/ cb_h,
                                             parent_floats,
-                                            absolute_children);
-        if (box->style.height.has_value() && !box->style.height.value().percent) {
-          content_height = std::max(
-              content_height,
-              SpecToContent(
-                  box->style.height.value(), cb_w, border_padding_h, box->style.box_sizing));
+                                            absolute_children,
+                                            /*percent_base_h*/ 0,
+                                            /*definite_content_height*/ definite_fill_height);
+        if (box->style.height.has_value()) {
+          const style::SizeSpec& height = box->style.height.value();
+          if (!height.percent) {
+            content_height =
+                std::max(content_height,
+                         SpecToContent(height, cb_w, border_padding_h, box->style.box_sizing));
+          } else if (cb_h > 0) {
+            // An absolutely positioned box resolves a percentage height
+            // against the containing block's height (CSS 2.2 §10.6.4).  The
+            // caller passes the nearest positioned ancestor's content height;
+            // 0 means the height is not definite, in which case the
+            // percentage is treated as auto.  The resolved height is exact
+            // (content taller than a specified height overflows).
+            content_height = SpecToContent(height, cb_h, border_padding_h, box->style.box_sizing);
+          }
+        } else if (fills_vertically) {
+          content_height = definite_fill_height;
         }
       }
       box->height = content_height + border_padding_h;

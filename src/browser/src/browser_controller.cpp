@@ -1758,10 +1758,12 @@ void BrowserController::PumpScriptTimers()
 void BrowserController::SetTabScrollOffset(int tab_id, float y)
 {
   Tab* tab = nullptr;
+  bool changed = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     for (const auto& candidate : tabs_) {
       if (candidate->id == tab_id) {
+        changed = candidate->scroll_offset_y != y;
         candidate->scroll_offset_y = y;
         candidate->frame_dirty = true;
         tab = candidate.get();
@@ -1774,10 +1776,17 @@ void BrowserController::SetTabScrollOffset(int tab_id, float y)
   }
   if (!IsRemoteTab(*tab)) {
     // In-process: the DOM is here, so the new scroll position is what the
-    // page observes.  Re-evaluate IntersectionObserver wiring (lazy-loading
-    // scaffolding on real pages hangs off it) and pick up the image sources
-    // the resulting callbacks assigned.
+    // page observes.  A changed offset fires the document-level "scroll"
+    // event first (WHATWG HTML "scroll" for the viewport: the event target is
+    // the Document, which is also where window-level listeners registered in
+    // this engine); infinite-scroll feeds hang their next-page loads off it.
+    // Then re-evaluate IntersectionObserver wiring (the other lazy-loading
+    // signal on real pages) and pick up the image sources the resulting
+    // callbacks assigned.
     if (tab->script_runtime != nullptr && tab->page != nullptr) {
+      if (changed) {
+        tab->script_runtime->DispatchDocumentEvent("scroll");
+      }
       tab->script_runtime->RefreshIntersectionObservers();
       const bool style_changed = tab->script_runtime->TakeStyleDirty();
       const bool dom_changed = tab->script_runtime->TakeDomDirty();

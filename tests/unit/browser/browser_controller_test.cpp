@@ -2464,6 +2464,72 @@ TEST(BrowserControllerTest, ScrollingTriggersObserverDrivenImageFetch)
   EXPECT_GE(fetch.RequestCount(), 2u); // document + late.png
 }
 
+// A changed viewport scroll offset fires the document-level "scroll" event
+// (WHATWG HTML: the target is the Document, which is also where window-level
+// listeners registered in this engine live).  Infinite-scroll feeds load
+// their next page from that listener; without the event the page never
+// grows and the user cannot scroll further.
+TEST(BrowserControllerTest, ScrollEventFiresWhenTheOffsetChanges)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body style=\"height:3000px\">"
+                               "<div id=\"marker\">init</div>"
+                               "<script>"
+                               "window.addEventListener('scroll', function(){"
+                               "  document.getElementById('marker')"
+                               "    .setAttribute('data-scroll', String(window.scrollY));"
+                               "});"
+                               "document.addEventListener('scroll', function(){"
+                               "  document.getElementById('marker')"
+                               "    .setAttribute('data-doc-scroll', String(window.scrollY));"
+                               "});"
+                               "</script></body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  ASSERT_NE(tab->page, nullptr);
+  controller.PumpScriptTimers();
+
+  {
+    dom::Element* marker = dom::QuerySelector(*tab->page->document(), "#marker");
+    ASSERT_NE(marker, nullptr);
+    EXPECT_FALSE(marker->GetAttribute("data-scroll").has_value());
+  }
+
+  // The browser half of the GUI's scrollbar handler.
+  controller.SetTabScrollOffset(tab->id, 250.0F);
+  {
+    dom::Element* marker = dom::QuerySelector(*tab->page->document(), "#marker");
+    ASSERT_NE(marker, nullptr);
+    const std::optional<std::string_view> value = marker->GetAttribute("data-scroll");
+    ASSERT_TRUE(value.has_value()) << "scroll listener did not run";
+    EXPECT_EQ(*value, "250");
+    // A listener registered on the document (the event target) runs too.
+    const std::optional<std::string_view> doc_value = marker->GetAttribute("data-doc-scroll");
+    ASSERT_TRUE(doc_value.has_value()) << "document scroll listener did not run";
+    EXPECT_EQ(*doc_value, "250");
+  }
+
+  // Re-applying the same offset is not a scroll: no second event.
+  dom::Element* marker = dom::QuerySelector(*tab->page->document(), "#marker");
+  ASSERT_NE(marker, nullptr);
+  marker->SetAttribute("data-scroll", "reset");
+  marker->SetAttribute("data-doc-scroll", "reset");
+  controller.SetTabScrollOffset(tab->id, 250.0F);
+  EXPECT_EQ(marker->GetAttribute("data-scroll").value_or(""), "reset")
+      << "an unchanged offset must not fire scroll";
+  //...but a different offset does.
+  controller.SetTabScrollOffset(tab->id, 400.0F);
+  EXPECT_EQ(marker->GetAttribute("data-scroll").value_or(""), "400");
+}
+
 // Timer batches only re-run the cascade when the DOM actually changed in a
 // style-affecting way.  A pure rAF/poll tick used to trigger a full restyle +
 // relayout on every 50 ms pump (measured >600 ms per pass on bilibili), and a

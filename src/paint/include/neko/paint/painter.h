@@ -20,6 +20,11 @@ public:
 private:
   void PaintBox(const layout::LayoutBox& box, DisplayList& list) const;
 
+  // Paints the box's own decorations and content (background, border,
+  // replaced image); the caller gates this on visibility and handles the
+  // clipping + child recursion.
+  void PaintBoxSelf(const layout::LayoutBox& box, DisplayList& list) const;
+
   const layout::LayoutBox* root_;
 };
 

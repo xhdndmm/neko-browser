@@ -317,6 +317,48 @@ int ElementIndex(const dom::Node* node)
   return 0;
 }
 
+// 1-based position of |node| among its element siblings with the same tag
+// name (:nth-of-type semantics, Selectors 4 §4.6).
+int ElementTypeIndex(const dom::Node* node)
+{
+  if (node->node_type() != dom::NodeType::kElement) {
+    return 0;
+  }
+  const dom::Node* parent = node->parent();
+  if (parent == nullptr) {
+    return 0;
+  }
+  const std::string_view tag = static_cast<const dom::Element*>(node)->tag_name();
+  int index = 0;
+  for (dom::Node* child : parent->ChildNodes()) {
+    if (child->node_type() != dom::NodeType::kElement) {
+      continue;
+    }
+    if (static_cast<const dom::Element*>(child)->tag_name() != tag) {
+      continue;
+    }
+    ++index;
+    if (child == node) {
+      return index;
+    }
+  }
+  return 0;
+}
+
+// True when |index| matches the An+B formula (1-based).  |a| == 0 reduces to
+// index == b.
+bool AnBMatches(int index, int a, int b)
+{
+  if (index <= 0) {
+    return false;
+  }
+  if (a == 0) {
+    return index == b;
+  }
+  const int diff = index - b;
+  return diff % a == 0 && (a > 0 ? diff >= 0 : diff <= 0) && diff / a >= 0;
+}
+
 // Parses an+b (e.g. "2n+1", "-n+3", "odd", "even") into (a, b) with b as the
 // 1-based matching positions offset.  Returns false for "n" alone which needs
 // special handling.
@@ -478,12 +520,44 @@ bool PseudoClassMatches(const dom::Element& element,
     if (!ParseAnB(pseudo.substr(open + 1, close - open - 1), a, b)) {
       return false;
     }
-    const int index = ElementIndex(&element);
-    if (a == 0) {
-      return index == b;
+    return AnBMatches(ElementIndex(&element), a, b);
+  }
+  if (pseudo.rfind("nth-of-type", 0) == 0) {
+    const std::size_t open = pseudo.find('(');
+    const std::size_t close = pseudo.find(')');
+    if (open == std::string_view::npos || close == std::string_view::npos || close < open) {
+      return false;
     }
-    const int diff = index - b;
-    return diff % a == 0 && (a > 0 ? diff >= 0 : diff <= 0) && diff / a >= 0;
+    int a = 0;
+    int b = 0;
+    if (!ParseAnB(pseudo.substr(open + 1, close - open - 1), a, b)) {
+      return false;
+    }
+    return AnBMatches(ElementTypeIndex(&element), a, b);
+  }
+  if (pseudo == "first-of-type") {
+    return ElementTypeIndex(&element) == 1;
+  }
+  if (pseudo == "last-of-type") {
+    if (ElementTypeIndex(&element) == 0) {
+      return false;
+    }
+    const dom::Node* parent = element.parent();
+    const std::string_view tag = element.tag_name();
+    bool seen_self = false;
+    for (dom::Node* child : parent->ChildNodes()) {
+      if (child == static_cast<const dom::Node*>(&element)) {
+        seen_self = true;
+        continue;
+      }
+      if (child->node_type() != dom::NodeType::kElement) {
+        continue;
+      }
+      if (seen_self && static_cast<const dom::Element*>(child)->tag_name() == tag) {
+        return false;
+      }
+    }
+    return true;
   }
   if (pseudo == "link" || pseudo == "any-link") {
     // A hyperlink source anchor (HTML Living Standard): <a>/<area> with href.

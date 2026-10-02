@@ -201,12 +201,24 @@ enum class Overflow
   kScroll,
 };
 
+// CSS 2.2 §11.2 visibility.  Inherited; hidden boxes keep their layout space
+// but are not painted (descendants may set visibility:visible again).
+enum class Visibility
+{
+  kVisible,
+  kHidden,
+};
+
 // A calc() term: `percent% of the containing block + offset px`.  min()/max()
 // and clamp() arguments are also linear combinations of this form.
 struct CalcTerm
 {
   float offset = 0;  // px component
   float percent = 0; // percentage coefficient
+  // True when the term is a pure <number> (no unit and no percentage).
+  // Multiplication/division in calc() require at least one number operand
+  // (CSS Values 4 §10.5); a bare number is carried in |offset|.
+  bool is_number = false;
 };
 
 // A length that may be a percentage (resolved against the containing block),
@@ -356,6 +368,9 @@ struct ComputedStyle
 
   // overflow (CSS Overflow 3).  Initial value: visible.
   Overflow overflow = Overflow::kVisible;
+
+  // visibility (CSS 2.2 §11.2).  Inherited.  Initial value: visible.
+  Visibility visibility = Visibility::kVisible;
 
   // Replaced content fitting (img).
   ObjectFit object_fit = ObjectFit::kFill;

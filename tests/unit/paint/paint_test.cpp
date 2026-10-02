@@ -381,6 +381,59 @@ TEST(PainterTest, InlineBlockPaintsInnerBlockBackground)
   EXPECT_TRUE(found);
 }
 
+TEST(PainterTest, VisibilityHiddenKeepsLayoutButSkipsPainting)
+{
+  // CSS 2.2 §11.2: a hidden box keeps its layout space but paints nothing;
+  // a descendant that sets visibility:visible paints again.  Real pages hide
+  // ad slots and un-hydrated card wrappers this way.
+  auto doc = html::Parser(
+                 "<body><div style=\"visibility:hidden;background-color:#ff0000;width:100px;"
+                 "height:40px\"><span style=\"background-color:#00ff00;width:10px;height:10px;"
+                 "display:inline-block\">hidden</span>"
+                 "<span style=\"visibility:visible;background-color:#0000ff;width:10px;height:10px;"
+                 "display:inline-block\">shown</span></div>"
+                 "<p>after</p></body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine layout(styles);
+  std::unique_ptr<layout::LayoutBox> root = layout.BuildLayoutTree(*doc, 400);
+
+  // The hidden div still occupies its 40px of layout.
+  const dom::Element* div = dom::QuerySelector(*doc, "div");
+  ASSERT_NE(div, nullptr);
+
+  Painter painter(root.get());
+  const DisplayList list = painter.Paint();
+  bool has_red = false;
+  bool has_green = false;
+  bool has_blue = false;
+  bool has_hidden_text = false;
+  bool has_shown_text = false;
+  for (const DrawCommand& c : list.commands()) {
+    if (c.type == CommandType::kFillRect && c.color == css::Color{255, 0, 0, 255}) {
+      has_red = true;
+    }
+    if (c.type == CommandType::kFillRect && c.color == css::Color{0, 255, 0, 255}) {
+      has_green = true;
+    }
+    if (c.type == CommandType::kFillRect && c.color == css::Color{0, 0, 255, 255}) {
+      has_blue = true;
+    }
+    if (c.type == CommandType::kDrawText && c.text == "hidden") {
+      has_hidden_text = true;
+    }
+    if (c.type == CommandType::kDrawText && c.text == "shown") {
+      has_shown_text = true;
+    }
+  }
+  EXPECT_FALSE(has_red) << "hidden background must not paint";
+  EXPECT_FALSE(has_green) << "hidden child must not paint";
+  EXPECT_FALSE(has_hidden_text) << "hidden text must not paint";
+  EXPECT_TRUE(has_blue) << "a visibility:visible child paints again";
+  EXPECT_TRUE(has_shown_text) << "text of a visibility:visible child paints";
+}
+
 TEST(PainterTest, InlineElementBackgroundAndPaddingArePainted)
 {
   // A padded inline element with a background paints a filled rect behind its

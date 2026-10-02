@@ -213,6 +213,63 @@ TEST(CssSelectorTest, PseudoClasses)
   EXPECT_TRUE(MatchesSelector(*p2, ParseSelectorList("p:nth-child(2n)")[0]));
 }
 
+TEST(CssSelectorTest, TypePseudoClasses)
+{
+  // :nth-of-type / :first-of-type / :last-of-type count element siblings of
+  // the same tag (Selectors 4 §4.6).  Real pages use them to reveal feed
+  // items by position (`.feed-card:nth-of-type(n+12){display:none}`).
+  auto doc = std::make_unique<dom::Document>();
+  auto html = std::make_unique<dom::Element>("html");
+  auto body = std::make_unique<dom::Element>("body");
+  // Sequence: div, p, div, p, p  (children of body).
+  std::vector<dom::Element*> divs;
+  std::vector<dom::Element*> ps;
+  for (int i = 0; i < 2; ++i) {
+    auto p_before = std::make_unique<dom::Element>("p");
+    ps.push_back(p_before.get());
+    body->AppendChild(std::move(p_before));
+    auto d = std::make_unique<dom::Element>("div");
+    divs.push_back(d.get());
+    body->AppendChild(std::move(d));
+  }
+  for (int i = 0; i < 2; ++i) {
+    auto p = std::make_unique<dom::Element>("p");
+    ps.push_back(p.get());
+    body->AppendChild(std::move(p));
+  }
+  html->AppendChild(std::move(body));
+  doc->AppendChild(std::move(html));
+
+  // divs are the 1st and 2nd of their type even though they are children
+  // #2 and #4 overall.
+  EXPECT_TRUE(MatchesSelector(*divs[0], ParseSelectorList("div:first-of-type")[0]));
+  EXPECT_FALSE(MatchesSelector(*divs[1], ParseSelectorList("div:first-of-type")[0]));
+  EXPECT_TRUE(MatchesSelector(*divs[1], ParseSelectorList("div:nth-of-type(2)")[0]));
+  EXPECT_FALSE(MatchesSelector(*divs[1], ParseSelectorList("div:nth-of-type(1)")[0]));
+  EXPECT_TRUE(MatchesSelector(*divs[1], ParseSelectorList("div:last-of-type")[0]));
+  // p children: #1, #2, #3, #4 of type p.
+  EXPECT_TRUE(MatchesSelector(*ps[0], ParseSelectorList("p:first-of-type")[0]));
+  EXPECT_TRUE(MatchesSelector(*ps[3], ParseSelectorList("p:last-of-type")[0]));
+  EXPECT_FALSE(MatchesSelector(*ps[2], ParseSelectorList("p:last-of-type")[0]));
+  EXPECT_TRUE(MatchesSelector(*ps[2], ParseSelectorList("p:nth-of-type(3)")[0]));
+  EXPECT_TRUE(MatchesSelector(*ps[3], ParseSelectorList("p:nth-of-type(2n)")[0]));
+  EXPECT_FALSE(MatchesSelector(*ps[2], ParseSelectorList("p:nth-of-type(2n)")[0]));
+  // The n+12 feed pattern: the 12th of its type matches, the 11th does not.
+  auto doc2 = std::make_unique<dom::Document>();
+  auto root = std::make_unique<dom::Element>("div");
+  std::vector<dom::Element*> cards;
+  for (int i = 0; i < 13; ++i) {
+    auto card = std::make_unique<dom::Element>("div");
+    card->SetAttribute("class", "feed-card");
+    cards.push_back(card.get());
+    root->AppendChild(std::move(card));
+  }
+  doc2->AppendChild(std::move(root));
+  EXPECT_FALSE(MatchesSelector(*cards[10], ParseSelectorList(".feed-card:nth-of-type(n+12)")[0]));
+  EXPECT_TRUE(MatchesSelector(*cards[11], ParseSelectorList(".feed-card:nth-of-type(n+12)")[0]));
+  EXPECT_TRUE(MatchesSelector(*cards[12], ParseSelectorList(".feed-card:nth-of-type(n+12)")[0]));
+}
+
 TEST(CssSelectorTest, LinkPseudoClasses)
 {
   auto doc = std::make_unique<dom::Document>();
