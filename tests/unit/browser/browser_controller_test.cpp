@@ -540,6 +540,39 @@ TEST(BrowserControllerTest, RunsInlineScriptsOnHtmlLoad)
   EXPECT_NE(tab->script_runtime, nullptr);
 }
 
+// window.sessionStorage is tab-scoped (WHATWG HTML 7.1): values written by
+// one page survive a navigation in the same tab, while a new tab starts with
+// an empty store.
+TEST(BrowserControllerTest, SessionStorageSurvivesNavigationAndIsPerTab)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/a",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>A</title></head><body><script>"
+                               "sessionStorage.setItem('k', 'tab-value');"
+                               "</script></body></html>"});
+  const std::string reader = "<html><head><title>B</title></head><body><script>"
+                             "document.title = sessionStorage.getItem('k') || 'missing';"
+                             "</script></body></html>";
+  fetch.Add("http://example.com/b",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}}, reader});
+  fetch.Add("http://example.com/c",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}}, reader});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/a").has_value());
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/b").has_value());
+  EXPECT_EQ(controller.ActiveTab()->title, "tab-value");
+
+  // A new tab has its own session store.
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/c").has_value());
+  EXPECT_EQ(controller.ActiveTab()->title, "missing");
+}
+
 // A page script calling window.scrollTo requests a scroll: the controller
 // records the pending offset and bumps the GUI-visible latch.
 TEST(BrowserControllerTest, ScriptScrollSetsPendingScroll)

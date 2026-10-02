@@ -72,6 +72,17 @@ struct PageApis
   std::function<void()> storage_clear;
   std::function<std::vector<std::string>()> storage_keys;
 
+  // window.sessionStorage (per top-level browsing context = tab; the caller
+  // scopes keys by origin).  When unset the binder falls back to a
+  // document-lifetime map, which is not spec-correct across navigations;
+  // the browser layer always provides the tab-scoped store (ADR: storage
+  // wiring in browser::RunPageScripts).
+  std::function<std::optional<std::string>(std::string_view)> session_storage_get;
+  std::function<void(std::string_view, std::string_view)> session_storage_set;
+  std::function<bool(std::string_view)> session_storage_remove;
+  std::function<void()> session_storage_clear;
+  std::function<std::vector<std::string>()> session_storage_keys;
+
   // window.fetch: performs the request for the (absolute) URL string; an Err
   // result rejects the returned promise (network error).
   std::function<base::Result<FetchResponse>(const std::string&)> fetch;

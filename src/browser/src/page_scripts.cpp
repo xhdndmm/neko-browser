@@ -246,6 +246,29 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
       return keys;
     };
   }
+  if (services.session_storage != nullptr) {
+    // window.sessionStorage is tab-scoped: the browser passes the tab's store
+    // so values survive navigations within the tab (and vanish with it).
+    storage::SessionStorage* store = services.session_storage;
+    const std::string origin = services.origin;
+    apis.session_storage_get = [store, origin](std::string_view key) {
+      return store->GetItem(origin, key);
+    };
+    apis.session_storage_set = [store, origin](std::string_view key, std::string_view value) {
+      store->SetItem(origin, key, value);
+    };
+    apis.session_storage_remove = [store, origin](std::string_view key) {
+      return store->RemoveItem(origin, key);
+    };
+    apis.session_storage_clear = [store, origin]() { store->Clear(origin); };
+    apis.session_storage_keys = [store, origin]() {
+      std::vector<std::string> keys;
+      for (const auto& entry : store->All(origin)) {
+        keys.push_back(entry.first);
+      }
+      return keys;
+    };
+  }
   if (services.cookies != nullptr) {
     storage::CookieStore* cookies = services.cookies;
     const base::Result<url::Url> document_url = url::Url::Parse(base_url);

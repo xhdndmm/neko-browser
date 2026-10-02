@@ -91,6 +91,11 @@ struct Tab
   std::shared_ptr<std::string> raw_text;   // kText / kOther
   std::shared_ptr<std::string> error;      // kError
 
+  // window.sessionStorage for this tab (WHATWG HTML 7.1 "session storage"):
+  // in-memory, partitioned by origin, survives navigations within the tab and
+  // dies with it.  Worker thread only.
+  storage::SessionStorage session_storage;
+
   // Direct navigation to an animated GIF: the full frame set plus the playback
   // position, advanced on the same frame clock as page animations
   // (PumpScriptTimers).  |image| above always holds the frame to display, and

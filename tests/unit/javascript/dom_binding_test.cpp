@@ -7,6 +7,7 @@
 #include "neko/html/parser.h"
 #include "neko/javascript/dom_binding.h"
 #include "neko/storage/indexed_db.h"
+#include "neko/storage/session_storage.h"
 
 #include <chrono>
 #include <filesystem>
@@ -2327,6 +2328,54 @@ TEST_F(DomBinderTest, SessionStorageUsesDocumentScopedStorage)
           .ToBoolean());
   ASSERT_TRUE(binder_->Evaluate("sessionStorage.getItem('consent') === 'yes'").has_value());
   EXPECT_TRUE(binder_->Evaluate("sessionStorage.getItem('consent') === 'yes'").value().ToBoolean());
+}
+
+// When the browser layer provides the tab-scoped session store through
+// PageApis, sessionStorage reads and writes go there instead of the
+// binder-local fallback: a fresh binder (i.e. a navigation) in the same tab
+// still sees the values.
+TEST(DomBinderSessionStorageTest, UsesTheBrowserProvidedTabStore)
+{
+  auto document = html::Parser("<!doctype html><html><body></body></html>").Parse();
+  storage::SessionStorage store;
+  const std::string origin = "https://example.com/";
+  PageApis apis;
+  apis.location_href = []() { return std::string("https://example.com/"); };
+  apis.session_storage_get = [&store, origin](std::string_view key) {
+    return store.GetItem(origin, key);
+  };
+  apis.session_storage_set = [&store, origin](std::string_view key, std::string_view value) {
+    store.SetItem(origin, key, value);
+  };
+  apis.session_storage_remove = [&store, origin](std::string_view key) {
+    return store.RemoveItem(origin, key);
+  };
+  apis.session_storage_clear = [&store, origin]() { store.Clear(origin); };
+  apis.session_storage_keys = [&store, origin]() {
+    std::vector<std::string> keys;
+    for (const auto& entry : store.All(origin)) {
+      keys.push_back(entry.first);
+    }
+    return keys;
+  };
+
+  {
+    DomBinder binder(*document, apis);
+    ASSERT_TRUE(binder.Evaluate("sessionStorage.setItem('k', 'v')").has_value());
+  }
+  ASSERT_TRUE(store.GetItem(origin, "k").has_value());
+  EXPECT_EQ(store.GetItem(origin, "k").value(), "v");
+
+  // A new document (simulated navigation) with the same tab store reads it
+  // back, and removal goes through the store as well.
+  auto next_document = html::Parser("<!doctype html><html><body></body></html>").Parse();
+  DomBinder next_binder(*next_document, apis);
+  auto value = next_binder.Evaluate("sessionStorage.getItem('k')");
+  ASSERT_TRUE(value.has_value());
+  EXPECT_EQ(value.value().ToString().value_or(""), "v");
+  ASSERT_TRUE(next_binder.Evaluate("sessionStorage.removeItem('k'); sessionStorage.length === 0")
+                  .has_value());
+  EXPECT_FALSE(store.GetItem(origin, "k").has_value());
 }
 
 TEST_F(DomBinderTest, UrlSearchParamsParsesMutatesAndSerializes)

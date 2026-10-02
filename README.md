@@ -81,8 +81,7 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
   stream 与对象流、/MediaBox 继承、图像 XObject 与 W/W* 裁剪）—— **PARTIAL**
 - **JavaScript**：QuickJS（quickjs-ng）runtime 封装 —— 核心语言 + console
   + 执行时限/内存上限 + **DOM 绑定与页内脚本执行**（`window === globalThis`、
-  事件/CustomEvent、setTimeout 事件循环、fetch/**XMLHttpRequest**/localStorage/
-  indexedDB、matchMedia、
+  事件/CustomEvent、setTimeout 事件循环、fetch/**XMLHttpRequest**/localStorage/**sessionStorage**（标签页会话级）/indexedDB、matchMedia、
   **`<script type="module">` ES 模块执行 + 动态 `import()` + import maps**（静态/
   动态导入走网络栈、相对解析、import.meta.url、共享模块缓存；import maps 支持
   imports/scopes 子集）、innerText 等子集，

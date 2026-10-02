@@ -10,6 +10,7 @@
 #include "neko/storage/local_storage.h"
 #include "neko/storage/password_store.h"
 #include "neko/storage/preferences.h"
+#include "neko/storage/session_storage.h"
 #include "neko/url/url.h"
 
 #include "gmock/gmock.h"
@@ -895,6 +896,57 @@ TEST(PasswordStoreTest, ReplacesSameKeyRemovesAndClears)
   PasswordStore reloaded(tp.path());
   ASSERT_TRUE(reloaded.Load().has_value());
   EXPECT_TRUE(reloaded.All().empty());
+}
+
+// ---------------------------------------------------------------------------
+// SessionStorage (in-memory, tab-scoped; WHATWG HTML 7.1)
+// ---------------------------------------------------------------------------
+
+TEST(SessionStorageTest, SetGetRemoveClear)
+{
+  SessionStorage store;
+  EXPECT_TRUE(store.empty());
+
+  store.SetItem("https://example.com/", "k", "v");
+  store.SetItem("https://example.com/", "k", "replaced");
+  ASSERT_EQ(store.size(), 1u);
+  EXPECT_THAT(store.GetItem("https://example.com/", "k").value(), Eq("replaced"));
+
+  EXPECT_TRUE(store.RemoveItem("https://example.com/", "k"));
+  EXPECT_FALSE(store.RemoveItem("https://example.com/", "k"));
+  EXPECT_FALSE(store.GetItem("https://example.com/", "k").has_value());
+  EXPECT_TRUE(store.empty());
+}
+
+TEST(SessionStorageTest, OriginsAreIsolated)
+{
+  SessionStorage store;
+  store.SetItem("https://a.example/", "k", "va");
+  store.SetItem("https://b.example/", "k", "vb");
+  EXPECT_THAT(store.GetItem("https://a.example/", "k").value(), Eq("va"));
+  EXPECT_THAT(store.GetItem("https://b.example/", "k").value(), Eq("vb"));
+  EXPECT_EQ(store.size(), 2u);
+
+  store.Clear("https://a.example/");
+  EXPECT_FALSE(store.GetItem("https://a.example/", "k").has_value());
+  EXPECT_THAT(store.GetItem("https://b.example/", "k").value(), Eq("vb"));
+
+  store.ClearAll();
+  EXPECT_TRUE(store.empty());
+}
+
+TEST(SessionStorageTest, AllReturnsInsertionOrder)
+{
+  SessionStorage store;
+  store.SetItem("https://example.com/", "b", "2");
+  store.SetItem("https://example.com/", "a", "1");
+  store.SetItem("https://other.example/", "c", "3");
+
+  const auto pairs = store.All("https://example.com/");
+  ASSERT_EQ(pairs.size(), 2u);
+  EXPECT_THAT(pairs[0].first, Eq("b"));
+  EXPECT_THAT(pairs[1].first, Eq("a"));
+  EXPECT_TRUE(store.All("https://none.example/").empty());
 }
 
 } // namespace

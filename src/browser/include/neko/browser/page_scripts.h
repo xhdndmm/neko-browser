@@ -7,6 +7,7 @@
 #include "neko/storage/cookie_store.h"
 #include "neko/storage/indexed_db.h"
 #include "neko/storage/local_storage.h"
+#include "neko/storage/session_storage.h"
 #include "neko/url/url.h"
 
 #include <cstddef>
@@ -27,6 +28,9 @@ struct PageScriptServices
 {
   // When non-null, window.localStorage is installed, scoped to |origin|.
   storage::LocalStorage* local_storage = nullptr;
+  // Tab-scoped session storage (window.sessionStorage).  Null keeps the
+  // binder's document-lifetime fallback (headless one-shot loads).
+  storage::SessionStorage* session_storage = nullptr;
   // When non-null, window.indexedDB is installed, scoped to |origin|.
   storage::IndexedDbStore* indexed_db = nullptr;
   storage::CookieStore* cookies = nullptr;

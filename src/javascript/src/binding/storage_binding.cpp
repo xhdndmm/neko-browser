@@ -82,12 +82,18 @@ JSValue LocalStorageGetItem(JSContext* ctx, JSValueConst this_val, int argc, JSV
     return JS_EXCEPTION;
   }
   const bool is_session_storage = IsSessionStorage(ctx, this_val);
-  const auto session_value = impl->session_storage.find(key);
-  const std::optional<std::string> value =
-      is_session_storage ? (session_value == impl->session_storage.end()
-                                ? std::nullopt
-                                : std::optional<std::string>(session_value->second))
-                         : impl->apis.storage_get(key);
+  std::optional<std::string> value;
+  if (is_session_storage && impl->apis.session_storage_get) {
+    // Tab-scoped session store wired by the browser layer.
+    value = impl->apis.session_storage_get(key);
+  } else if (is_session_storage) {
+    const auto session_value = impl->session_storage.find(key);
+    if (session_value != impl->session_storage.end()) {
+      value = session_value->second;
+    }
+  } else {
+    value = impl->apis.storage_get(key);
+  }
   return value.has_value() ? JS_NewString(ctx, value->c_str()) : JS_NULL;
 }
 
@@ -107,7 +113,11 @@ JSValue LocalStorageSetItem(JSContext* ctx, JSValueConst this_val, int argc, JSV
     return JS_EXCEPTION;
   }
   if (IsSessionStorage(ctx, this_val)) {
-    impl->session_storage[key] = value;
+    if (impl->apis.session_storage_set) {
+      impl->apis.session_storage_set(key, value);
+    } else {
+      impl->session_storage[key] = value;
+    }
   } else {
     impl->apis.storage_set(key, value);
   }
@@ -126,7 +136,11 @@ JSValue LocalStorageRemoveItem(JSContext* ctx, JSValueConst this_val, int argc, 
     return JS_EXCEPTION;
   }
   if (IsSessionStorage(ctx, this_val)) {
-    impl->session_storage.erase(key);
+    if (impl->apis.session_storage_remove) {
+      (void)impl->apis.session_storage_remove(key);
+    } else {
+      impl->session_storage.erase(key);
+    }
   } else {
     impl->apis.storage_remove(key);
   }
@@ -141,7 +155,11 @@ LocalStorageClear(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueCo
     return JS_ThrowTypeError(ctx, "localStorage is not available");
   }
   if (IsSessionStorage(ctx, this_val)) {
-    impl->session_storage.clear();
+    if (impl->apis.session_storage_clear) {
+      impl->apis.session_storage_clear();
+    } else {
+      impl->session_storage.clear();
+    }
   } else {
     impl->apis.storage_clear();
   }
@@ -161,10 +179,14 @@ JSValue LocalStorageKey(JSContext* ctx, JSValueConst this_val, int argc, JSValue
   }
   std::vector<std::string> keys;
   if (IsSessionStorage(ctx, this_val)) {
-    keys.reserve(impl->session_storage.size());
-    for (const auto& [key, value] : impl->session_storage) {
-      (void)value;
-      keys.push_back(key);
+    if (impl->apis.session_storage_keys) {
+      keys = impl->apis.session_storage_keys();
+    } else {
+      keys.reserve(impl->session_storage.size());
+      for (const auto& [key, value] : impl->session_storage) {
+        (void)value;
+        keys.push_back(key);
+      }
     }
   } else {
     keys = impl->apis.storage_keys();
@@ -181,8 +203,13 @@ JSValue LocalStorageLength(JSContext* ctx, JSValueConst this_val)
   if (impl == nullptr || (!IsSessionStorage(ctx, this_val) && !impl->apis.storage_keys)) {
     return JS_NewInt32(ctx, 0);
   }
-  const std::size_t size = IsSessionStorage(ctx, this_val) ? impl->session_storage.size()
-                                                           : impl->apis.storage_keys().size();
+  std::size_t size = 0;
+  if (IsSessionStorage(ctx, this_val)) {
+    size = impl->apis.session_storage_keys ? impl->apis.session_storage_keys().size()
+                                           : impl->session_storage.size();
+  } else {
+    size = impl->apis.storage_keys().size();
+  }
   return JS_NewInt32(ctx, static_cast<int32_t>(size));
 }
 

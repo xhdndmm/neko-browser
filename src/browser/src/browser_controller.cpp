@@ -2206,6 +2206,9 @@ void BrowserController::LoadBytes(Tab& tab,
     // localStorage (scoped to the page origin) and fetch.
     browser::PageScriptServices services;
     services.local_storage = &local_storage_;
+    // window.sessionStorage is tab-scoped: values survive navigation within
+    // this tab and vanish when it is closed (WHATWG HTML 7.1).
+    services.session_storage = &tab.session_storage;
     services.indexed_db = &indexed_db_;
     services.cookies = &cookies_;
     services.origin = origin;
