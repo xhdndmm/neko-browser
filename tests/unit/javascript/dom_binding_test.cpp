@@ -2829,6 +2829,33 @@ TEST_F(DomBinderTest, CustomEventCarriesDetail)
   EXPECT_TRUE(EvalBool("CustomEvent.prototype instanceof Event"));
 }
 
+// Element.dir reflects the content attribute limited to the known values
+// ltr/rtl/auto; an absent or invalid value reads back as "" (WHATWG HTML).
+// Swiper (qq.com's banner slider) calls `el.dir.toLowerCase()` while mounting,
+// so an undefined property used to abort the whole page render.
+TEST_F(DomBinderTest, ElementDirReflectsTheAttribute)
+{
+  EXPECT_TRUE(EvalBool("document.createElement('div').dir === \"\""));
+  EXPECT_TRUE(EvalBool("(function(){ var el = document.createElement('div'); "
+                       "el.dir = 'rtl'; "
+                       "return el.getAttribute('dir') === 'rtl' && el.dir === 'rtl'; })()"));
+  // Known values match ASCII case-insensitively and read back lowercased.
+  EXPECT_TRUE(EvalBool("(function(){ var el = document.createElement('div'); "
+                       "el.setAttribute('dir', 'RTL'); "
+                       "return el.dir === 'rtl'; })()"));
+  EXPECT_TRUE(EvalBool("(function(){ var el = document.createElement('div'); "
+                       "el.setAttribute('dir', 'auto'); "
+                       "return el.dir === 'auto'; })()"));
+  // Unknown values read back as "" (the attribute stays as written).
+  EXPECT_TRUE(EvalBool("(function(){ var el = document.createElement('div'); "
+                       "el.setAttribute('dir', 'bogus'); "
+                       "return el.dir === '' && el.getAttribute('dir') === 'bogus'; })()"));
+  // Assigning the empty string drops the attribute.
+  EXPECT_TRUE(EvalBool("(function(){ var el = document.createElement('div'); "
+                       "el.dir = 'rtl'; el.dir = ''; "
+                       "return el.hasAttribute('dir') === false && el.dir === ''; })()"));
+}
+
 // window.matchMedia(query): returns a MediaQueryList evaluated against the
 // engine's fixed 800x600 viewport; the list exposes matches/media and the
 // standard no-op listener hooks (so scripts don't throw).

@@ -625,6 +625,46 @@ JSValue ElementSetLang(JSContext* ctx, JSValueConst this_val, JSValueConst value
   return JS_UNDEFINED;
 }
 
+JSValue ElementGetDir(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  // HTML: dir reflects the content attribute limited to the known values
+  // ltr/rtl/auto; an absent or invalid value reads back as "".  Swiper (the
+  // slider qq.com mounts over its banners) calls `el.dir.toLowerCase()`, so a
+  // missing property used to abort the whole page render.
+  const std::optional<std::string_view> dir = element->GetAttribute("dir");
+  if (dir.has_value()) {
+    const std::string lowered = ToLower(std::string(*dir));
+    if (lowered == "ltr" || lowered == "rtl" || lowered == "auto") {
+      return JS_NewStringLen(ctx, lowered.data(), lowered.size());
+    }
+  }
+  return JS_NewStringLen(ctx, "", 0);
+}
+
+JSValue ElementSetDir(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  bool ok = false;
+  const std::string dir = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  if (dir.empty()) {
+    element->RemoveAttribute("dir");
+  } else {
+    element->SetAttribute("dir", dir);
+  }
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
+  return JS_UNDEFINED;
+}
+
 JSValue ElementGetOuterHTML(JSContext* ctx, JSValueConst this_val)
 {
   dom::Node* node = UnwrapNode(ctx, this_val);
@@ -1618,6 +1658,11 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
                  "lang",
                  MakeGetter(ctx, "lang", ElementGetLang),
                  MakeSetter(ctx, "lang", ElementSetLang));
+  DefineAccessor(ctx,
+                 impl.element_proto,
+                 "dir",
+                 MakeGetter(ctx, "dir", ElementGetDir),
+                 MakeSetter(ctx, "dir", ElementSetDir));
 
   // Form controls (input/textarea/select/option/button).
   DefineAccessor(ctx,
