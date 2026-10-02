@@ -1469,6 +1469,18 @@ void BrowserController::SchedulePendingImageFetch(Tab& tab)
       FetchPageImages(*page, base_url, fetch, *pool);
     } while (state->again.exchange(false));
     state->in_flight.store(false);
+    // The images were attached on this thread (the page's root was reset and
+    // its version bumped): wake the frame pump so the new pixels reach the
+    // GUI.  Without this, a lazily-loaded image scrolled into view is fetched
+    // but its placeholder stays gray until some unrelated event repaints.
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      const auto it = std::find_if(
+          tabs_.begin(), tabs_.end(), [tab_id](const auto& t) { return t->id == tab_id; });
+      if (it != tabs_.end()) {
+        (*it)->frame_dirty = true;
+      }
+    }
     if (state->again.exchange(false)) {
       // A change landed between the last pass and clearing the flag: schedule
       // once more (claims make it a cheap no-op when it was stale).
@@ -1494,8 +1506,13 @@ void BrowserController::ProduceFrame(Tab& tab)
   const int height = tab.viewport_height > 0 ? tab.viewport_height : kDefaultRemoteViewportHeight;
   // The viewport changed (or the page was never laid out): lay out here on the
   // worker thread.  SetTabViewport already lays out for a resize; this covers
-  // the first frame after a load and any residual mismatch.
-  if (!tab.page->HasLayout()) {
+  // the first frame after a load and any residual mismatch — including a
+  // document whose on-demand geometry layout ran with a zero viewport height
+  // (page scripts query geometry before the first frame; a zero-height layout
+  // would otherwise stick for the document's whole life, zeroing vh units /
+  // window.innerHeight and the IntersectionObserver band that lazy loading
+  // hangs off).
+  if (!tab.page->HasLayout() || tab.page->viewport_css_height() <= 0.0F) {
     tab.page->Layout(static_cast<float>(width), static_cast<float>(height));
   }
   const float content_height = tab.page->ContentHeight();
@@ -3377,11 +3394,16 @@ void FetchPageVideos(renderer::Page& page,
     }
     const auto response = fetch(parsed.value(), {});
     if (!response) {
+      NEKO_LOG_WARNING("video: fetch failed for " + url + ": " + response.error().message());
       return base::Err(response.error());
     }
     // The decoder is budgeted (frame count + total RGBA bytes), so a huge
     // video degrades to a bounded prefix rather than exhausting memory.
-    return media::DecodeVideo(response.value().body);
+    auto clip = media::DecodeVideo(response.value().body);
+    if (!clip) {
+      NEKO_LOG_WARNING("video: decode failed for " + url + ": " + clip.error().message());
+    }
+    return clip;
   };
 
   const auto attach = [&page](const PendingVideo& item, media::VideoClip clip) {
@@ -3400,7 +3422,8 @@ void FetchPageVideos(renderer::Page& page,
     const std::size_t frame_count = strip.frames->size();
     const image::Image first_frame = (*strip.frames)[0]; // copy: strip moves below
     page.SetElementVideo(item.element, first_frame, std::move(strip), item.autoplay);
-    NEKO_LOG_INFO("video: injected " + item.url + " (" + std::to_string(frame_count) + " frames)");
+    NEKO_LOG_INFO("video: injected " + item.url + " (" + std::to_string(frame_count) +
+                  (clip.truncated ? " frames, budget-truncated)" : " frames)"));
   };
 
   if (pending.size() == 1) {

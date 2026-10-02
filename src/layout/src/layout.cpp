@@ -1704,12 +1704,26 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       box->style = styles.StyleFor(element);
       ResolveBoxEdges(*box, containing_width);
 
+      const bool replaced_media = element.tag_name() == "img" || element.tag_name() == "video" ||
+                                  element.tag_name() == "canvas";
+      const image::Image* replaced_image = nullptr;
+      float replaced_w = 0;
+      float replaced_h = 0;
+      if (replaced_media) {
+        replaced_image = images != nullptr ? images->Find(element) : nullptr;
+        ComputeReplacedSize(
+            box->style, element, replaced_image, containing_width, replaced_w, replaced_h);
+      }
+
       const float border_padding_w =
           box->border_left + box->border_right + box->padding_left + box->padding_right;
       float content_width;
       if (box->style.width.has_value()) {
         content_width = SpecToContent(
             box->style.width.value(), containing_width, border_padding_w, box->style.box_sizing);
+      } else if (replaced_media) {
+        // A floated replaced box shrink-to-fits to its replaced size.
+        content_width = replaced_w;
       } else {
         const float extras = box->margin_left + box->margin_right + border_padding_w;
         const float available = std::max(0.0f, containing_width - extras);
@@ -1753,15 +1767,23 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       const float avail_width = box->width - box->border_left - box->border_right -
                                 box->padding_left - box->padding_right;
       std::vector<AbsoluteChild> absolute_children;
-      float content_height = LayoutBlockContent(*box,
-                                                element,
-                                                avail_width,
-                                                box->border_left,
-                                                box->border_top,
-                                                avail_width,
-                                                0,
-                                                kNoFloats,
-                                                absolute_children);
+      float content_height = 0;
+      if (replaced_media) {
+        // Replaced content has no in-flow children: its content height is the
+        // replaced size (the decoded pixels ride on the box for the painter).
+        box->image = replaced_image;
+        content_height = replaced_h;
+      } else {
+        content_height = LayoutBlockContent(*box,
+                                            element,
+                                            avail_width,
+                                            box->border_left,
+                                            box->border_top,
+                                            avail_width,
+                                            0,
+                                            kNoFloats,
+                                            absolute_children);
+      }
       const float border_padding_h =
           box->border_top + box->border_bottom + box->padding_top + box->padding_bottom;
       if (box->style.height.has_value() && !box->style.height.value().percent) {
@@ -1983,9 +2005,16 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
             box, element, avail_width, cb_x, cb_y, cb_w, cb_h, absolute_children);
       }
       float cursor_y = 0;
-      std::vector<InlineItem> inline_items;
-      // Block-level (and table) children are laid out after the inline content
-      // so that their vertical position accounts for the preceding text lines.
+      // Children are processed in DOM order.  Consecutive inline-level
+      // children form an anonymous block (an "inline run") between the
+      // block-level siblings, as CSS 2.1 §9.2.1.1 requires: a block followed
+      // by text and then another block must render in exactly that order, so
+      // runs and blocks are interleaved rather than grouped ("all inline
+      // first, all blocks after" hoisted text above preceding blocks).
+      struct InlineRun
+      {
+        std::vector<InlineItem> items;
+      };
       struct BlockChild
       {
         dom::Element* element;
@@ -1993,10 +2022,29 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         bool table = false;
         bool form_control = false;
       };
+      struct FlowEntry
+      {
+        bool inline_run = false; // else a block-level child
+        std::size_t index = 0;   // into inline_runs or block_children
+      };
+      std::vector<InlineRun> inline_runs;
       std::vector<BlockChild> block_children;
+      std::vector<FlowEntry> flow;
+      const auto current_inline_items = [&]() -> std::vector<InlineItem>& {
+        if (flow.empty() || !flow.back().inline_run) {
+          flow.push_back(FlowEntry{true, inline_runs.size()});
+          inline_runs.emplace_back();
+        }
+        return inline_runs.back().items;
+      };
+      const auto start_block = [&](BlockChild bc) {
+        flow.push_back(FlowEntry{false, block_children.size()});
+        block_children.push_back(bc);
+      };
       for (dom::Node* child : element.ChildNodes()) {
         if (child->node_type() == dom::NodeType::kText) {
-          CollectText(static_cast<dom::Text*>(child)->data(), box.style, &element, inline_items);
+          CollectText(
+              static_cast<dom::Text*>(child)->data(), box.style, &element, current_inline_items());
           continue;
         }
         if (child->node_type() != dom::NodeType::kElement) {
@@ -2040,19 +2088,20 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
              child_style.display == style::Display::kFlex ||
              child_style.display == style::Display::kGrid)) {
           // A block-level form control still paints as a replaced widget.
-          block_children.push_back(
+          start_block(
               BlockChild{&child_element, child_style, /*table=*/false, /*form_control=*/true});
         } else if (child_style.display == style::Display::kBlock ||
                    child_style.display == style::Display::kListItem ||
                    child_style.display == style::Display::kFlex ||
                    child_style.display == style::Display::kGrid) {
-          block_children.push_back(BlockChild{&child_element, child_style, /*table=*/false});
+          start_block(BlockChild{&child_element, child_style, /*table=*/false});
         } else if (child_style.display == style::Display::kTable) {
-          block_children.push_back(BlockChild{&child_element, child_style, /*table=*/true});
+          start_block(BlockChild{&child_element, child_style, /*table=*/true});
         } else {
           // Inline element: its text (and atomic <img>/inline-block boxes)
-          // flows into this box's lines.
-          CollectInline(child_element, child_style, &child_element, avail_width, inline_items);
+          // flows into the current inline run (this box's lines).
+          CollectInline(
+              child_element, child_style, &child_element, avail_width, current_inline_items());
         }
       }
 
@@ -2062,18 +2111,6 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       for (const auto& f : box.floats) {
         all_floats.push_back(f.get());
       }
-      float lines_height = 0;
-      LayoutLines(inline_items,
-                  avail_width,
-                  box.content_x(),
-                  box.content_y() + cursor_y,
-                  registry,
-                  box.style,
-                  all_floats,
-                  box.lines,
-                  lines_height);
-      // Block-level children come after the inline content.
-      cursor_y += lines_height;
       // Absolute children take their static vertical position from the flow
       // cursor at their document position: after the block-level siblings
       // that precede them.  Fill those in as the flow advances (the value is
@@ -2096,9 +2133,27 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       // The parent collapses its own top margin with its first in-flow child's
       // when it has no border/padding to separate them, so the child's
       // collapsed margin is partly applied outside the parent's content box.
-      for (std::size_t block_index = 0; block_index < block_children.size(); ++block_index) {
-        flush_absolute_static_y(block_index);
-        const BlockChild& bc = block_children[block_index];
+      for (const FlowEntry& entry : flow) {
+        if (entry.inline_run) {
+          // An anonymous block of inline content between block-level siblings:
+          // laid out at the current flow position, advancing the cursor.
+          float lines_height = 0;
+          LayoutLines(inline_runs[entry.index].items,
+                      avail_width,
+                      box.content_x(),
+                      box.content_y() + cursor_y,
+                      registry,
+                      box.style,
+                      all_floats,
+                      box.lines,
+                      lines_height);
+          cursor_y += lines_height;
+          // Line boxes separate adjoining block margins (CSS 2.1 8.3.1).
+          pending_margin_valid = false;
+          continue;
+        }
+        flush_absolute_static_y(entry.index);
+        const BlockChild& bc = block_children[entry.index];
         // Sibling margin collapsing applies between in-flow block-level boxes
         // in the same BFC.  Tables and form controls participate in the flow
         // but the engine lays them out through their own paths, so they are
@@ -2110,7 +2165,10 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         // margin the same way ResolveBoxEdges will, against the same containing
         // width, so the two cannot disagree.
         float top_adjust = 0.0f;
-        if (collapsible && pending_margin_valid && box.lines.empty()) {
+        // |pending_margin_valid| is only true directly after a block child:
+        // an inline run in between resets it, because its line boxes
+        // separate the adjoining margins.
+        if (collapsible && pending_margin_valid) {
           const float child_margin_top = ResolveSize(bc.style.margin_top, avail_width);
           const float collapsed = CollapseAdjoiningMargins(pending_margin_bottom, child_margin_top);
           top_adjust = collapsed - child_margin_top;
@@ -2282,6 +2340,23 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         box->padding_left += kListMarkerGap;
       }
 
+      // Replaced content in the block flow (img/video/canvas with display:block,
+      // including table cells and list items, which share this builder).  Its
+      // content box is the replaced size and the decoded pixels ride on the box
+      // for the painter; without this a block-level <img> laid out as an empty
+      // box of the right size and never painted its pixels (gray covers on real
+      // sites).
+      const bool replaced_media = element.tag_name() == "img" || element.tag_name() == "video" ||
+                                  element.tag_name() == "canvas";
+      const image::Image* replaced_image = nullptr;
+      float replaced_w = 0;
+      float replaced_h = 0;
+      if (replaced_media) {
+        replaced_image = images != nullptr ? images->Find(element) : nullptr;
+        ComputeReplacedSize(
+            box->style, element, replaced_image, containing_width, replaced_w, replaced_h);
+      }
+
       // Width: explicit (px or %) or fill the containing block.
       const float border_padding_w =
           box->border_left + box->border_right + box->padding_left + box->padding_right;
@@ -2290,6 +2365,10 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         // box-sizing: with border-box the specified width covers border+padding.
         content_width = SpecToContent(
             box->style.width.value(), containing_width, border_padding_w, box->style.box_sizing);
+      } else if (replaced_media) {
+        // CSS width > presentational width attribute > intrinsic size (with
+        // aspect-ratio preservation for a single axis).
+        content_width = replaced_w;
       } else {
         content_width = containing_width - box->margin_left - box->margin_right - border_padding_w;
         if (content_width < 0) {
@@ -2381,18 +2460,29 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       }
 
       std::vector<AbsoluteChild> absolute_children;
-      float content_height = LayoutBlockContent(*box,
-                                                element,
-                                                avail_width,
-                                                child_cb_x,
-                                                child_cb_y,
-                                                child_cb_w,
-                                                /*cb_h*/ 0.0f,
-                                                parent_floats,
-                                                absolute_children,
-                                                /*percent_base_h=*/definite_content_height);
+      float content_height = 0;
+      if (replaced_media) {
+        // Replaced content has no in-flow children: its content height is the
+        // replaced size (the decoded pixels were attached to the box above).
+        box->image = replaced_image;
+        content_height = replaced_h;
+      } else {
+        content_height = LayoutBlockContent(*box,
+                                            element,
+                                            avail_width,
+                                            child_cb_x,
+                                            child_cb_y,
+                                            child_cb_w,
+                                            /*cb_h*/ 0.0f,
+                                            parent_floats,
+                                            absolute_children,
+                                            /*percent_base_h=*/definite_content_height);
+      }
 
-      if (box->style.height.has_value()) {
+      if (replaced_media) {
+        // ComputeReplacedSize already resolved the CSS height / attribute /
+        // intrinsic ratio; re-applying them here would double-count.
+      } else if (box->style.height.has_value()) {
         if (box->style.height.value().percent) {
           if (percent_base_h > 0) {
             content_height = std::max(content_height, definite_content_height);
@@ -2461,6 +2551,17 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       box->style = styles.StyleFor(element);
       ResolveBoxEdges(*box, containing_width);
 
+      const bool replaced_media = element.tag_name() == "img" || element.tag_name() == "video" ||
+                                  element.tag_name() == "canvas";
+      const image::Image* replaced_image = nullptr;
+      float replaced_w = 0;
+      float replaced_h = 0;
+      if (replaced_media) {
+        replaced_image = images != nullptr ? images->Find(element) : nullptr;
+        ComputeReplacedSize(
+            box->style, element, replaced_image, containing_width, replaced_w, replaced_h);
+      }
+
       const float border_padding_w =
           box->border_left + box->border_right + box->padding_left + box->padding_right;
       float content_width;
@@ -2471,6 +2572,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         const style::SizeSpec& width = box->style.width.value();
         content_width =
             SpecToContent(width, containing_width, border_padding_w, box->style.box_sizing);
+      } else if (replaced_media) {
+        content_width = replaced_w;
       } else {
         content_width = containing_width - box->margin_left - box->margin_right - border_padding_w;
         if (content_width < 0) {
@@ -2508,8 +2611,16 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       const float avail = box->width - box->border_left - box->border_right - box->padding_left -
                           box->padding_right;
       std::vector<AbsoluteChild> absolute_children;
-      float content_height = LayoutBlockContent(
-          *box, element, avail, cb_x, cb_y, cb_w, cb_h, kNoFloats, absolute_children);
+      float content_height = 0;
+      if (replaced_media) {
+        // Replaced content has no in-flow children: its content height is the
+        // replaced size (the decoded pixels ride on the box for the painter).
+        box->image = replaced_image;
+        content_height = replaced_h;
+      } else {
+        content_height = LayoutBlockContent(
+            *box, element, avail, cb_x, cb_y, cb_w, cb_h, kNoFloats, absolute_children);
+      }
       const float border_padding_h =
           box->border_top + box->border_bottom + box->padding_top + box->padding_bottom;
       if (forced_content_height.has_value()) {

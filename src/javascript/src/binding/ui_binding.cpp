@@ -782,6 +782,14 @@ JSValue ElementSetSrc(JSContext* ctx, JSValueConst this_val, JSValueConst value)
     return JS_EXCEPTION;
   }
   element->SetAttribute("src", src);
+  // Attribute mutations from a property setter behave exactly like
+  // setAttribute: pages assign img.src from IntersectionObserver callbacks
+  // (lazy loading) outside any timer/event dispatch, and the browser layer's
+  // late-fetch pass and style reapplication hang off the DOM-dirty flag.
+  if (Impl* impl = ImplFor(ctx, this_val); impl != nullptr) {
+    impl->RecordAttributeMutation(element, "src");
+    impl->MarkDomDirty();
+  }
   return JS_UNDEFINED;
 }
 
@@ -807,6 +815,12 @@ JSValue ElementSetSrcSet(JSContext* ctx, JSValueConst this_val, JSValueConst val
     return JS_EXCEPTION;
   }
   element->SetAttribute("srcset", srcset);
+  // See ElementSetSrc: property-driven attribute mutation must mark the DOM
+  // dirty like setAttribute("srcset", ...) does.
+  if (Impl* impl = ImplFor(ctx, this_val); impl != nullptr) {
+    impl->RecordAttributeMutation(element, "srcset");
+    impl->MarkDomDirty();
+  }
   return JS_UNDEFINED;
 }
 

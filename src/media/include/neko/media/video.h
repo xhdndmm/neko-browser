@@ -39,11 +39,18 @@ struct VideoClip
   std::string format_name; // container (e.g. "mov,mp4,m4a,3gp,3g2,mj2")
   std::string codec_name;  // decoder (e.g. "h264", "vp9")
   std::vector<VideoFrame> frames;
+  // True when a budget (frame cap or byte cap) stopped decoding, so |frames|
+  // is a bounded prefix rather than the whole video.  Set conservatively
+  // when the frame cap is reached exactly (stream end is not probed).
+  bool truncated = false;
 };
 
-// Decodes every video frame of an in-memory media container, bounded by
+// Decodes video frames of an in-memory media container, bounded by
 // |max_frames| and |max_total_bytes| (decoded RGBA bytes) so a pathological
-// input cannot exhaust memory.  Audio tracks are ignored.
+// input cannot exhaust memory.  When a bound is hit the clip degrades to the
+// prefix that fits (|VideoClip::truncated| is set); only an input whose
+// *first* frame cannot fit into |max_total_bytes| is an error.  Audio tracks
+// are ignored.
 base::Result<VideoClip> DecodeVideo(std::string_view data,
                                     int max_frames = 2048,
                                     int64_t max_total_bytes = 128LL * 1024 * 1024);

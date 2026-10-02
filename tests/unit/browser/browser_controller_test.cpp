@@ -2371,6 +2371,99 @@ TEST(BrowserControllerTest, FetchesImageAssignedAfterTheInitialPass)
   EXPECT_GE(fetch.RequestCount(), 2u); // document + late.png
 }
 
+// The GUI lazy-loading loop end to end: an IntersectionObserver observes an
+// element below the fold; the user scrolls (SetTabScrollOffset, exactly what
+// WebView's scroll bar reports), the controller refreshes the observers, the
+// page's callback assigns img.src, the late pass fetches it, and the produced
+// frame actually contains the fetched pixels.  bilibili's feed hangs its image
+// mounting off this exact chain, and the pixels (not just the DOM state) are
+// what the user sees -- a fetch that completes without marking the tab dirty
+// leaves the placeholder gray on screen.
+TEST(BrowserControllerTest, ScrollingTriggersObserverDrivenImageFetch)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  const std::string png = MakePng();
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<div style=\"height:600px\"></div>"
+                               "<img id=\"late\" data-src=\"/late.png\""
+                               "     style=\"width:10px;height:10px\">"
+                               "<script>"
+                               // The callback only assigns src: it deliberately mutates
+                               // nothing else, so the repaint must come from the image
+                               // pipeline itself, not from a coincidental DOM change.
+                               "var obs = new IntersectionObserver(function(entries){"
+                               "  if (entries[entries.length-1].isIntersecting) {"
+                               "    var img = document.getElementById('late');"
+                               "    img.src = img.getAttribute('data-src');"
+                               "  }"
+                               "});"
+                               "obs.observe(document.getElementById('late'));"
+                               "</script></body></html>"});
+  fetch.Add("http://example.com/late.png",
+            FakeFetcher::Route{200, {{"content-type", "image/png"}}, png});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  ASSERT_NE(tab->page, nullptr);
+
+  // Before scrolling the sprite is below the viewport: no observer callback
+  // ran, so the image was never assigned (and never requested).
+  controller.PumpScriptTimers();
+  {
+    dom::Element* img = dom::QuerySelector(*tab->page->document(), "#late");
+    ASSERT_NE(img, nullptr);
+    EXPECT_FALSE(img->GetAttribute("src").has_value());
+  }
+
+  // Scroll it into view — the browser half of the GUI's scroll bar handler.
+  controller.SetTabScrollOffset(tab->id, 400.0F);
+  controller.PumpScriptTimersUntilQuiet();
+
+  bool attached = false;
+  for (int i = 0; i < 400 && !attached; ++i) {
+    controller.PumpScriptTimers();
+    dom::Element* img = dom::QuerySelector(*tab->page->document(), "#late");
+    attached = img != nullptr && tab->page->Find(*img) != nullptr;
+    if (!attached) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  }
+  ASSERT_TRUE(attached) << "observer-driven lazy image never reached the page";
+
+  // The next pump must rebuild the viewport frame and the fetched pixels must
+  // be in it.  The image is an inline replaced box on the line below the
+  // spacer (body margin included), so scan the band it can occupy rather than
+  // hard-coding one pixel.
+  controller.PumpScriptTimers();
+  const TabSnapshot snapshot = controller.SnapshotActiveTab();
+  ASSERT_NE(snapshot.frame, nullptr);
+  ASSERT_GT(snapshot.frame->width, 40);
+  ASSERT_GT(snapshot.frame->height, 260);
+  bool found_image_pixels = false;
+  for (int y = 190; y < 260 && !found_image_pixels; ++y) {
+    for (int x = 0; x < 40; ++x) {
+      const std::size_t idx =
+          (static_cast<std::size_t>(y) * static_cast<std::size_t>(snapshot.frame->width) +
+           static_cast<std::size_t>(x)) *
+          4;
+      if (snapshot.frame->rgba[idx] > 200 && snapshot.frame->rgba[idx + 1] < 60 &&
+          snapshot.frame->rgba[idx + 2] < 60) {
+        found_image_pixels = true;
+        break;
+      }
+    }
+  }
+  EXPECT_TRUE(found_image_pixels) << "lazy image pixels never reached the frame";
+  EXPECT_GE(fetch.RequestCount(), 2u); // document + late.png
+}
+
 // <script type="application/json"> is a data block (HTML §4.12.1): never
 // executed as code, and it does not stop the executable scripts around it.
 TEST(BrowserControllerTest, NonJsScriptTypesAreNotExecuted)

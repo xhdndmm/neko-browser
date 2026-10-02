@@ -7,6 +7,14 @@
 - 独立 Layout Tree（与 DOM 分离），绝对视口坐标
 - 盒模型（margin/border/padding，百分比按包含块宽度解析）
 - block layout（垂直堆叠、宽度填充/显式/百分比、内容高度/显式高度）
+- **子元素 DOM 顺序 / 匿名块**（2026-10）：连续行内子节点构成匿名块并与
+  块级兄弟**交错**排布（CSS 2.1 §9.2.1.1）；修复了“全部行内内容先行、
+  全部块级子元素随后”把块间文本/media 提升到容器顶部的问题（`<p>x</p>
+  text<p>y</p>`、块间 `<video>` 等）；块间行盒正确抑制相邻兄弟外边距折叠
+- **替换元素绘制（块级/浮动/Flex 子项）**（2026-10）：`img`/`video`/`canvas`
+  在 `BuildBlock`（含表格单元格 / grid 项）、`BuildFloat`、`BuildFlexItem`
+  中按 CSS 尺寸 > width/height 属性 > 固有尺寸（单轴给定时保持比例）定尺寸，
+  并把解码像素挂到盒上供绘制（此前只留尺寸盒，封面画成灰块）
 - inline layout（词级换行 → 行盒 → 文本游程，inline 元素样式作用于文本）
 - **text-align**（CSS Text 3 §5）：`left`（默认）/`center`/`right` 在行内把内容
   移到可用宽度内的对应位置；`justify` 已解析但未实现（词间不分散）；UA 样式

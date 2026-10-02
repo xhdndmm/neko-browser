@@ -44,9 +44,16 @@
 - ~~图片增量加载/懒加载~~（2026-10 已实现：认领式晚到抓取 + `img` load/error
   事件 + 滚动感知 IntersectionObserver，见兼容性矩阵“图片子资源生命周期”
   与“IntersectionObserver”）；alt 文本渲染、srcset/sizes 选择仍未实现
+- ~~块级/浮动/Flex 子项替换元素像素绘制~~（2026-10 已实现：`BuildBlock`
+  （含表格单元格/grid 项）/`BuildFloat`/`BuildFlexItem` 挂载解码像素 +
+  replaced 尺寸；此前 `display:block` 封面画成灰块）与 ~~抓取完成重绘~~
+  （晚到 pass 置脏帧泵，否则封面到位后界面不刷新）
 - `text-align` 对齐、连字符断行、CJK 逐字断行
 - 完整系统字体目录扫描（当前内置候选路径表；具体名按文件名匹配）
-- `<video>` 播放的音频轨道、controls 与缓冲（视频帧动画已接入，见渲染器 `Page::AdvanceAnimations`）
+- `<video>` 播放的音频轨道、controls 与缓冲（视频帧动画已接入，见渲染器
+  `Page::AdvanceAnimations`；直链 MP4/WebM 解码为**有界前缀**——预算命中截断
+  并置 `VideoClip::truncated`）；**MSE（`MediaSource` + `blob:`）NOT
+  IMPLEMENTED**，bilibili 等站点播放器走此路径，画面为空
 - GPU 窗口呈现（swapchain）与 Vulkan/Metal/D3D11 后端（Linux EGL/OpenGL
   已实现，见 ADR 0017）；GPU 光栅化
 - 布局增量失效（当前布局每次全量重算；显示列表/光栅化已增量）

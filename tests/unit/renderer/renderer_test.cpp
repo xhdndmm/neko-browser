@@ -454,6 +454,65 @@ renderer::Page::VideoStrip MakeTestVideoStrip()
   return strip;
 }
 
+// <video> is a replaced *phrasing* element (HTML spec): it must occupy its
+// DOM position in the flow — between the two headings — not jump to the top
+// of the document, and the heading that follows must start below it.
+TEST(PageTest, VideoKeepsItsDomFlowPosition)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body style=\"margin:0\">"
+                            "<h2 id=\"a\" style=\"margin:0\">A</h2>"
+                            "<video id=\"v\" width=\"320\" height=\"180\"></video>"
+                            "<h2 id=\"b\" style=\"margin:0\">B</h2></body>")
+                  .has_value());
+  dom::Element* a = dom::QuerySelector(*page.document(), "#a");
+  dom::Element* v = dom::QuerySelector(*page.document(), "#v");
+  dom::Element* b = dom::QuerySelector(*page.document(), "#b");
+  ASSERT_NE(a, nullptr);
+  ASSERT_NE(v, nullptr);
+  ASSERT_NE(b, nullptr);
+  page.SetElementVideo(*v, SolidImage(2, 1, 10, 0, 0), MakeTestVideoStrip(), /*autoplay=*/false);
+  page.Layout(600, 400);
+  const auto ga = page.ElementBoxGeometry(*a);
+  const auto gv = page.ElementBoxGeometry(*v);
+  const auto gb = page.ElementBoxGeometry(*b);
+  ASSERT_TRUE(ga.has_value());
+  ASSERT_TRUE(gv.has_value());
+  ASSERT_TRUE(gb.has_value());
+  EXPECT_NEAR(ga->y, 0.0F, 1.0F);
+  EXPECT_NEAR(gv->y, ga->y + ga->height, 2.0F); // directly below heading A
+  EXPECT_NEAR(gv->height, 180.0F, 2.0F);
+  EXPECT_GE(gb->y, gv->y + gv->height - 2.0F); // heading B below the video
+}
+
+// Inline content between two block siblings must render between them (CSS
+// 2.1 §9.2.1.1 anonymous blocks), not hoisted above the first block.
+TEST(PageTest, InlineTextBetweenBlocksKeepsDomOrder)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body style=\"margin:0\">"
+                            "<p id=\"a\" style=\"margin:0\">A</p>"
+                            "<span id=\"s\">middle</span>"
+                            "<p id=\"b\" style=\"margin:0\">B</p></body>")
+                  .has_value());
+  page.Layout(600, 400);
+  dom::Element* a = dom::QuerySelector(*page.document(), "#a");
+  dom::Element* s = dom::QuerySelector(*page.document(), "#s");
+  dom::Element* b = dom::QuerySelector(*page.document(), "#b");
+  ASSERT_NE(a, nullptr);
+  ASSERT_NE(s, nullptr);
+  ASSERT_NE(b, nullptr);
+  const auto ga = page.ElementBoxGeometry(*a);
+  const auto gs = page.ElementBoxGeometry(*s);
+  const auto gb = page.ElementBoxGeometry(*b);
+  ASSERT_TRUE(ga.has_value());
+  ASSERT_TRUE(gs.has_value());
+  ASSERT_TRUE(gb.has_value());
+  EXPECT_NEAR(ga->y, 0.0F, 1.0F);
+  EXPECT_GE(gs->y, ga->y + ga->height - 1.0F); // text below first paragraph
+  EXPECT_GE(gb->y, gs->y + gs->height - 1.0F); // second paragraph below text
+}
+
 TEST(PageTest, VideoAutoplayAdvancesFrames)
 {
   Page page;
@@ -553,6 +612,73 @@ TEST(PageTest, RendersElementImageAtIntrinsicSize)
     }
   }
   EXPECT_TRUE(found_red);
+}
+
+// Scans a rasterized frame for the 2x2 fixture's red corner (SolidImage uses a
+// solid colour; this uses a distinct one so text antialiasing cannot match).
+bool FrameHasPixels(const paint::Rasterizer& frame, std::uint8_t r, std::uint8_t g, std::uint8_t b)
+{
+  const std::size_t h = static_cast<std::size_t>(frame.height());
+  const std::size_t w = static_cast<std::size_t>(frame.width());
+  for (std::size_t y = 0; y < h; ++y) {
+    for (std::size_t x = 0; x < w; ++x) {
+      const std::size_t p = (y * w + x) * 4;
+      if (frame.pixels()[p] == r && frame.pixels()[p + 1] == g && frame.pixels()[p + 2] == b) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Block-level and float/flex children that are replaced elements must paint
+// their decoded pixels: real site CSS routinely sets `display:block` (covers)
+// or puts images in flex rows, and those builders used to lay out a sized but
+// empty box (placeholders stayed gray on bilibili's home page).
+TEST(PageTest, BlockLevelImagePaintsItsPixels)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<html><body style=\"background-color:#ffffff;margin:0\">"
+                            "<img id=\"cover\" style=\"display:block;width:40px;height:20px\">"
+                            "</body></html>")
+                  .has_value());
+  dom::Element* img_el = dom::QuerySelector(*page.document(), "#cover");
+  ASSERT_NE(img_el, nullptr);
+  page.SetElementImage(*img_el, SolidImage(4, 2, 220, 0, 0));
+  page.Layout(200);
+  const paint::Rasterizer frame = page.Rasterize(200, 100);
+  EXPECT_TRUE(FrameHasPixels(frame, 220, 0, 0));
+}
+
+TEST(PageTest, FlexItemImagePaintsItsPixels)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<html><body style=\"background-color:#ffffff;margin:0\">"
+                            "<div style=\"display:flex\">"
+                            "<img id=\"cover\" style=\"width:40px;height:20px\">"
+                            "</div></body></html>")
+                  .has_value());
+  dom::Element* img_el = dom::QuerySelector(*page.document(), "#cover");
+  ASSERT_NE(img_el, nullptr);
+  page.SetElementImage(*img_el, SolidImage(4, 2, 0, 220, 0));
+  page.Layout(200);
+  const paint::Rasterizer frame = page.Rasterize(200, 100);
+  EXPECT_TRUE(FrameHasPixels(frame, 0, 220, 0));
+}
+
+TEST(PageTest, FloatedImagePaintsItsPixels)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<html><body style=\"background-color:#ffffff;margin:0\">"
+                            "<img id=\"avatar\" style=\"float:left;width:40px;height:20px\">"
+                            "<p>text beside the float</p></body></html>")
+                  .has_value());
+  dom::Element* img_el = dom::QuerySelector(*page.document(), "#avatar");
+  ASSERT_NE(img_el, nullptr);
+  page.SetElementImage(*img_el, SolidImage(4, 2, 0, 0, 220));
+  page.Layout(200);
+  const paint::Rasterizer frame = page.Rasterize(200, 100);
+  EXPECT_TRUE(FrameHasPixels(frame, 0, 0, 220));
 }
 
 TEST(PageTest, CanvasFillRectRendersBackingStore)

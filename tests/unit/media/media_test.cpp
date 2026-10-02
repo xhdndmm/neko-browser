@@ -347,6 +347,35 @@ TEST(MediaVideoTest, RespectsFrameBudget)
   base::Result<VideoClip> clip = DecodeVideo(data, /*max_frames=*/2);
   ASSERT_TRUE(clip.has_value()) << clip.error().message();
   EXPECT_EQ(clip.value().frames.size(), 2u);
+  EXPECT_TRUE(clip.value().truncated);
+}
+
+TEST(MediaVideoTest, ByteBudgetTruncatesToFittingPrefix)
+{
+  const std::string data = ReadFixture("sample_8x6_h264.mp4");
+  ASSERT_FALSE(data.empty());
+  // 8x6 RGBA = 192 bytes/frame; budget for 3 frames (the fixture has ~6).
+  base::Result<VideoClip> clip = DecodeVideo(data,
+                                             /*max_frames=*/2048,
+                                             /*max_total_bytes=*/3 * 8 * 6 * 4);
+  ASSERT_TRUE(clip.has_value()) << clip.error().message();
+  EXPECT_EQ(clip.value().frames.size(), 3u);
+  EXPECT_TRUE(clip.value().truncated);
+  // A full decode of the same fixture must not be truncated.
+  base::Result<VideoClip> full = DecodeVideo(data);
+  ASSERT_TRUE(full.has_value()) << full.error().message();
+  EXPECT_FALSE(full.value().truncated);
+}
+
+TEST(MediaVideoTest, RejectsClipWhoseFirstFrameExceedsBudget)
+{
+  const std::string data = ReadFixture("sample_8x6_h264.mp4");
+  ASSERT_FALSE(data.empty());
+  // Not even one 8x6 RGBA frame fits: nothing would be renderable.
+  base::Result<VideoClip> clip = DecodeVideo(data, /*max_frames=*/2048, /*max_total_bytes=*/1);
+  ASSERT_FALSE(clip.has_value());
+  EXPECT_EQ(clip.error().category(), base::ErrorCategory::kParse);
+  EXPECT_NE(clip.error().message().find("first frame"), std::string::npos);
 }
 
 } // namespace

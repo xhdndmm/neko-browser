@@ -424,11 +424,24 @@ base::Result<VideoClip> DecodeVideo(std::string_view data, int max_frames, int64
     if (!frame.value().has_value()) {
       break;
     }
+    // Memory budget: keep the frames that fit and stop (a bounded prefix is
+    // far more useful than failing the whole decode -- real-world videos are
+    // routinely larger than the budget).  A first frame that cannot fit at
+    // all yields nothing renderable, so that stays an error.
     if (bytes_per_frame > max_total_bytes) {
-      return base::Error::Parse("video: frame budget exceeded");
+      if (clip.frames.empty()) {
+        return base::Error::Parse("video: first frame exceeds the decoded memory budget");
+      }
+      clip.truncated = true;
+      break;
     }
     max_total_bytes -= bytes_per_frame;
     clip.frames.push_back(std::move(*frame.value()));
+  }
+  // Hitting the frame cap also means the clip is a prefix of the stream (the
+  // budget check above may have broken earlier; both paths set the flag).
+  if (static_cast<int>(clip.frames.size()) >= max_frames) {
+    clip.truncated = true;
   }
   return clip;
 }

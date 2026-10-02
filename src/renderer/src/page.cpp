@@ -102,8 +102,21 @@ bool CollectFragmentRect(const layout::LayoutBox& box,
       }
     }
     for (const layout::InlineBox& ib : line.boxes) {
-      if (ib.image != nullptr && ib.element == target) {
-        add(ib.x, ib.y, ib.width, ib.height);
+      if (ib.element == target) {
+        // The box carries the element's own geometry; the image only refines
+        // the size when the CSS box has none.  Matching on the element (not
+        // on a decoded image) matters: geometry queries run *before* the
+        // subresource fetch attaches the pixels — that query is exactly what
+        // IntersectionObserver needs to decide a lazy image is in view.
+        float w = ib.width;
+        float h = ib.height;
+        if (w <= 0 && ib.image != nullptr) {
+          w = static_cast<float>(ib.image->width);
+        }
+        if (h <= 0 && ib.image != nullptr) {
+          h = static_cast<float>(ib.image->height);
+        }
+        add(ib.x, ib.y, w, h);
       }
       if (ib.block_box != nullptr &&
           CollectFragmentRect(*ib.block_box, target, min_x, min_y, max_right, max_bottom)) {
@@ -1232,8 +1245,13 @@ std::optional<ElementGeometry> Page::ElementBoxGeometry(const dom::Element& elem
   }
   if (root_ == nullptr) {
     // No layout yet (e.g. page scripts run before the UI lays out): build one
-    // at the last viewport size so geometry queries have real values.
-    LayoutLocked(viewport_width_ > 0 ? viewport_width_ : 800, viewport_height_);
+    // at the last viewport size so geometry queries have real values.  The
+    // fallback height must be non-zero: viewport_height_ drives vh units,
+    // innerHeight and the IntersectionObserver viewport band, and a zero here
+    // poisons all of them for the rest of the document's life (HasLayout()
+    // then keeps the first real layout pass from ever replacing it).
+    LayoutLocked(viewport_width_ > 0 ? viewport_width_ : 800,
+                 viewport_height_ > 0 ? viewport_height_ : 600);
   }
   if (root_ == nullptr) {
     return std::nullopt;
