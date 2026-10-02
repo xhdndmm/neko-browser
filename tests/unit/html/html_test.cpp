@@ -1029,5 +1029,129 @@ TEST(HtmlTest, UnclosedFormattingInCellDoesNotLeakPastTable)
   EXPECT_EQ(static_cast<dom::Element*>(footer->parent())->tag_name(), "body");
 }
 
+// ---------------------------------------------------------------------------
+// "in select" / "in select in table" (WHATWG 13.2.6.4.16 / 13.2.6.4.17).
+// Before these modes existed, options nested inside options and
+// select-closing tokens (input/textarea/select-nested) stayed inside the
+// select, so form widgets after a select were swallowed by it.
+// ---------------------------------------------------------------------------
+
+TEST(HtmlTest, OptionsBecomeSiblings)
+{
+  auto doc = ParseDoc("<body><select><option>a<option>b</select>");
+  dom::Element* select = dom::QuerySelector(*doc, "select");
+  ASSERT_NE(select, nullptr);
+  const std::vector<dom::Element*> options = dom::QuerySelectorAll(*doc, "option");
+  ASSERT_EQ(options.size(), 2u);
+  EXPECT_EQ(options[0]->TextContent(), "a");
+  EXPECT_EQ(options[1]->TextContent(), "b");
+  EXPECT_EQ(options[0]->parent(), select);
+  EXPECT_EQ(options[1]->parent(), select);
+  EXPECT_EQ(select->child_count(), 2u);
+}
+
+TEST(HtmlTest, OptgroupClosesOptionAndPreviousOptgroup)
+{
+  auto doc =
+      ParseDoc("<body><select><optgroup label=a><option>1<optgroup label=b><option>2</select>");
+  const std::vector<dom::Element*> optgroups = dom::QuerySelectorAll(*doc, "optgroup");
+  ASSERT_EQ(optgroups.size(), 2u);
+  const std::vector<dom::Element*> options = dom::QuerySelectorAll(*doc, "option");
+  ASSERT_EQ(options.size(), 2u);
+  EXPECT_EQ(options[0]->parent(), optgroups[0]);
+  EXPECT_EQ(options[1]->parent(), optgroups[1]);
+  EXPECT_EQ(static_cast<dom::Element*>(optgroups[0]->parent())->tag_name(), "select");
+  EXPECT_EQ(static_cast<dom::Element*>(optgroups[1]->parent())->tag_name(), "select");
+}
+
+TEST(HtmlTest, EndOptgroupPopsOptionThenOptgroup)
+{
+  auto doc = ParseDoc("<body><select><optgroup><option>x</optgroup><option>y</select>");
+  const std::vector<dom::Element*> optgroups = dom::QuerySelectorAll(*doc, "optgroup");
+  ASSERT_EQ(optgroups.size(), 1u);
+  const std::vector<dom::Element*> options = dom::QuerySelectorAll(*doc, "option");
+  ASSERT_EQ(options.size(), 2u);
+  EXPECT_EQ(options[0]->parent(), optgroups[0]);
+  EXPECT_EQ(static_cast<dom::Element*>(options[1]->parent())->tag_name(), "select");
+}
+
+TEST(HtmlTest, InputAbortsSelect)
+{
+  auto doc = ParseDoc("<body><select><option>a<input value=v></select>");
+  dom::Element* select = dom::QuerySelector(*doc, "select");
+  ASSERT_NE(select, nullptr);
+  const std::vector<dom::Element*> inputs = dom::QuerySelectorAll(*doc, "input");
+  ASSERT_EQ(inputs.size(), 1u);
+  // The input is a sibling of the select, not a child: the select was closed
+  // and the trailing </select> was ignored (no select in scope anymore).
+  EXPECT_EQ(static_cast<dom::Element*>(inputs[0]->parent())->tag_name(), "body");
+  EXPECT_EQ(select->TextContent(), "a");
+}
+
+TEST(HtmlTest, NestedSelectStartsASibling)
+{
+  auto doc = ParseDoc("<body><select><option>a<select><option>b</select>");
+  const std::vector<dom::Element*> selects = dom::QuerySelectorAll(*doc, "select");
+  ASSERT_EQ(selects.size(), 2u);
+  EXPECT_EQ(static_cast<dom::Element*>(selects[0]->parent())->tag_name(), "body");
+  EXPECT_EQ(static_cast<dom::Element*>(selects[1]->parent())->tag_name(), "body");
+  EXPECT_EQ(selects[0]->TextContent(), "a");
+  EXPECT_EQ(selects[1]->TextContent(), "b");
+}
+
+TEST(HtmlTest, NonSelectElementsInsideSelectAreIgnored)
+{
+  auto doc = ParseDoc("<body><select><div>x</div><option>y</select>");
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "div").size(), 0u);
+  dom::Element* select = dom::QuerySelector(*doc, "select");
+  ASSERT_NE(select, nullptr);
+  // Characters still make it into the select even though the tags are ignored.
+  EXPECT_EQ(select->TextContent(), "xy");
+}
+
+TEST(HtmlTest, HrClosesOptionInsideSelect)
+{
+  auto doc = ParseDoc("<body><select><option>a<hr><option>b</select>");
+  dom::Element* select = dom::QuerySelector(*doc, "select");
+  ASSERT_NE(select, nullptr);
+  const std::vector<dom::Element*> options = dom::QuerySelectorAll(*doc, "option");
+  ASSERT_EQ(options.size(), 2u);
+  EXPECT_EQ(options[0]->parent(), select);
+  EXPECT_EQ(options[1]->parent(), select);
+  const std::vector<dom::Element*> hrs = dom::QuerySelectorAll(*doc, "hr");
+  ASSERT_EQ(hrs.size(), 1u);
+  EXPECT_EQ(hrs[0]->parent(), select);
+  EXPECT_EQ(hrs[0]->child_count(), 0u); // void element
+  EXPECT_EQ(select->child_count(), 3u); // option, hr, option
+}
+
+TEST(HtmlTest, SelectInTableBreaksOutOnTableCell)
+{
+  auto doc = ParseDoc("<body><table><tr><td><select><option>a<td>b</table>");
+  const std::vector<dom::Element*> cells = dom::QuerySelectorAll(*doc, "td");
+  ASSERT_EQ(cells.size(), 2u);
+  dom::Element* select = dom::QuerySelector(*doc, "select");
+  ASSERT_NE(select, nullptr);
+  EXPECT_EQ(select->parent(), cells[0]);
+  EXPECT_EQ(cells[0]->TextContent(), "a");
+  EXPECT_EQ(cells[1]->TextContent(), "b");
+}
+
+TEST(HtmlTest, SelectInTableBreaksOutOnTableEndTag)
+{
+  auto doc = ParseDoc("<body><table><tr><td><select><option>a</table>after");
+  dom::Element* table = dom::QuerySelector(*doc, "table");
+  ASSERT_NE(table, nullptr);
+  dom::Element* select = dom::QuerySelector(*doc, "select");
+  ASSERT_NE(select, nullptr);
+  EXPECT_EQ(select->TextContent(), "a");
+  // The table end tag closed the select and the table; following text belongs
+  // to the body, not to the select.
+  dom::Element* body = Body(*doc);
+  ASSERT_NE(body, nullptr);
+  EXPECT_NE(body->TextContent().find("after"), std::string::npos);
+  EXPECT_EQ(select->TextContent().find("after"), std::string::npos);
+}
+
 } // namespace
 } // namespace neko::html

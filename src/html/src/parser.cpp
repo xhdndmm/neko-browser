@@ -164,8 +164,10 @@ std::unique_ptr<dom::Document> Parser::Parse()
         case Mode::kInTableBody:
         case Mode::kInRow:
         case Mode::kInCell:
-          // EOF in a table insertion mode is processed with the "in body"
-          // rules (13.2.6.4.9), which simply stop parsing here.
+        case Mode::kInSelect:
+        case Mode::kInSelectInTable:
+          // EOF in a table/select insertion mode is processed with the "in
+          // body" rules (13.2.6.4.9), which simply stop parsing here.
           mode_ = Mode::kInBody;
           break;
         case Mode::kInBody:
@@ -443,6 +445,15 @@ void Parser::ResetInsertionMode()
       last = true;
     }
     const std::string_view tag = node->tag_name();
+    if (tag == "select" && !last) {
+      // "If node is a select element": the surrounding table context decides
+      // between the two select modes (13.2.6.4.17).
+      const bool table_context = mode_ == Mode::kInTable || mode_ == Mode::kInCaption ||
+                                 mode_ == Mode::kInTableBody || mode_ == Mode::kInRow ||
+                                 mode_ == Mode::kInCell;
+      mode_ = table_context ? Mode::kInSelectInTable : Mode::kInSelect;
+      return;
+    }
     if ((tag == "td" || tag == "th") && !last) {
       mode_ = Mode::kInCell;
       return;
@@ -969,6 +980,8 @@ void Parser::ProcessComment(Token token)
   case Mode::kInTableBody:
   case Mode::kInRow:
   case Mode::kInCell:
+  case Mode::kInSelect:
+  case Mode::kInSelectInTable:
     AppendNode(std::make_unique<dom::Comment>(token.data));
     return;
   }
@@ -1092,6 +1105,13 @@ void Parser::ProcessCharacter(Token token)
     original_mode_ = mode_;
     mode_ = Mode::kInTableText;
     Reprocess(std::move(token));
+    return;
+
+  case Mode::kInSelect:
+  case Mode::kInSelectInTable:
+    // Character tokens inside a select are inserted at the current node
+    // (13.2.6.4.16 / 13.2.6.4.17).
+    AppendText(token.data);
     return;
 
   case Mode::kAfterBody:
@@ -1393,6 +1413,47 @@ void Parser::ProcessStartTag(Token token)
       PushActiveFormatting(stack_.back());
       return;
     }
+    if (tag == "option") {
+      // An open option is closed by the next option (13.2.6.4.7).
+      if (CurrentNode() != nullptr && CurrentNode()->tag_name() == "option") {
+        PopElement();
+      }
+      ReconstructActiveFormatting();
+      InsertElement(CreateElement(token).release());
+      return;
+    }
+    if (tag == "optgroup") {
+      if (CurrentNode() != nullptr && CurrentNode()->tag_name() == "option") {
+        PopElement();
+      }
+      if (CurrentNode() != nullptr && CurrentNode()->tag_name() == "optgroup") {
+        PopElement();
+      }
+      ReconstructActiveFormatting();
+      InsertElement(CreateElement(token).release());
+      return;
+    }
+    if (tag == "select") {
+      ReconstructActiveFormatting();
+      InsertElement(CreateElement(token).release());
+      // The surrounding context selects the select insertion mode
+      // (13.2.6.4.7): inside a table section or cell the table-aware variant
+      // applies, so table tags can still break out of the select.  The
+      // context is read from the open elements (the select is current);
+      // mode_ itself may be a temporary "in body" during delegation.
+      bool table_context = false;
+      for (auto it = stack_.rbegin(); it != stack_.rend(); ++it) {
+        const std::string_view t = (*it)->tag_name();
+        if (t == "select") {
+          continue;
+        }
+        table_context = t == "td" || t == "th" || t == "tr" || t == "tbody" || t == "thead" ||
+                        t == "tfoot" || t == "caption" || t == "table";
+        break;
+      }
+      mode_ = table_context ? Mode::kInSelectInTable : Mode::kInSelect;
+      return;
+    }
 
     // Any other start tag: inline element or unknown element.
     if (IsFormattingElement(tag)) {
@@ -1543,14 +1604,15 @@ void Parser::ProcessStartTag(Token token)
     // insertion mode (13.2.6.4.15).  Leaving mode_ at kInBody would make a
     // following </td> take the in-body path (PopThrough) instead of closing
     // the cell, leaking active formatting elements past the table.
-    {
-      const Mode saved = mode_;
-      mode_ = Mode::kInBody;
-      ProcessStartTag(std::move(token));
-      if (mode_ == Mode::kInBody) {
-        mode_ = saved;
-      }
-    }
+    ProcessWithInBodyRules(std::move(token));
+    return;
+
+  case Mode::kInSelect:
+    ProcessInSelect(std::move(token));
+    return;
+
+  case Mode::kInSelectInTable:
+    ProcessInSelectInTable(std::move(token));
     return;
 
   case Mode::kAfterBody:
@@ -1852,16 +1914,17 @@ void Parser::ProcessEndTag(Token token)
     }
     // Anything else: in-body rules without changing the insertion mode
     // (13.2.6.4.15), so a following </td> still closes the cell.
-    {
-      const Mode saved = mode_;
-      mode_ = Mode::kInBody;
-      ProcessEndTag(std::move(token));
-      if (mode_ == Mode::kInBody) {
-        mode_ = saved;
-      }
-    }
+    ProcessWithInBodyRules(std::move(token));
     return;
   }
+
+  case Mode::kInSelect:
+    ProcessInSelect(std::move(token));
+    return;
+
+  case Mode::kInSelectInTable:
+    ProcessInSelectInTable(std::move(token));
+    return;
 
   case Mode::kAfterBody:
     if (token.name == "html") {
@@ -2004,6 +2067,159 @@ void Parser::ProcessEndTagInTable(Token token)
 // style/title etc., where the head element pointer is pushed onto the stack
 // first.  If the in-head rules did not change the insertion mode (e.g. a
 // void head element), the mode reverts to "after head".
+// Runs |token| with the "in body" rules from another insertion mode, restoring
+// the mode unless the rules changed it themselves (e.g. textarea switches to
+// the text mode).  This mirrors ProcessInHead's wrapper and is the documented
+// WHATWG pattern for "process the token using the rules for the in body
+// insertion mode".
+void Parser::ProcessWithInBodyRules(Token token)
+{
+  const Mode saved = mode_;
+  mode_ = Mode::kInBody;
+  ProcessToken(std::move(token));
+  if (mode_ == Mode::kInBody) {
+    mode_ = saved;
+  }
+}
+
+// "in select" (WHATWG 13.2.6.4.16): only option/optgroup/hr/select/
+// input/keygen/textarea/script/template are meaningful; everything else is
+// ignored (characters are inserted).
+void Parser::ProcessInSelect(Token token)
+{
+  switch (token.type) {
+  case TokenType::kCharacter:
+    AppendText(token.data);
+    return;
+  case TokenType::kComment:
+    AppendNode(std::make_unique<dom::Comment>(token.data));
+    return;
+  case TokenType::kDoctype:
+  case TokenType::kEOF:
+    return; // parse error / end of input; ignored here
+  case TokenType::kStartTag: {
+    const std::string& tag = token.name;
+    if (tag == "html") {
+      ProcessWithInBodyRules(std::move(token));
+      return;
+    }
+    if (tag == "option") {
+      if (CurrentNode() != nullptr && CurrentNode()->tag_name() == "option") {
+        PopElement();
+      }
+      InsertElement(CreateElement(token).release());
+      return;
+    }
+    if (tag == "optgroup") {
+      if (CurrentNode() != nullptr && CurrentNode()->tag_name() == "option") {
+        PopElement();
+      }
+      if (CurrentNode() != nullptr && CurrentNode()->tag_name() == "optgroup") {
+        PopElement();
+      }
+      InsertElement(CreateElement(token).release());
+      return;
+    }
+    if (tag == "hr") {
+      if (CurrentNode() != nullptr && CurrentNode()->tag_name() == "option") {
+        PopElement();
+      }
+      if (CurrentNode() != nullptr && CurrentNode()->tag_name() == "optgroup") {
+        PopElement();
+      }
+      InsertElement(CreateElement(token).release());
+      PopElement(); // hr is void
+      return;
+    }
+    if (tag == "select") {
+      // A nested select is a parse error: close the open one, then reprocess
+      // (which starts a new sibling select via the in-body rules).
+      if (!InScope("select")) {
+        return; // fragment case
+      }
+      PopThrough("select");
+      ResetInsertionMode();
+      Reprocess(std::move(token));
+      return;
+    }
+    if (tag == "input" || tag == "keygen" || tag == "textarea") {
+      // These close the select and are reprocessed in the surrounding
+      // context (a text field after the select, matching browsers).
+      if (!InScope("select")) {
+        return; // fragment case
+      }
+      PopThrough("select");
+      ResetInsertionMode();
+      ProcessWithInBodyRules(std::move(token));
+      return;
+    }
+    if (tag == "script" || tag == "template") {
+      ProcessInHead(std::move(token));
+      return;
+    }
+    return; // anything else: parse error; ignored
+  }
+  case TokenType::kEndTag: {
+    const std::string& tag = token.name;
+    if (tag == "optgroup") {
+      if (CurrentNode() != nullptr && CurrentNode()->tag_name() == "option" && stack_.size() >= 2 &&
+          stack_[stack_.size() - 2]->tag_name() == "optgroup") {
+        PopElement();
+      }
+      if (CurrentNode() != nullptr && CurrentNode()->tag_name() == "optgroup") {
+        PopElement();
+      }
+      return;
+    }
+    if (tag == "option") {
+      if (CurrentNode() != nullptr && CurrentNode()->tag_name() == "option") {
+        PopElement();
+      }
+      return;
+    }
+    if (tag == "select") {
+      // Select scope equals the default scope here: optgroup and option are
+      // not scope boundaries (13.2.6.1), so InScope is the correct predicate.
+      if (!InScope("select")) {
+        return; // parse error (fragment case); ignored
+      }
+      PopThrough("select");
+      ResetInsertionMode();
+      return;
+    }
+    if (tag == "template") {
+      ProcessInHead(std::move(token));
+      return;
+    }
+    return; // anything else: parse error; ignored
+  }
+  }
+}
+
+// "in select in table" (WHATWG 13.2.6.4.17): table tags break out of the
+// select; everything else follows the in-select rules.
+void Parser::ProcessInSelectInTable(Token token)
+{
+  if (token.type == TokenType::kStartTag || token.type == TokenType::kEndTag) {
+    const std::string& tag = token.name;
+    const bool table_tag = tag == "caption" || tag == "table" || tag == "tbody" || tag == "tfoot" ||
+                           tag == "thead" || tag == "tr" || tag == "td" || tag == "th";
+    if (table_tag) {
+      if (token.type == TokenType::kEndTag && !InTableScope(tag)) {
+        return; // parse error; ignored
+      }
+      if (!InScope("select")) {
+        return; // defensive: malformed stack (fragment case)
+      }
+      PopThrough("select");
+      ResetInsertionMode();
+      Reprocess(std::move(token));
+      return;
+    }
+  }
+  ProcessInSelect(std::move(token));
+}
+
 void Parser::ProcessInHead(Token token)
 {
   const Mode saved_mode = mode_;

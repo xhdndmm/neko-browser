@@ -46,6 +46,8 @@ private:
     kInTableBody,
     kInRow,
     kInCell,
+    kInSelect,
+    kInSelectInTable,
     kAfterBody,
     kAfterAfterBody,
   };
@@ -57,6 +59,12 @@ private:
   void ProcessComment(Token token);
   void ProcessStartTagInTable(Token token);
   void ProcessEndTagInTable(Token token);
+  // "in select" / "in select in table" insertion modes (13.2.6.4.16/17).
+  void ProcessInSelect(Token token);
+  void ProcessInSelectInTable(Token token);
+  // Runs |token| with the "in body" rules from another insertion mode,
+  // restoring the mode unless the rules changed it themselves.
+  void ProcessWithInBodyRules(Token token);
 
   void InsertElement(dom::Element* element);
   void AppendNode(std::unique_ptr<dom::Node> node);

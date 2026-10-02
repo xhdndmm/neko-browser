@@ -16,7 +16,8 @@
 - 树构建：initial → before html → before head → in head → after head →
   in body → text → after body，外加完整表格模式链：
   in table → in table text → in caption → in column group → in table body →
-  in row → in cell；隐含 html/head/body、隐含 p/li/标题闭合、void 元素、
+  in row → in cell，以及 **in select / in select in table**；隐含 html/head/body、
+  隐含 p/li/标题闭合、void 元素、
   hr/center 关闭 p、dd/dt 互闭、游离结束标签、EOF 骨架
 - **表格容错（foster parenting）**：表格内误置的文本/元素被「寄养」到表格之前
   （§13.2.6.1、13.2.6.4.9-4.15），含 pending table character tokens 缓冲与
@@ -39,8 +40,6 @@
 
 - CDATA section 状态、processing instruction 状态（依赖 foreign content）
 - in template / in frameset 模式（依赖 template/frameset 支持）
-- quirks mode 尚未接线到 CSS/布局（force-quirks 标志已由 tokenizer 计算，
-  但 Document 的渲染模式仍为 no-quirks）
 - 无 fragment parsing（`innerHTML` 走完整文档解析器再取 `<body>` 子节点，
   因此 `<style>`/`<meta>`/`<link>`/`<template>` 形式的片段会被静默丢弃，
   表格片段的上下文规则也不正确 —— 见兼容性矩阵）
@@ -67,6 +66,12 @@
 - **重复属性（13.2.5.34）**：应保留**首个**，此前 `SetAttribute` 覆盖导致末个胜出。
   这不只是规范问题——它构成典型的解析器差异面（HTML 清洗器读首个，朴素过滤器
   常读末个）。
+
+- **in select 缺失（2026-10 修复）**：此前没有 select 插入模式——`<select><option>a<option>b`
+  产生 option 套 option；`<select><input>` 把输入框吞进 select；表格中的 select 不会
+  被 `<td>`/`</table>` 正确打断。现按 13.2.6.4.16/17 实现 in select 与 in select in
+  table（option/optgroup 兄弟化、`hr`、嵌套 select 弹旧开新、input/keygen/textarea 中止），
+  回归覆盖 9 个用例（`OptionsBecomeSiblings` 等）。
 
 ## 命名字符引用（生成代码）
 
