@@ -10,3 +10,26 @@
 # itself is a documented UBSan false positive with Qt's internals, so the
 # demangle buffer it leaves behind is not a real leak.
 leak:__ubsan_handle_dynamic_type_cache_miss
+
+# ---------------------------------------------------------------------------
+# EGL/GPU driver one-time caches (Mesa/llvmpipe, NVIDIA).
+#
+# Connecting an EGL display pulls in the driver stack — libgallium + libLLVM
+# on Mesa, libnvidia-egl* on NVIDIA — together with its process-wide caches:
+# llvmpipe's software screen (the ~2.7 KB calloc Mesa makes while the
+# surfaceless display is created), LLVM's one-time target registry (the ~128 B
+# realloc out of libLLVM), and vendor helper state.  None of it is released by
+# eglTerminate (the drivers keep these caches for the life of the process,
+# and libglvnd additionally unloads vendor libraries once the last display is
+# terminated, orphaning them outright).  Everything allocated on these paths
+# lives in driver-internal globals; the try-display ladder
+# (EglGpuContext::ConnectDisplay/TryDisplay in
+# src/compositor/src/egl_gpu_context.cpp) only holds stack locals there, so a
+# report whose stack runs through those frames is driver residue, not an
+# engine leak.  Mesa and Chromium carry the same suppressions.
+leak:ConnectDisplay
+leak:TryDisplay
+# Driver-side residue whose (unsymbolizable) stacks do not include our frames.
+leak:libgallium
+leak:libLLVM
+

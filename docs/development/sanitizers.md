@@ -72,6 +72,30 @@ setarch $(uname -m) -R ctest --preset tsan
 
 CI 中 `.github/workflows/ci.yml` 的 `tsan` 任务就是这三条的固化。
 
+## ASan / LSan 本地运行
+
+```bash
+cmake --preset asan -DFETCHCONTENT_SOURCE_DIR_GOOGLETEST=$PWD/build/debug/_deps/googletest-src \
+                  -DFETCHCONTENT_SOURCE_DIR_QUICKJS=$PWD/build/debug/_deps/quickjs-src
+cmake --build --preset asan --parallel
+ctest --preset asan
+```
+
+- **同样必须用 `ctest --preset asan`**：`tools/lsan.supp` 挂在 preset 的
+  `LSAN_OPTIONS` 上，裸 `ctest` 不加载 preset 环境。
+- **EGL/GPU 驱动的一次性缓存已在 `tools/lsan.supp` 中抑制**（`ConnectDisplay`/
+  `TryDisplay` 帧 + `libgallium`/`libLLVM` 模块）：连接 EGL display 会加载驱动栈
+  （Mesa 的 libgallium+libLLVM，NVIDIA 的 libnvidia-egl*），其进程级缓存
+  （llvmpipe 软屏 ~2.7 KB、LLVM 目标注册表 ~128 B、厂商帮助器状态）在
+  `eglTerminate` 后仍不释放、且 libglvnd 会在最后一个 display 终结后卸载厂商库
+  使这些全局指针直接失效。这些路径上 neko 只持有栈上局部量，分配全部发生在驱动
+  内部（Mesa/Chromium 对同样对象有相同抑制）。
+- 驱动指纹随机器而异（CI 是 Mesa llvmpipe；本机 Arch 是 NVIDIA，表现为
+  `libdbus` 侧残留）。本地验证抑制机制/驱动残留的正确姿势：在
+  `LSAN_OPTIONS` 里追加一个**不入库**的临时抑制文件（如 `leak:libdbus`），
+  跑 `neko_compositor_tests` 应全绿且无未抑制报告；仓库内条目在本机零匹配即为
+  无误伤。
+
 ## 实现说明
 
 - `NEKO_SANITIZERS` 缓存变量是 CMake 列表（分号分隔），在
