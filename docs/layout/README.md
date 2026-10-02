@@ -28,6 +28,12 @@
   `min-width:auto` 的内容最小尺寸取 min(content, specified)——`width:100%`
   对确定容器可解析时用它封顶，`min-width:auto` 的项不再以子树 min-content
   为底拒绝收缩（bilibili 轮播 100% 链，回归见 `BilibiliCardRepro`）
+- **auto 高度列的 main 尺寸与 reverse 翻转**（2026-10）：容器高 auto 时
+  没有可分配的 free space，`row-reverse`/`column-reverse` 的翻转基准改为
+  **行自身 main 范围**（原用“容器主轴回退值 = 可用宽度”，column-reverse 的
+  子项整体被翻到容器下方数百像素——Codeberg 头部的标题/logo 全空白）；
+  列项在容器高 auto 时：确定 height 属性定高，否则可增长项回退实测内容高
+  （`flex:2 1 0` 的 basis 0 曾把项压成 0 高，内容溢出不占位；回归 3 例）
 - **晚到附着不重复布局**（2026-10）：尺寸已确定的替换元素（CSS 宽高或
   width/height 属性双轴齐备）收到解码帧时只就地更新布局盒/行内盒的图像指针，
   不重建布局树（真实页面逐张懒加载封面时，每张一次全量重排把滚动拖死）；

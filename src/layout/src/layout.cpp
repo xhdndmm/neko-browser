@@ -2881,6 +2881,9 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       float max_main_clamp = 0; // resolved max-width/height on the main axis (0 = none)
       float content_main = 0;   // final content-box main size
       float content_cross = 0;  // natural content-box cross size
+      // Measured content height of a column item (auto main size fallback
+      // when the container's height is auto and flex-basis cannot resolve).
+      float auto_main_height = 0;
       bool base_from_spec = false;
       bool cross_auto = true;        // no explicit cross-size property
       int auto_main_margins = 0;     // number of auto margins on the main axis
@@ -3169,6 +3172,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
           }
           item.box = BuildFlexItemBox(
               item, cross_width, std::nullopt, avail_width, cb_x, cb_y, cb_w, cb_h);
+          item.auto_main_height = item.box->content_height();
           if (!item.base_from_spec) {
             item.base_main = item.box->content_height();
           }
@@ -3211,14 +3215,36 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
     // it back proportionally to flex-shrink × content-box flex base size,
     // clamped at the item's min-content main size.  Resolved min/max main
     // sizes are applied last (min wins over max, matching CSS 2.2 §10.4).
-    static void
-    ResolveFlexLengths(bool main_definite, float container_main, std::vector<FlexLineData>& lines)
+    static void ResolveFlexLengths(bool main_definite,
+                                   bool row,
+                                   float container_main,
+                                   std::vector<FlexLineData>& lines)
     {
       for (FlexLineData& line : lines) {
         for (FlexItemData* it : line.items) {
           it->content_main = it->base_main;
         }
         if (!main_definite) {
+          // Auto-height column: the container has no free space to hand out
+          // and flex-basis cannot be resolved against an indefinite main
+          // size.  A definite height property pins the item (the codeberg
+          // logo's height:200px); otherwise an item that can grow falls back
+          // to its measured content height (`flex:2 1 0` used to produce a
+          // 0-height box -- codeberg's column-reverse header row collapsed
+          // and its children landed 600px down the page).
+          if (!row) {
+            for (FlexItemData* it : line.items) {
+              const style::SizeSpec* height_spec =
+                  it->style->height.has_value() ? &it->style->height.value() : nullptr;
+              if (height_spec != nullptr && !height_spec->percent && !height_spec->is_calc &&
+                  !height_spec->is_extremum) {
+                it->content_main = SpecToContent(
+                    *height_spec, container_main, it->border_padding_main, it->style->box_sizing);
+              } else if (it->style->flex_grow > 0.0f) {
+                it->content_main = std::max(it->base_main, it->auto_main_height);
+              }
+            }
+          }
           continue;
         }
         const float free = container_main - line.outer_main_sum;
@@ -3368,7 +3394,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       }
 
       // ---- Resolve flexible lengths (§9.7) ----
-      ResolveFlexLengths(main_definite, container_main, lines);
+      ResolveFlexLengths(main_definite, row, container_main, lines);
 
       // ---- Build row item boxes at their final main size; fix column
       // heights to their final main size ----
@@ -3489,7 +3515,16 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
           content_sum += it->content_main + it->border_padding_main + it->margin_main;
         }
         const float gaps = main_gap * static_cast<float>(std::max(0, n - 1));
-        const float free = container_main - (content_sum + gaps);
+        // Placement basis along the main axis.  A row and a definite-height
+        // column use the container's content main size; a column with an
+        // AUTO height has none yet, so the line's own extent is the basis.
+        // Using the available WIDTH there (the old fallback) put every
+        // reverse-direction child hundreds of pixels down the page and
+        // distributed phantom free space (codeberg's column-reverse header
+        // row: children landed at y=728 instead of y=72).
+        const float line_main_extent = content_sum + gaps;
+        const float used_main = main_definite ? container_main : line_main_extent;
+        const float free = used_main - line_main_extent;
         float main_cursor = 0;
         float extra_gap = 0;
         // Auto main margins absorb the positive free space and take
@@ -3604,7 +3639,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
           }
           float main_pos = main_cursor;
           if (reverse_main) {
-            main_pos = container_main - main_cursor - outer_main;
+            main_pos = used_main - main_cursor - outer_main;
           }
           float cross_pos_abs = line_offsets[li] + cross_pos;
 

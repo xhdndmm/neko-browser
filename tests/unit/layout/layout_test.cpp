@@ -3064,5 +3064,51 @@ TEST(LayoutTest, AbsoluteAutoInsetDropsBelowInlineTrigger)
   EXPECT_FLOAT_EQ(menu->x + menu->width, host->x + host->width - host->border_right);
 }
 
+// Regressions for auto-height columns (codeberg's header row): a
+// column-reverse flex container with height:auto used to flip its children by
+// the available WIDTH, putting every item hundreds of pixels down the page,
+// and a `flex:2 1 0` item (flex-basis 0) resolved to a 0-height box.
+TEST(LayoutTest, ColumnReverseAutoHeightKeepsChildrenAtTheContentTop)
+{
+  Page page = Build("<style>.col{display:flex;flex-direction:column-reverse;padding:10px}"
+                    ".a{height:40px}.b{height:60px}</style>"
+                    "<div class=col id=c><div class=a id=x></div><div class=b id=y></div></div>");
+  const LayoutBox* c = FindBox(*page.root, "#c", *page.doc);
+  const LayoutBox* x = FindBox(*page.root, "#x", *page.doc);
+  const LayoutBox* y = FindBox(*page.root, "#y", *page.doc);
+  ASSERT_NE(c, nullptr);
+  ASSERT_NE(x, nullptr);
+  ASSERT_NE(y, nullptr);
+  EXPECT_FLOAT_EQ(c->height, 10.0f + 60.0f + 40.0f + 10.0f);
+  // column-reverse: the LAST DOM child (60px) sits at the content top, the
+  // first (40px) below it.  Both must be inside the container, not flipped
+  // 700px down by the container's width.
+  EXPECT_FLOAT_EQ(y->y, c->content_y()) << "the last child flows from the content top";
+  EXPECT_FLOAT_EQ(x->y, c->content_y() + 60.0f) << "the first child follows it downward";
+  EXPECT_LE(x->y + x->height, c->content_y() + c->content_height() + 0.01f);
+}
+
+TEST(LayoutTest, AutoHeightColumnFlexBasisZeroItemKeepsItsContentHeight)
+{
+  Page page =
+      Build("<style>.col{display:flex;flex-direction:column}"
+            ".it{flex:2 1 0}</style>"
+            "<div class=col id=c><div class=it id=t><div style='height:50px'></div></div></div>");
+  const LayoutBox* t = FindBox(*page.root, "#t", *page.doc);
+  ASSERT_NE(t, nullptr);
+  EXPECT_FLOAT_EQ(t->height, 50.0f)
+      << "flex-basis:0 cannot resolve in an auto-height column; the content decides";
+}
+
+TEST(LayoutTest, AutoHeightColumnItemWithExplicitHeightKeepsIt)
+{
+  Page page = Build("<style>.col{display:flex;flex-direction:column}"
+                    ".it{flex:1 1 0;height:120px}</style>"
+                    "<div class=col id=c><div class=it id=t></div></div>");
+  const LayoutBox* t = FindBox(*page.root, "#t", *page.doc);
+  ASSERT_NE(t, nullptr);
+  EXPECT_FLOAT_EQ(t->height, 120.0f) << "a definite height pins the item (the codeberg logo)";
+}
+
 } // namespace
 } // namespace neko::layout
