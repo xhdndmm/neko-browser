@@ -86,24 +86,50 @@ void EnsureAttrClassRegistered(JSRuntime* rt)
 std::mutex g_ctx_mutex;
 std::unordered_map<JSContext*, Impl*> g_ctx_to_impl;
 
+JSValue ResolveProxyReceiver(JSContext* ctx, JSValueConst val)
+{
+  if (!JS_IsProxy(val)) {
+    return JS_DupValue(ctx, val);
+  }
+  JSValue target = JS_GetProxyTarget(ctx, val);
+  while (!JS_IsException(target) && JS_IsProxy(target)) {
+    JSValue next = JS_GetProxyTarget(ctx, target);
+    JS_FreeValue(ctx, target);
+    target = next;
+  }
+  if (JS_IsException(target)) {
+    // Revoked proxy (or a proxy whose target lookup failed): report the usual
+    // invalid receiver rather than leaking the exception.
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return JS_DupValue(ctx, val);
+  }
+  return target;
+}
+
 // Resolves the owning Impl for a C callback.  Prefers the opaque wrapper on
 // |this_val| (node methods), then falls back to the ctx registry (global
 // functions like setTimeout, whose this_val is the global object).
 Impl* ImplFor(JSContext* ctx, JSValueConst this_val)
 {
-  auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, g_node_class_id));
-  if (w != nullptr && w->impl != nullptr) {
-    return w->impl;
+  JSValue receiver = ResolveProxyReceiver(ctx, this_val);
+  auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(receiver, g_node_class_id));
+  Impl* impl = (w != nullptr && w->impl != nullptr) ? w->impl : nullptr;
+  JS_FreeValue(ctx, receiver);
+  if (impl != nullptr) {
+    return impl;
   }
   std::lock_guard<std::mutex> lock(g_ctx_mutex);
   const auto it = g_ctx_to_impl.find(ctx);
   return it != g_ctx_to_impl.end() ? it->second : nullptr;
 }
 
-dom::Node* UnwrapNode(JSValueConst this_val)
+dom::Node* UnwrapNode(JSContext* ctx, JSValueConst this_val)
 {
-  auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, g_node_class_id));
-  return w != nullptr ? w->node : nullptr;
+  JSValue receiver = ResolveProxyReceiver(ctx, this_val);
+  auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(receiver, g_node_class_id));
+  dom::Node* node = w != nullptr ? w->node : nullptr;
+  JS_FreeValue(ctx, receiver);
+  return node;
 }
 
 dom::Element* AsElement(dom::Node* node)
@@ -237,6 +263,21 @@ std::unique_ptr<dom::Node> CloneNodeImpl(const dom::Node& source, bool deep)
   switch (source.node_type()) {
   case dom::NodeType::kElement: {
     const auto& el = static_cast<const dom::Element&>(source);
+    // <template> clones its template contents (WHATWG HTML 4.12.3), not the
+    // element's own (usually empty) child list — Vue clones template.content
+    // fragments heavily during hydration.
+    if (const dom::HTMLTemplateElement* tpl = el.AsTemplate()) {
+      auto clone = std::make_unique<dom::HTMLTemplateElement>();
+      for (const dom::Attribute& attr : tpl->attributes()) {
+        clone->SetAttribute(attr.name, attr.value);
+      }
+      if (deep) {
+        for (dom::Node* child : tpl->content()->ChildNodes()) {
+          clone->content()->AppendChild(CloneNodeImpl(*child, true));
+        }
+      }
+      return clone;
+    }
     auto clone =
         std::make_unique<dom::Element>(std::string(el.tag_name()), std::string(el.namespace_uri()));
     for (const dom::Attribute& attr : el.attributes()) {
@@ -445,6 +486,7 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   html_image_element_proto = JS_NewObjectProto(ctx, element_proto);
   html_media_element_proto = JS_NewObjectProto(ctx, element_proto);
   html_video_element_proto = JS_NewObjectProto(ctx, html_media_element_proto);
+  html_template_element_proto = JS_NewObjectProto(ctx, element_proto);
   html_canvas_element_proto = JS_NewObjectProto(ctx, element_proto);
   svg_element_proto = JS_NewObjectProto(ctx, element_proto);
 
@@ -546,42 +588,11 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   InstallIntersectionObserverGlobal(ctx, global, *this);
   InstallMessageChannelGlobals(ctx, global, *this);
 
-  // Legacy jQuery compatibility aliases (common on ad/tracking/bootstraps):
-  // these are intentionally minimal and only prevent startup ReferenceErrors.
-  // A real selector engine is still out of scope.
-  JSValue jquery = JS_NewCFunction(
-      ctx,
-      [](JSContext* inner_ctx, JSValueConst /*this_val*/, int /*argc*/, JSValueConst* /*argv*/)
-          -> JSValue { return JS_NewArray(inner_ctx); },
-      "jQuery",
-      1);
-  JSValue jquery_ready = JS_NewCFunction(
-      ctx,
-      [](JSContext* inner_ctx, JSValueConst /*this_val*/, int argc, JSValueConst* argv) -> JSValue {
-        if (argc > 0 && JS_IsFunction(inner_ctx, argv[0])) {
-          JSValue callback = JS_DupValue(inner_ctx, argv[0]);
-          JSValue set_timeout =
-              JS_GetPropertyStr(inner_ctx, JS_GetGlobalObject(inner_ctx), "setTimeout");
-          JSValue args[2] = {callback, JS_NewInt32(inner_ctx, 0)};
-          JSValue result = JS_Call(inner_ctx, set_timeout, JS_UNDEFINED, 2, args);
-          JS_FreeValue(inner_ctx, callback);
-          JS_FreeValue(inner_ctx, set_timeout);
-          JS_FreeValue(inner_ctx, result);
-        }
-        return JS_UNDEFINED;
-      },
-      "ready",
-      1);
-  JS_SetPropertyStr(ctx, jquery, "ready", jquery_ready); // steals
-  JSValue jquery_window = JS_DupValue(ctx, jquery);
-  JSValue jquery_global = JS_DupValue(ctx, jquery);
-  JSValue dollar_window = JS_DupValue(ctx, jquery);
-  JSValue dollar_global = JS_DupValue(ctx, jquery);
-  JS_SetPropertyStr(ctx, window, "jQuery", jquery_window); // steals
-  JS_SetPropertyStr(ctx, global, "jQuery", jquery_global); // steals
-  JS_SetPropertyStr(ctx, window, "$", dollar_window);      // steals
-  JS_SetPropertyStr(ctx, global, "$", dollar_global);      // steals
-  JS_FreeValue(ctx, jquery);
+  // No fabricated jQuery/$ aliases.  Browsers do not define these globals,
+  // and a stub breaks feature detection on real pages: bilibili tests
+  // window.jQuery, finds the stub, and throws "cannot set property 'lazyload'
+  // of undefined" when it writes jQuery.fn.lazyload.  Pages that need jQuery
+  // load it themselves, exactly as they do in Chrome or Firefox.
 
   // window.history: a minimal History object (script-visible session length
   // plus no-op traversal/mutation; the browser's navigation stack is separate
@@ -652,6 +663,17 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
                  MakeGetter(ctx, "data", CharacterDataGetData),
                  MakeSetter(ctx, "data", CharacterDataSetData));
   DefineGetter(ctx, fragment_proto, "children", MakeGetter(ctx, "children", ElementGetChildren));
+  // DocumentFragment implements ParentNode (DOM §4.2): its querySelector /
+  // querySelectorAll search the fragment's subtree.  Scripts build detached
+  // subtrees in fragments and query them before insertion.
+  JS_SetPropertyStr(ctx,
+                    fragment_proto,
+                    "querySelector",
+                    JS_NewCFunction(ctx, ElementQuerySelector, "querySelector", 1));
+  JS_SetPropertyStr(ctx,
+                    fragment_proto,
+                    "querySelectorAll",
+                    JS_NewCFunction(ctx, ElementQuerySelectorAll, "querySelectorAll", 1));
   DefineInterface(ctx, global, "CharacterData", character_data_proto);
   DefineInterface(ctx, global, "DocumentType", document_type_proto);
   DefineInterface(ctx, global, "Text", text_proto);
@@ -784,6 +806,7 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   DefineInterface(ctx, global, "HTMLMediaElement", html_media_element_proto);
   DefineInterface(ctx, global, "HTMLVideoElement", html_video_element_proto);
   DefineInterface(ctx, global, "HTMLCanvasElement", html_canvas_element_proto);
+  DefineInterface(ctx, global, "HTMLTemplateElement", html_template_element_proto);
   DefineInterface(ctx, global, "CanvasRenderingContext2D", canvas_2d_proto);
   DefineInterface(ctx, global, "SVGElement", svg_element_proto);
   DefineInterface(ctx, global, "NodeList", node_list_proto);
@@ -1099,24 +1122,9 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   JS_SetPropertyStr(ctx, window, "navigator", JS_DupValue(ctx, navigator)); // steals dup
   JS_SetPropertyStr(ctx, global, "navigator", navigator);                   // steals
 
-  // Legacy bootstrap shims used by Bing and other real-world pages.  These are
-  // intentionally minimal and only supply the objects/scripts expect during
-  // startup; they are not a full compatibility layer for the full browser.
-  JS_SetPropertyStr(ctx, window, "_w", JS_DupValue(ctx, window));
-  JS_SetPropertyStr(ctx, window, "_d", JS_DupValue(ctx, doc_wrap));
-  JS_SetPropertyStr(ctx, global, "_w", JS_DupValue(ctx, window));
-  JS_SetPropertyStr(ctx, global, "_d", JS_DupValue(ctx, doc_wrap));
-
-  auto make_noop_function = [&](const char* name) {
-    return JS_NewCFunction(
-        ctx,
-        [](JSContext* /*inner_ctx*/,
-           JSValueConst /*this_val*/,
-           int /*argc*/,
-           JSValueConst* /*argv*/) -> JSValue { return JS_UNDEFINED; },
-        name,
-        0);
-  };
+  // No fabricated _w/_d/Feedback/BM/Log globals either: they are not web
+  // platform APIs.  Sites that test for them must observe their real absence;
+  // no-op stand-ins make tracker/bootstrap code misbehave silently.
 
   JSValue perf_observer_proto = JS_NewObject(ctx);
   auto performance_observer_noop = [](JSContext* /*inner_ctx*/,
@@ -1186,22 +1194,6 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   JS_SetPropertyStr(ctx, visual_viewport, "scale", JS_NewFloat64(ctx, 1.0));
   JS_SetPropertyStr(ctx, window, "visualViewport", JS_DupValue(ctx, visual_viewport));
   JS_SetPropertyStr(ctx, global, "visualViewport", visual_viewport);
-
-  JSValue feedback = JS_NewObject(ctx);
-  JSValue feedback_bootstrap = JS_NewObject(ctx);
-  JS_SetPropertyStr(ctx, feedback, "Bootstrap", feedback_bootstrap); // steals
-  JS_SetPropertyStr(ctx, window, "Feedback", JS_DupValue(ctx, feedback));
-  JS_SetPropertyStr(ctx, global, "Feedback", feedback);
-
-  JSValue bm = JS_NewObject(ctx);
-  JS_SetPropertyStr(ctx, bm, "trigger", make_noop_function("trigger"));
-  JS_SetPropertyStr(ctx, window, "BM", JS_DupValue(ctx, bm));
-  JS_SetPropertyStr(ctx, global, "BM", bm);
-
-  JSValue log = JS_NewObject(ctx);
-  JS_SetPropertyStr(ctx, log, "Log", make_noop_function("Log"));
-  JS_SetPropertyStr(ctx, window, "Log", JS_DupValue(ctx, log));
-  JS_SetPropertyStr(ctx, global, "Log", log);
 
   // screen: reports the window's viewport (see the declaration above), so it
   // follows window resizes and the page zoom.  A real display-size query (Qt
@@ -1433,16 +1425,9 @@ Impl::~Impl()
   // what keeps JS_FreeRuntime's "gc_obj_list is empty" assertion green.
   for (const char* name : {"document",
                            "window",
-                           "_w",
-                           "_d",
-                           "$",
-                           "jQuery",
                            "PerformanceObserver",
                            "serviceWorker",
                            "visualViewport",
-                           "Feedback",
-                           "BM",
-                           "Log",
                            "setTimeout",
                            "setInterval",
                            "clearTimeout",
@@ -1553,6 +1538,7 @@ Impl::~Impl()
   JS_FreeValue(ctx, html_media_element_proto);
   JS_FreeValue(ctx, html_video_element_proto);
   JS_FreeValue(ctx, html_canvas_element_proto);
+  JS_FreeValue(ctx, html_template_element_proto);
   JS_FreeValue(ctx, canvas_2d_proto);
   JS_FreeValue(ctx, svg_element_proto);
   JS_FreeValue(ctx, xhr_proto);
@@ -1694,6 +1680,9 @@ JSValue Impl::PrototypeFor(const dom::Node* node) const
     }
     if (element->tag_name() == "canvas") {
       return html_canvas_element_proto;
+    }
+    if (element->tag_name() == "template") {
+      return html_template_element_proto;
     }
     return element_proto;
   }
@@ -2342,6 +2331,7 @@ bool Impl::DispatchPropagated(dom::Node* target, JSValue event)
   w->propagation_stopped = false;
   w->immediate_stopped = false;
   w->default_prevented = false;
+  w->dispatched = true;
   w->event_phase = kEventNone;
   if (!JS_IsUndefined(w->target)) {
     JS_FreeValue(ctx, w->target);

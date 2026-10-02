@@ -591,9 +591,11 @@ TEST(HtmlTest, EmptyNoscriptInHeadKeepsBodyUsable)
 
 TEST(HtmlTest, TemplateInHeadDoesNotCorruptTheTree)
 {
-  // The "in template" insertion mode is not implemented yet (see
-  // docs/html/README.md), so <template> content is kept as raw text.  What
-  // must not happen is the parser desynchronising the way <noscript> did.
+  // The full "in template" insertion mode (13.2.6.4.18) is not implemented
+  // yet (see docs/html/README.md); what is implemented is the template
+  // contents rule of 13.2.5.3: insertions addressed at a <template> element
+  // land in its separate contents fragment.  What must not happen is the
+  // parser desynchronising the way <noscript> did.
   auto doc = ParseDoc("<!DOCTYPE html><html><head>"
                       "<template><div>TT</div></template>"
                       "</head><body><p>x</p></body></html>");
@@ -601,6 +603,41 @@ TEST(HtmlTest, TemplateInHeadDoesNotCorruptTheTree)
   ASSERT_NE(body, nullptr);
   EXPECT_EQ(ParentTag(body), "html");
   EXPECT_NE(dom::QuerySelector(*doc, "p"), nullptr);
+}
+
+TEST(HtmlTest, TemplateChildrenGoIntoTheContentsFragment)
+{
+  // WHATWG HTML 13.2.5.3: when the adjusted insertion location is inside a
+  // <template> element, nodes are inserted into the template contents instead
+  // of the element itself.  template.content is what Vue's runtime DOM reads
+  // (createElement + innerHTML + content.firstChild); parsed markup must
+  // populate the same fragment.
+  auto doc = ParseDoc("<!DOCTYPE html><html><body>"
+                      "<template id=card><div class=face>TT</div>"
+                      "<span>extra</span></template>"
+                      "<p id=after>done</p></body></html>");
+  dom::Element* body = Body(*doc);
+  ASSERT_NE(body, nullptr);
+  dom::Element* template_el = dom::QuerySelector(*doc, "#card");
+  ASSERT_NE(template_el, nullptr);
+  dom::HTMLTemplateElement* tpl = template_el->AsTemplate();
+  ASSERT_NE(tpl, nullptr) << "parsed <template> must be an HTMLTemplateElement";
+  // The element itself has no children; they live in the contents fragment.
+  EXPECT_EQ(template_el->first_child(), nullptr);
+  ASSERT_NE(tpl->content(), nullptr);
+  dom::Node* first = tpl->content()->first_child();
+  ASSERT_NE(first, nullptr);
+  ASSERT_EQ(first->node_type(), dom::NodeType::kElement);
+  EXPECT_EQ(static_cast<dom::Element*>(first)->tag_name(), "div");
+  EXPECT_EQ(static_cast<dom::Element*>(first)->GetAttribute("class").value_or(""), "face");
+  EXPECT_EQ(tpl->content()->child_count(), 2u);
+  // Follow-up content stays outside the template.
+  dom::Element* after = dom::QuerySelector(*doc, "#after");
+  ASSERT_NE(after, nullptr);
+  EXPECT_EQ(after->parent(), body);
+  // Serialization includes the contents (browser outerHTML behavior).
+  const std::string html = template_el->ToString();
+  EXPECT_NE(html.find("<div class=\"face\">TT</div>"), std::string::npos) << html;
 }
 
 TEST(HtmlTest, NoframesInHeadDoesNotCorruptTheTree)

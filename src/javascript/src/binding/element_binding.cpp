@@ -162,7 +162,7 @@ int DatasetGetOwnPropertyNames(JSContext* ctx,
 
 JSValue ElementGetTagName(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -172,7 +172,7 @@ JSValue ElementGetTagName(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementGetNamespaceURI(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -182,7 +182,7 @@ JSValue ElementGetNamespaceURI(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementGetId(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -195,7 +195,7 @@ JSValue ElementGetId(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementSetId(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -215,7 +215,7 @@ JSValue ElementSetId(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 
 JSValue ElementGetClassName(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -228,7 +228,7 @@ JSValue ElementGetClassName(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementSetClassName(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -320,7 +320,7 @@ JSValue AttrGetOwnerElement(JSContext* ctx, JSValueConst this_val)
 JSValue ElementGetAttributes(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -371,7 +371,7 @@ NamedNodeMapGetNamedItem(JSContext* ctx, JSValueConst this_val, int argc, JSValu
 JSValue ElementGetChildren(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "not a ParentNode");
   }
@@ -382,7 +382,7 @@ JSValue ElementGetChildren(JSContext* ctx, JSValueConst this_val)
 JSValue ElementGetFirstElementChild(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -397,7 +397,7 @@ JSValue ElementGetFirstElementChild(JSContext* ctx, JSValueConst this_val)
 JSValue ElementGetLastElementChild(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -441,7 +441,7 @@ dom::Element* ElementSiblingOf(dom::Element* element, int offset)
 JSValue ElementGetNextElementSibling(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -451,7 +451,7 @@ JSValue ElementGetNextElementSibling(JSContext* ctx, JSValueConst this_val)
 JSValue ElementGetPreviousElementSibling(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -461,7 +461,7 @@ JSValue ElementGetPreviousElementSibling(JSContext* ctx, JSValueConst this_val)
 JSValue ElementGetDataset(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -475,7 +475,7 @@ JSValue ElementGetDataset(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementMatches(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "matches: not an element");
   }
@@ -493,7 +493,7 @@ JSValue ElementMatches(JSContext* ctx, JSValueConst this_val, int argc, JSValueC
 JSValue ElementClosest(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "closest: not an element");
   }
@@ -516,7 +516,7 @@ JSValue ElementClosest(JSContext* ctx, JSValueConst this_val, int argc, JSValueC
 JSValue ElementRemove(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr || node->parent() == nullptr) {
     return JS_UNDEFINED;
   }
@@ -529,7 +529,7 @@ JSValue ElementRemove(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSVal
 
 JSValue ElementGetHidden(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -538,7 +538,7 @@ JSValue ElementGetHidden(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementSetHidden(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -558,7 +558,7 @@ JSValue ElementSetHidden(JSContext* ctx, JSValueConst this_val, JSValueConst val
 
 JSValue ElementGetTitle(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -569,7 +569,7 @@ JSValue ElementGetTitle(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementSetTitle(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -588,7 +588,7 @@ JSValue ElementSetTitle(JSContext* ctx, JSValueConst this_val, JSValueConst valu
 
 JSValue ElementGetLang(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -599,7 +599,7 @@ JSValue ElementGetLang(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementSetLang(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -618,7 +618,7 @@ JSValue ElementSetLang(JSContext* ctx, JSValueConst this_val, JSValueConst value
 
 JSValue ElementGetOuterHTML(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
@@ -678,7 +678,7 @@ void SetClassTokens(dom::Element& element, const std::vector<std::string>& token
 
 JSValue ClassListAdd(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "classList: not an element");
   }
@@ -709,7 +709,7 @@ JSValue ClassListAdd(JSContext* ctx, JSValueConst this_val, int argc, JSValueCon
 
 JSValue ClassListRemove(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "classList: not an element");
   }
@@ -728,7 +728,7 @@ JSValue ClassListRemove(JSContext* ctx, JSValueConst this_val, int argc, JSValue
 
 JSValue ClassListContains(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "classList: not an element");
   }
@@ -751,7 +751,7 @@ JSValue ClassListContains(JSContext* ctx, JSValueConst this_val, int argc, JSVal
 
 JSValue ClassListToggle(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "classList: not an element");
   }
@@ -794,7 +794,7 @@ JSValue ClassListToggle(JSContext* ctx, JSValueConst this_val, int argc, JSValue
 
 JSValue ClassListReplace(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "classList: not an element");
   }
@@ -823,7 +823,7 @@ JSValue ClassListReplace(JSContext* ctx, JSValueConst this_val, int argc, JSValu
 
 JSValue ClassListItem(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "classList: not an element");
   }
@@ -845,7 +845,7 @@ JSValue ClassListItem(JSContext* ctx, JSValueConst this_val, int argc, JSValueCo
 
 JSValue ClassListGetLength(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "classList: not an element");
   }
@@ -855,7 +855,7 @@ JSValue ClassListGetLength(JSContext* ctx, JSValueConst this_val)
 JSValue
 ClassListToString(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "classList: not an element");
   }
@@ -873,7 +873,7 @@ ClassListToString(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueCo
 JSValue
 ClassListIterator(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "classList: not an element");
   }
@@ -902,10 +902,27 @@ ClassListIterator(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueCo
   return result;
 }
 
+// HTMLTemplateElement.prototype.content: the template contents fragment.
+// Only template elements carry the accessor (it lives on the template
+// prototype), and a foreign receiver answers undefined like other
+// interface getters do when the platform object is absent.
+JSValue ElementGetTemplateContent(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
+  dom::HTMLTemplateElement* tpl = (node != nullptr && node->node_type() == dom::NodeType::kElement)
+                                      ? static_cast<dom::Element*>(node)->AsTemplate()
+                                      : nullptr;
+  if (impl == nullptr || tpl == nullptr) {
+    return JS_UNDEFINED;
+  }
+  return impl->WrapNode(tpl->content());
+}
+
 JSValue ElementGetClassList(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -920,9 +937,16 @@ JSValue ElementGetClassList(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementGetInnerHTML(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
+  }
+  // For <template>, innerHTML reads the template contents (browser behavior:
+  // the HTML fragment serialization algorithm uses the template's contents).
+  if (node->node_type() == dom::NodeType::kElement) {
+    if (dom::HTMLTemplateElement* tpl = static_cast<dom::Element*>(node)->AsTemplate()) {
+      node = tpl->content();
+    }
   }
   std::string out;
   for (dom::Node* child : node->ChildNodes()) {
@@ -934,7 +958,7 @@ JSValue ElementGetInnerHTML(JSContext* ctx, JSValueConst this_val)
 JSValue ElementSetInnerHTML(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -942,6 +966,11 @@ JSValue ElementSetInnerHTML(JSContext* ctx, JSValueConst this_val, JSValueConst 
   const std::string html = ArgString(ctx, value, &ok);
   if (!ok) {
     return JS_EXCEPTION;
+  }
+  // <template> writes into its template contents, not the element itself.
+  dom::Node* target = element;
+  if (dom::HTMLTemplateElement* tpl = element->AsTemplate()) {
+    target = tpl->content();
   }
   // Parse the fragment through the full document parser and move the <body>
   // children into this element.  Scripts in the fragment are not executed.
@@ -966,14 +995,14 @@ JSValue ElementSetInnerHTML(JSContext* ctx, JSValueConst this_val, JSValueConst 
       }
     }
   }
-  while (element->first_child() != nullptr) {
-    std::unique_ptr<dom::Node> removed = element->RemoveChild(element->first_child());
+  while (target->first_child() != nullptr) {
+    std::unique_ptr<dom::Node> removed = target->RemoveChild(target->first_child());
     impl->TakeOwnership(removed.get(), std::move(removed));
   }
   if (body != nullptr) {
     while (body->first_child() != nullptr) {
       std::unique_ptr<dom::Node> child = body->RemoveChild(body->first_child());
-      element->AppendChild(std::move(child));
+      target->AppendChild(std::move(child));
     }
   }
   impl->MarkDomDirty();
@@ -1021,7 +1050,7 @@ JSValue
 ElementInsertAdjacentHTML(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -1068,7 +1097,7 @@ ElementInsertAdjacentHTML(JSContext* ctx, JSValueConst this_val, int argc, JSVal
 JSValue ElementGetStyle(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -1083,7 +1112,7 @@ JSValue ElementGetStyle(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementGetAttribute(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -1109,7 +1138,7 @@ JSValue ElementGetAttributeNames(JSContext* ctx,
                                  int /*argc*/,
                                  JSValueConst* /*argv*/)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -1127,7 +1156,7 @@ JSValue ElementGetAttributeNames(JSContext* ctx,
 // horizontal part is a no-op — documented).
 JSValue ElementScrollIntoView(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr || argc > 0) {
     // Options objects (block/inline/behavior) are accepted but ignored: the
     // engine scrolls the element's top into view, like block:"start".
@@ -1149,7 +1178,7 @@ JSValue ElementScrollIntoView(JSContext* ctx, JSValueConst this_val, int argc, J
 
 JSValue ElementSetAttribute(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -1174,7 +1203,7 @@ JSValue ElementSetAttribute(JSContext* ctx, JSValueConst this_val, int argc, JSV
 
 JSValue ElementRemoveAttribute(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -1195,7 +1224,7 @@ JSValue ElementRemoveAttribute(JSContext* ctx, JSValueConst this_val, int argc, 
 
 JSValue ElementHasAttribute(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -1212,7 +1241,7 @@ JSValue ElementHasAttribute(JSContext* ctx, JSValueConst this_val, int argc, JSV
 
 JSValue ElementToggleAttribute(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -1244,7 +1273,7 @@ JSValue ElementToggleAttribute(JSContext* ctx, JSValueConst this_val, int argc, 
 JSValue ElementQuerySelector(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
@@ -1262,7 +1291,7 @@ JSValue ElementQuerySelector(JSContext* ctx, JSValueConst this_val, int argc, JS
 JSValue ElementQuerySelectorAll(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
@@ -1319,7 +1348,7 @@ JSValue
 ElementGetElementsByTagName(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
@@ -1339,7 +1368,7 @@ JSValue
 ElementGetElementsByClassName(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
@@ -1535,6 +1564,12 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
   DefineGetter(ctx, impl.element_proto, "dataset", MakeGetter(ctx, "dataset", ElementGetDataset));
   DefineGetter(
       ctx, impl.svg_element_proto, "dataset", MakeGetter(ctx, "dataset", ElementGetDataset));
+  // HTMLTemplateElement.prototype.content (HTML 4.12.3): only template
+  // elements get the accessor, so `'content' in div` stays false.
+  DefineGetter(ctx,
+               impl.html_template_element_proto,
+               "content",
+               MakeGetter(ctx, "content", ElementGetTemplateContent));
   DefineAccessor(ctx,
                  impl.element_proto,
                  "hidden",

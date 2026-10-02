@@ -80,7 +80,7 @@ JSValue XMLSerializerSerializeToString(JSContext* ctx,
   if (argc < 1) {
     return JS_ThrowTypeError(ctx, "serializeToString requires a Node");
   }
-  dom::Node* node = UnwrapNode(argv[0]);
+  dom::Node* node = UnwrapNode(ctx, argv[0]);
   if (node == nullptr) {
     return JS_ThrowTypeError(ctx, "serializeToString argument is not a Node");
   }
@@ -91,7 +91,7 @@ JSValue XMLSerializerSerializeToString(JSContext* ctx,
 JSValue DocGetDocumentElement(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr || node->node_type() != dom::NodeType::kDocument) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
@@ -100,7 +100,7 @@ JSValue DocGetDocumentElement(JSContext* ctx, JSValueConst this_val)
 
 JSValue DocGetDoctype(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (node == nullptr || node->node_type() != dom::NodeType::kDocument) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
@@ -110,7 +110,7 @@ JSValue DocGetDoctype(JSContext* ctx, JSValueConst this_val)
 JSValue DocGetBody(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr || node->node_type() != dom::NodeType::kDocument) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
@@ -134,7 +134,7 @@ JSValue DocGetBody(JSContext* ctx, JSValueConst this_val)
 JSValue DocGetHead(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr || node->node_type() != dom::NodeType::kDocument) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
@@ -145,7 +145,7 @@ JSValue DocGetHead(JSContext* ctx, JSValueConst this_val)
 JSValue DocGetReadyState(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr || node->node_type() != dom::NodeType::kDocument) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
@@ -157,7 +157,7 @@ JSValue DocGetReadyState(JSContext* ctx, JSValueConst this_val)
 JSValue DocGetTitle(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr || node->node_type() != dom::NodeType::kDocument) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
@@ -225,7 +225,7 @@ JSValue DocumentImplementationCreateHTMLDocument(JSContext* ctx,
 JSValue DocGetImplementation(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr || node->node_type() != dom::NodeType::kDocument) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
@@ -238,7 +238,7 @@ JSValue DocGetImplementation(JSContext* ctx, JSValueConst this_val)
 JSValue DocSetTitle(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr || node->node_type() != dom::NodeType::kDocument) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
@@ -306,7 +306,7 @@ dom::Element* FindElementByTag(const dom::Node& root, std::string_view tag)
 JSValue DocGetElementById(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
@@ -338,7 +338,11 @@ JSValue DocCreateElement(JSContext* ctx, JSValueConst this_val, int argc, JSValu
   if (tag.empty()) {
     return JS_ThrowTypeError(ctx, "createElement: empty tag name");
   }
-  auto element = std::make_unique<dom::Element>(tag);
+  // <template> needs the HTMLTemplateElement shape so template.content works
+  // (Vue's runtime DOM builds and clones fragments this way).
+  auto element = tag == "template"
+                     ? std::unique_ptr<dom::Element>(std::make_unique<dom::HTMLTemplateElement>())
+                     : std::make_unique<dom::Element>(tag);
   dom::Element* raw = element.get();
   impl->created[raw] = std::move(element);
   return impl->WrapNode(raw);
@@ -364,7 +368,7 @@ JSValue DocCreateTextNode(JSContext* ctx, JSValueConst this_val, int argc, JSVal
 JSValue DocQuerySelector(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
@@ -382,7 +386,7 @@ JSValue DocQuerySelector(JSContext* ctx, JSValueConst this_val, int argc, JSValu
 JSValue DocQuerySelectorAll(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
@@ -447,7 +451,7 @@ dom::Node* NextTreeNode(dom::Node* node, dom::Node* root)
 JSValue DocCreateTreeWalker(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* root = argc >= 1 ? UnwrapNode(argv[0]) : nullptr;
+  dom::Node* root = argc >= 1 ? UnwrapNode(ctx, argv[0]) : nullptr;
   if (impl == nullptr || root == nullptr) {
     return JS_ThrowTypeError(ctx, "createTreeWalker requires a root Node");
   }
@@ -507,8 +511,8 @@ JSValue RangeGetCommonAncestorContainer(JSContext* ctx, JSValueConst this_val)
   Impl* impl = ImplFor(ctx, this_val);
   JSValue start_value = JS_GetPropertyStr(ctx, this_val, "__nekoRangeStartContainer");
   JSValue end_value = JS_GetPropertyStr(ctx, this_val, "__nekoRangeEndContainer");
-  dom::Node* start = UnwrapNode(start_value);
-  dom::Node* end = UnwrapNode(end_value);
+  dom::Node* start = UnwrapNode(ctx, start_value);
+  dom::Node* end = UnwrapNode(ctx, end_value);
   JS_FreeValue(ctx, start_value);
   JS_FreeValue(ctx, end_value);
   if (impl == nullptr || start == nullptr || end == nullptr) {
@@ -528,7 +532,7 @@ JSValue RangeGetCommonAncestorContainer(JSContext* ctx, JSValueConst this_val)
 JSValue DocCreateRange(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* document = UnwrapNode(this_val);
+  dom::Node* document = UnwrapNode(ctx, this_val);
   if (impl == nullptr || document == nullptr || document->node_type() != dom::NodeType::kDocument) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
@@ -550,8 +554,8 @@ TreeWalkerNextNode(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueC
   JSValue root_value = JS_GetPropertyStr(ctx, this_val, "root");
   JSValue current_value = JS_GetPropertyStr(ctx, this_val, "currentNode");
   JSValue mask_value = JS_GetPropertyStr(ctx, this_val, "_whatToShow");
-  dom::Node* root = UnwrapNode(root_value);
-  dom::Node* current = UnwrapNode(current_value);
+  dom::Node* root = UnwrapNode(ctx, root_value);
+  dom::Node* current = UnwrapNode(ctx, current_value);
   uint32_t what_to_show = 0;
   const int mask_result = JS_ToUint32(ctx, &what_to_show, mask_value);
   JS_FreeValue(ctx, mask_value);
@@ -592,6 +596,57 @@ JSValue DocCreateComment(JSContext* ctx, JSValueConst this_val, int argc, JSValu
   return impl->WrapNode(raw);
 }
 
+// document.createEvent(interfaceName): the legacy DOM Level 2/3 event
+// construction API (DOM Standard §2.8 "legacy factory functions").  It is
+// deprecated but still ubiquitous in older page bootstraps — bilibili's
+// LoginInfo emitter calls document.createEvent("HTMLEvents") and then
+// initEvent, and the missing function broke its user-state flow.  The
+// returned event is uninitialized (empty type) until init*Event runs; the
+// initializer subset the engine supports lives on Event.prototype.
+JSValue DocCreateEvent(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  bool ok = false;
+  const std::string name = argc >= 1 ? ArgString(ctx, argv[0], &ok) : std::string();
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  // Names mapping to a plain Event-compatible surface: Event/Events/
+  // HTMLEvents (the common one), UIEvent(s), MouseEvent(s), KeyboardEvent(s),
+  // FocusEvent, ProgressEvent, MessageEvent, StorageEvent.  Their dedicated
+  // fields are not populated by createEvent itself (browsers return an
+  // uninitialized event too); init*Event fills what the engine models.
+  static constexpr std::array<const char*, 14> kEventNames = {"Event",
+                                                              "Events",
+                                                              "HTMLEvents",
+                                                              "UIEvent",
+                                                              "UIEvents",
+                                                              "MouseEvent",
+                                                              "MouseEvents",
+                                                              "KeyboardEvent",
+                                                              "KeyboardEvents",
+                                                              "FocusEvent",
+                                                              "ProgressEvent",
+                                                              "MessageEvent",
+                                                              "StorageEvent",
+                                                              "ErrorEvent"};
+  for (const char* candidate : kEventNames) {
+    if (name == candidate) {
+      return impl->MakeEvent(std::string(), /*bubbles=*/false, /*cancelable=*/false);
+    }
+  }
+  if (name == "CustomEvent" || name == "CustomEvents") {
+    JSValue event = impl->MakeEvent(std::string(), false, false);
+    JS_SetPrototype(ctx, event, impl->custom_event_proto);
+    return event;
+  }
+  return ThrowDomException(
+      ctx, "NotSupportedError", "createEvent: unsupported interface \"" + name + "\"");
+}
+
 JSValue DocCreateElementNS(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   if (argc < 2) {
@@ -610,7 +665,10 @@ JSValue DocCreateElementNS(JSContext* ctx, JSValueConst this_val, int argc, JSVa
   if (!ok || tag.empty()) {
     return JS_ThrowTypeError(ctx, "createElementNS requires a tag name");
   }
-  auto element = std::make_unique<dom::Element>(tag, namespace_uri);
+  const bool html_namespace = namespace_uri == "http://www.w3.org/1999/xhtml";
+  auto element = (html_namespace && tag == "template")
+                     ? std::unique_ptr<dom::Element>(std::make_unique<dom::HTMLTemplateElement>())
+                     : std::make_unique<dom::Element>(tag, namespace_uri);
   dom::Element* raw = element.get();
   impl->created[raw] = std::move(element);
   return impl->WrapNode(raw);
@@ -654,7 +712,7 @@ std::vector<dom::Element*> CollectByClass(const dom::Node& root, std::string_vie
 JSValue DocGetElementsByTagName(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
@@ -674,7 +732,7 @@ JSValue
 DocGetElementsByClassName(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
@@ -843,7 +901,7 @@ JSValue DocGetReferrer(JSContext* ctx, JSValueConst this_val)
 JSValue DocGetForms(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
@@ -853,7 +911,7 @@ JSValue DocGetForms(JSContext* ctx, JSValueConst this_val)
 JSValue DocGetImages(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
@@ -863,7 +921,7 @@ JSValue DocGetImages(JSContext* ctx, JSValueConst this_val)
 JSValue DocGetScripts(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
@@ -873,7 +931,7 @@ JSValue DocGetScripts(JSContext* ctx, JSValueConst this_val)
 JSValue DocGetCurrentScript(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
@@ -886,7 +944,7 @@ JSValue DocGetCurrentScript(JSContext* ctx, JSValueConst this_val)
 JSValue DocGetLinks(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
@@ -1164,7 +1222,7 @@ void DefineStyleSheetPrototype(JSContext* ctx, Impl& impl)
 
 void DefineDocumentPrototype(JSContext* ctx, Impl& impl)
 {
-  static const std::array<JSCFunctionListEntry, 14> kMethods = {{
+  static const std::array<JSCFunctionListEntry, 15> kMethods = {{
       JS_CFUNC_DEF("getElementById", 1, DocGetElementById),
       JS_CFUNC_DEF("createElement", 1, DocCreateElement),
       JS_CFUNC_DEF("createElementNS", 2, DocCreateElementNS),
@@ -1173,6 +1231,7 @@ void DefineDocumentPrototype(JSContext* ctx, Impl& impl)
       JS_CFUNC_DEF("createTreeWalker", 1, DocCreateTreeWalker),
       JS_CFUNC_DEF("createRange", 0, DocCreateRange),
       JS_CFUNC_DEF("createComment", 1, DocCreateComment),
+      JS_CFUNC_DEF("createEvent", 1, DocCreateEvent),
       JS_CFUNC_DEF("querySelector", 1, DocQuerySelector),
       JS_CFUNC_DEF("querySelectorAll", 1, DocQuerySelectorAll),
       JS_CFUNC_DEF("getElementsByTagName", 1, DocGetElementsByTagName),

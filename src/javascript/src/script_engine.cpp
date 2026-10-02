@@ -43,6 +43,86 @@ void PromiseRejectionTracker(
 char* ModuleNormalize(JSContext* ctx, const char* base_name, const char* name, void* opaque);
 JSModuleDef* ModuleLoader(JSContext* ctx, const char* module_name, void* opaque);
 
+// Annex B (B.2.5.1) legacy RegExp static properties: $1-$9, $&, $`, $', $+,
+// $_ and their named aliases (input, lastMatch, lastParen, leftContext,
+// rightContext).  QuickJS implements the ECMAScript core but not these
+// deprecated statics, and real sites use them: bilibili's date formatting
+// runs test() and then reads RegExp.$1.length, which was undefined and broke
+// every timestamp in the recommendation feed.
+//
+// The engine routes every match through the RegExpExec abstract operation,
+// which reads the regexp's 'exec' property (quickjs.c JS_RegExpExec), so
+// wrapping RegExp.prototype.exec observes matches from test(), match(),
+// replace(), split() and exec() alike.  A failed match must not change the
+// statics, matching browser behavior.
+constexpr const char* kLegacyRegexpStaticsScript = R"JS(
+(function () {
+  var original_exec = RegExp.prototype.exec;
+  var state = {
+    input: "",
+    lastMatch: "",
+    lastParen: "",
+    leftContext: "",
+    rightContext: "",
+    groups: ["", "", "", "", "", "", "", "", "", ""]
+  };
+  function text(value) { return value === undefined ? "" : String(value); }
+  function record(subject, result) {
+    state.input = subject;
+    state.lastMatch = text(result[0]);
+    state.leftContext = subject.slice(0, result.index);
+    state.rightContext = subject.slice(result.index + state.lastMatch.length);
+    var last = "";
+    for (var i = result.length - 1; i >= 1; i--) {
+      if (result[i] !== undefined) { last = text(result[i]); break; }
+    }
+    state.lastParen = last;
+    for (var g = 1; g <= 9; g++) {
+      state.groups[g] = g < result.length ? text(result[g]) : "";
+    }
+  }
+  RegExp.prototype.exec = function (subject) {
+    var result = original_exec.call(this, subject);
+    if (result !== null) { record(String(subject), result); }
+    return result;
+  };
+  function define(name, getter) {
+    Object.defineProperty(RegExp, name, { get: getter, configurable: true });
+  }
+  for (var n = 1; n <= 9; n++) {
+    define("$" + n, (function (index) {
+      return function () { return state.groups[index]; };
+    })(n));
+  }
+  define("input", function () { return state.input; });
+  define("$_", function () { return state.input; });
+  define("lastMatch", function () { return state.lastMatch; });
+  define("$&", function () { return state.lastMatch; });
+  define("lastParen", function () { return state.lastParen; });
+  define("$+", function () { return state.lastParen; });
+  define("leftContext", function () { return state.leftContext; });
+  define("$`", function () { return state.leftContext; });
+  define("rightContext", function () { return state.rightContext; });
+  define("$'", function () { return state.rightContext; });
+})();
+)JS";
+
+void InstallLegacyRegexpStatics(JSContext* ctx)
+{
+  JSValue result = JS_Eval(ctx,
+                           kLegacyRegexpStaticsScript,
+                           std::strlen(kLegacyRegexpStaticsScript),
+                           "<legacy-regexp-statics>",
+                           JS_EVAL_TYPE_GLOBAL);
+  if (JS_IsException(result)) {
+    // The install script is engine-owned and cannot fail in practice; clear
+    // the exception so context creation still succeeds.
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return;
+  }
+  JS_FreeValue(ctx, result);
+}
+
 // Owns the JSRuntime + JSContext.  One per ScriptEngine; shared with the
 // ScriptValues it produces so a value keeps the runtime alive.
 struct RuntimeCore
@@ -55,7 +135,11 @@ struct RuntimeCore
   // Optional import-map resolver consulted before the built-in specifier
   // rules (see SetModuleSpecifierResolver).
   ScriptEngine::SpecifierResolver module_specifier_resolver;
-  std::chrono::steady_clock::time_point deadline{};
+  // Execution deadline for the interrupt handler.  Initialized to "never":
+  // engine-owned scripts run during context setup (the legacy RegExp statics
+  // install) before any Evaluate() call sets a real deadline, and an epoch
+  // deadline would interrupt them immediately.
+  std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::time_point::max();
   bool interrupted = false;
   // Promises whose rejections are currently unreported: (promise, reason),
   // both Dup'd.  Cleared at each microtask checkpoint (see RunPendingJobs).
@@ -75,6 +159,7 @@ struct RuntimeCore
     JS_SetContextOpaque(ctx, this);
     JS_SetInterruptHandler(rt, &InterruptHandler, this);
     JS_SetHostPromiseRejectionTracker(rt, &PromiseRejectionTracker, this);
+    InstallLegacyRegexpStatics(ctx);
     // The loader is registered unconditionally; without a fetcher it throws
     // "module loading is not enabled", so importing fails loudly instead of
     // silently falling back to file access (which must never happen here).
@@ -248,6 +333,47 @@ constexpr std::size_t kDefaultMemoryLimit = 128u * 1024u * 1024u; // 128 MiB
 void AppendConsoleArg(JSContext* ctx, std::string& out, JSValueConst v)
 {
   if (JS_IsObject(v)) {
+    // Error objects keep their detail on non-enumerable properties, so
+    // JSON.stringify renders them as "{}" — pages that log a caught error
+    // (Vue's global errorHandler is a common one) would be undebuggable.
+    // Format them the way browsers do: "Name: message" plus the stack.
+    if (JS_IsError(v)) {
+      JSValue name = JS_GetPropertyStr(ctx, v, "name");
+      JSValue message = JS_GetPropertyStr(ctx, v, "message");
+      JSValue stack = JS_GetPropertyStr(ctx, v, "stack");
+      const char* name_s = JS_ToCString(ctx, name);
+      if (name_s != nullptr) {
+        out += name_s;
+        JS_FreeCString(ctx, name_s);
+      } else {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        out += "Error";
+      }
+      const char* message_s = JS_ToCString(ctx, message);
+      if (message_s != nullptr) {
+        if (message_s[0] != '\0') {
+          out += ": ";
+          out += message_s;
+        }
+        JS_FreeCString(ctx, message_s);
+      } else {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+      }
+      if (JS_IsString(stack)) {
+        const char* stack_s = JS_ToCString(ctx, stack);
+        if (stack_s != nullptr) {
+          if (stack_s[0] != '\0') {
+            out += "\n";
+            out += stack_s;
+          }
+          JS_FreeCString(ctx, stack_s);
+        }
+      }
+      JS_FreeValue(ctx, name);
+      JS_FreeValue(ctx, message);
+      JS_FreeValue(ctx, stack);
+      return;
+    }
     JSValue json = JS_JSONStringify(ctx, v, JS_UNDEFINED, JS_UNDEFINED);
     if (JS_IsException(json)) {
       JS_FreeValue(ctx, JS_GetException(ctx));
@@ -656,6 +782,22 @@ void ScriptEngine::RunPendingJobs()
       } else {
         JS_FreeValue(core_->ctx, JS_GetException(core_->ctx));
       }
+      // Error objects carry a stack naming the script file and line.  Real
+      // sites run minified bundles where the message alone ("cannot set
+      // property 'lazyload' of undefined") cannot be acted on; the stack
+      // turns the report into something diagnosable.
+      JSValue stack = JS_GetPropertyStr(core_->ctx, p.second, "stack");
+      if (JS_IsString(stack)) {
+        const char* trace = JS_ToCString(core_->ctx, stack);
+        if (trace != nullptr) {
+          if (trace[0] != '\0') {
+            message += "\n";
+            message += trace;
+          }
+          JS_FreeCString(core_->ctx, trace);
+        }
+      }
+      JS_FreeValue(core_->ctx, stack);
       core_->console_sink("error", message);
     }
     JS_FreeValue(core_->ctx, p.first);

@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 
 namespace neko::html {
@@ -87,7 +88,11 @@ bool SameAttributes(const dom::Element& a, const dom::Element& b)
 // Builds an element from a start tag token, copying its attributes.
 std::unique_ptr<dom::Element> CreateElement(const Token& token)
 {
-  auto element = std::make_unique<dom::Element>(token.name);
+  // <template> becomes an HTMLTemplateElement so its children can be routed
+  // into the template contents fragment (WHATWG HTML 13.2.5.3).
+  auto element = token.name == "template"
+                     ? std::unique_ptr<dom::Element>(std::make_unique<dom::HTMLTemplateElement>())
+                     : std::make_unique<dom::Element>(token.name);
   for (const Attribute& attr : token.attributes) {
     // WHATWG 13.2.5.34 (attribute name state): "If there is already an
     // attribute on the token with the exact same name, then this is a
@@ -117,6 +122,23 @@ bool IsTableCaptionColumn(std::string_view tag)
 }
 
 } // namespace
+
+// WHATWG HTML 13.2.5.3 ("appropriate place for inserting a node"): the step
+// after foster parenting — "if the adjusted insertion location is inside a
+// template element, let it instead be inside the template element's template
+// contents, after its last child".  This keeps <template> children out of the
+// element's own node tree, so template.content is populated as soon as the
+// parser walks into the template.
+std::pair<dom::Node*, dom::Node*> Parser::RerouteTemplateInsertion(dom::Node* parent,
+                                                                   dom::Node* before)
+{
+  if (parent != nullptr && parent->node_type() == dom::NodeType::kElement) {
+    if (dom::HTMLTemplateElement* tpl = static_cast<dom::Element*>(parent)->AsTemplate()) {
+      return {tpl->content(), nullptr};
+    }
+  }
+  return {parent, before};
+}
 
 Parser::Parser(std::string_view html) : html_(html), tokenizer_(html) {}
 
@@ -204,6 +226,7 @@ dom::Element* Parser::CurrentNode()
 void Parser::AppendNode(std::unique_ptr<dom::Node> node)
 {
   auto [parent, before] = AdjustedInsertionLocation();
+  std::tie(parent, before) = RerouteTemplateInsertion(parent, before);
   InsertNodeAt(parent, before, std::move(node));
 }
 
@@ -217,6 +240,7 @@ void Parser::InsertElement(dom::Element* element)
     return;
   }
   auto [parent, before] = AdjustedInsertionLocation();
+  std::tie(parent, before) = RerouteTemplateInsertion(parent, before);
   InsertNodeAt(parent, before, std::unique_ptr<dom::Node>(element));
   stack_.push_back(element);
 }
@@ -244,6 +268,7 @@ void Parser::PopThrough(std::string_view tag)
 void Parser::AppendText(std::string_view text)
 {
   auto [parent, before] = AdjustedInsertionLocation();
+  std::tie(parent, before) = RerouteTemplateInsertion(parent, before);
   AppendTextAt(parent, before, text);
 }
 

@@ -173,19 +173,62 @@ document wrapper）只靠 GC 看不到的引用计数存活，runtime 销毁时�
 
 ## bing.com 实测（阶段 1：脚本链打通）
 
-`window === globalThis` 修复后，bing 首页的脚本链从首个 `window._w` 处断开
-（随后 `_G`、`EventsToDuplicate`、`sj_evt`、`Feedback` 连环崩溃）变为仅剩 5
-个残余错误，搜索框 `<textarea id="sb_form_q">` 正常渲染：
+`window === globalThis` 修复后，bing 首页的脚本链不再从首个 `window._w` 处
+断开（此后 `_G`、`EventsToDuplicate`、`sj_evt`、`Feedback` 相继可用），搜索框
+`<textarea id="sb_form_q">` 正常渲染。残余报错与真实浏览器控制台一致，均为
+bing 自身问题：
 
 - `_w is not defined`：bing 脚本 1 在脚本 31 定义 `_w` **之前**就执行
-  `_w.sj_pt=sj_pt`。这是 bing 自身的问题——任何符合规范的浏览器都会在此抛
-  ReferenceError（bing 控制台常年有该报错），且不致命（后续脚本继续执行并
-  定义 `_w`）。
+  `_w.sj_pt=sj_pt`。任何符合规范的浏览器都会在此抛 ReferenceError（bing
+  控制台常年有该报错），且不致命（后续脚本继续执行并定义 `_w`）。
 - `Feedback is not defined` / `.controller` / `.trigger` / `.match` of
   undefined：均来自 bing 的动态模块加载器（`_w.rms.js`）与遥测脚本，依赖其
   异步模块时序；同步引擎不仿真该时序，故这些辅助脚本报错但不阻塞主渲染。
 - 搜索框本身是服务端渲染进 HTML 的（非纯 JS 现拼），脚本链负责的是建议、
   IOTD、登录态、反馈等增强功能。
+
+**历史注记（2026-10 撤销）**：曾为消除上述 ReferenceError 在引擎里注入过
+`window.jQuery`/`$`/`_w`/`_d`/`Feedback`/`BM`/`Log` 的假对象。该做法被
+bilibili 实测证伪 —— bundle 检测到 `window.jQuery` 为真值后会写
+`jQuery.fn.lazyload`，在假对象上直接崩溃（“cannot set property 'lazyload'
+of undefined”）。**伪造全局已全部移除**：浏览器不定义这些名字，feature
+detection 必须得到真实答案，页面自行降级或加载真正的库。详见
+`docs/compatibility/compatibility-matrix.md` 的 “Web IDL 一致性” 行。
+
+## bilibili.com 实测（2026-10：真实站点驱动的引擎修复）
+
+www.bilibili.com 首页（Vue 3 SSR + hydration + 大量异步 chunk）作为真实站点
+靶标，三种执行模式（进程内 / `--network-process` / `--renderer-process`）
+加载后 **JS 错误为零**（修复前 46 个），推荐流卡片 394 张。修复链条（各带
+回归测试）：
+
+1. **伪造 `window.jQuery`/`$` 全局**（见上节）导致 bundle 在 `jQuery.fn`
+   写入处崩溃 → 全部移除。
+2. **Proxy 接收者**：Vue reactivity 以 `Reflect.get(target, key, receiver)`
+   读取 DOM 属性，接收者是 Proxy。Web IDL 要求 Proxy（目标为实现接口的平台
+   对象）透明工作；引擎此前对一切 Proxy 接收者抛 “detached node”，现
+   `ResolveProxyReceiver` 在 `UnwrapNode`/`ImplFor` 及其全部调用点统一解包。
+3. **Annex B 遗留 RegExp 静态属性**：`RegExp.$1` 等此前为 undefined，而
+   bilibili 的日期格式化在 `test()` 后读 `RegExp.$1.length`。引擎包装
+   `RegExp.prototype.exec`（test/match/replace/split 均经 `exec` 属性），
+   在每次成功匹配时记录 $1-$9/lastMatch/lastParen/leftContext/rightContext/
+   input，并把它们作为 RegExp 构造器上的访问器暴露。
+4. **`template.content`**：`HTMLTemplateElement` 此前完全缺失，
+   Vue 的 `insertStaticContent` 在 `content.firstChild` 处崩溃。现解析器与
+   `createElement('template')` 均产出 `HTMLTemplateElement`，按 13.2.5.3
+   将子节点路由进 contents fragment；`innerHTML` 读写 contents；
+   `template.content` 可直接插入文档（借用 fragment 路径，children 移出、
+   fragment 留空）。
+5. **XHR 可写属性**：`withCredentials`/`timeout` 补上 setter（jQuery
+   transport 对 `xhrFields` 逐属性赋值，此前抛 “no setter for property”）。
+6. **`document.createEvent` + `initEvent`**（遗留 DOM Level 2/3 API）：
+   LoginInfo emitter 的 `emit` 路径依赖；createEvent 支持常见接口名并抛
+   `NotSupportedError`，init*Event 含 `InvalidStateError` 语义。
+
+**已知残余（下一步）**：懒加载站点在首屏后**动态设置 `img.src` 不触发新的
+图片抓取**（首屏图片仅在页面载入后统一抓取一次；静态 src 与直接 `<img>`
+均正常，已用隔离探针定位）。bilibili 的卡片缩略图因此显示占位背景。
+渲染层面残余的头部吸顶/绝对定位重叠属于布局引擎已知限制。
 
 ## 所有权与生命周期
 

@@ -2,12 +2,15 @@
 
 #include "neko/dom/node.h"
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace neko::dom {
+
+class HTMLTemplateElement;
 
 struct Attribute
 {
@@ -48,6 +51,19 @@ public:
   // Convenience accessors for the id and class attributes.
   std::optional<std::string_view> Id() const;
   std::vector<std::string_view> ClassList() const;
+
+  // Returns this element as an HTMLTemplateElement when it is one (nullptr
+  // otherwise).  The parser's "appropriate place for inserting a node" rule
+  // (WHATWG HTML 13.2.5.3) routes children of <template> into its contents
+  // fragment through this accessor; no RTTI is involved.
+  virtual HTMLTemplateElement* AsTemplate()
+  {
+    return nullptr;
+  }
+  virtual const HTMLTemplateElement* AsTemplate() const
+  {
+    return nullptr;
+  }
 
   std::string ToString() const override;
 
@@ -138,6 +154,46 @@ public:
   {
     return "#document-fragment";
   }
+};
+
+// HTMLTemplateElement (WHATWG HTML 4.12.3): the element's parsed children and
+// innerHTML live in a separate "template contents" DocumentFragment exposed as
+// `content`.  Scripts build fragments via createElement('template') +
+// innerHTML and clone template.content; Vue's runtime DOM does exactly that,
+// and bilibili's hydration crashed with "cannot read property 'firstChild' of
+// undefined" while `content` was missing entirely.
+//
+// The DOM appendChild on a template element still targets the element itself
+// (browser behavior); only parsed children and innerHTML use the contents.
+class HTMLTemplateElement : public Element
+{
+public:
+  HTMLTemplateElement();
+
+  HTMLTemplateElement* AsTemplate() override
+  {
+    return this;
+  }
+  const HTMLTemplateElement* AsTemplate() const override
+  {
+    return this;
+  }
+
+  DocumentFragment* content()
+  {
+    return content_.get();
+  }
+  const DocumentFragment* content() const
+  {
+    return content_.get();
+  }
+
+  // Serializes as <template> with the contents as its markup (browser
+  // behavior: outerHTML includes the template contents).
+  std::string ToString() const override;
+
+private:
+  std::unique_ptr<DocumentFragment> content_;
 };
 class Document : public Node
 {

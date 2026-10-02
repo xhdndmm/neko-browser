@@ -92,7 +92,7 @@ JSValue MutationObserverObserve(JSContext* ctx, JSValueConst this_val, int argc,
   if (argc < 2) {
     return JS_ThrowTypeError(ctx, "observe requires target and options");
   }
-  dom::Node* target = UnwrapNode(argv[0]);
+  dom::Node* target = UnwrapNode(ctx, argv[0]);
   if (target == nullptr) {
     return JS_ThrowTypeError(ctx, "observe target is not a Node");
   }
@@ -558,7 +558,7 @@ static constexpr std::array<const char*, 19> kElementEventHandlers = {"onclick",
 JSValue ElementGetEventHandler(JSContext* ctx, JSValueConst this_val, int magic)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr || magic < 0 ||
       magic >= static_cast<int>(kElementEventHandlers.size())) {
     return JS_ThrowTypeError(ctx, "not an element");
@@ -578,7 +578,7 @@ JSValue ElementGetEventHandler(JSContext* ctx, JSValueConst this_val, int magic)
 JSValue ElementSetEventHandler(JSContext* ctx, JSValueConst this_val, JSValueConst value, int magic)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr || magic < 0 ||
       magic >= static_cast<int>(kElementEventHandlers.size())) {
     return JS_ThrowTypeError(ctx, "not an element");
@@ -710,7 +710,7 @@ EventComposedPath(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueCo
   if (impl == nullptr || w == nullptr) {
     return JS_ThrowTypeError(ctx, "not an Event");
   }
-  dom::Node* node = !JS_IsUndefined(w->target) ? UnwrapNode(w->target) : nullptr;
+  dom::Node* node = !JS_IsUndefined(w->target) ? UnwrapNode(ctx, w->target) : nullptr;
   std::vector<dom::Node*> path;
   for (dom::Node* p = node; p != nullptr; p = p->parent()) {
     path.push_back(p);
@@ -724,13 +724,89 @@ EventComposedPath(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueCo
   return impl->MakeNodeArray(reversed);
 }
 
+// ---------------------------------------------------------------------------
+// Legacy event initializers (DOM Standard §2.8, "legacy factory functions and
+// initializers").  document.createEvent() hands back an *uninitialized* event
+// that sites configure with initEvent — bilibili's LoginInfo emitter does
+// document.createEvent("HTMLEvents") + initEvent("onLoginInfoLoaded", ...).
+// ---------------------------------------------------------------------------
+
+JSValue EventInitEvent(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  EventWrapper* w = UnwrapEvent(this_val);
+  if (w == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an Event");
+  }
+  if (w->dispatched) {
+    return ThrowDomException(
+        ctx, "InvalidStateError", "initEvent: the event has already been dispatched");
+  }
+  bool ok = false;
+  const std::string type = argc >= 1 ? ArgString(ctx, argv[0], &ok) : std::string();
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  w->type = type;
+  w->bubbles = argc >= 2 && JS_ToBool(ctx, argv[1]) > 0;
+  w->cancelable = argc >= 3 && JS_ToBool(ctx, argv[2]) > 0;
+  w->default_prevented = false;
+  w->propagation_stopped = false;
+  w->immediate_stopped = false;
+  w->event_phase = 0;
+  return JS_UNDEFINED;
+}
+
+JSValue EventInitCustomEvent(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  JSValue result = EventInitEvent(ctx, this_val, argc, argv);
+  if (JS_IsException(result)) {
+    return result;
+  }
+  JSValue detail = argc >= 4 ? JS_DupValue(ctx, argv[3]) : JS_NULL;
+  JS_SetPropertyStr(ctx, this_val, "detail", detail); // steals
+  return JS_UNDEFINED;
+}
+
+// initMouseEvent(type, bubbles, cancelable, view, detail, screenX, screenY,
+//                clientX, clientY, ctrlKey, altKey, shiftKey, metaKey, button,
+//                relatedTarget)
+// The engine stores what its MouseEvent surface exposes (clientX/clientY/
+// button); screen coordinates and the modifier-key snapshot have no backing
+// fields yet (documented deviation).
+JSValue EventInitMouseEvent(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  JSValue result = EventInitEvent(ctx, this_val, std::min(argc, 3), argv);
+  if (JS_IsException(result)) {
+    return result;
+  }
+  EventWrapper* w = UnwrapEvent(this_val);
+  if (w == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an Event");
+  }
+  auto number_arg = [&](int index) {
+    double out = 0;
+    if (index < argc && JS_ToFloat64(ctx, &out, argv[index]) < 0) {
+      out = 0;
+      JS_FreeValue(ctx, JS_GetException(ctx));
+    }
+    return out;
+  };
+  w->client_x = number_arg(7);
+  w->client_y = number_arg(8);
+  w->button = static_cast<int>(number_arg(13));
+  return JS_UNDEFINED;
+}
+
 void DefineEventPrototype(JSContext* ctx, Impl& impl)
 {
-  static const std::array<JSCFunctionListEntry, 4> kMethods = {{
+  static const std::array<JSCFunctionListEntry, 7> kMethods = {{
       JS_CFUNC_DEF("preventDefault", 0, EventPreventDefault),
       JS_CFUNC_DEF("stopPropagation", 0, EventStopPropagation),
       JS_CFUNC_DEF("stopImmediatePropagation", 0, EventStopImmediatePropagation),
       JS_CFUNC_DEF("composedPath", 0, EventComposedPath),
+      JS_CFUNC_DEF("initEvent", 3, EventInitEvent),
+      JS_CFUNC_DEF("initCustomEvent", 4, EventInitCustomEvent),
+      JS_CFUNC_DEF("initMouseEvent", 15, EventInitMouseEvent),
   }};
   JS_SetPropertyFunctionList(
       ctx, impl.event_proto, kMethods.data(), static_cast<int>(kMethods.size()));

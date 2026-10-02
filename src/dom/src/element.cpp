@@ -11,6 +11,22 @@ Element::Element(std::string tag_name, std::string namespace_uri)
       namespace_uri_(std::move(namespace_uri))
 {}
 
+HTMLTemplateElement::HTMLTemplateElement()
+    : Element("template"), content_(std::make_unique<DocumentFragment>())
+{}
+
+std::string HTMLTemplateElement::ToString() const
+{
+  std::string out = SerializeOpenTag(*this);
+  for (const dom::Node* child : content_->ChildNodes()) {
+    out += child->ToString();
+  }
+  out += "</";
+  out += tag_name();
+  out += ">";
+  return out;
+}
+
 bool Element::HasAttribute(std::string_view name) const
 {
   return std::any_of(

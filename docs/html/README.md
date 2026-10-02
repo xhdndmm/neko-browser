@@ -39,7 +39,12 @@
 ## 未实现
 
 - CDATA section 状态、processing instruction 状态（依赖 foreign content）
-- in template / in frameset 模式（依赖 template/frameset 支持）
+- in template **插入模式**（13.2.6.4.18，栈/模式切换及其与 foster parenting 的
+  交互）；template 的**内容路由已实现**：按 13.2.5.3，插入目标为 `<template>`
+  的节点进入其独立的 template contents fragment（即 `template.content`，
+  2026-10 修复），因此解析出的 `<template>` 子树与 `template.content` 一致；
+  差的是模式级细节（如模板内表格片段的模式的精确处理）
+- in frameset 模式
 - 无 fragment parsing（`innerHTML` 走完整文档解析器再取 `<body>` 子节点，
   因此 `<style>`/`<meta>`/`<link>`/`<template>` 形式的片段会被静默丢弃，
   表格片段的上下文规则也不正确 —— 见兼容性矩阵）
@@ -56,8 +61,8 @@
   `noscript` 而不是 `head`；此后模式栈与开元素栈**整篇文档失步**：真正的
   `<body>` 被插到 `<head>` 之下，其后所有元素成了 `<html>` 的直接子节点，
   **`document.body` 全程为 null**。`<noscript>` 内容此前还会被解析成活动元素
-  并触发真实网络请求（`<img src>`）。`<template>` 同因缺 "in template" 模式而
-  有同样风险，现按 rawtext 处理并在文档中标注为近似。
+  并触发真实网络请求（`<img src>`）。`<template>` 曾同样有失步风险，现已按
+  WHATWG 13.2.5.3 把子节点路由进 template contents fragment（2026-10，见下节）。
 - **命名字符引用 13.2.5.78**：`for historical reasons` 规则只适用于属性上下文，
   且不查 legacy 名单。此前该拒绝逻辑被用在所有上下文并额外要求 legacy 名单，
   结果「缺分号」几乎在所有真实标记里都静默禁用实体。现缺分号仍展开：

@@ -1260,7 +1260,7 @@ JSValue WindowGetClosed(JSContext* /*ctx*/, JSValueConst /*this_val*/)
 JSValue WindowGetComputedStyle(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = argc >= 1 ? AsElement(UnwrapNode(argv[0])) : nullptr;
+  dom::Element* element = argc >= 1 ? AsElement(UnwrapNode(ctx, argv[0])) : nullptr;
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "getComputedStyle requires an element");
   }

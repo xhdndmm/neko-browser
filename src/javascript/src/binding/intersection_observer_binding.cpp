@@ -270,14 +270,14 @@ void ParseRootMargin(IoWrapper* w, const std::string& text, double root_w, doubl
 }
 
 // The observer's effective root box (root bounds expanded by rootMargin).
-std::optional<Rect> RootRect(IoWrapper* w)
+std::optional<Rect> RootRect(JSContext* ctx, IoWrapper* w)
 {
   Rect base;
   if (JS_IsUndefined(w->root)) {
     // Viewport root: engine-default 800x600 (matches innerWidth/innerHeight).
     base = Rect{0, 0, 800, 600};
   } else {
-    dom::Element* el = AsElement(UnwrapNode(w->root));
+    dom::Element* el = AsElement(UnwrapNode(ctx, w->root));
     if (el == nullptr) {
       return std::nullopt;
     }
@@ -324,11 +324,11 @@ void ComputeAndEnqueue(JSContext* ctx, IoWrapper* w)
   if (w->targets.empty()) {
     return;
   }
-  const std::optional<Rect> root = RootRect(w);
+  const std::optional<Rect> root = RootRect(ctx, w);
   bool changed = false;
   std::vector<JSValue> new_entries;
   for (IoTarget& t : w->targets) {
-    dom::Element* el = AsElement(UnwrapNode(t.element));
+    dom::Element* el = AsElement(UnwrapNode(ctx, t.element));
     if (el == nullptr) {
       continue;
     }
@@ -396,7 +396,7 @@ JSValue IoObserverObserve(JSContext* ctx, JSValueConst this_val, int argc, JSVal
   if (w == nullptr) {
     return JS_ThrowTypeError(ctx, "not an IntersectionObserver");
   }
-  if (argc < 1 || AsElement(UnwrapNode(argv[0])) == nullptr) {
+  if (argc < 1 || AsElement(UnwrapNode(ctx, argv[0])) == nullptr) {
     return JS_ThrowTypeError(ctx, "observe requires an Element");
   }
   for (const IoTarget& t : w->targets) {

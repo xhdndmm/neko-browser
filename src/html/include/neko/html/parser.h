@@ -97,6 +97,10 @@ private:
   // The adjusted insertion location (13.2.6.1): a (parent, before) pair.
   // |before| is null to append.  Honors foster parenting.
   std::pair<dom::Node*, dom::Node*> AdjustedInsertionLocation() const;
+  // WHATWG HTML 13.2.5.3: redirect insertions addressed at a <template>
+  // element into its template contents fragment.
+  static std::pair<dom::Node*, dom::Node*> RerouteTemplateInsertion(dom::Node* parent,
+                                                                    dom::Node* before);
   void AppendTextAt(dom::Node* parent, dom::Node* before, std::string_view text);
   void InsertNodeAt(dom::Node* parent, dom::Node* before, std::unique_ptr<dom::Node> node);
 

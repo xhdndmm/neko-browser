@@ -60,7 +60,7 @@ void SetStyleAttr(dom::Element& element, const std::string& value)
 
 JSValue StyleSetProperty(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not a style declaration");
   }
@@ -91,7 +91,7 @@ JSValue StyleSetProperty(JSContext* ctx, JSValueConst this_val, int argc, JSValu
 
 JSValue StyleGetPropertyValue(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not a style declaration");
   }
@@ -113,7 +113,7 @@ JSValue StyleGetPropertyValue(JSContext* ctx, JSValueConst this_val, int argc, J
 
 JSValue StyleRemoveProperty(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not a style declaration");
   }
@@ -140,7 +140,7 @@ JSValue StyleRemoveProperty(JSContext* ctx, JSValueConst this_val, int argc, JSV
 
 JSValue StyleGetProperty(JSContext* ctx, JSValueConst this_val, int magic)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not a style declaration");
   }
@@ -158,7 +158,7 @@ JSValue StyleGetProperty(JSContext* ctx, JSValueConst this_val, int magic)
 
 JSValue StyleSetPropertyDirect(JSContext* ctx, JSValueConst this_val, JSValueConst value, int magic)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not a style declaration");
   }

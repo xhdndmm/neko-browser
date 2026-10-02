@@ -110,6 +110,46 @@ TEST_F(ScriptEngineTest, EvaluatesString)
   EXPECT_EQ(str.value(), "hello world");
 }
 
+// Annex B B.2.5.1: the legacy RegExp static properties update on every
+// successful match, including through test() — bilibili's date formatting
+// reads RegExp.$1.length right after test().
+TEST_F(ScriptEngineTest, LegacyRegexpStaticsTrackMatches)
+{
+  auto value = engine_->Evaluate("var _r = /(a)(b)?/.exec('xa'); "
+                                 "[RegExp.$1, RegExp.$2, RegExp['$&'], RegExp['$`'], "
+                                 " RegExp[\"$'\"], RegExp['$+'], RegExp.input].join('|')");
+  ASSERT_TRUE(value.has_value());
+  auto s = value.value().ToString();
+  ASSERT_TRUE(s.has_value());
+  EXPECT_EQ(s.value(), "a||a|x||a|xa");
+
+  // test() goes through the same exec path and must update the statics too.
+  value = engine_->Evaluate("/([0-9]+)/.test('id=42;'); RegExp.$1");
+  ASSERT_TRUE(value.has_value());
+  s = value.value().ToString();
+  ASSERT_TRUE(s.has_value());
+  EXPECT_EQ(s.value(), "42");
+
+  // A failed match leaves the previous values untouched (browser behavior).
+  value = engine_->Evaluate("/(nope)/.test('id=42;'); RegExp.$1");
+  ASSERT_TRUE(value.has_value());
+  s = value.value().ToString();
+  ASSERT_TRUE(s.has_value());
+  EXPECT_EQ(s.value(), "42");
+
+  // String.prototype.match/replace use the same path.
+  value = engine_->Evaluate("'a1'.match(/(\\d)/); RegExp.$1");
+  ASSERT_TRUE(value.has_value());
+  s = value.value().ToString();
+  ASSERT_TRUE(s.has_value());
+  EXPECT_EQ(s.value(), "1");
+  value = engine_->Evaluate("'a7'.replace(/(\\d)/, 'x'); RegExp.$1");
+  ASSERT_TRUE(value.has_value());
+  s = value.value().ToString();
+  ASSERT_TRUE(s.has_value());
+  EXPECT_EQ(s.value(), "7");
+}
+
 TEST_F(ScriptEngineTest, EvaluatesObjectAndJson)
 {
   auto result = engine_->Evaluate("({a: 1, b: 'x'})");

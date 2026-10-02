@@ -81,6 +81,9 @@ struct EventWrapper
   bool default_prevented = false;
   bool propagation_stopped = false;
   bool immediate_stopped = false;
+  // Legacy initEvent() must throw InvalidStateError once the event has been
+  // dispatched (DOM Standard §2.9 "Legacy event initializers").
+  bool dispatched = false;
   int event_phase = 0; // 0 none, 1 capture, 2 target, 3 bubble
   // KeyboardEvent fields (empty for non-keyboard events).
   std::string key;
@@ -119,12 +122,24 @@ extern std::unordered_map<JSContext*, Impl*> g_ctx_to_impl;
 // Shared helpers (defined in impl.cpp unless noted otherwise).
 // ---------------------------------------------------------------------------
 
+// Web IDL receiver unwrapping.  A Proxy whose target is a platform object
+// acts as that object for interface members, and accessors invoked through
+// the proxy receive it as |this|.  Page frameworks exploit this: Vue's
+// reactivity calls Reflect.get(target, key, receiver) with a Proxy receiver
+// (bilibili's bundle reads parentElement / querySelectorAll that way), and
+// Chrome/Firefox resolve the receiver to the target node.  Unwraps nested
+// proxies fully and returns a new reference the caller must free; revoked or
+// failing proxies fall back to a dup of |val| (the caller then reports the
+// usual invalid-receiver TypeError).
+JSValue ResolveProxyReceiver(JSContext* ctx, JSValueConst val);
+
 // Resolves the owning Impl for a C callback.  Prefers the opaque wrapper on
-// |this_val| (node methods), then falls back to the ctx registry (global
-// functions like setTimeout, whose this_val is the global object).
+// |this_val| (node methods, resolved through proxies), then falls back to the
+// ctx registry (global functions like setTimeout, whose this_val is the
+// global object).
 Impl* ImplFor(JSContext* ctx, JSValueConst this_val);
 
-dom::Node* UnwrapNode(JSValueConst this_val);
+dom::Node* UnwrapNode(JSContext* ctx, JSValueConst this_val);
 dom::Element* AsElement(dom::Node* node);
 int32_t NodeTypeNumber(dom::NodeType type);
 
@@ -325,6 +340,10 @@ JSValue DocCreateRange(JSContext* ctx, JSValueConst this_val, int argc, JSValueC
 // element_binding.cpp — ParentNode.children implementation shared by Element
 // and DocumentFragment prototypes.
 JSValue ElementGetChildren(JSContext* ctx, JSValueConst this_val);
+// Shared with the DocumentFragment prototype (ParentNode mixin, DOM §4.2).
+JSValue ElementQuerySelector(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue
+ElementQuerySelectorAll(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue NamedNodeMapItem(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue
 NamedNodeMapGetNamedItem(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
@@ -581,6 +600,14 @@ struct XhrWrapper
   std::string response_text;
   std::string response_url;
   std::string response_type;
+  // The XMLHttpRequest withCredentials / timeout IDL attributes are
+  // writable; both are accepted-but-inert for now (the engine sends no
+  // cookies/none per same-origin fetch rules yet — see the compatibility
+  // matrix).  jQuery's transport assigns xhrFields entries onto the object
+  // (withCredentials: true), so a read-only property broke bilibili's
+  // tracker script with "no setter for property".
+  bool with_credentials = false;
+  double timeout_ms = 0;
   std::vector<std::pair<std::string, std::string>> response_headers;
   JSValue on_ready_state_change = JS_UNDEFINED;
   JSValue on_load = JS_UNDEFINED;
@@ -657,6 +684,7 @@ struct Impl
   JSValue html_image_element_proto = JS_UNDEFINED;
   JSValue html_media_element_proto = JS_UNDEFINED;
   JSValue html_video_element_proto = JS_UNDEFINED;
+  JSValue html_template_element_proto = JS_UNDEFINED;
   JSValue html_canvas_element_proto = JS_UNDEFINED;
   JSValue canvas_2d_proto = JS_UNDEFINED;
   JSValue svg_element_proto = JS_UNDEFINED;

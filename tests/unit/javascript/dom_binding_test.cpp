@@ -756,25 +756,185 @@ TEST_F(DomBinderTest, DocumentImplementationSupportsBasicFeatures)
                "return d instanceof Document && d.title === 'Doc Title'; })()"));
 }
 
-TEST_F(DomBinderTest, JQueryCompatibilityAliasesAreDefined)
+TEST_F(DomBinderTest, NonstandardGlobalsAreNotFabricated)
 {
-  EXPECT_TRUE(EvalBool("typeof $ === 'function' && typeof jQuery === 'function'"));
-  EXPECT_TRUE(EvalBool(
-      "(function(){ var called = false; $.ready = function(fn){ called = typeof fn === 'function'; "
-      "}; $.ready(function(){}); return called && typeof jQuery.ready === 'function'; })()"));
+  // Browsers do not define window.jQuery, window.$, window._w, window._d,
+  // window.Feedback, window.BM or window.Log.  The engine used to fabricate
+  // minimal stand-ins; sites feature-detect them and then call the full API,
+  // so the stubs broke real pages (bilibili's bundle writes jQuery.fn.lazyload
+  // whenever window.jQuery is truthy and crashed on the stub).
+  for (const char* name : {"jQuery", "$", "_w", "_d", "Feedback", "BM", "Log"}) {
+    EXPECT_FALSE(EvalBool(std::string("'") + name + "' in window")) << name;
+  }
+  // The bilibili regression shape: with honest feature detection the guarded
+  // write is skipped instead of throwing.
+  EXPECT_TRUE(EvalBool("(function(){"
+                       "  if (window.jQuery) { window.jQuery.fn.lazyload = function(){}; }"
+                       "  return true;"
+                       "})()"));
 }
 
-TEST_F(DomBinderTest, LegacyBootstrapCompatibilityGlobals)
+TEST_F(DomBinderTest, StandardPlatformGlobalsAreAvailable)
 {
-  EXPECT_TRUE(EvalBool("_w === window && _d === document"));
   EXPECT_TRUE(EvalBool("typeof PerformanceObserver === 'function'"));
   EXPECT_TRUE(EvalBool("document.visibilityState === 'visible'"));
   EXPECT_TRUE(EvalBool("navigator.serviceWorker && navigator.serviceWorker.controller === null"));
   EXPECT_TRUE(EvalBool("window.visualViewport && typeof window.visualViewport.width === 'number'"));
+}
+
+TEST_F(DomBinderTest, TemplateElementExposesItsContentsFragment)
+{
+  // HTMLTemplateElement (HTML 4.12.3): innerHTML reads and writes the
+  // template contents, not the element's own child list, and content is a
+  // DocumentFragment.  Vue's runtime DOM relies on this exact shape
+  // (createElement('template') + innerHTML + content.firstChild +
+  // content.cloneNode); bilibili's hydration failed with "cannot read
+  // property 'firstChild' of undefined" while content was missing.
+  EXPECT_TRUE(
+      EvalBool("(function(){"
+               "  var t = document.createElement('template');"
+               "  if ('content' in document.createElement('div')) return false;"
+               "  if (typeof t.content !== 'object' || t.content === null) return false;"
+               "  if (t.content.nodeType !== 11) return false;"
+               "  t.innerHTML = '<div id=x>hi</div>';"
+               "  if (t.childNodes.length !== 0) return false;"
+               "  if (t.content.childNodes.length !== 1) return false;"
+               "  if (t.content.firstChild.getAttribute('id') !== 'x') return false;"
+               "  if (t.innerHTML.indexOf('id=\"x\"') === -1) return false;"
+               "  var clone = t.content.cloneNode(true);"
+               "  if (clone.firstChild === null"
+               "      || clone.firstChild.getAttribute('id') !== 'x') return false;"
+               "  if (!(t instanceof HTMLTemplateElement)) return false;"
+               "  var t2 = document.createElement('template');"
+               "  t2.appendChild(document.createElement('u'));"
+               "  if (t2.childNodes.length !== 1) return false;" // appendChild stays on the element
+               "  var deep = t.cloneNode(true);"
+               "  return deep.content.childNodes.length === 1;"
+               "})()"));
+}
+
+TEST_F(DomBinderTest, LegacyCreateEventInitializers)
+{
+  // document.createEvent + initEvent: the deprecated DOM Level 2/3 API that
+  // bilibili's LoginInfo emitter uses (document.createEvent("HTMLEvents"),
+  // then initEvent("onLoginInfoLoaded", true, true), then
+  // document.dispatchEvent).  Missing createEvent broke its user-state flow.
   EXPECT_TRUE(EvalBool(
-      "typeof Feedback === 'object' && Feedback && typeof Feedback.Bootstrap === 'object'"));
-  EXPECT_TRUE(EvalBool("BM && typeof BM.trigger === 'function'"));
-  EXPECT_TRUE(EvalBool("Log && typeof Log.Log === 'function'"));
+      "(function(){"
+      "  var ev = document.createEvent('HTMLEvents');"
+      "  if (ev.type !== '') return false;"
+      "  ev.initEvent('onLoginInfoLoaded', true, true);"
+      "  if (ev.type !== 'onLoginInfoLoaded' || !ev.bubbles || !ev.cancelable) return false;"
+      "  ev.data = {uid: 7};"
+      "  var seen = null;"
+      "  document.addEventListener('onLoginInfoLoaded', function(e){ seen = e.data; });"
+      "  if (document.dispatchEvent(ev) !== true) return false;"
+      "  if (seen === null || seen.uid !== 7) return false;"
+      "  document.removeEventListener('onLoginInfoLoaded', function(){});"
+      "  try { ev.initEvent('again', false, false); return false; }"
+      "  catch (e) { if (e.name !== 'InvalidStateError') return false; }"
+      "  var ce = document.createEvent('CustomEvent');"
+      "  ce.initCustomEvent('t', false, false, {v: 2});"
+      "  if (ce.type !== 't' || ce.detail.v !== 2) return false;"
+      "  try { document.createEvent('NoSuchInterface'); return false; }"
+      "  catch (e) { return e.name === 'NotSupportedError'; }"
+      "})()"));
+}
+
+TEST_F(DomBinderTest, FragmentParentNodeQueries)
+{
+  // DocumentFragment implements ParentNode (DOM §4.2): querySelector and
+  // querySelectorAll search the fragment's subtree.  Scripts build detached
+  // subtrees inside fragments and query them before insertion.
+  EXPECT_TRUE(EvalBool("(function(){"
+                       "  var f = document.createDocumentFragment();"
+                       "  var d = document.createElement('div');"
+                       "  d.innerHTML = '<b class=r>x</b><b class=r>y</b>';"
+                       "  f.appendChild(d);"
+                       "  if (f.querySelector('.r') === null) return false;"
+                       "  if (f.querySelectorAll('b').length !== 2) return false;"
+                       "  if (f.querySelectorAll('.missing').length !== 0) return false;"
+                       "  return f.children.length === 1;"
+                       "})()"));
+}
+
+TEST_F(DomBinderTest, InsertingTemplateContentsMovesItsChildren)
+{
+  // Browsers allow parent.insertBefore(template.content, anchor) and
+  // parent.appendChild(template.content) — Vue's insertStaticContent
+  // hydration does exactly this.  The contents fragment is owned by the
+  // template element rather than the binder, so the insert must move its
+  // children (leaving the fragment empty, as in browsers) instead of
+  // reporting an internal ownership error.
+  EXPECT_TRUE(EvalBool("(function(){"
+                       "  var host = document.createElement('div');"
+                       "  document.body.appendChild(host);"
+                       "  var t = document.createElement('template');"
+                       "  t.innerHTML = '<i>a</i><b>b</b>';"
+                       "  host.insertBefore(t.content, null);"
+                       "  if (host.childNodes.length !== 2) return false;"
+                       "  if (host.firstChild.tagName !== 'I') return false;"
+                       "  if (t.content.childNodes.length !== 0) return false;"
+                       "  var t2 = document.createElement('template');"
+                       "  t2.innerHTML = '<u>u</u>';"
+                       "  host.appendChild(t2.content);"
+                       "  if (host.childNodes.length !== 3) return false;"
+                       "  if (host.lastChild.tagName !== 'U') return false;"
+                       "  if (t2.content.childNodes.length !== 0) return false;"
+                       "  return true;"
+                       "})()"));
+}
+
+TEST_F(DomBinderTest, ProxyWrappedReceiversBehaveLikeTheirTarget)
+{
+  // Web IDL: a Proxy whose target is a platform object acts as the target for
+  // interface members, and accessors invoked through the proxy receive it as
+  // |this|.  Vue's reactivity reads DOM properties with
+  // Reflect.get(target, key, receiver) — a Proxy receiver — and bilibili's
+  // homepage relies on it (its bundle threw "detached node" for
+  // parentElement / querySelectorAll before the engine unwrapped proxies).
+  EXPECT_TRUE(EvalBool("(function(){"
+                       "  var el = document.createElement('div');"
+                       "  el.innerHTML = '<b>x</b>';"
+                       "  var p = new Proxy(el, {});"
+                       "  return p.nodeType === 1"
+                       "      && p.tagName === 'DIV'"
+                       "      && p.querySelectorAll('b').length === 1"
+                       "      && Reflect.get(el, 'nodeType', p) === 1;"
+                       "})()"));
+  // Detached nodes read through a proxy answer like the target does instead
+  // of throwing: parentElement/parentNode are null, nodeType still works.
+  EXPECT_TRUE(EvalBool("(function(){"
+                       "  var el = document.createElement('span');"
+                       "  var p = new Proxy(el, {});"
+                       "  return p.parentElement === null && p.parentNode === null"
+                       "      && p.nodeType === 1 && p.textContent === '';"
+                       "})()"));
+  // Vue-style get trap (Reflect.get forwards the proxy as receiver).
+  EXPECT_TRUE(EvalBool("(function(){"
+                       "  var el = document.createElement('div');"
+                       "  var v = new Proxy(el, {"
+                       "    get: function(t, k, r){ return Reflect.get(t, k, r); },"
+                       "  });"
+                       "  return v.nodeType === 1 && v.classList.length === 0"
+                       "      && v.querySelectorAll('i').length === 0;"
+                       "})()"));
+  // Mutating methods called with a proxy receiver act on the target.
+  EXPECT_TRUE(EvalBool("(function(){"
+                       "  var el = document.createElement('div');"
+                       "  var p = new Proxy(el, {});"
+                       "  p.setAttribute('data-x', '1');"
+                       "  var child = document.createElement('i');"
+                       "  el.appendChild.call(p, child);"
+                       "  return el.getAttribute('data-x') === '1'"
+                       "      && el.firstChild === child && child.parentNode === el;"
+                       "})()"));
+  // Genuinely invalid receivers still throw a TypeError.
+  EXPECT_TRUE(EvalBool("(function(){"
+                       "  var d = Object.getOwnPropertyDescriptor(Node.prototype, 'nodeType');"
+                       "  try { d.get.call({}); return false; }"
+                       "  catch (e) { return e instanceof TypeError; }"
+                       "})()"));
 }
 
 TEST_F(DomBinderTest, ElementPrototypeExposesNamespaceURI)
@@ -3286,6 +3446,47 @@ TEST_F(DomBinderTest, Canvas2dFillRect)
 // ---------------------------------------------------------------------------
 // XMLHttpRequest (wired through PageApis::xhr_request).
 // ---------------------------------------------------------------------------
+
+TEST(DomBinderXhrTest, XhrWritableAttributesAreAccepted)
+{
+  // jQuery's XHR transport assigns xhrFields entries onto the object
+  // (xhr.withCredentials = true) and libraries set xhr.timeout: both are
+  // writable IDL attributes.  The read-only withCredentials broke bilibili's
+  // tracker script with "no setter for property".
+  dom::Document doc;
+  PageApis apis;
+  apis.resolve_url = [](const std::string& raw) {
+    return raw.rfind("http://", 0) == 0 ? raw : "http://test.local/" + raw;
+  };
+  apis.xhr_request = [](const std::string&,
+                        const std::string&,
+                        const std::vector<std::pair<std::string, std::string>>&,
+                        const std::string&) -> base::Result<FetchResponse> {
+    FetchResponse out;
+    out.status = 200;
+    return base::Ok(std::move(out));
+  };
+  DomBinder binder(doc, apis);
+
+  const auto run = binder.Evaluate(R"(
+    globalThis.ok = (function(){
+      var x = new XMLHttpRequest();
+      if (x.withCredentials !== false) return false;
+      // The jQuery transport pattern: for (u in xhrFields) xhr[u] = xhrFields[u].
+      var fields = { withCredentials: true, timeout: 2500 };
+      for (var u in fields) {
+        x[u] = fields[u];
+      }
+      if (x.withCredentials !== true || x.timeout !== 2500) return false;
+      x.timeout = -5;
+      return x.timeout === 0;
+    })();
+  )");
+  ASSERT_TRUE(run.has_value()) << run.error().message();
+  auto ok = binder.Evaluate("globalThis.ok");
+  ASSERT_TRUE(ok.has_value());
+  EXPECT_TRUE(ok.value().ToBoolean().value_or(false));
+}
 
 TEST(DomBinderXhrTest, XhrLifecycleAndEvents)
 {

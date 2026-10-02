@@ -33,7 +33,7 @@ JSValue RectToJson(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueC
 // wire geometry.
 std::optional<ElementGeometry> ElementGeometryOf(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return std::nullopt;
   }
@@ -49,7 +49,7 @@ JSValue ElementGetBoundingClientRect(JSContext* ctx,
                                      int /*argc*/,
                                      JSValueConst* /*argv*/)
 {
-  if (AsElement(UnwrapNode(this_val)) == nullptr) {
+  if (AsElement(UnwrapNode(ctx, this_val)) == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
   // The laid-out border box in document coordinates (client coordinates when
@@ -105,7 +105,7 @@ bool IsDocumentScrollingElement(const dom::Element* element)
 JSValue ElementGetScrollTop(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -118,7 +118,7 @@ JSValue ElementGetScrollTop(JSContext* ctx, JSValueConst this_val)
 JSValue ElementSetScrollTop(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -138,7 +138,7 @@ JSValue ElementSetScrollTop(JSContext* ctx, JSValueConst this_val, JSValueConst 
 JSValue ElementGetScrollLeft(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -151,7 +151,7 @@ JSValue ElementGetScrollLeft(JSContext* ctx, JSValueConst this_val)
 JSValue ElementSetScrollLeft(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -183,7 +183,7 @@ JSValue ElementGetScrollHeight(JSContext* ctx, JSValueConst this_val)
 JSValue
 ElementGetOffsetParent(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -241,7 +241,7 @@ bool IsCheckableInput(const dom::Element& element)
 
 JSValue ElementGetValue(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -266,7 +266,7 @@ JSValue ElementGetValue(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementSetValue(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -298,7 +298,7 @@ JSValue ElementSetValue(JSContext* ctx, JSValueConst this_val, JSValueConst valu
 
 JSValue ElementGetValidity(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr || element->tag_name() != "input") {
     return JS_ThrowTypeError(ctx, "not an input element");
   }
@@ -331,7 +331,7 @@ JSValue ValidityStateGetTypeMismatch(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementGetChecked(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr || !IsCheckableInput(*element)) {
     return JS_NewBool(ctx, false);
   }
@@ -340,7 +340,7 @@ JSValue ElementGetChecked(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementSetChecked(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr || !IsCheckableInput(*element)) {
     return JS_UNDEFINED;
   }
@@ -359,7 +359,7 @@ JSValue ElementSetChecked(JSContext* ctx, JSValueConst this_val, JSValueConst va
 
 JSValue ElementGetType(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -372,7 +372,7 @@ JSValue ElementGetType(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementSetType(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -389,7 +389,7 @@ JSValue ElementSetType(JSContext* ctx, JSValueConst this_val, JSValueConst value
 
 JSValue ElementGetPlaceholder(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -399,7 +399,7 @@ JSValue ElementGetPlaceholder(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementSetPlaceholder(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -414,7 +414,7 @@ JSValue ElementSetPlaceholder(JSContext* ctx, JSValueConst this_val, JSValueCons
 
 JSValue ElementGetDisabled(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -423,7 +423,7 @@ JSValue ElementGetDisabled(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementSetDisabled(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -442,7 +442,7 @@ JSValue ElementSetDisabled(JSContext* ctx, JSValueConst this_val, JSValueConst v
 
 JSValue ElementGetName(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -452,7 +452,7 @@ JSValue ElementGetName(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementSetName(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -467,7 +467,7 @@ JSValue ElementSetName(JSContext* ctx, JSValueConst this_val, JSValueConst value
 
 JSValue ElementGetFormAction(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -477,7 +477,7 @@ JSValue ElementGetFormAction(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementSetFormAction(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -493,7 +493,7 @@ JSValue ElementSetFormAction(JSContext* ctx, JSValueConst this_val, JSValueConst
 JSValue FormGetAction(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr || element->tag_name() != "form") {
     return JS_ThrowTypeError(ctx, "not a form element");
   }
@@ -503,7 +503,7 @@ JSValue FormGetAction(JSContext* ctx, JSValueConst this_val)
 
 JSValue FormSetAction(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr || element->tag_name() != "form") {
     return JS_ThrowTypeError(ctx, "not a form element");
   }
@@ -518,7 +518,7 @@ JSValue FormSetAction(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 
 JSValue FormGetEnctype(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr || element->tag_name() != "form") {
     return JS_ThrowTypeError(ctx, "not a form element");
   }
@@ -528,7 +528,7 @@ JSValue FormGetEnctype(JSContext* ctx, JSValueConst this_val)
 
 JSValue FormSetEnctype(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr || element->tag_name() != "form") {
     return JS_ThrowTypeError(ctx, "not a form element");
   }
@@ -543,7 +543,7 @@ JSValue FormSetEnctype(JSContext* ctx, JSValueConst this_val, JSValueConst value
 
 JSValue FormGetMethod(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr || element->tag_name() != "form") {
     return JS_ThrowTypeError(ctx, "not a form element");
   }
@@ -553,7 +553,7 @@ JSValue FormGetMethod(JSContext* ctx, JSValueConst this_val)
 
 JSValue FormSetMethod(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr || element->tag_name() != "form") {
     return JS_ThrowTypeError(ctx, "not a form element");
   }
@@ -568,7 +568,7 @@ JSValue FormSetMethod(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 
 JSValue FormSubmit(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr || element->tag_name() != "form") {
     return JS_ThrowTypeError(ctx, "not a form element");
   }
@@ -579,7 +579,7 @@ JSValue
 FormRequestSubmit(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr || element->tag_name() != "form") {
     return JS_ThrowTypeError(ctx, "not a form element");
   }
@@ -590,7 +590,7 @@ FormRequestSubmit(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueCo
 JSValue ElementGetHref(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -602,7 +602,7 @@ JSValue ElementGetHref(JSContext* ctx, JSValueConst this_val)
 JSValue ElementGetAnchorUrlPart(JSContext* ctx, JSValueConst this_val, int magic)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -645,7 +645,7 @@ JSValue ElementGetAnchorUrlPart(JSContext* ctx, JSValueConst this_val, int magic
 
 JSValue ElementSetHref(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -660,7 +660,7 @@ JSValue ElementSetHref(JSContext* ctx, JSValueConst this_val, JSValueConst value
 
 JSValue ElementGetDownload(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -670,7 +670,7 @@ JSValue ElementGetDownload(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementSetDownload(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -685,7 +685,7 @@ JSValue ElementSetDownload(JSContext* ctx, JSValueConst this_val, JSValueConst v
 
 JSValue ElementGetPing(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -695,7 +695,7 @@ JSValue ElementGetPing(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementSetPing(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -710,7 +710,7 @@ JSValue ElementSetPing(JSContext* ctx, JSValueConst this_val, JSValueConst value
 
 JSValue ElementGetTarget(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -720,7 +720,7 @@ JSValue ElementGetTarget(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementSetTarget(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -735,7 +735,7 @@ JSValue ElementSetTarget(JSContext* ctx, JSValueConst this_val, JSValueConst val
 
 JSValue ElementGetRel(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -745,7 +745,7 @@ JSValue ElementGetRel(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementSetRel(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -761,7 +761,7 @@ JSValue ElementSetRel(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 JSValue ElementGetSrc(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -772,7 +772,7 @@ JSValue ElementGetSrc(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementSetSrc(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -787,7 +787,7 @@ JSValue ElementSetSrc(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 
 JSValue ElementGetSrcSet(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -797,7 +797,7 @@ JSValue ElementGetSrcSet(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementSetSrcSet(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -812,7 +812,7 @@ JSValue ElementSetSrcSet(JSContext* ctx, JSValueConst this_val, JSValueConst val
 
 JSValue ElementGetSrcDoc(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -822,7 +822,7 @@ JSValue ElementGetSrcDoc(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementSetSrcDoc(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -837,7 +837,7 @@ JSValue ElementSetSrcDoc(JSContext* ctx, JSValueConst this_val, JSValueConst val
 
 JSValue ElementGetCredentialless(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -846,7 +846,7 @@ JSValue ElementGetCredentialless(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementSetCredentialless(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -865,7 +865,7 @@ JSValue ElementSetCredentialless(JSContext* ctx, JSValueConst this_val, JSValueC
 
 JSValue ElementGetAlt(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -875,7 +875,7 @@ JSValue ElementGetAlt(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementSetAlt(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -907,7 +907,7 @@ int64_t PositiveIntAttr(const dom::Element& element, std::string_view name)
 
 JSValue ElementGetWidth(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -916,7 +916,7 @@ JSValue ElementGetWidth(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementSetWidth(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -934,7 +934,7 @@ JSValue ElementSetWidth(JSContext* ctx, JSValueConst this_val, JSValueConst valu
 
 JSValue ElementGetHeight(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -943,7 +943,7 @@ JSValue ElementGetHeight(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementSetHeight(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -961,7 +961,7 @@ JSValue ElementSetHeight(JSContext* ctx, JSValueConst this_val, JSValueConst val
 
 JSValue ElementGetNaturalWidth(JSContext* ctx, JSValueConst this_val)
 {
-  if (AsElement(UnwrapNode(this_val)) == nullptr) {
+  if (AsElement(UnwrapNode(ctx, this_val)) == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
   // The binder does not track decoded image dimensions; 0 (a documented
@@ -972,7 +972,7 @@ JSValue ElementGetNaturalWidth(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementGetNaturalHeight(JSContext* ctx, JSValueConst this_val)
 {
-  if (AsElement(UnwrapNode(this_val)) == nullptr) {
+  if (AsElement(UnwrapNode(ctx, this_val)) == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
   return JS_NewInt32(ctx, 0);
@@ -980,7 +980,7 @@ JSValue ElementGetNaturalHeight(JSContext* ctx, JSValueConst this_val)
 
 JSValue ElementGetComplete(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -991,7 +991,7 @@ JSValue ElementGetComplete(JSContext* ctx, JSValueConst this_val)
 JSValue ElementGetCurrentSrc(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -1011,7 +1011,7 @@ JSValue
 ElementPlayVideo(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -1029,7 +1029,7 @@ JSValue
 ElementPauseVideo(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
@@ -1045,7 +1045,7 @@ ElementPauseVideo(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueCo
 JSValue ElementGetVideoDuration(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr || !IsVideoElement(element) ||
       !impl->apis.video_duration) {
     return JS_NewFloat64(ctx, std::nan(""));
@@ -1057,7 +1057,7 @@ JSValue ElementGetVideoDuration(JSContext* ctx, JSValueConst this_val)
 JSValue ElementGetVideoCurrentTime(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr || !IsVideoElement(element) ||
       !impl->apis.video_current_time) {
     return JS_NewFloat64(ctx, 0);
@@ -1068,7 +1068,7 @@ JSValue ElementGetVideoCurrentTime(JSContext* ctx, JSValueConst this_val)
 JSValue ElementSetVideoCurrentTime(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr || !IsVideoElement(element) || !impl->apis.video_seek) {
     return JS_UNDEFINED;
   }
@@ -1084,7 +1084,7 @@ JSValue ElementSetVideoCurrentTime(JSContext* ctx, JSValueConst this_val, JSValu
 JSValue ElementGetVideoPaused(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr || !IsVideoElement(element) ||
       !impl->apis.video_paused) {
     return JS_NewBool(ctx, 1);
@@ -1094,7 +1094,7 @@ JSValue ElementGetVideoPaused(JSContext* ctx, JSValueConst this_val)
 
 [[maybe_unused]] JSValue ElementGetText(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Element* element = AsElement(UnwrapNode(this_val));
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }

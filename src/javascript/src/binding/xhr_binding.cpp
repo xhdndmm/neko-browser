@@ -347,8 +347,44 @@ JSValue XhrSetResponseType(JSContext* ctx, JSValueConst this_val, JSValueConst v
 
 JSValue XhrGetWithCredentials(JSContext* ctx, JSValueConst this_val)
 {
-  (void)XhrOf(ctx, this_val);
-  return JS_FALSE; // accepted-but-inert (documented)
+  auto* w = XhrOf(ctx, this_val);
+  if (w == nullptr) {
+    return JS_FALSE;
+  }
+  return JS_NewBool(ctx, w->with_credentials);
+}
+
+JSValue XhrSetWithCredentials(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  auto* w = XhrOf(ctx, this_val);
+  if (w == nullptr) {
+    return JS_UNDEFINED; // WebIDL: silent no-op on an invalid receiver
+  }
+  w->with_credentials = JS_ToBool(ctx, value) > 0;
+  return JS_UNDEFINED;
+}
+
+JSValue XhrGetTimeout(JSContext* ctx, JSValueConst this_val)
+{
+  auto* w = XhrOf(ctx, this_val);
+  if (w == nullptr) {
+    return JS_NewFloat64(ctx, 0);
+  }
+  return JS_NewFloat64(ctx, w->timeout_ms);
+}
+
+JSValue XhrSetTimeout(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  auto* w = XhrOf(ctx, this_val);
+  if (w == nullptr) {
+    return JS_UNDEFINED;
+  }
+  double ms = 0;
+  if (JS_ToFloat64(ctx, &ms, value) < 0 || ms < 0) {
+    ms = 0;
+  }
+  w->timeout_ms = ms;
+  return JS_UNDEFINED;
 }
 
 // Shared accessor factory for the four on* properties.
@@ -486,8 +522,16 @@ void InstallXhrGlobal(JSContext* ctx, Impl& impl)
                  "responseType",
                  MakeGetter(ctx, "responseType", XhrGetResponseType),
                  MakeSetter(ctx, "responseType", XhrSetResponseType));
-  DefineGetter(
-      ctx, proto, "withCredentials", MakeGetter(ctx, "withCredentials", XhrGetWithCredentials));
+  DefineAccessor(ctx,
+                 proto,
+                 "withCredentials",
+                 MakeGetter(ctx, "withCredentials", XhrGetWithCredentials),
+                 MakeSetter(ctx, "withCredentials", XhrSetWithCredentials));
+  DefineAccessor(ctx,
+                 proto,
+                 "timeout",
+                 MakeGetter(ctx, "timeout", XhrGetTimeout),
+                 MakeSetter(ctx, "timeout", XhrSetTimeout));
 
   struct HandlerSlot
   {

@@ -36,7 +36,7 @@ CanvasContextWrapper* UnwrapCanvasContext(JSValueConst value)
 JSValue CanvasGetContext(JSContext* ctx, JSValueConst this_value, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_value);
-  dom::Element* canvas = AsElement(UnwrapNode(this_value));
+  dom::Element* canvas = AsElement(UnwrapNode(ctx, this_value));
   if (impl == nullptr || canvas == nullptr || canvas->tag_name() != "canvas") {
     return JS_ThrowTypeError(ctx, "getContext called on incompatible receiver");
   }

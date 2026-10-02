@@ -57,19 +57,50 @@ void InsertNodeWithFragmentSemantics(Impl& impl,
   }
 }
 
+// Handles a DocumentFragment the binder does NOT own: HTMLTemplateElement's
+// contents fragment is kept alive by its template element (unique_ptr inside
+// the DOM object), so ReleaseOwned() cannot adopt it.  Browsers happily
+// insert such a fragment — inserting template.content is Vue's standard
+// hydration path (insertStaticContent does parent.insertBefore(container
+// .content, anchor)) — moving its children out and leaving the (now empty)
+// fragment in place, owned by whoever owns it today.
+//
+// Returns false when |child| is not a fragment (the caller then reports the
+// real ownership error).
+bool InsertBorrowedFragment(dom::Node* parent,
+                            dom::Node* child,
+                            dom::Node* reference,
+                            std::vector<dom::Node*>& added)
+{
+  if (child->node_type() != dom::NodeType::kDocumentFragment) {
+    return false;
+  }
+  while (child->first_child() != nullptr) {
+    dom::Node* moving = child->first_child();
+    std::unique_ptr<dom::Node> detached = child->RemoveChild(moving);
+    added.push_back(moving);
+    if (reference != nullptr) {
+      parent->InsertBefore(std::move(detached), reference);
+    } else {
+      parent->AppendChild(std::move(detached));
+    }
+  }
+  return true;
+}
+
 } // namespace
 
 JSValue NodeAppendChild(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* parent = UnwrapNode(this_val);
+  dom::Node* parent = UnwrapNode(ctx, this_val);
   if (impl == nullptr || parent == nullptr) {
     return JS_ThrowTypeError(ctx, "appendChild: detached node");
   }
   if (argc < 1) {
     return JS_ThrowTypeError(ctx, "appendChild requires one argument");
   }
-  dom::Node* child = UnwrapNode(argv[0]);
+  dom::Node* child = UnwrapNode(ctx, argv[0]);
   if (child == nullptr) {
     return JS_ThrowTypeError(ctx, "appendChild: argument is not a node");
   }
@@ -95,6 +126,12 @@ JSValue NodeAppendChild(JSContext* ctx, JSValueConst this_val, int argc, JSValue
   }
   std::unique_ptr<dom::Node> owned = impl->ReleaseOwned(child);
   if (owned == nullptr) {
+    std::vector<dom::Node*> added;
+    if (InsertBorrowedFragment(parent, child, nullptr, added)) {
+      impl->RecordChildListMutation(parent, added, {});
+      impl->MarkDomDirty();
+      return impl->WrapNode(child);
+    }
     return JS_ThrowTypeError(ctx, "appendChild: internal ownership error");
   }
   std::vector<dom::Node*> added;
@@ -111,12 +148,12 @@ JSValue NodeAppendChild(JSContext* ctx, JSValueConst this_val, int argc, JSValue
 JSValue NodeAppend(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* parent = UnwrapNode(this_val);
+  dom::Node* parent = UnwrapNode(ctx, this_val);
   if (impl == nullptr || parent == nullptr) {
     return JS_ThrowTypeError(ctx, "append: detached node");
   }
   for (int i = 0; i < argc; ++i) {
-    if (UnwrapNode(argv[i]) == nullptr) {
+    if (UnwrapNode(ctx, argv[i]) == nullptr) {
       continue; // non-node argument (string): not supported, skip
     }
     JSValue result = NodeAppendChild(ctx, this_val, 1, &argv[i]);
@@ -135,7 +172,7 @@ JSValue NodeAppend(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
 JSValue NodeReplaceChildren(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "replaceChildren: detached node");
   }
@@ -158,18 +195,18 @@ JSValue NodeReplaceChildren(JSContext* ctx, JSValueConst this_val, int argc, JSV
 JSValue NodeInsertBefore(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* parent = UnwrapNode(this_val);
+  dom::Node* parent = UnwrapNode(ctx, this_val);
   if (impl == nullptr || parent == nullptr) {
     return JS_ThrowTypeError(ctx, "insertBefore: detached node");
   }
   if (argc < 1) {
     return JS_ThrowTypeError(ctx, "insertBefore requires at least one argument");
   }
-  dom::Node* child = UnwrapNode(argv[0]);
+  dom::Node* child = UnwrapNode(ctx, argv[0]);
   if (child == nullptr) {
     return JS_ThrowTypeError(ctx, "insertBefore: argument is not a node");
   }
-  dom::Node* reference = argc >= 2 ? UnwrapNode(argv[1]) : nullptr;
+  dom::Node* reference = argc >= 2 ? UnwrapNode(ctx, argv[1]) : nullptr;
   if (reference != nullptr && reference->parent() != parent) {
     return ThrowDomException(
         ctx, "NotFoundError", "insertBefore: reference is not a child of this node");
@@ -187,6 +224,12 @@ JSValue NodeInsertBefore(JSContext* ctx, JSValueConst this_val, int argc, JSValu
   }
   std::unique_ptr<dom::Node> owned = impl->ReleaseOwned(child);
   if (owned == nullptr) {
+    std::vector<dom::Node*> added;
+    if (InsertBorrowedFragment(parent, child, reference, added)) {
+      impl->RecordChildListMutation(parent, added, {});
+      impl->MarkDomDirty();
+      return impl->WrapNode(child);
+    }
     return JS_ThrowTypeError(ctx, "insertBefore: internal ownership error");
   }
   std::vector<dom::Node*> added;
@@ -199,14 +242,14 @@ JSValue NodeInsertBefore(JSContext* ctx, JSValueConst this_val, int argc, JSValu
 JSValue NodeRemoveChild(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* parent = UnwrapNode(this_val);
+  dom::Node* parent = UnwrapNode(ctx, this_val);
   if (impl == nullptr || parent == nullptr) {
     return JS_ThrowTypeError(ctx, "removeChild: detached node");
   }
   if (argc < 1) {
     return JS_ThrowTypeError(ctx, "removeChild requires one argument");
   }
-  dom::Node* child = UnwrapNode(argv[0]);
+  dom::Node* child = UnwrapNode(ctx, argv[0]);
   if (child == nullptr || child->parent() != parent) {
     return ThrowDomException(
         ctx, "NotFoundError", "removeChild: argument is not a child of this node");
@@ -221,7 +264,7 @@ JSValue NodeRemoveChild(JSContext* ctx, JSValueConst this_val, int argc, JSValue
 JSValue
 NodeHasChildNodes(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (node == nullptr) {
     return JS_ThrowTypeError(ctx, "hasChildNodes: detached node");
   }
@@ -231,7 +274,7 @@ NodeHasChildNodes(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueCo
 JSValue NodeCloneNode(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "cloneNode: detached node");
   }
@@ -251,7 +294,7 @@ JSValue NodeCloneNode(JSContext* ctx, JSValueConst this_val, int argc, JSValueCo
 JSValue NodeAddEventListener(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "addEventListener: requires a node");
   }
@@ -310,7 +353,7 @@ JSValue NodeAddEventListener(JSContext* ctx, JSValueConst this_val, int argc, JS
 JSValue NodeRemoveEventListener(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "removeEventListener: requires a node");
   }
@@ -371,7 +414,7 @@ JSValue NodeRemoveEventListener(JSContext* ctx, JSValueConst this_val, int argc,
 JSValue NodeDispatchEvent(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "dispatchEvent: requires a node");
   }
@@ -398,7 +441,7 @@ JSValue NodeDispatchEvent(JSContext* ctx, JSValueConst this_val, int argc, JSVal
 
 JSValue NodeGetNodeType(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
@@ -407,7 +450,7 @@ JSValue NodeGetNodeType(JSContext* ctx, JSValueConst this_val)
 
 JSValue NodeGetNodeName(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
@@ -417,7 +460,7 @@ JSValue NodeGetNodeName(JSContext* ctx, JSValueConst this_val)
 
 JSValue NodeGetTextContent(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
@@ -428,7 +471,7 @@ JSValue NodeGetTextContent(JSContext* ctx, JSValueConst this_val)
 JSValue NodeSetTextContent(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
@@ -462,7 +505,7 @@ JSValue NodeSetTextContent(JSContext* ctx, JSValueConst this_val, JSValueConst v
 
 JSValue NodeGetNodeValue(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
@@ -475,7 +518,7 @@ JSValue NodeGetNodeValue(JSContext* ctx, JSValueConst this_val)
 
 JSValue NodeSetNodeValue(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
@@ -497,7 +540,7 @@ JSValue NodeSetNodeValue(JSContext* ctx, JSValueConst this_val, JSValueConst val
 // to the text and comment prototypes.
 JSValue CharacterDataGetData(JSContext* ctx, JSValueConst this_val)
 {
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
@@ -510,7 +553,7 @@ JSValue CharacterDataGetData(JSContext* ctx, JSValueConst this_val)
 
 JSValue CharacterDataSetData(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
@@ -530,7 +573,7 @@ JSValue CharacterDataSetData(JSContext* ctx, JSValueConst this_val, JSValueConst
 JSValue NodeGetParentNode(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
@@ -540,7 +583,7 @@ JSValue NodeGetParentNode(JSContext* ctx, JSValueConst this_val)
 JSValue NodeGetFirstChild(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
@@ -550,7 +593,7 @@ JSValue NodeGetFirstChild(JSContext* ctx, JSValueConst this_val)
 JSValue NodeGetLastChild(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
@@ -560,7 +603,7 @@ JSValue NodeGetLastChild(JSContext* ctx, JSValueConst this_val)
 JSValue NodeGetChildNodes(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
@@ -572,7 +615,7 @@ JSValue NodeGetChildNodes(JSContext* ctx, JSValueConst this_val)
 JSValue NodeGetBaseURI(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  if (impl == nullptr || UnwrapNode(this_val) == nullptr) {
+  if (impl == nullptr || UnwrapNode(ctx, this_val) == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
   const std::string& url = impl->document_url;
@@ -621,7 +664,7 @@ dom::Node* SiblingOf(dom::Node* node, int offset)
 JSValue NodeGetNextSibling(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
@@ -631,7 +674,7 @@ JSValue NodeGetNextSibling(JSContext* ctx, JSValueConst this_val)
 JSValue NodeGetPreviousSibling(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
@@ -641,7 +684,7 @@ JSValue NodeGetPreviousSibling(JSContext* ctx, JSValueConst this_val)
 JSValue NodeGetParentElement(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
@@ -651,7 +694,7 @@ JSValue NodeGetParentElement(JSContext* ctx, JSValueConst this_val)
 JSValue NodeGetOwnerDocument(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
@@ -665,7 +708,7 @@ JSValue NodeGetOwnerDocument(JSContext* ctx, JSValueConst this_val)
 JSValue NodeGetIsConnected(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "detached node");
   }
@@ -681,14 +724,14 @@ JSValue NodeGetIsConnected(JSContext* ctx, JSValueConst this_val)
 
 JSValue NodeContains(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (node == nullptr) {
     return JS_ThrowTypeError(ctx, "contains: detached node");
   }
   if (argc < 1) {
     return JS_NewBool(ctx, false);
   }
-  dom::Node* other = UnwrapNode(argv[0]);
+  dom::Node* other = UnwrapNode(ctx, argv[0]);
   if (other == nullptr) {
     return JS_NewBool(ctx, false);
   }
@@ -701,15 +744,15 @@ JSValue NodeContains(JSContext* ctx, JSValueConst this_val, int argc, JSValueCon
 JSValue NodeReplaceChild(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* parent = UnwrapNode(this_val);
+  dom::Node* parent = UnwrapNode(ctx, this_val);
   if (impl == nullptr || parent == nullptr) {
     return JS_ThrowTypeError(ctx, "replaceChild: detached node");
   }
   if (argc < 2) {
     return JS_ThrowTypeError(ctx, "replaceChild requires (newChild, oldChild)");
   }
-  dom::Node* new_child = UnwrapNode(argv[0]);
-  dom::Node* old_child = UnwrapNode(argv[1]);
+  dom::Node* new_child = UnwrapNode(ctx, argv[0]);
+  dom::Node* old_child = UnwrapNode(ctx, argv[1]);
   if (new_child == nullptr || old_child == nullptr) {
     return JS_ThrowTypeError(ctx, "replaceChild: arguments are not nodes");
   }
@@ -742,7 +785,7 @@ JSValue NodeReplaceChild(JSContext* ctx, JSValueConst this_val, int argc, JSValu
 JSValue NodeNormalize(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
   Impl* impl = ImplFor(ctx, this_val);
-  dom::Node* node = UnwrapNode(this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
   if (impl == nullptr || node == nullptr) {
     return JS_ThrowTypeError(ctx, "normalize: detached node");
   }
@@ -887,7 +930,7 @@ JSValue HTMLCollectionNamedItem(JSContext* ctx, JSValueConst this_val, int argc,
   JS_FreeValue(ctx, length_value);
   for (uint32_t index = 0; index < length; ++index) {
     JSValue value = JS_GetPropertyUint32(ctx, this_val, index);
-    dom::Element* element = AsElement(UnwrapNode(value));
+    dom::Element* element = AsElement(UnwrapNode(ctx, value));
     if (element != nullptr) {
       const auto id = element->Id();
       const auto element_name = element->GetAttribute("name");
