@@ -1480,38 +1480,47 @@ void BrowserController::SchedulePendingImageFetch(Tab& tab)
   state->in_flight.store(true);
   const std::shared_ptr<renderer::Page> page = tab.page;
   const std::string base_url = tab.url;
-  const int tab_id = tab.id;
   // Same fetcher the load-time subresource pass uses (cookies follow the
   // resource URL).  [this] is bounded by the pool draining on destruction;
   // the state/page handles outlive the tab if it is navigated away.
   const auto fetch = [this](const url::Url& resource_url, std::string_view) {
     return fetch_(resource_url, CookieHeader(resource_url, NowUnix()));
   };
-  pool_->Post([this, tab_id, state, page, base_url, fetch, pool = pool_.get()]() {
+  pool_->Post([state, page, base_url, fetch, pool = pool_.get()]() {
     do {
       FetchPageImages(*page, base_url, fetch, *pool);
     } while (state->again.exchange(false));
     state->in_flight.store(false);
-    // The images were attached on this thread (the page's root was reset and
-    // its version bumped): wake the frame pump so the new pixels reach the
-    // GUI.  Without this, a lazily-loaded image scrolled into view is fetched
-    // but its placeholder stays gray until some unrelated event repaints.
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      const auto it = std::find_if(
-          tabs_.begin(), tabs_.end(), [tab_id](const auto& t) { return t->id == tab_id; });
-      if (it != tabs_.end()) {
-        (*it)->frame_dirty = true;
-      }
-    }
+    // This pass ran on a pool thread while the Tab belongs to the worker
+    // thread, so nothing here may touch Tab state.  The results are published
+    // as atomics and applied by the worker's next pump
+    // (ApplyDeferredImageFetchSignals): a finished pass means the GUI owes a
+    // repaint — the placeholder would otherwise stay gray until some
+    // unrelated event repainted — and a source claimed while the pass ran
+    // means one more pass is due.  The old code wrote tab->frame_dirty under
+    // mutex_ from here, which raced the worker's DOM-lock-protected writes
+    // to the same field (TSan: this lambda vs DispatchKeyboard).
+    state->wake_frame.store(true);
     if (state->again.exchange(false)) {
-      // A change landed between the last pass and clearing the flag: schedule
-      // once more (claims make it a cheap no-op when it was stale).
-      if (Tab* tab_again = FindTab(tab_id); tab_again != nullptr) {
-        SchedulePendingImageFetch(*tab_again);
-      }
+      state->reschedule.store(true);
     }
   });
+}
+
+void BrowserController::ApplyDeferredImageFetchSignals(Tab& tab)
+{
+  if (tab.image_fetch_state == nullptr) {
+    return;
+  }
+  const std::shared_ptr<Tab::ImageFetchState> state = tab.image_fetch_state;
+  if (state->wake_frame.exchange(false)) {
+    tab.frame_dirty = true;
+  }
+  if (state->reschedule.exchange(false)) {
+    // A source was claimed while the last pass ran: fetch it now (a pass
+    // already running would just set |again| again).
+    SchedulePendingImageFetch(tab);
+  }
 }
 
 void BrowserController::ProduceFrame(Tab& tab)
@@ -1619,6 +1628,9 @@ int BrowserController::PumpScriptTimersUntilQuiet(int max_iterations)
   if (page_lock_keepalive != nullptr) {
     dom_lock = page_lock_keepalive->AcquireDomLock();
   }
+  // Pick up what a finished pool-side late-image pass signalled (it must not
+  // touch the Tab): repaint mark and follow-up pass.
+  ApplyDeferredImageFetchSignals(*tab);
   const int iterations =
       ::neko::browser::PumpScriptTimersUntilQuiet(*tab->script_runtime, max_iterations);
   if (iterations > 0 && tab->page != nullptr) {
@@ -1666,6 +1678,9 @@ void BrowserController::PumpScriptTimers()
   if (page_lock_keepalive != nullptr) {
     dom_lock = page_lock_keepalive->AcquireDomLock();
   }
+  // Pick up what a finished pool-side late-image pass signalled (it must not
+  // touch the Tab): repaint mark and follow-up pass.
+  ApplyDeferredImageFetchSignals(*tab);
   // Images attached by the pool since the last pump fire their load/error
   // events first: page scripts often hang state (placeholder removal,
   // fallback swaps) off them, and any DOM they touch must land before the

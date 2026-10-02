@@ -99,12 +99,18 @@ struct Tab
 
   // Coalescing state for SchedulePendingImageFetch.  Shared with the in-flight
   // pool task so the task can clear/refire it even when the tab is gone
-  // (reachable from the GUI or a worker swap).  Worker thread only; the
-  // atomics are read/written by the pool task as well.
+  // (reachable from the GUI or a worker swap).  Worker thread only, except
+  // the atomics: the pool task raises them and the worker's pump applies them
+  // (the pool task never touches the Tab itself — a Tab field written from a
+  // pool thread raced the worker's DOM-lock-protected writes, TSan).
   struct ImageFetchState
   {
     std::atomic<bool> in_flight{false};
     std::atomic<bool> again{false};
+    // A pass finished: the GUI owes a repaint (new pixels were attached).
+    std::atomic<bool> wake_frame{false};
+    // A source was claimed while a pass ran: one more pass is due.
+    std::atomic<bool> reschedule{false};
   };
   std::shared_ptr<ImageFetchState> image_fetch_state;
 
@@ -744,6 +750,12 @@ private:
   // pass a cheap no-op when nothing changed; concurrent schedules are
   // coalesced per tab, with one re-run when a change lands mid-pass.
   void SchedulePendingImageFetch(Tab& tab);
+
+  // Applies the signals a finished pool-side late-image pass raised
+  // (Tab::ImageFetchState's wake_frame/reschedule atomics).  Worker thread
+  // only: the pass must not touch Tab state, so the repaint mark and the
+  // follow-up pass are applied here, from the worker's pump.
+  void ApplyDeferredImageFetchSignals(Tab& tab);
 
   // Dispatches the image "load"/"error" events the fetch layer queued on the
   // tab's page (browsers fire these from their network stack; our fetcher

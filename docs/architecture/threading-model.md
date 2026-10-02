@@ -126,6 +126,14 @@ mutex，就是 use-after-free。`browser_controller.cpp` 中所有「取 DOM 锁
   DOM 锁：泵里的定时器/事件回调会写 DOM，而池上的子资源任务在锁下读
   DOM，不加锁就是数据竞争（TSan 实测报出 `SetAttribute` vs
   `CollectImageSourcesLocked`）。
+- **池线程绝不触碰 Tab**：Tab（及其 `frame_dirty` 等标志）归 worker 线程
+  所有，而 worker 写这些标志时并不同时持 `mutex_`（输入派发只持 DOM
+  锁），所以「池任务在 `mutex_` 下写 `frame_dirty`」与 worker 的写是同一
+  字段上的两种锁 → 数据竞争（TSan：`DispatchKeyboard` vs
+  `SchedulePendingImageFetch` 的池任务）。晚到图片抓取完成后只升
+  `Tab::ImageFetchState` 里的原子信号（`wake_frame`/`reschedule`），由
+  worker 的泵调用 `ApplyDeferredImageFetchSignals()` 落地：置脏帧、
+  补一次抓取。池侧也负责不了重排 —— Tab 状态只能由 owner 线程改。
 
 ---
 
@@ -180,6 +188,7 @@ mutex，就是 use-after-free。`browser_controller.cpp` 中所有「取 DOM 锁
 | 动画时钟 | `tests/unit/renderer`（GIF 帧推进）、`tests/unit/browser`（直接导航 GIF 播放） |
 | DOM 竞争（ADR 0020） | TSan 下加载真实页面：`src/dom|style|renderer` 无数据竞争；渲染路径不再有跨线程 DOM 访问（剩余 TSan 报告为 Qt 信号/槽内部机制） |
 | 定时器泵持 DOM 锁（JS 写 vs 池读） | TSan 下 `BrowserControllerTest` 全组（98 用例）：无锁泵曾稳定报 `Element::SetAttribute` vs 池线程 `CollectImageSourcesLocked` 竞争，加锁后连续多轮全绿 |
+| 池线程不触碰 Tab（晚到抓取信号延迟落地） | TSan 下 `BrowserControllerTest` + `UiSmokeTest` 全组：池任务曾在 `mutex_` 下写 `tab->frame_dirty`，与 worker 在 DOM 锁下的同名写竞争（CI tsan #141 `DispatchKeyboard` vs `SchedulePendingImageFetch` 池任务）；改为原子信号 + worker 泵落地后全绿 |
 
 ---
 
