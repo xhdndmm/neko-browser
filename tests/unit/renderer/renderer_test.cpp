@@ -1241,6 +1241,44 @@ TEST(PageTest, BandedRasterizeMatchesFullRasterization)
   EXPECT_EQ(stitched, full.pixels());
 }
 
+TEST(PageTest, ParallelBandedRasterizeMatchesSerial)
+{
+  // The banded screenshot path rasterizes each band in parallel sub-bands on
+  // a thread pool; the band content must stay byte-identical to the serial
+  // band rasterization.  The trailing partial band (rows < band height) is
+  // the interesting case: the visible band must be intersected into every
+  // worker band, otherwise rows beyond it would be drawn.
+  Page page;
+  ASSERT_TRUE(
+      page.LoadHtml("<body style=\"background-color:#ffffff\">"
+                    "<div style=\"background-color:#ff0000;width:300px;height:150px\">a</div>"
+                    "<div style=\"background-color:#00ff00;width:300px;height:150px\">b</div>"
+                    "<div style=\"background-color:#0000ff;width:300px;height:150px\">c</div>"
+                    "</body>")
+          .has_value());
+  page.Layout(400);
+
+  constexpr int kWidth = 400;
+  constexpr int kHeight = 430; // 128-row bands with a 46-row trailing band
+  constexpr int kBandHeight = 128;
+
+  base::ThreadPool pool(4);
+  paint::Rasterizer serial(kWidth, kBandHeight);
+  paint::Rasterizer parallel(kWidth, kBandHeight);
+  const auto row_bytes = static_cast<std::ptrdiff_t>(kWidth) * 4;
+  for (int y0 = 0; y0 < kHeight; y0 += kBandHeight) {
+    const int rows = std::min(kBandHeight, kHeight - y0);
+    const auto band_bytes = static_cast<std::ptrdiff_t>(rows) * row_bytes;
+    page.RasterizeInto(serial, 0, rows, static_cast<float>(y0));
+    page.RasterizeInto(parallel, 0, rows, static_cast<float>(y0), &pool);
+    const std::vector<std::uint8_t> serial_band(serial.pixels().begin(),
+                                                serial.pixels().begin() + band_bytes);
+    const std::vector<std::uint8_t> parallel_band(parallel.pixels().begin(),
+                                                  parallel.pixels().begin() + band_bytes);
+    EXPECT_EQ(serial_band, parallel_band) << "band y0=" << y0 << " rows=" << rows;
+  }
+}
+
 TEST(PageTest, ScrollBlitBandMatchesFullRasterization)
 {
   // The UI scroll-blit path must reproduce the full rasterization at the new

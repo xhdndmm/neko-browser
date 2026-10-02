@@ -526,7 +526,11 @@ int RunRendererChild()
     const float content_height =
         page.layout_root() != nullptr ? page.layout_root()->height : static_cast<float>(height);
     const int full_height = std::max(height, static_cast<int>(content_height) + 40);
-    neko::paint::Rasterizer raster = page.Rasterize(width, full_height);
+    // Rasterize in parallel bands: the child is CPU-bound on paint once the
+    // page is loaded, and a full-height buffer gives the band split plenty of
+    // rows to work with.
+    neko::base::ThreadPool pool;
+    neko::paint::Rasterizer raster = page.Rasterize(width, full_height, /*y_offset=*/0, &pool);
     result.ok = true;
     result.width = raster.width();
     result.height = raster.height();
@@ -950,9 +954,13 @@ int main(int argc, char** argv)
         return 1;
       }
       neko::paint::Rasterizer band(800, std::min(kBandHeight, height));
+      // One pool for the whole loop; each band is rasterized in parallel
+      // horizontal sub-bands.  The output stays byte-identical to the serial
+      // path (RasterizeParallel honours the band's visible region).
+      neko::base::ThreadPool pool;
       for (int y0 = 0; y0 < height; y0 += kBandHeight) {
         const int rows = std::min(kBandHeight, height - y0);
-        page.RasterizeInto(band, 0, rows, static_cast<float>(y0));
+        page.RasterizeInto(band, 0, rows, static_cast<float>(y0), &pool);
         const auto appended = writer.value().AppendRows(band.pixels().data(), rows);
         if (!appended) {
           std::cerr << "error: " << appended.error().message() << "\n";

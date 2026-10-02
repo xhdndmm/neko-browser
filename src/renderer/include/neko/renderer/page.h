@@ -195,10 +195,17 @@ public:
   RasterizeFull(paint::Rasterizer& raster, float y_offset, base::ThreadPool* pool = nullptr) const;
 
   // Rasterizes only screen rows [band_y0, band_y1) of an existing rasterizer
-  // (same buffer size), used by the UI's scroll blit: the buffer's content was
-  // already shifted and only the newly exposed band is redrawn.  Clears the
-  // band to the canvas background first.  |y_offset| is the new scroll offset.
-  void RasterizeInto(paint::Rasterizer& raster, int band_y0, int band_y1, float y_offset) const;
+  // (same buffer size), used by the UI's scroll blit and by the banded
+  // screenshot path: the buffer's content was already shifted (or is a fresh
+  // band buffer) and only the requested band is redrawn.  Clears the band to
+  // the canvas background first.  |y_offset| is the new scroll offset.
+  // |pool| enables parallel band rasterization within the band (the output
+  // is byte-identical to the serial path).
+  void RasterizeInto(paint::Rasterizer& raster,
+                     int band_y0,
+                     int band_y1,
+                     float y_offset,
+                     base::ThreadPool* pool = nullptr) const;
 
   // Monotonic counter bumped whenever the document/style/layout/image content
   // changes.  The UI compares it against its cached rasterization.

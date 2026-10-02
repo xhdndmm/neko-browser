@@ -556,7 +556,9 @@ public:
   // This pumps the loop, bounded by |max_iterations| and by a virtual clock
   // advance, then returns.  Deliberately *not* a real sleep: the loop is
   // synchronous, so advancing the virtual clock is what makes due timers fire.
-  // Worker thread only.
+  // Worker thread only.  Holds the page DOM lock for the pump (the callbacks
+  // run page scripts and mutate the document, which the pool's subresource
+  // work reads under the same lock — ADR 0020).
   //
   // Returns the number of pump iterations performed.
   int PumpScriptTimersUntilQuiet(int max_iterations = 1000);

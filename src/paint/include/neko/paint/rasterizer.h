@@ -65,6 +65,8 @@ public:
   // Like Rasterize but splits the viewport into horizontal bands processed on
   // a thread pool.  |min_band_height| keeps tiny viewports single-threaded
   // (parallelism overhead would dominate).  The font registry must be set.
+  // A visible band set via SetVisibleBand() is intersected into every worker
+  // band, so only rows the serial path would draw are written.
   void RasterizeParallel(const DisplayList& list, base::ThreadPool& pool, int min_band_height = 64);
 
   // Restricts all subsequent drawing to screen rows [y0, y1) (in addition to
@@ -147,6 +149,12 @@ private:
   bool ApplyClip(float& x, float& y, float& width, float& height) const;
   // Intersects a screen-space y range [y0, y1) with the active visible band.
   void ClampToBand(int& y0, int& y1) const;
+  // True when the document-space row range [y0, y1) can write at least one
+  // row here (translated by the scroll offset, clipped to the viewport and
+  // intersected with the visible band).  Text drawing uses it to skip runs
+  // that only a different band can see, so parallel band views do not shape
+  // and cache glyphs they could never draw.
+  bool RowRangeVisible(int doc_y0, int doc_y1) const;
   // Byte offset of pixel (x, y) in screen space, translated to the local
   // buffer (band views subtract their origin).
   std::size_t BandOffset(int x, int y) const;

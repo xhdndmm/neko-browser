@@ -645,6 +645,34 @@ TEST(RasterizerTest, ParallelRasterizationMatchesSerial)
   EXPECT_EQ(serial.pixels(), parallel.pixels());
 }
 
+TEST(RasterizerTest, ParallelRasterizationRespectsVisibleBand)
+{
+  // A caller-set visible band (banded screenshot, scroll blit) must be
+  // intersected into every worker band: rows outside the band keep the
+  // pre-existing buffer content in the parallel path too, exactly like the
+  // serial path leaves them untouched.
+  DisplayList list;
+  list.FillRect(0, 0, 32, 32, css::Color{255, 0, 0, 255});
+
+  base::ThreadPool pool(4);
+  Rasterizer serial(32, 32);
+  serial.Clear(css::Color{0, 0, 255, 255}); // sentinel outside the band
+  serial.SetVisibleBand(8, 16);
+  serial.Rasterize(list);
+  serial.ResetVisibleBand();
+
+  Rasterizer parallel(32, 32);
+  parallel.Clear(css::Color{0, 0, 255, 255});
+  parallel.SetVisibleBand(8, 16);
+  parallel.RasterizeParallel(list, pool, /*min_band_height=*/4);
+  parallel.ResetVisibleBand();
+
+  EXPECT_EQ(serial.pixels(), parallel.pixels());
+  EXPECT_EQ(Pixel(parallel, 16, 7), (css::Color{0, 0, 255, 255}));  // above the band
+  EXPECT_EQ(Pixel(parallel, 16, 16), (css::Color{0, 0, 255, 255})); // below the band
+  EXPECT_EQ(Pixel(parallel, 16, 12), (css::Color{255, 0, 0, 255})); // inside the band
+}
+
 TEST(RasterizerTest, IntegerBlendMatchesReferenceAlpha)
 {
   // A semi-transparent red over an opaque blue: the integer fixed-point blend

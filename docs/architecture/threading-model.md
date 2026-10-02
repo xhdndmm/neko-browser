@@ -107,6 +107,26 @@ Page，且该 shared_ptr **声明在锁之前**（局部变量逆序析构，保
 mutex，就是 use-after-free。`browser_controller.cpp` 中所有「取 DOM 锁」的
 路径都遵循这一模式。
 
+### 3.3 并行光栅化与 DOM 锁的交互
+
+`ProduceFrame` 在**持 DOM 锁**的帧泵路径上调用带池光栅化（`pump` →
+`ProduceFrame` → `RasterizeFull(..., pool_)`），因此并行带的提交必须满足：
+
+- **调用线程亲自光栅化第 0 带**，只向池提交 `带数-1` 个任务。任务数严格
+  小于 worker 数，保证即使有 worker 阻塞在 DOM 锁上（例如池上的图片附加
+  任务正等锁），剩余 worker 也能把已提交的带跑完。若提交数等于 worker
+  数，就会出现「调用方持锁等带、池任务等锁」的循环等待。
+- 带内任务只写互不重叠的行区间，不取 DOM 锁，不依赖池上其它任务；
+  `RasterizeParallel` 内部的可见带交叉（`band_y0_/band_y1_` 取交）保证
+  带视图只写串行路径会写的行。
+- 文本与图形命令在带视图里用 `RowRangeVisible()` 提前跳过：字形缓存的
+  查表是全局锁 + 像素拷贝，若每个带都重做，N 个带会把一次串行工作放大
+  N 倍并让池线程在全局锁上互相踩踏（实测 20 带下总 CPU 从 1.9s 涨到 42s）。
+- 定时器泵（`PumpScriptTimers` / `PumpScriptTimersUntilQuiet`）全程持
+  DOM 锁：泵里的定时器/事件回调会写 DOM，而池上的子资源任务在锁下读
+  DOM，不加锁就是数据竞争（TSan 实测报出 `SetAttribute` vs
+  `CollectImageSourcesLocked`）。
+
 ---
 
 ## 4. 进程模型
@@ -150,6 +170,8 @@ mutex，就是 use-after-free。`browser_controller.cpp` 中所有「取 DOM 锁
 | 主题 | 覆盖 |
 | --- | --- |
 | 并行带光栅化与串行逐像素一致 | `tests/unit/paint`（`RasterizerTest.ParallelRasterizationMatchesSerial`） |
+| 并行光栅化尊重可见带（带视图不外写） | `tests/unit/paint`（`RasterizerTest.ParallelRasterizationRespectsVisibleBand`） |
+| `RasterizeInto` 分带并行与串行逐字节一致（含尾部不满带） | `tests/unit/renderer`（`PageTest.ParallelBandedRasterizeMatchesSerial`） |
 | 字形缓存跨线程 | `tests/unit/graphics`（缓存/并发用例） |
 | DNS 缓存与超时 | `tests/unit/network`（12 个用例，含本地 UDP 服务器） |
 | WebSocket 线程模型 | `tests/unit/network` + JS 绑定测试（事件在泵中派发） |
@@ -157,6 +179,7 @@ mutex，就是 use-after-free。`browser_controller.cpp` 中所有「取 DOM 锁
 | 崩溃与回退路径 | `renderer_session_test`（`ChildCrashIsDetectedAndReported`、子进程无法启动、协议往返/版本） |
 | 动画时钟 | `tests/unit/renderer`（GIF 帧推进）、`tests/unit/browser`（直接导航 GIF 播放） |
 | DOM 竞争（ADR 0020） | TSan 下加载真实页面：`src/dom|style|renderer` 无数据竞争；渲染路径不再有跨线程 DOM 访问（剩余 TSan 报告为 Qt 信号/槽内部机制） |
+| 定时器泵持 DOM 锁（JS 写 vs 池读） | TSan 下 `BrowserControllerTest` 全组（98 用例）：无锁泵曾稳定报 `Element::SetAttribute` vs 池线程 `CollectImageSourcesLocked` 竞争，加锁后连续多轮全绿 |
 
 ---
 
@@ -164,8 +187,12 @@ mutex，就是 use-after-free。`browser_controller.cpp` 中所有「取 DOM 锁
 
 - 单线程池大小固定（硬件并发数），没有按优先级/域限流（例如图片抓取不会
   让位给关键路径请求）。
-- 帧在 worker 线程串行光栅化（不再用 UI 光栅池），大页面单帧成本上升；
-  可用控制器自己的光栅池优化。
+- **页面脚本（QuickJS，无 JIT）在单一线程上执行**：真实站点的加载 CPU
+  几乎全在 `RunPageScripts` + 定时器泵里的 JS 上（实测 bilibili：单线程
+  ~6.8s user，池线程合计 ~0.2s）。任何带内并行都无法切分单个脚本的执行——
+  这与所有浏览器一致；可并行的是栅格化（本次已接入）、图片解码与子资源
+  抓取（此前已在池上）。Debug 构建（-O0，QuickJS 同为 -O0）会显著放大这
+  一段耗时，真实使用应用 Release 构建。
 - DevTools 仍读取活 DOM（在 DOM 锁下），脚本长跑时会短暂阻塞；完全
   worker 侧序列化快照是后续可选工作（ADR 0020 B2）。
 - 无事件循环：连接复用与 HTTP/2 需要它，属于后续阶段。

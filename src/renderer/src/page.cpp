@@ -1273,7 +1273,11 @@ void Page::RasterizeFull(paint::Rasterizer& raster, float y_offset, base::Thread
   }
 }
 
-void Page::RasterizeInto(paint::Rasterizer& raster, int band_y0, int band_y1, float y_offset) const
+void Page::RasterizeInto(paint::Rasterizer& raster,
+                         int band_y0,
+                         int band_y1,
+                         float y_offset,
+                         base::ThreadPool* pool) const
 {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   // Clear first: without a layout tree the band must still show the canvas
@@ -1291,7 +1295,15 @@ void Page::RasterizeInto(paint::Rasterizer& raster, int band_y0, int band_y1, fl
   raster.SetFontRegistry(&fonts_);
   raster.SetVisibleBand(band_y0, band_y1);
   raster.SetScrollOffset(y_offset);
-  raster.Rasterize(EnsureDisplayList());
+  const paint::DisplayList& list = EnsureDisplayList();
+  if (pool != nullptr) {
+    // Parallel path: RasterizeParallel honours the visible band set above, so
+    // only rows [band_y0, band_y1) are written and the result matches the
+    // serial band byte for byte.
+    raster.RasterizeParallel(list, *pool);
+  } else {
+    raster.Rasterize(list);
+  }
   raster.ResetVisibleBand();
 }
 

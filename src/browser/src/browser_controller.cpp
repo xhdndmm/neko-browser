@@ -1540,7 +1540,12 @@ void BrowserController::ProduceFrame(Tab& tab)
   }
   const float content_height = tab.page->ContentHeight();
   paint::Rasterizer raster(width, height);
-  tab.page->RasterizeFull(raster, tab.scroll_offset_y, nullptr);
+  // Rasterize in parallel bands on the shared pool: frame production is the
+  // most latency-sensitive CPU work on this thread.  RasterizeParallel runs
+  // the first band on this thread and keeps the submitted task count below the
+  // worker count, so a pool task can still be waiting on the DOM lock this
+  // call holds without deadlocking (threading-model §3.3).
+  tab.page->RasterizeFull(raster, tab.scroll_offset_y, pool_.get());
   auto frame = std::make_shared<RemoteFrame>();
   frame->width = width;
   frame->height = height;
@@ -1600,6 +1605,20 @@ int BrowserController::PumpScriptTimersUntilQuiet(int max_iterations)
   if (tab->script_runtime == nullptr) {
     return 0;
   }
+  // The timers run page scripts, so the pump must own the document (ADR
+  // 0020): the pool threads that inject subresources (source collection,
+  // image attach) take the same lock, and without it TSan reports the JS
+  // attribute writes racing those locked reads.  The same lock then covers
+  // the restyle and the queued load/error event callbacks below.
+  // Keep the Page alive for as long as the lock is held (declared before
+  // |dom_lock| so it is released last): a timer may navigate, which replaces
+  // the tab's Page and would otherwise leave the lock guarding a destroyed
+  // mutex.
+  const std::shared_ptr<renderer::Page> page_lock_keepalive = tab->page;
+  std::unique_lock<std::recursive_mutex> dom_lock;
+  if (page_lock_keepalive != nullptr) {
+    dom_lock = page_lock_keepalive->AcquireDomLock();
+  }
   const int iterations =
       ::neko::browser::PumpScriptTimersUntilQuiet(*tab->script_runtime, max_iterations);
   if (iterations > 0 && tab->page != nullptr) {
@@ -1617,6 +1636,7 @@ int BrowserController::PumpScriptTimersUntilQuiet(int max_iterations)
     }
   }
   // Deliver any image load/error events the pool queued during the pump.
+  // These dispatch page scripts, so they stay inside the DOM lock scope.
   FirePendingImageEvents(*tab);
   return iterations;
 }
@@ -1626,6 +1646,25 @@ void BrowserController::PumpScriptTimers()
   Tab* tab = ActiveTab();
   if (tab == nullptr) {
     return;
+  }
+  // Keep the Page alive for as long as the lock is held.  Declared *before*
+  // |dom_lock| on purpose: locals are destroyed in reverse declaration order, so
+  // the keepalive must be released last, after the lock is dropped.
+  //
+  // Everything below can navigate -- a timer callback assigning location.href, a
+  // script-requested navigation, a form submit -- and navigation replaces the
+  // tab's Page, dropping the last reference to the current one.  Locking through
+  // a borrowed `tab->page` and then unlocking after the Page had been destroyed
+  // was a use-after-free on its mutex (caught by ThreadSanitizer; undefined
+  // behaviour per the standard).
+  //
+  // The lock covers the whole pump, image event dispatch and IntersectionObserver
+  // refresh included: all of it runs page scripts and mutates the document,
+  // and the pool's subresource tasks take the same lock (ADR 0020).
+  const std::shared_ptr<renderer::Page> page_lock_keepalive = tab->page;
+  std::unique_lock<std::recursive_mutex> dom_lock;
+  if (page_lock_keepalive != nullptr) {
+    dom_lock = page_lock_keepalive->AcquireDomLock();
   }
   // Images attached by the pool since the last pump fire their load/error
   // events first: page scripts often hang state (placeholder removal,
@@ -1649,21 +1688,6 @@ void BrowserController::PumpScriptTimers()
     if (style_changed || dom_changed) {
       SchedulePendingImageFetch(*tab);
     }
-  }
-  // Keep the Page alive for as long as the lock is held.  Declared *before*
-  // |dom_lock| on purpose: locals are destroyed in reverse declaration order, so
-  // the keepalive must be released last, after the lock is dropped.
-  //
-  // Everything below can navigate -- a timer callback assigning location.href, a
-  // script-requested navigation, a form submit -- and navigation replaces the
-  // tab's Page, dropping the last reference to the current one.  Locking through
-  // a borrowed `tab->page` and then unlocking after the Page had been destroyed
-  // was a use-after-free on its mutex (caught by ThreadSanitizer; undefined
-  // behaviour per the standard).
-  const std::shared_ptr<renderer::Page> page_lock_keepalive = tab->page;
-  std::unique_lock<std::recursive_mutex> dom_lock;
-  if (page_lock_keepalive != nullptr) {
-    dom_lock = page_lock_keepalive->AcquireDomLock();
   }
   if (IsRemoteTab(*tab)) {
     // Renderer mode: the child advances its own timers/animations; a changed

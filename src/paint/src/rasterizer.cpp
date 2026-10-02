@@ -75,8 +75,8 @@ Rasterizer::Rasterizer(uint8_t* pixels, int width, int full_height, int band_y0,
 Rasterizer::Rasterizer(const Rasterizer& other)
     : owns_pixels_(other.owns_pixels_), pixels_data_(other.pixels_data_), width_(other.width_),
       height_(other.height_), band_y0_(other.band_y0_), band_y1_(other.band_y1_),
-      scroll_offset_(other.scroll_offset_), pixels_(other.pixels_), registry_(other.registry_),
-      clips_(other.clips_)
+      band_origin_y_(other.band_origin_y_), scroll_offset_(other.scroll_offset_),
+      pixels_(other.pixels_), registry_(other.registry_), clips_(other.clips_)
 {
   if (owns_pixels_) {
     pixels_data_ = pixels_.data();
@@ -93,6 +93,7 @@ Rasterizer& Rasterizer::operator=(const Rasterizer& other)
   height_ = other.height_;
   band_y0_ = other.band_y0_;
   band_y1_ = other.band_y1_;
+  band_origin_y_ = other.band_origin_y_;
   scroll_offset_ = other.scroll_offset_;
   registry_ = other.registry_;
   clips_ = other.clips_;
@@ -104,8 +105,8 @@ Rasterizer& Rasterizer::operator=(const Rasterizer& other)
 Rasterizer::Rasterizer(Rasterizer&& other) noexcept
     : owns_pixels_(other.owns_pixels_), pixels_data_(other.pixels_data_), width_(other.width_),
       height_(other.height_), band_y0_(other.band_y0_), band_y1_(other.band_y1_),
-      scroll_offset_(other.scroll_offset_), pixels_(std::move(other.pixels_)),
-      registry_(other.registry_), clips_(std::move(other.clips_))
+      band_origin_y_(other.band_origin_y_), scroll_offset_(other.scroll_offset_),
+      pixels_(std::move(other.pixels_)), registry_(other.registry_), clips_(std::move(other.clips_))
 {
   if (owns_pixels_) {
     pixels_data_ = pixels_.data();
@@ -123,6 +124,7 @@ Rasterizer& Rasterizer::operator=(Rasterizer&& other) noexcept
   height_ = other.height_;
   band_y0_ = other.band_y0_;
   band_y1_ = other.band_y1_;
+  band_origin_y_ = other.band_origin_y_;
   scroll_offset_ = other.scroll_offset_;
   registry_ = other.registry_;
   clips_ = std::move(other.clips_);
@@ -214,6 +216,17 @@ void Rasterizer::ClampToBand(int& y0, int& y1) const
   y1 = std::min(y1, band_y1_);
 }
 
+bool Rasterizer::RowRangeVisible(int doc_y0, int doc_y1) const
+{
+  const int scroll = static_cast<int>(std::round(scroll_offset_));
+  int y0 = doc_y0 - scroll;
+  int y1 = doc_y1 - scroll;
+  y0 = std::max(y0, 0);
+  y1 = std::min(y1, height_);
+  ClampToBand(y0, y1);
+  return y1 > y0;
+}
+
 std::size_t Rasterizer::BandOffset(int x, int y) const
 {
   return (static_cast<std::size_t>(y - band_origin_y_) * static_cast<std::size_t>(width_) +
@@ -285,27 +298,41 @@ void Rasterizer::RasterizeParallel(const DisplayList& list,
   for (int i = 0; i <= num_bands; ++i) {
     band_starts[static_cast<std::size_t>(i)] = height_ * i / num_bands;
   }
+  // The lowest band runs on the calling thread: the caller is about to wait
+  // anyway, and this keeps the submitted task count below the worker count.
+  // That matters because callers may hold a lock the workers can block on
+  // (the DOM lock: a pool task injecting a subresource waits for it while the
+  // frame's bands wait for workers).  One caller-run band leaves one worker
+  // spare for exactly that case.
+  const auto run_band = [this, &list](int y0, int y1) {
+    // A band view: full-page coordinate space, writing only rows [y0, y1)
+    // of the shared buffer (translated by the band's origin).
+    Rasterizer view(pixels_data_ +
+                        static_cast<std::size_t>(y0) * static_cast<std::size_t>(width_) * 4,
+                    width_,
+                    height_,
+                    y0,
+                    y1 - y0);
+    view.registry_ = registry_;
+    view.scroll_offset_ = scroll_offset_;
+    // A visible band set on this rasterizer (banded screenshot rows, a
+    // scroll blit's exposed strip) restricts which rows may be drawn:
+    // intersect it into the view so parallel output matches what the
+    // serial path writes row for row.
+    view.band_y0_ = std::max(view.band_y0_, band_y0_);
+    view.band_y1_ = std::min(view.band_y1_, band_y1_);
+    view.Rasterize(list);
+  };
   std::vector<std::future<void>> futures;
   futures.reserve(static_cast<std::size_t>(num_bands));
-  for (int i = 0; i < num_bands; ++i) {
+  run_band(band_starts[0], band_starts[1]);
+  for (int i = 1; i < num_bands; ++i) {
     const int y0 = band_starts[static_cast<std::size_t>(i)];
     const int y1 = band_starts[static_cast<std::size_t>(i) + 1];
     if (y1 <= y0) {
       continue;
     }
-    futures.push_back(pool.Submit([this, &list, y0, y1] {
-      // A band view: full-page coordinate space, writing only rows [y0, y1)
-      // of the shared buffer (translated by the band's origin).
-      Rasterizer view(pixels_data_ +
-                          static_cast<std::size_t>(y0) * static_cast<std::size_t>(width_) * 4,
-                      width_,
-                      height_,
-                      y0,
-                      y1 - y0);
-      view.registry_ = registry_;
-      view.scroll_offset_ = scroll_offset_;
-      view.Rasterize(list);
-    }));
+    futures.push_back(pool.Submit([&run_band, y0, y1] { run_band(y0, y1); }));
   }
   for (std::future<void>& f : futures) {
     f.wait();
@@ -465,6 +492,9 @@ void Rasterizer::DrawText8x8(const DrawCommand& command)
   const int start_y = static_cast<int>(std::round(command.y));
   const int cell = static_cast<int>(std::ceil(scale));
   const int step = static_cast<int>(std::round(command.font_size));
+  if (!RowRangeVisible(start_y - 1, start_y + 8 * cell + 2)) {
+    return;
+  }
 
   for (std::size_t i = 0; i < command.text.size(); ++i) {
     const unsigned char ch = static_cast<unsigned char>(command.text[i]);
@@ -500,6 +530,19 @@ void Rasterizer::DrawText8x8(const DrawCommand& command)
 
 void Rasterizer::DrawTextFreetype(const DrawCommand& command)
 {
+  // Skip runs that cannot write a row here, before any registry work: the
+  // selector lookup and the font metrics each take a lock that is shared by
+  // every pool thread, and a band view walks the whole display list although
+  // it owns one strip.  Paying those locks per band serialized the pool
+  // (measured: parallel raster of a text-heavy page burned ~10x the serial
+  // CPU).  The bound uses only the font size so the check itself is free: the
+  // em box extended by one more font size below the top covers ascent,
+  // descent and the underline; an extra row above covers overshoot.
+  const int doc_top = static_cast<int>(std::floor(command.y)) - 1;
+  const int doc_bottom = static_cast<int>(std::ceil(command.y + 2.0f * command.font_size)) + 2;
+  if (!RowRangeVisible(doc_top, doc_bottom)) {
+    return;
+  }
   const graphics::FontSelector* selector =
       registry_->SelectorFor(command.font_family, command.font_weight, command.font_italic);
   if (selector == nullptr) {

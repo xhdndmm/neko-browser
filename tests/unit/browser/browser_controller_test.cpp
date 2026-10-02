@@ -125,6 +125,21 @@ bool WaitForSubresourcesOn(const Tab& tab, Pred pred, int timeout_ms = 5000)
   return poll();
 }
 
+// Page::Find is a caller-holds-the-lock accessor (it runs under Layout()'s
+// lock in production).  The pool attaches images concurrently with a load, so
+// every direct read from a test goes through the lock, and the returned image
+// is a copy: the map may rehash when the next image is attached, which would
+// leave a bare pointer dangling.
+image::Image FindImageCopy(renderer::Page& page, const dom::Element& element, bool* found = nullptr)
+{
+  const std::unique_lock<std::recursive_mutex> dom_lock = page.AcquireDomLock();
+  const image::Image* image = page.Find(element);
+  if (found != nullptr) {
+    *found = image != nullptr;
+  }
+  return image != nullptr ? *image : image::Image{};
+}
+
 // Records every request (url + cookie header) and answers from a route map.
 // Thread-safe: the controller may fetch page subresources in parallel on a
 // thread pool (see FetchPageImages), so the recorded request lists are
@@ -2007,10 +2022,11 @@ TEST(BrowserControllerTest, PageVideoDecodesAndAutoplays)
   // The decoded first frame is attached asynchronously after publish.
   ASSERT_TRUE(WaitForSubresourcesOn(
       *tab, [&tab, video] { return tab->page != nullptr && tab->page->Find(*video) != nullptr; }));
-  const image::Image* frame = tab->page->Find(*video);
-  ASSERT_NE(frame, nullptr);
-  EXPECT_EQ(frame->width, 8);
-  EXPECT_EQ(frame->height, 6);
+  bool found_frame = false;
+  const image::Image frame = FindImageCopy(*tab->page, *video, &found_frame);
+  ASSERT_TRUE(found_frame);
+  EXPECT_EQ(frame.width, 8);
+  EXPECT_EQ(frame.height, 6);
 
   // Autoplay: the first pump tick starts playback at frame 0; after well
   // past one 2 fps frame interval, the next pump advances the displayed
@@ -2279,10 +2295,11 @@ TEST(BrowserControllerTest, InjectsMultiplePageImages)
   const std::vector<dom::Element*> imgs = dom::QuerySelectorAll(*tab->page->document(), "img");
   ASSERT_EQ(imgs.size(), 3u);
   for (const dom::Element* element : imgs) {
-    const image::Image* decoded = tab->page->Find(*element);
-    ASSERT_NE(decoded, nullptr);
-    EXPECT_EQ(decoded->width, 2);
-    EXPECT_EQ(decoded->height, 2);
+    bool found_image = false;
+    const image::Image decoded = FindImageCopy(*tab->page, *element, &found_image);
+    ASSERT_TRUE(found_image);
+    EXPECT_EQ(decoded.width, 2);
+    EXPECT_EQ(decoded.height, 2);
   }
 }
 
@@ -2361,7 +2378,14 @@ TEST(BrowserControllerTest, FetchesImageAssignedAfterTheInitialPass)
     controller.PumpScriptTimers();
     dom::Element* body = dom::QuerySelector(*tab->page->document(), "body");
     const std::vector<dom::Element*> images = dom::QuerySelectorAll(*tab->page->document(), "img");
-    const bool attached = !images.empty() && tab->page->Find(*images[0]) != nullptr;
+    // Page::Find is a caller-holds-the-lock accessor (it runs under Layout()'s
+    // lock); a pool thread may be attaching images concurrently, so the test
+    // must take the DOM lock like the controller does.
+    bool attached = false;
+    {
+      const std::unique_lock<std::recursive_mutex> dom_lock = tab->page->AcquireDomLock();
+      attached = !images.empty() && tab->page->Find(*images[0]) != nullptr;
+    }
     ready = body != nullptr && attached && body->GetAttribute("data-late").value_or("") == "loaded";
     if (!ready) {
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -2430,7 +2454,12 @@ TEST(BrowserControllerTest, ScrollingTriggersObserverDrivenImageFetch)
   for (int i = 0; i < 400 && !attached; ++i) {
     controller.PumpScriptTimers();
     dom::Element* img = dom::QuerySelector(*tab->page->document(), "#late");
-    attached = img != nullptr && tab->page->Find(*img) != nullptr;
+    // Page::Find is a caller-holds-the-lock accessor; see the note in the
+    // late-assigned-image test above.
+    {
+      const std::unique_lock<std::recursive_mutex> dom_lock = tab->page->AcquireDomLock();
+      attached = img != nullptr && tab->page->Find(*img) != nullptr;
+    }
     if (!attached) {
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
@@ -2692,10 +2721,11 @@ TEST(BrowserControllerTest, DataUrlImageIsDecodedWithoutNetwork)
   ASSERT_TRUE(decoded_ok);
   const std::vector<dom::Element*> imgs = dom::QuerySelectorAll(*tab->page->document(), "img");
   ASSERT_EQ(imgs.size(), 1u);
-  const image::Image* decoded = tab->page->Find(*imgs[0]);
-  ASSERT_NE(decoded, nullptr);
-  EXPECT_EQ(decoded->width, 2);
-  EXPECT_EQ(decoded->height, 2);
+  bool found_image = false;
+  const image::Image decoded = FindImageCopy(*tab->page, *imgs[0], &found_image);
+  ASSERT_TRUE(found_image);
+  EXPECT_EQ(decoded.width, 2);
+  EXPECT_EQ(decoded.height, 2);
 }
 
 // <link rel="stylesheet" href="data:text/css,..."> is applied: external
