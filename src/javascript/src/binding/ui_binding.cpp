@@ -293,6 +293,8 @@ JSValue ElementSetValue(JSContext* ctx, JSValueConst this_val, JSValueConst valu
   } else {
     element->SetAttribute("value", text);
   }
+  // Reflector setter: behaves like setAttribute (cascade may change).
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -354,6 +356,8 @@ JSValue ElementSetChecked(JSContext* ctx, JSValueConst this_val, JSValueConst va
   } else {
     element->RemoveAttribute("checked");
   }
+  // Reflector setter: behaves like setAttribute (cascade may change).
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -384,6 +388,8 @@ JSValue ElementSetType(JSContext* ctx, JSValueConst this_val, JSValueConst value
   if (element->tag_name() == "input") {
     element->SetAttribute("type", type);
   }
+  // Reflector setter: behaves like setAttribute (cascade may change).
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -409,6 +415,8 @@ JSValue ElementSetPlaceholder(JSContext* ctx, JSValueConst this_val, JSValueCons
     return JS_EXCEPTION;
   }
   element->SetAttribute("placeholder", text);
+  // Reflector setter: behaves like setAttribute (cascade may change).
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -437,6 +445,8 @@ JSValue ElementSetDisabled(JSContext* ctx, JSValueConst this_val, JSValueConst v
   } else {
     element->RemoveAttribute("disabled");
   }
+  // Reflector setter: behaves like setAttribute (cascade may change).
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -462,6 +472,8 @@ JSValue ElementSetName(JSContext* ctx, JSValueConst this_val, JSValueConst value
     return JS_EXCEPTION;
   }
   element->SetAttribute("name", text);
+  // Reflector setter: behaves like setAttribute (cascade may change).
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -487,6 +499,8 @@ JSValue ElementSetFormAction(JSContext* ctx, JSValueConst this_val, JSValueConst
     return JS_EXCEPTION;
   }
   element->SetAttribute("formaction", form_action);
+  // Reflector setter: behaves like setAttribute (cascade may change).
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -513,6 +527,8 @@ JSValue FormSetAction(JSContext* ctx, JSValueConst this_val, JSValueConst value)
     return JS_EXCEPTION;
   }
   element->SetAttribute("action", action);
+  // Reflector setter: behaves like setAttribute (cascade may change).
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -538,6 +554,8 @@ JSValue FormSetEnctype(JSContext* ctx, JSValueConst this_val, JSValueConst value
     return JS_EXCEPTION;
   }
   element->SetAttribute("enctype", enctype);
+  // Reflector setter: behaves like setAttribute (cascade may change).
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -563,6 +581,8 @@ JSValue FormSetMethod(JSContext* ctx, JSValueConst this_val, JSValueConst value)
     return JS_EXCEPTION;
   }
   element->SetAttribute("method", method);
+  // Reflector setter: behaves like setAttribute (cascade may change).
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -655,6 +675,8 @@ JSValue ElementSetHref(JSContext* ctx, JSValueConst this_val, JSValueConst value
     return JS_EXCEPTION;
   }
   element->SetAttribute("href", href);
+  // Reflector setter: behaves like setAttribute (cascade may change).
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -680,6 +702,8 @@ JSValue ElementSetDownload(JSContext* ctx, JSValueConst this_val, JSValueConst v
     return JS_EXCEPTION;
   }
   element->SetAttribute("download", download);
+  // Reflector setter: behaves like setAttribute (cascade may change).
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -705,6 +729,8 @@ JSValue ElementSetPing(JSContext* ctx, JSValueConst this_val, JSValueConst value
     return JS_EXCEPTION;
   }
   element->SetAttribute("ping", ping);
+  // Reflector setter: behaves like setAttribute (cascade may change).
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -730,6 +756,8 @@ JSValue ElementSetTarget(JSContext* ctx, JSValueConst this_val, JSValueConst val
     return JS_EXCEPTION;
   }
   element->SetAttribute("target", text);
+  // Reflector setter: behaves like setAttribute (cascade may change).
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -755,6 +783,8 @@ JSValue ElementSetRel(JSContext* ctx, JSValueConst this_val, JSValueConst value)
     return JS_EXCEPTION;
   }
   element->SetAttribute("rel", text);
+  // Reflector setter: behaves like setAttribute (cascade may change).
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -788,7 +818,7 @@ JSValue ElementSetSrc(JSContext* ctx, JSValueConst this_val, JSValueConst value)
   // late-fetch pass and style reapplication hang off the DOM-dirty flag.
   if (Impl* impl = ImplFor(ctx, this_val); impl != nullptr) {
     impl->RecordAttributeMutation(element, "src");
-    impl->MarkDomDirty();
+    impl->MarkDomMediaDirty(element);
   }
   return JS_UNDEFINED;
 }
@@ -819,7 +849,7 @@ JSValue ElementSetSrcSet(JSContext* ctx, JSValueConst this_val, JSValueConst val
   // dirty like setAttribute("srcset", ...) does.
   if (Impl* impl = ImplFor(ctx, this_val); impl != nullptr) {
     impl->RecordAttributeMutation(element, "srcset");
-    impl->MarkDomDirty();
+    impl->MarkDomMediaDirty(element);
   }
   return JS_UNDEFINED;
 }
@@ -846,6 +876,8 @@ JSValue ElementSetSrcDoc(JSContext* ctx, JSValueConst this_val, JSValueConst val
     return JS_EXCEPTION;
   }
   element->SetAttribute("srcdoc", srcdoc);
+  // Reflector setter: behaves like setAttribute (cascade may change).
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -874,6 +906,8 @@ JSValue ElementSetCredentialless(JSContext* ctx, JSValueConst this_val, JSValueC
   } else {
     element->RemoveAttribute("credentialless");
   }
+  // Reflector setter: behaves like setAttribute (cascade may change).
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -899,6 +933,8 @@ JSValue ElementSetAlt(JSContext* ctx, JSValueConst this_val, JSValueConst value)
     return JS_EXCEPTION;
   }
   element->SetAttribute("alt", text);
+  // Reflector setter: behaves like setAttribute (cascade may change).
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -943,6 +979,8 @@ JSValue ElementSetWidth(JSContext* ctx, JSValueConst this_val, JSValueConst valu
     v = 0;
   }
   element->SetAttribute("width", std::to_string(v));
+  // Reflector setter: behaves like setAttribute (cascade may change).
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -970,6 +1008,8 @@ JSValue ElementSetHeight(JSContext* ctx, JSValueConst this_val, JSValueConst val
     v = 0;
   }
   element->SetAttribute("height", std::to_string(v));
+  // Reflector setter: behaves like setAttribute (cascade may change).
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 

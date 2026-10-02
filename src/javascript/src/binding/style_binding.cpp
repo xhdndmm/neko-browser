@@ -85,7 +85,7 @@ JSValue StyleSetProperty(JSContext* ctx, JSValueConst this_val, int argc, JSValu
     decls.push_back(InlineDecl{name, value, false});
   }
   SetStyleAttr(*element, SerializeInlineStyle(decls));
-  ImplFor(ctx, this_val)->MarkDomDirty();
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -135,6 +135,7 @@ JSValue StyleRemoveProperty(JSContext* ctx, JSValueConst this_val, int argc, JSV
                              }),
               decls.end());
   SetStyleAttr(*element, SerializeInlineStyle(decls));
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_NewStringLen(ctx, removed.data(), removed.size());
 }
 
@@ -180,6 +181,7 @@ JSValue StyleSetPropertyDirect(JSContext* ctx, JSValueConst this_val, JSValueCon
     decls.push_back(InlineDecl{std::string(prop), prop_value, false});
   }
   SetStyleAttr(*element, SerializeInlineStyle(decls));
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 

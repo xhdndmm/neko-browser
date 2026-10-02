@@ -853,20 +853,50 @@ struct Impl
   // interaction events to decide whether to re-run the style cascade/layout,
   // so on-screen updates from event handlers are reflected promptly.
   bool dom_dirty_ = false;
+  // True additionally when the mutation can change the cascade's outcome
+  // (classes, style, structural edits, non-media attributes).  Media-loading
+  // attributes (src/srcset/sizes/loading/decoding) only change which bytes an
+  // element loads: lazy-loading pages assign img.src on every scroll frame,
+  // and re-running the full restyle+relayout for each assignment froze real
+  // pages (measured >600 ms per pass on bilibili).
+  bool style_dirty_ = false;
   // Called by every JS DOM mutation handler (child list, attributes, class,
   // innerHTML, text content).  Setting the dirty flag lets the browser layer
   // re-run the style cascade; refreshing the live collections (childNodes /
   // children / getElementsBy* / forms / images / links / scripts) is what makes
   // them spec-live rather than a snapshot taken at access time.
-  void MarkDomDirty()
+  void MarkDomDirty(const dom::Node* mutated = nullptr)
   {
     dom_dirty_ = true;
-    RefreshLiveCollections();
+    style_dirty_ = true;
+    RefreshLiveCollections(mutated);
+  }
+  // Media-loading attribute names: the element's src family.  They feed the
+  // late-fetch pass but not the cascade (attribute selectors on src are not a
+  // real-world styling pattern; the alternative costs a full restyle per
+  // lazily-loaded image).
+  static bool IsMediaLoadingAttribute(std::string_view name)
+  {
+    return name == "src" || name == "srcset" || name == "sizes" || name == "loading" ||
+           name == "decoding";
+  }
+  // A media-source change: the late-fetch pass must run, the style engine can
+  // be skipped.
+  void MarkDomMediaDirty(const dom::Node* mutated = nullptr)
+  {
+    dom_dirty_ = true;
+    RefreshLiveCollections(mutated);
   }
   bool TakeDomDirty()
   {
     const bool dirty = dom_dirty_;
     dom_dirty_ = false;
+    return dirty;
+  }
+  bool TakeStyleDirty()
+  {
+    const bool dirty = style_dirty_;
+    style_dirty_ = false;
     return dirty;
   }
 
@@ -966,7 +996,13 @@ struct Impl
   // and releases it in the destructor.
   JSValue MakeLiveCollection(dom::Node* root, LiveKind kind, const std::string& arg);
   std::vector<dom::Node*> QueryLive(dom::Node* root, LiveKind kind, const std::string& arg) const;
-  void RefreshLiveCollections();
+  // Re-queries the live collections (childNodes / children / getElementsBy*,
+  // document.forms/images/links/scripts) so they stay spec-live.  |mutated|,
+  // when given, scopes the work: a collection whose root is not the mutated
+  // node or one of its ancestors cannot change, so it is skipped (real pages
+  // hold dozens of collections and mutate the DOM thousands of times per
+  // hydration burst — eager refresh of all of them cost seconds of CPU).
+  void RefreshLiveCollections(const dom::Node* mutated = nullptr);
   void DetachLiveCollections();
 
   // Creates an Event object (class wrapper + event_proto prototype).

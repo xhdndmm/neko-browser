@@ -1849,12 +1849,27 @@ Impl::QueryLive(dom::Node* root, LiveKind kind, const std::string& arg) const
   return out;
 }
 
-void Impl::RefreshLiveCollections()
+void Impl::RefreshLiveCollections(const dom::Node* mutated)
 {
   if (ctx == nullptr) {
     return;
   }
   for (LiveCollection& collection : live_collections) {
+    if (mutated != nullptr && collection.root != nullptr) {
+      // The collection re-queries |collection.root|'s subtree: a mutation
+      // outside it cannot change the result.  Walking the mutated node's
+      // ancestor chain is bounded by tree depth (unlike the query itself).
+      bool affected = false;
+      for (const dom::Node* n = mutated; n != nullptr; n = n->parent()) {
+        if (n == collection.root) {
+          affected = true;
+          break;
+        }
+      }
+      if (!affected) {
+        continue;
+      }
+    }
     const std::vector<dom::Node*> nodes =
         QueryLive(collection.root, collection.kind, collection.arg);
     // Setting length first truncates any stale trailing indexes.

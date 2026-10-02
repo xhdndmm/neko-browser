@@ -128,6 +128,11 @@ bool DomBinder::TakeDomDirty()
   return impl_->TakeDomDirty();
 }
 
+bool DomBinder::TakeStyleDirty()
+{
+  return impl_->TakeStyleDirty();
+}
+
 void DomBinder::DispatchDocumentEvent(std::string_view type)
 {
   impl_->DispatchDocumentEvent(type);

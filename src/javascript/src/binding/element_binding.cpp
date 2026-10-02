@@ -115,6 +115,11 @@ int DatasetSetProperty(JSContext* ctx,
   } else {
     el->SetAttribute(attr, value_str);
   }
+  // data-* attributes are styled through [data-x] selectors on real sites:
+  // the mutation must mark the DOM dirty like setAttribute does.
+  if (w->impl != nullptr) {
+    w->impl->MarkDomDirty(el);
+  }
   return 1;
 }
 
@@ -209,7 +214,7 @@ JSValue ElementSetId(JSContext* ctx, JSValueConst this_val, JSValueConst value)
   } else {
     element->SetAttribute("id", id);
   }
-  ImplFor(ctx, this_val)->MarkDomDirty();
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -242,7 +247,7 @@ JSValue ElementSetClassName(JSContext* ctx, JSValueConst this_val, JSValueConst 
   } else {
     element->SetAttribute("class", cls);
   }
-  ImplFor(ctx, this_val)->MarkDomDirty();
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -294,7 +299,7 @@ JSValue AttrSetValue(JSContext* ctx, JSValueConst this_val, JSValueConst value)
     return JS_EXCEPTION;
   }
   wrapper->element->SetAttribute(wrapper->name, string_value);
-  wrapper->impl->MarkDomDirty();
+  wrapper->impl->MarkDomDirty(wrapper->element);
   return JS_UNDEFINED;
 }
 
@@ -517,11 +522,13 @@ JSValue ElementRemove(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSVal
 {
   Impl* impl = ImplFor(ctx, this_val);
   dom::Node* node = UnwrapNode(ctx, this_val);
-  if (impl == nullptr || node == nullptr || node->parent() == nullptr) {
+  dom::Node* parent = node != nullptr ? node->parent() : nullptr;
+  if (impl == nullptr || node == nullptr || parent == nullptr) {
     return JS_UNDEFINED;
   }
-  std::unique_ptr<dom::Node> removed = node->parent()->RemoveChild(node);
+  std::unique_ptr<dom::Node> removed = parent->RemoveChild(node);
   impl->TakeOwnership(node, std::move(removed));
+  impl->MarkDomDirty(parent);
   return JS_UNDEFINED;
 }
 
@@ -552,7 +559,7 @@ JSValue ElementSetHidden(JSContext* ctx, JSValueConst this_val, JSValueConst val
   } else {
     element->RemoveAttribute("hidden");
   }
-  ImplFor(ctx, this_val)->MarkDomDirty();
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -583,6 +590,7 @@ JSValue ElementSetTitle(JSContext* ctx, JSValueConst this_val, JSValueConst valu
   } else {
     element->SetAttribute("title", title);
   }
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -613,6 +621,7 @@ JSValue ElementSetLang(JSContext* ctx, JSValueConst this_val, JSValueConst value
   } else {
     element->SetAttribute("lang", lang);
   }
+  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -676,6 +685,20 @@ void SetClassTokens(dom::Element& element, const std::vector<std::string>& token
   }
 }
 
+// classList mutators funnel through here: the class attribute feeds the
+// cascade, so the mutation must mark the DOM (and style) dirty like
+// setAttribute("class", ...) does.
+void ApplyClassTokens(JSContext* ctx,
+                      JSValueConst this_val,
+                      dom::Element& element,
+                      const std::vector<std::string>& tokens)
+{
+  SetClassTokens(element, tokens);
+  if (Impl* impl = ImplFor(ctx, this_val); impl != nullptr) {
+    impl->MarkDomDirty(&element);
+  }
+}
+
 JSValue ClassListAdd(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
@@ -703,7 +726,7 @@ JSValue ClassListAdd(JSContext* ctx, JSValueConst this_val, int argc, JSValueCon
       tokens.push_back(token);
     }
   }
-  SetClassTokens(*element, tokens);
+  ApplyClassTokens(ctx, this_val, *element, tokens);
   return JS_UNDEFINED;
 }
 
@@ -722,7 +745,7 @@ JSValue ClassListRemove(JSContext* ctx, JSValueConst this_val, int argc, JSValue
     }
     tokens.erase(std::remove(tokens.begin(), tokens.end(), token), tokens.end());
   }
-  SetClassTokens(*element, tokens);
+  ApplyClassTokens(ctx, this_val, *element, tokens);
   return JS_UNDEFINED;
 }
 
@@ -779,16 +802,16 @@ JSValue ClassListToggle(JSContext* ctx, JSValueConst this_val, int argc, JSValue
     } else if (!want && present) {
       tokens.erase(std::remove(tokens.begin(), tokens.end(), token), tokens.end());
     }
-    SetClassTokens(*element, tokens);
+    ApplyClassTokens(ctx, this_val, *element, tokens);
     return JS_NewBool(ctx, added);
   }
   if (present) {
     tokens.erase(std::remove(tokens.begin(), tokens.end(), token), tokens.end());
-    SetClassTokens(*element, tokens);
+    ApplyClassTokens(ctx, this_val, *element, tokens);
     return JS_NewBool(ctx, false);
   }
   tokens.push_back(token);
-  SetClassTokens(*element, tokens);
+  ApplyClassTokens(ctx, this_val, *element, tokens);
   return JS_NewBool(ctx, true);
 }
 
@@ -814,7 +837,7 @@ JSValue ClassListReplace(JSContext* ctx, JSValueConst this_val, int argc, JSValu
   for (std::string& t : tokens) {
     if (t == old_token) {
       t = new_token;
-      SetClassTokens(*element, tokens);
+      ApplyClassTokens(ctx, this_val, *element, tokens);
       return JS_NewBool(ctx, true);
     }
   }
@@ -1005,7 +1028,7 @@ JSValue ElementSetInnerHTML(JSContext* ctx, JSValueConst this_val, JSValueConst 
       target->AppendChild(std::move(child));
     }
   }
-  impl->MarkDomDirty();
+  impl->MarkDomDirty(target);
   return JS_UNDEFINED;
 }
 
@@ -1090,7 +1113,7 @@ ElementInsertAdjacentHTML(JSContext* ctx, JSValueConst this_val, int argc, JSVal
       insert_before(parent, std::move(*it), reference);
     }
   }
-  impl->MarkDomDirty();
+  impl->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -1197,7 +1220,13 @@ JSValue ElementSetAttribute(JSContext* ctx, JSValueConst this_val, int argc, JSV
   element->SetAttribute(name, value);
   Impl* impl = ImplFor(ctx, this_val);
   impl->RecordAttributeMutation(element, name);
-  impl->MarkDomDirty();
+  // Media-loading attributes (src/srcset/...) only need the late-fetch pass;
+  // everything else can affect the cascade and takes the full restyle path.
+  if (Impl::IsMediaLoadingAttribute(name)) {
+    impl->MarkDomMediaDirty(element);
+  } else {
+    impl->MarkDomDirty(element);
+  }
   return JS_UNDEFINED;
 }
 
@@ -1218,7 +1247,11 @@ JSValue ElementRemoveAttribute(JSContext* ctx, JSValueConst this_val, int argc, 
   element->RemoveAttribute(name);
   Impl* impl = ImplFor(ctx, this_val);
   impl->RecordAttributeMutation(element, name);
-  impl->MarkDomDirty();
+  if (Impl::IsMediaLoadingAttribute(name)) {
+    impl->MarkDomMediaDirty(element);
+  } else {
+    impl->MarkDomDirty(element);
+  }
   return JS_UNDEFINED;
 }
 
@@ -1266,7 +1299,7 @@ JSValue ElementToggleAttribute(JSContext* ctx, JSValueConst this_val, int argc, 
   }
   Impl* impl = ImplFor(ctx, this_val);
   impl->RecordAttributeMutation(element, name);
-  impl->MarkDomDirty();
+  impl->MarkDomDirty(element);
   return JS_NewBool(ctx, force);
 }
 

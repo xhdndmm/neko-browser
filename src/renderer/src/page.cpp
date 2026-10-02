@@ -671,6 +671,111 @@ image::SvgTextShaper Page::MakeSvgTextShaper() const
   return paint::CreateSvgTextShaper(fonts_);
 }
 
+namespace {
+
+// Parses a presentational width/height attribute as a plain non-negative
+// integer (the only form the layout engine treats as a definite size).
+std::optional<long> ParseDimensionAttribute(const dom::Element& element, std::string_view name)
+{
+  const std::optional<std::string_view> raw = element.GetAttribute(name);
+  if (!raw.has_value()) {
+    return std::nullopt;
+  }
+  auto is_space = [](char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+  };
+  std::size_t begin = 0;
+  std::size_t end = raw->size();
+  while (begin < end && is_space(raw->at(begin))) {
+    ++begin;
+  }
+  while (end > begin && is_space(raw->at(end - 1))) {
+    --end;
+  }
+  if (begin == end) {
+    return std::nullopt;
+  }
+  long value = 0;
+  for (std::size_t i = begin; i < end; ++i) {
+    const char c = raw->at(i);
+    if (c < '0' || c > '9') {
+      return std::nullopt;
+    }
+    value = value * 10 + (c - '0');
+    if (value > 1000000) {
+      return std::nullopt;
+    }
+  }
+  return value;
+}
+
+// True when the element's laid-out size depends on the decoded image: the
+// replaced sizing algorithm follows the intrinsic dimensions unless both
+// axes are definite (CSS size or width/height attributes).  Background-image
+// hosts and <canvas> never derive their box from the content.
+bool LayoutSizeDependsOnImage(const dom::Element& element, const style::StyleEngine& styles)
+{
+  const std::string_view tag = element.tag_name();
+  if (tag != "img" && tag != "video") {
+    return false;
+  }
+  const style::ComputedStyle& style = styles.StyleFor(element);
+  if (style.width.has_value() && style.height.has_value()) {
+    return false;
+  }
+  if (ParseDimensionAttribute(element, "width").has_value() &&
+      ParseDimensionAttribute(element, "height").has_value()) {
+    return false;
+  }
+  return true;
+}
+
+bool IsReplacedMediaElement(const dom::Element& element)
+{
+  const std::string_view tag = element.tag_name();
+  return tag == "img" || tag == "video" || tag == "canvas";
+}
+
+// Patches the image pointers the painter reads when a size-stable element
+// receives its decoded pixels.  Rebuilding the whole layout tree for that
+// costs hundreds of milliseconds on real pages (measured ~600 ms on
+// bilibili) and used to run once per lazily-loaded image, which is what made
+// scrolling freeze; the box geometry cannot change here, so the tree stays.
+void UpdateAttachedImageInTree(layout::LayoutBox& box,
+                               const dom::Element& element,
+                               const image::Image* image,
+                               bool replaced)
+{
+  if (box.element == &element) {
+    if (replaced) {
+      box.image = image;
+    } else {
+      box.background_image = image;
+    }
+  }
+  for (layout::Line& line : box.lines) {
+    for (layout::InlineBox& inline_box : line.boxes) {
+      if (inline_box.element == &element && replaced) {
+        inline_box.image = image;
+      }
+      if (inline_box.block_box != nullptr) {
+        UpdateAttachedImageInTree(*inline_box.block_box, element, image, replaced);
+      }
+    }
+  }
+  for (auto& child : box.children) {
+    UpdateAttachedImageInTree(*child, element, image, replaced);
+  }
+  for (auto& child : box.positioned_children) {
+    UpdateAttachedImageInTree(*child, element, image, replaced);
+  }
+  for (auto& f : box.floats) {
+    UpdateAttachedImageInTree(*f, element, image, replaced);
+  }
+}
+
+} // namespace
+
 void Page::SetElementImage(const dom::Element* element,
                            image::Image image,
                            std::shared_ptr<image::GifAnimation> animation)
@@ -702,7 +807,12 @@ void Page::SetElementImage(const dom::Element* element,
     animation_states_.erase(element);
   }
   video_states_.erase(element); // a static image replaces any video frame
-  root_.reset();                // the replaced box's intrinsic size may have changed
+  const image::Image* stored = &images_.find(element)->second;
+  if (LayoutSizeDependsOnImage(*element, styles_)) {
+    root_.reset(); // the replaced box's intrinsic size may have changed
+  } else if (root_ != nullptr) {
+    UpdateAttachedImageInTree(*root_, *element, stored, IsReplacedMediaElement(*element));
+  }
   display_list_.reset();
   pending_image_events_.emplace_back(element, true); // <img> load event, see below
   BumpVersion();
@@ -731,6 +841,8 @@ void Page::SetElementImages(const std::vector<const dom::Element*>& elements,
   }
 
   bool attached = false;
+  bool layout_affected = false;
+  std::vector<std::pair<const dom::Element*, bool>> in_place;
   for (const dom::Element* element : elements) {
     if (element == nullptr || alive.find(element) == alive.end()) {
       continue;
@@ -742,13 +854,24 @@ void Page::SetElementImages(const std::vector<const dom::Element*>& elements,
       animation_states_.erase(element);
     }
     video_states_.erase(element);
+    if (LayoutSizeDependsOnImage(*element, styles_)) {
+      layout_affected = true;
+    } else {
+      in_place.emplace_back(element, IsReplacedMediaElement(*element));
+    }
     pending_image_events_.emplace_back(element, true);
     attached = true;
   }
   if (!attached) {
     return;
   }
-  root_.reset();
+  if (layout_affected) {
+    root_.reset(); // an intrinsic-sized replaced box may have a new size
+  } else if (root_ != nullptr) {
+    for (const auto& [element, replaced] : in_place) {
+      UpdateAttachedImageInTree(*root_, *element, &images_.find(element)->second, replaced);
+    }
+  }
   display_list_.reset();
   BumpVersion();
 }

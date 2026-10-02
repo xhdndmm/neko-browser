@@ -409,6 +409,41 @@ TEST_F(DomBinderTest, BlobAndObjectUrl)
                "url.indexOf('blob:') === 0; })()"));
 }
 
+// The browser layer distinguishes two kinds of DOM-dirty: "the document
+// changed at all" (feeds the late-fetch pass) and "the cascade inputs
+// changed" (drives the full restyle).  Media-loading attributes (img.src and
+// friends) assign on every scroll frame during lazy loading — restyling for
+// them froze real pages; everything else (classes, style, structural edits)
+// must report through both flags.
+TEST_F(DomBinderTest, MediaSourceMutationsSkipTheStyleDirtyFlag)
+{
+  binder_->TakeDomDirty();
+  binder_->TakeStyleDirty();
+
+  ASSERT_TRUE(EvalBool("(function(){"
+                       "  document.body.appendChild(document.createElement('img'));"
+                       "  return true;"
+                       "})()"));
+  binder_->TakeDomDirty(); // structural edit: drain both, then test the src setter alone
+  binder_->TakeStyleDirty();
+
+  ASSERT_TRUE(EvalBool("(function(){"
+                       "  document.body.lastChild.src = 'https://example.com/x.png';"
+                       "  return true;"
+                       "})()"));
+  EXPECT_TRUE(binder_->TakeDomDirty());
+  EXPECT_FALSE(binder_->TakeStyleDirty()) << "img.src must not force a restyle";
+
+  ASSERT_TRUE(EvalBool("(function(){ document.getElementById('first').classList.add('hot'); "
+                       "return true; })()"));
+  EXPECT_TRUE(binder_->TakeDomDirty());
+  EXPECT_TRUE(binder_->TakeStyleDirty());
+
+  ASSERT_TRUE(EvalBool("(function(){ document.getElementById('first').style.width = '10px'; "
+                       "return true; })()"));
+  EXPECT_TRUE(binder_->TakeStyleDirty()) << "per-property style setters must restyle";
+}
+
 TEST_F(DomBinderTest, UrlConstructsParsedValuesAndExposesPrototype)
 {
   EXPECT_TRUE(

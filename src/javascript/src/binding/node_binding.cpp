@@ -45,15 +45,23 @@ void InsertNodeWithFragmentSemantics(Impl& impl,
         parent->AppendChild(std::move(detached));
       }
     }
-    // Keep the (now empty) fragment alive under binder ownership.
+    // Keep the (now empty) fragment alive under binder ownership.  Live
+    // collections rooted at the fragment see its children move out: the
+    // caller refreshes the insertion parent, the source needs its own pass.
+    impl.MarkDomDirty(fragment);
     impl.TakeOwnership(fragment, std::move(owned));
     return;
   }
+  dom::Node* previous_parent = owned->parent();
   added.push_back(owned.get());
   if (reference != nullptr) {
     parent->InsertBefore(std::move(owned), reference);
   } else {
     parent->AppendChild(std::move(owned));
+  }
+  if (previous_parent != nullptr && previous_parent != parent) {
+    // A live collection rooted at the node's old parent sees it leave.
+    impl.MarkDomDirty(previous_parent);
   }
 }
 
@@ -67,7 +75,8 @@ void InsertNodeWithFragmentSemantics(Impl& impl,
 //
 // Returns false when |child| is not a fragment (the caller then reports the
 // real ownership error).
-bool InsertBorrowedFragment(dom::Node* parent,
+bool InsertBorrowedFragment(Impl& impl,
+                            dom::Node* parent,
                             dom::Node* child,
                             dom::Node* reference,
                             std::vector<dom::Node*>& added)
@@ -85,6 +94,8 @@ bool InsertBorrowedFragment(dom::Node* parent,
       parent->AppendChild(std::move(detached));
     }
   }
+  // Live collections rooted at the fragment see its children move out.
+  impl.MarkDomDirty(child);
   return true;
 }
 
@@ -121,15 +132,18 @@ JSValue NodeAppendChild(JSContext* ctx, JSValueConst this_val, int argc, JSValue
         ctx, "HierarchyRequestError", "appendChild: maximum tree depth exceeded");
   }
   if (child->parent() != nullptr) {
-    std::unique_ptr<dom::Node> removed = child->parent()->RemoveChild(child);
+    dom::Node* previous_parent = child->parent();
+    std::unique_ptr<dom::Node> removed = previous_parent->RemoveChild(child);
     impl->TakeOwnership(child, std::move(removed));
+    // A live collection rooted at the previous parent sees the node leave.
+    impl->MarkDomDirty(previous_parent);
   }
   std::unique_ptr<dom::Node> owned = impl->ReleaseOwned(child);
   if (owned == nullptr) {
     std::vector<dom::Node*> added;
-    if (InsertBorrowedFragment(parent, child, nullptr, added)) {
+    if (InsertBorrowedFragment(*impl, parent, child, nullptr, added)) {
       impl->RecordChildListMutation(parent, added, {});
-      impl->MarkDomDirty();
+      impl->MarkDomDirty(parent);
       return impl->WrapNode(child);
     }
     return JS_ThrowTypeError(ctx, "appendChild: internal ownership error");
@@ -137,7 +151,7 @@ JSValue NodeAppendChild(JSContext* ctx, JSValueConst this_val, int argc, JSValue
   std::vector<dom::Node*> added;
   InsertNodeWithFragmentSemantics(*impl, parent, std::move(owned), nullptr, added);
   impl->RecordChildListMutation(parent, added, {});
-  impl->MarkDomDirty();
+  impl->MarkDomDirty(parent);
   return impl->WrapNode(child);
 }
 
@@ -162,7 +176,7 @@ JSValue NodeAppend(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
     }
     JS_FreeValue(ctx, result);
   }
-  impl->MarkDomDirty();
+  impl->MarkDomDirty(parent);
   return JS_UNDEFINED;
 }
 
@@ -188,7 +202,7 @@ JSValue NodeReplaceChildren(JSContext* ctx, JSValueConst this_val, int argc, JSV
     }
     JS_FreeValue(ctx, result);
   }
-  impl->MarkDomDirty();
+  impl->MarkDomDirty(node);
   return JS_UNDEFINED;
 }
 
@@ -219,15 +233,18 @@ JSValue NodeInsertBefore(JSContext* ctx, JSValueConst this_val, int argc, JSValu
         ctx, "HierarchyRequestError", "insertBefore: maximum tree depth exceeded");
   }
   if (child->parent() != nullptr) {
-    std::unique_ptr<dom::Node> removed = child->parent()->RemoveChild(child);
+    dom::Node* previous_parent = child->parent();
+    std::unique_ptr<dom::Node> removed = previous_parent->RemoveChild(child);
     impl->TakeOwnership(child, std::move(removed));
+    // A live collection rooted at the previous parent sees the node leave.
+    impl->MarkDomDirty(previous_parent);
   }
   std::unique_ptr<dom::Node> owned = impl->ReleaseOwned(child);
   if (owned == nullptr) {
     std::vector<dom::Node*> added;
-    if (InsertBorrowedFragment(parent, child, reference, added)) {
+    if (InsertBorrowedFragment(*impl, parent, child, reference, added)) {
       impl->RecordChildListMutation(parent, added, {});
-      impl->MarkDomDirty();
+      impl->MarkDomDirty(parent);
       return impl->WrapNode(child);
     }
     return JS_ThrowTypeError(ctx, "insertBefore: internal ownership error");
@@ -235,7 +252,7 @@ JSValue NodeInsertBefore(JSContext* ctx, JSValueConst this_val, int argc, JSValu
   std::vector<dom::Node*> added;
   InsertNodeWithFragmentSemantics(*impl, parent, std::move(owned), reference, added);
   impl->RecordChildListMutation(parent, added, {});
-  impl->MarkDomDirty();
+  impl->MarkDomDirty(parent);
   return impl->WrapNode(child);
 }
 
@@ -257,7 +274,7 @@ JSValue NodeRemoveChild(JSContext* ctx, JSValueConst this_val, int argc, JSValue
   std::unique_ptr<dom::Node> removed = parent->RemoveChild(child);
   impl->TakeOwnership(child, std::move(removed));
   impl->RecordChildListMutation(parent, {}, {child});
-  impl->MarkDomDirty();
+  impl->MarkDomDirty(parent);
   return impl->WrapNode(child);
 }
 
@@ -484,12 +501,12 @@ JSValue NodeSetTextContent(JSContext* ctx, JSValueConst this_val, JSValueConst v
   // data; it must not create child nodes (which a Text/Comment cannot have).
   if (node->node_type() == dom::NodeType::kText) {
     static_cast<dom::Text*>(node)->SetData(text);
-    impl->MarkDomDirty();
+    impl->MarkDomDirty(node);
     return JS_UNDEFINED;
   }
   if (node->node_type() == dom::NodeType::kComment) {
     static_cast<dom::Comment*>(node)->SetData(text);
-    impl->MarkDomDirty();
+    impl->MarkDomDirty(node);
     return JS_UNDEFINED;
   }
   while (node->first_child() != nullptr) {
@@ -499,7 +516,7 @@ JSValue NodeSetTextContent(JSContext* ctx, JSValueConst this_val, JSValueConst v
   if (!text.empty()) {
     node->AppendChild(std::make_unique<dom::Text>(text));
   }
-  impl->MarkDomDirty();
+  impl->MarkDomDirty(node);
   return JS_UNDEFINED;
 }
 
@@ -532,6 +549,7 @@ JSValue NodeSetNodeValue(JSContext* ctx, JSValueConst this_val, JSValueConst val
   } else if (node->node_type() == dom::NodeType::kComment) {
     static_cast<dom::Comment*>(node)->SetData(text);
   }
+  ImplFor(ctx, this_val)->MarkDomDirty(node);
   return JS_UNDEFINED;
 }
 
@@ -567,6 +585,7 @@ JSValue CharacterDataSetData(JSContext* ctx, JSValueConst this_val, JSValueConst
   } else if (node->node_type() == dom::NodeType::kComment) {
     static_cast<dom::Comment*>(node)->SetData(text);
   }
+  ImplFor(ctx, this_val)->MarkDomDirty(node);
   return JS_UNDEFINED;
 }
 
@@ -778,7 +797,7 @@ JSValue NodeReplaceChild(JSContext* ctx, JSValueConst this_val, int argc, JSValu
   std::unique_ptr<dom::Node> removed_old = parent->RemoveChild(old_child);
   impl->TakeOwnership(old_child, std::move(removed_old));
   impl->RecordChildListMutation(parent, added, {old_child});
-  impl->MarkDomDirty();
+  impl->MarkDomDirty(parent);
   return impl->WrapNode(new_child);
 }
 

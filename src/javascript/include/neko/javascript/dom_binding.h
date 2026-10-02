@@ -427,6 +427,12 @@ public:
   // to re-run the style cascade/layout so event-handler DOM changes appear.
   bool TakeDomDirty();
 
+  // Like TakeDomDirty, but only for mutations that can change the cascade
+  // (classes, style, structural edits, non-media attributes).  Media-loading
+  // attributes (img.src and friends) report through TakeDomDirty only: they
+  // need the late-fetch pass, not a full restyle.
+  bool TakeStyleDirty();
+
   // Dispatches a synthetic document-level event (e.g. "DOMContentLoaded",
   // "load") to listeners registered on the document — which is where
   // window-level listeners are stored.  RunPageScripts calls this after the

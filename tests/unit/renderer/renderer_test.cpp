@@ -681,6 +681,44 @@ TEST(PageTest, FloatedImagePaintsItsPixels)
   EXPECT_TRUE(FrameHasPixels(frame, 0, 0, 220));
 }
 
+// Late image attaches (lazy loading) for size-stable elements must not
+// rebuild the layout tree: real pages load hundreds of covers that way and a
+// full relayout per image (measured ~600 ms on bilibili) froze scrolling.
+// The painter picks the attached pixels up in place.
+TEST(PageTest, LateImageAttachKeepsLayoutWhenSizeIsDefinite)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body style=\"margin:0\">"
+                            "<img id=\"a\" style=\"display:block;width:40px;height:20px\">"
+                            "</body>")
+                  .has_value());
+  dom::Element* a = dom::QuerySelector(*page.document(), "#a");
+  ASSERT_NE(a, nullptr);
+  page.Layout(200, 100);
+  ASSERT_TRUE(page.HasLayout());
+  page.SetElementImages({a}, SolidImage(4, 2, 0, 200, 0));
+  EXPECT_TRUE(page.HasLayout()) << "a size-stable attach must not invalidate layout";
+  const paint::Rasterizer frame = page.Rasterize(200, 100);
+  EXPECT_TRUE(FrameHasPixels(frame, 0, 200, 0));
+}
+
+// Without a definite size the replaced box follows the intrinsic dimensions:
+// that attach must invalidate the layout tree.
+TEST(PageTest, LateImageAttachRelayoutsIntrinsicSizedBoxes)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body style=\"margin:0\"><img id=\"a\"></body>").has_value());
+  dom::Element* a = dom::QuerySelector(*page.document(), "#a");
+  ASSERT_NE(a, nullptr);
+  page.Layout(200, 100);
+  ASSERT_TRUE(page.HasLayout());
+  page.SetElementImage(*a, SolidImage(6, 3, 200, 0, 0));
+  EXPECT_FALSE(page.HasLayout()) << "an intrinsic-sized attach must invalidate layout";
+  page.Layout(200, 100);
+  const paint::Rasterizer frame = page.Rasterize(200, 100);
+  EXPECT_TRUE(FrameHasPixels(frame, 200, 0, 0));
+}
+
 TEST(PageTest, CanvasFillRectRendersBackingStore)
 {
   Page page;

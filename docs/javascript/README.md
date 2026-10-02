@@ -250,7 +250,14 @@ www.bilibili.com 首页（Vue 3 SSR + hydration + 大量异步 chunk）作为真
 事件到页）。**2026-10 第二批修复**：IO 的几何查询不再要求目标已有解码
 图像（抓取**前**就要判定相交，此前行内 img 直接漏报）、`img.src` setter
 置脏（IO 回调在定时器之外赋值）、抓取完成置脏（图片到达后帧泵重建——
-滚动集成测试现断言**帧像素**包含抓取结果而不仅 DOM 状态）。**剩余**：
+滚动集成测试现断言**帧像素**包含抓取结果而不仅 DOM 状态）。**2026-10 性能批次**：脏标记分层为 `dom_dirty`（DOM 变更，驱动晚到抓取）与
+`style_dirty`（级联输入变更，驱动全量重算）；媒体加载属性（`src`/`srcset`/
+`sizes`/`loading`/`decoding`）只置前者，其余（类/样式/结构/普通属性）两者
+都置。为此补齐了此前漏置脏的绑定：classList、dataset、逐属性
+`style.width` 类 setter、节点插入/删除、文本 data、表单/链接反射 setter。
+`RefreshLiveCollections` 改为按变更节点范围刷新（集合根不在变更节点祖先
+链上则跳过；插入/移动节点会补刷新旧父节点与 fragment 源根）：2000 次
+变更实测 3137ms→686ms。**剩余**：
 bilibili 播放页画面需 MSE（NOT IMPLEMENTED，见兼容性矩阵“视频解码”行）；
 无滚动截图中仅绘制视口内卡片封面（与浏览器不滚动时一致）。
 

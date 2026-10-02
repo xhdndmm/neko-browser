@@ -2464,6 +2464,54 @@ TEST(BrowserControllerTest, ScrollingTriggersObserverDrivenImageFetch)
   EXPECT_GE(fetch.RequestCount(), 2u); // document + late.png
 }
 
+// Timer batches only re-run the cascade when the DOM actually changed in a
+// style-affecting way.  A pure rAF/poll tick used to trigger a full restyle +
+// relayout on every 50 ms pump (measured >600 ms per pass on bilibili), and a
+// batch assigning img.src must feed the late-fetch pass without a restyle.
+TEST(BrowserControllerTest, TimerBatchesOnlyRestyleWhenTheCascadeChanged)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body style=\"margin:0\">"
+                               "<div id=\"box\" style=\"width:10px;height:10px\"></div>"
+                               "<script>var _unused = 1;</script>"
+                               "</body></html>"});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  ASSERT_NE(tab->page, nullptr);
+  controller.PumpScriptTimers();
+  dom::Element* box = dom::QuerySelector(*tab->page->document(), "#box");
+  ASSERT_NE(box, nullptr);
+  const std::uint64_t before = tab->page->layout_version();
+
+  // A pure-JS timer tick: nothing changed, so no restyle/relayout may run.
+  ASSERT_TRUE(
+      tab->script_runtime->Evaluate("setTimeout(function(){ window._tick = 1; }, 0)").has_value());
+  controller.PumpScriptTimers();
+  EXPECT_EQ(tab->page->layout_version(), before);
+
+  // A timer that changes styles must restyle and relayout.  This exercises
+  // the per-property setter path (style.width), which used to not even mark
+  // the DOM dirty.
+  ASSERT_TRUE(tab->script_runtime
+                  ->Evaluate("setTimeout(function(){"
+                             "document.getElementById('box').style.width = '50px';"
+                             "}, 0)")
+                  .has_value());
+  controller.PumpScriptTimers();
+  EXPECT_NE(tab->page->layout_version(), before);
+  const auto geometry = tab->page->ElementBoxGeometry(*box);
+  ASSERT_TRUE(geometry.has_value());
+  EXPECT_NEAR(geometry->width, 50.0F, 1.0F);
+}
+
 // <script type="application/json"> is a data block (HTML §4.12.1): never
 // executed as code, and it does not stop the executable scripts around it.
 TEST(BrowserControllerTest, NonJsScriptTypesAreNotExecuted)
