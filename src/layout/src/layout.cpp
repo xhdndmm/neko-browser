@@ -15,6 +15,17 @@
 #include <vector>
 
 namespace neko::layout {
+
+// Replaced elements whose box comes from CSS size / presentational attributes /
+// intrinsic size rather than from in-flow content.  <svg> belongs here: an
+// inline SVG (e.g. a 18x18 icon with width/height attributes) is a replaced
+// element per the HTML standard; sizing it as an empty inline box measured it
+// as zero and collapsed icon slots in flex/intrinsic contexts.
+static bool IsReplacedElement(std::string_view tag)
+{
+  return tag == "img" || tag == "video" || tag == "canvas" || tag == "svg";
+}
+
 namespace {
 
 // Empty float list for block formatting contexts that do not inherit floats
@@ -782,20 +793,26 @@ struct IntrinsicWidths
 };
 
 // An element's left+right padding and border (added to intrinsic content).
+// Defined after MeasureContent; used here for the width attribute fallback.
+std::optional<std::int64_t> ParseNonNegativeInt(const dom::Element& element, std::string_view name);
+
 // Measures the min/max intrinsic content width of |element|, recursing through
 // the inline + block content model.  Replaced elements (img/input/...) use
-// their explicit width (zero when auto).  Percentages, floats and positioning
-// are out of scope for this measurement.  Text is measured through |registry|
-// (real advances with per-character fallback) when provided, else with the
-// monospace fallback.
+// their explicit CSS width, else the width presentational attribute, and zero
+// when neither applies (height-only replaced boxes keep their zero-width
+// contribution; they do not arise in the supported content).  Percentages,
+// floats and positioning are out of scope for this measurement.  Text is
+// measured through |registry| (real advances with per-character fallback)
+// when provided, else with the monospace fallback.
 IntrinsicWidths MeasureContent(const dom::Element& element,
                                const style::StyleEngine& styles,
                                const graphics::FontRegistry* registry)
 {
   const style::ComputedStyle& style = styles.StyleFor(element);
   const bool replaced = element.tag_name() == "img" || element.tag_name() == "video" ||
-                        element.tag_name() == "canvas" || element.tag_name() == "input" ||
-                        element.tag_name() == "textarea" || element.tag_name() == "select";
+                        element.tag_name() == "canvas" || element.tag_name() == "svg" ||
+                        element.tag_name() == "input" || element.tag_name() == "textarea" ||
+                        element.tag_name() == "select";
   if (replaced) {
     IntrinsicWidths w;
     // Only a definite plain length (not a percentage / calc / extremum) is a
@@ -810,6 +827,19 @@ IntrinsicWidths MeasureContent(const dom::Element& element,
         w.min = w.max = std::max(0.0f, specified - bp);
       } else {
         w.min = w.max = specified;
+      }
+    } else if (!style.width.has_value()) {
+      if (const std::optional<std::int64_t> attr_w = ParseNonNegativeInt(element, "width");
+          attr_w.has_value()) {
+        // Presentational hint: a width attribute sizes the replaced box when
+        // no CSS width applies at all (HTML rendering / SVG sizing).  An
+        // author width -- even a percentage, which this measurement does not
+        // resolve -- overrides the hint, so the attribute is ignored then.
+        // Inline SVG icons carrying only width/height attributes measured 0
+        // here, so a flex container sizing to its content dropped the icon's
+        // whole slot and the text item collapsed/wrapped (bilibili's top
+        // nav).
+        w.min = w.max = static_cast<float>(attr_w.value());
       }
     }
     return w;
@@ -913,6 +943,15 @@ IntrinsicWidths MeasureContent(const dom::Element& element,
     const dom::Element& child_el = static_cast<const dom::Element&>(*child);
     const style::ComputedStyle& child_style = styles.StyleFor(child_el);
     if (child_style.display == style::Display::kNone) {
+      continue;
+    }
+    if (child_style.position == style::Position::kAbsolute ||
+        child_style.position == style::Position::kFixed) {
+      // Out-of-flow content does not contribute to intrinsic sizes (CSS
+      // Sizing 1 §5).  Without this an absolutely positioned subtree (e.g.
+      // the carousel body over the shim skeleton) pushed its replaced
+      // descendants' attribute sizes into the min/max-content of a grid
+      // item, blowing up the `1fr` track minimums.
       continue;
     }
     if (child_el.tag_name() == "br") {
@@ -1132,11 +1171,13 @@ void ComputeReplacedSize(const style::ComputedStyle& style,
                          float& out_w,
                          float& out_h)
 {
-  // Intrinsic size: the decoded frame when available; <video> without a
-  // frame falls back to the HTML-spec default 300x150 box.
+  // Intrinsic size: the decoded frame when available; <video>/<canvas>/<svg>
+  // without one fall back to the CSS default replaced size 300x150 (an svg's
+  // width/height attributes are handled below as presentational hints).
   float intrinsic_w = img != nullptr ? static_cast<float>(img->width) : 0.0f;
   float intrinsic_h = img != nullptr ? static_cast<float>(img->height) : 0.0f;
-  if (img == nullptr && (element.tag_name() == "video" || element.tag_name() == "canvas")) {
+  if (img == nullptr && (element.tag_name() == "video" || element.tag_name() == "canvas" ||
+                         element.tag_name() == "svg")) {
     intrinsic_w = 300;
     intrinsic_h = 150;
   }
@@ -1795,8 +1836,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       box->style = styles.StyleFor(element);
       ResolveBoxEdges(*box, containing_width);
 
-      const bool replaced_media = element.tag_name() == "img" || element.tag_name() == "video" ||
-                                  element.tag_name() == "canvas";
+      const bool replaced_media = IsReplacedElement(element.tag_name());
       const image::Image* replaced_image = nullptr;
       float replaced_w = 0;
       float replaced_h = 0;
@@ -1969,13 +2009,13 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         items.push_back(InlineItem{{}, &child_style, &child_element, /*line_break=*/true});
         return;
       }
-      if (child_element.tag_name() == "img" || child_element.tag_name() == "video" ||
-          child_element.tag_name() == "canvas") {
+      if (IsReplacedElement(child_element.tag_name())) {
         const image::Image* img = images != nullptr ? images->Find(child_element) : nullptr;
         float w = 0;
         float h = 0;
         ComputeReplacedSize(child_style, child_element, img, containing_width, w, h);
-        // A replaced image/media/canvas element's baseline is its bottom edge.
+        // A replaced image/media/canvas/svg element's baseline is its bottom
+        // edge.
         items.push_back(InlineItem{{},
                                    &child_style,
                                    &child_element,
@@ -2454,8 +2494,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       // for the painter; without this a block-level <img> laid out as an empty
       // box of the right size and never painted its pixels (gray covers on real
       // sites).
-      const bool replaced_media = element.tag_name() == "img" || element.tag_name() == "video" ||
-                                  element.tag_name() == "canvas";
+      const bool replaced_media = IsReplacedElement(element.tag_name());
       const image::Image* replaced_image = nullptr;
       float replaced_w = 0;
       float replaced_h = 0;
@@ -2663,8 +2702,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       box->style = styles.StyleFor(element);
       ResolveBoxEdges(*box, containing_width);
 
-      const bool replaced_media = element.tag_name() == "img" || element.tag_name() == "video" ||
-                                  element.tag_name() == "canvas";
+      const bool replaced_media = IsReplacedElement(element.tag_name());
       const image::Image* replaced_image = nullptr;
       float replaced_w = 0;
       float replaced_h = 0;
@@ -3049,9 +3087,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         } else if (row ? s.width.has_value() : s.height.has_value()) {
           main_spec = row ? &s.width.value() : &s.height.value();
         }
-        const bool replaced_media = child_el.tag_name() == "img" ||
-                                    child_el.tag_name() == "video" ||
-                                    child_el.tag_name() == "canvas";
+        const bool replaced_media = IsReplacedElement(child_el.tag_name());
         if (main_spec != nullptr) {
           item.base_main =
               SpecToContent(*main_spec, avail_width, item.border_padding_main, s.box_sizing);
@@ -3081,6 +3117,23 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
           // the practical "image shrinks to the container" behaviour real
           // pages rely on.
           item.min_main = replaced_media ? 0.0f : MeasureContent(child_el, styles, registry).min;
+          // CSS Flexbox 1 §4.5: the content-based minimum size is the SMALLER
+          // of the content size suggestion and the specified size suggestion,
+          // so a definite main size caps the floor.  Without the cap a
+          // `width:100%` flex item whose subtree measures wide (a replaced
+          // image with width/height attributes behind percentage-sized
+          // wrappers) refused to shrink to its container and stretched the
+          // whole carousel (bilibili's recommended-swipe area).  The cap
+          // uses the width property only -- flex-basis is not a specified
+          // size suggestion -- and only in a row, where the container width
+          // makes percentages definite.
+          if (row && s.width.has_value()) {
+            const float spec_content =
+                SpecToContent(s.width.value(), avail_width, item.border_padding_main, s.box_sizing);
+            if (spec_content < item.min_main) {
+              item.min_main = spec_content;
+            }
+          }
           if (item.min_main_clamp > item.min_main) {
             item.min_main = item.min_main_clamp;
           }
@@ -4280,8 +4333,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       if (box->style.width.has_value()) {
         content_width =
             SpecToContent(box->style.width.value(), cb_w, border_padding_w, box->style.box_sizing);
-      } else if (element.tag_name() == "img" || element.tag_name() == "video" ||
-                 element.tag_name() == "canvas") {
+      } else if (IsReplacedElement(element.tag_name())) {
         // Replaced absolute boxes honor CSS size, else the presentational
         // width/height attributes, else the decoded intrinsic size.
         const image::Image* img = images != nullptr ? images->Find(element) : nullptr;
@@ -4309,8 +4361,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
           box->border_top + box->border_bottom + box->padding_top + box->padding_bottom;
       std::vector<AbsoluteChild> absolute_children;
       float content_height = 0;
-      if (element.tag_name() == "img" || element.tag_name() == "video" ||
-          element.tag_name() == "canvas") {
+      if (IsReplacedElement(element.tag_name())) {
         const image::Image* img = images != nullptr ? images->Find(element) : nullptr;
         float replaced_w = 0;
         float replaced_h = 0;

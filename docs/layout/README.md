@@ -11,10 +11,23 @@
   块级兄弟**交错**排布（CSS 2.1 §9.2.1.1）；修复了“全部行内内容先行、
   全部块级子元素随后”把块间文本/media 提升到容器顶部的问题（`<p>x</p>
   text<p>y</p>`、块间 `<video>` 等）；块间行盒正确抑制相邻兄弟外边距折叠
-- **替换元素绘制（块级/浮动/Flex 子项）**（2026-10）：`img`/`video`/`canvas`
+- **替换元素绘制（块级/浮动/Flex 子项）**（2026-10）：`img`/`video`/`canvas`/`svg`
   在 `BuildBlock`（含表格单元格 / grid 项）、`BuildFloat`、`BuildFlexItem`
   中按 CSS 尺寸 > width/height 属性 > 固有尺寸（单轴给定时保持比例）定尺寸，
   并把解码像素挂到盒上供绘制（此前只留尺寸盒，封面画成灰块）
+- **inline `<svg>` 按替换元素布局**（2026-10）：`<svg width=18 height=18>` 图标
+  （bilibili 顶栏、Codeberg Octicons）此前按空 inline 盒量到 0×0——行内收集、
+  flex 项、绝对定位、固有宽度测量（`MeasureContent`）全部走替换元素路径后，
+  图标占位正确、相邻文本不再收缩换行（回归 4 例）；**SVG 子树（path 等）不参与
+  布局也不栅格化**（图标为空白占位；SVG 作为独立图片解码是另一条路径）
+- **固有宽度测量两处修正**（2026-10）：① 替换元素在**没有任何 CSS width** 时
+  可用 width 属性（presentational hint），有作者 width（即使用百分比）时忽略；
+  ② 绝对/固定定位子树不参与 min/max-content（CSS Sizing 1 §5）——缺失时
+  绝对定位的轮播图片会把 `1fr` 轨道最小值撑大到图片宽
+- **Flex 项自动最小值钳制**（Flexbox §4.5，2026-10）：行方向 flex 项
+  `min-width:auto` 的内容最小尺寸取 min(content, specified)——`width:100%`
+  对确定容器可解析时用它封顶，`min-width:auto` 的项不再以子树 min-content
+  为底拒绝收缩（bilibili 轮播 100% 链，回归见 `BilibiliCardRepro`）
 - **晚到附着不重复布局**（2026-10）：尺寸已确定的替换元素（CSS 宽高或
   width/height 属性双轴齐备）收到解码帧时只就地更新布局盒/行内盒的图像指针，
   不重建布局树（真实页面逐张懒加载封面时，每张一次全量重排把滚动拖死）；

@@ -101,6 +101,7 @@ gtest_discover_tests(neko_style_tests DISCOVERY_MODE PRE_TEST)
 add_executable(neko_layout_tests
   layout/layout_test.cpp
   layout/bilibili_repro_test.cpp
+  layout/replaced_svg_test.cpp
 )
 target_link_libraries(neko_layout_tests PRIVATE neko::layout neko::html gtest_main)
 apply_compiler_warnings(neko_layout_tests)
