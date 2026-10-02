@@ -524,7 +524,7 @@ int RunRendererChild()
     // definite basis, mirroring the CLI screenshot path.
     page.Layout(static_cast<float>(width), static_cast<float>(height));
     const float content_height =
-        page.layout_root() != nullptr ? page.layout_root()->height : static_cast<float>(height);
+        page.layout_root() != nullptr ? page.ContentHeight() : static_cast<float>(height);
     const int full_height = std::max(height, static_cast<int>(content_height) + 40);
     // Rasterize in parallel bands: the child is CPU-bound on paint once the
     // page is loaded, and a full-height buffer gives the band split plenty of
@@ -935,7 +935,7 @@ int main(int argc, char** argv)
       // matching a browser window rather than an unbounded "whole page" canvas.
       page.Layout(kViewportWidth, kMinHeight);
       const float content_height =
-          page.layout_root() != nullptr ? page.layout_root()->height : kMinHeight;
+          page.layout_root() != nullptr ? page.ContentHeight() : kMinHeight;
       const int height = std::max(kMinHeight, static_cast<int>(content_height) + 40);
       // Rasterize band by band instead of allocating one full-page RGBA
       // buffer: a page hundreds of thousands of pixels tall (real pages can

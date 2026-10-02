@@ -834,6 +834,38 @@ std::string SvgColorHex(const style::StyleEngine& styles, const dom::Element& el
   return std::string(buffer);
 }
 
+// Highest bottom edge of a laid-out subtree (the scrollable overflow region,
+// CSS Overflow 3, simplified).  A page whose body fixes `height:100%` still
+// scrolls to its overflowing content in real browsers, so the document height
+// must look past the root box's own height (Gitea pages were clipped at the
+// viewport).  Inline-block inner boxes carry local coordinates; |base_x| /
+// |base_y| place them.
+void AccumulateContentBottom(const layout::LayoutBox& box,
+                             float base_x,
+                             float base_y,
+                             float& bottom)
+{
+  bottom = std::max(bottom, base_y + box.y + box.height);
+  for (const layout::Line& line : box.lines) {
+    for (const layout::InlineBox& inline_box : line.boxes) {
+      bottom = std::max(bottom, base_y + inline_box.y + inline_box.height);
+      if (inline_box.block_box != nullptr) {
+        AccumulateContentBottom(
+            *inline_box.block_box, base_x + inline_box.x, base_y + inline_box.y, bottom);
+      }
+    }
+  }
+  for (const auto& child : box.children) {
+    AccumulateContentBottom(*child, base_x, base_y, bottom);
+  }
+  for (const auto& child : box.positioned_children) {
+    AccumulateContentBottom(*child, base_x, base_y, bottom);
+  }
+  for (const auto& f : box.floats) {
+    AccumulateContentBottom(*f, base_x, base_y, bottom);
+  }
+}
+
 } // namespace
 
 void Page::RasterizeInlineSvgImagesLocked()
@@ -1470,8 +1502,12 @@ float Page::ContentHeight() const
   if (root_ == nullptr) {
     return 0;
   }
-  // The root box spans the full laid-out content.
-  return root_->height * page_zoom_;
+  // The scrollable region is the tallest laid-out bottom edge, not just the
+  // root box: a fixed-height body (height:100%) clips its overflowing
+  // content in the box tree, but browsers still scroll to it.
+  float bottom = root_->height;
+  AccumulateContentBottom(*root_, /*base_x=*/0, /*base_y=*/0, bottom);
+  return bottom * page_zoom_;
 }
 
 const dom::Element* Page::ElementAt(float x, float y) const

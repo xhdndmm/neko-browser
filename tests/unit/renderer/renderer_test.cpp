@@ -126,6 +126,33 @@ TEST(PageTest, InlineSvgResolvesCurrentColor)
   EXPECT_EQ(image.pixels()[offset + 2], 0);
 }
 
+TEST(PageTest, ContentHeightIncludesOverflowingDescendants)
+{
+  // Gitea's `body{height:100%}` clamps the body box to the viewport, but the
+  // document still scrolls to its content; the scroll extent (and full-page
+  // screenshots) must look past the root box.
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<html style=\"height:100px\">"
+                            "<body style=\"margin:0;height:100%\">"
+                            "<div style=\"height:300px\"></div></body></html>")
+                  .has_value());
+  page.Layout(100, 100);
+  ASSERT_NE(page.layout_root(), nullptr);
+  EXPECT_LE(page.layout_root()->height, 120.0f) << "the root box itself stays pinned";
+  EXPECT_GE(page.ContentHeight(), 300.0f) << "overflowing content still defines the scroll extent";
+}
+
+TEST(PageTest, ContentHeightFollowsTheRootOnNormalPages)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body style=\"margin:0\">"
+                            "<div style=\"height:50px\"></div></body>")
+                  .has_value());
+  page.Layout(100, 100);
+  ASSERT_NE(page.layout_root(), nullptr);
+  EXPECT_FLOAT_EQ(page.ContentHeight(), page.layout_root()->height);
+}
+
 TEST(PageTest, FocusedCaretGeometryIsThreadSafeAndInputOnly)
 {
   Page page;
