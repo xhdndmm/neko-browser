@@ -780,20 +780,27 @@ void DefinePlatformGlobals(JSContext* ctx)
   JSRuntime* rt = JS_GetRuntime(ctx);
   {
     std::lock_guard<std::mutex> lock(g_platform_class_mutex);
-    if (g_text_classes_registered.count(rt) == 0) {
+    // A reused JSRuntime address must not skip registration (see
+    // xhr_binding.cpp); JS_IsRegisteredClass is the authoritative check.
+    if (g_text_encoder_class_id == 0) {
       JS_NewClassID(rt, &g_text_encoder_class_id);
+    }
+    if (!JS_IsRegisteredClass(rt, g_text_encoder_class_id)) {
       JSClassDef encoder_def = {};
       encoder_def.class_name = "TextEncoder";
       encoder_def.finalizer = TextEncoderFinalizer;
       JS_NewClass(rt, g_text_encoder_class_id, &encoder_def);
-
+    }
+    if (g_text_decoder_class_id == 0) {
       JS_NewClassID(rt, &g_text_decoder_class_id);
+    }
+    if (!JS_IsRegisteredClass(rt, g_text_decoder_class_id)) {
       JSClassDef decoder_def = {};
       decoder_def.class_name = "TextDecoder";
       decoder_def.finalizer = TextDecoderFinalizer;
       JS_NewClass(rt, g_text_decoder_class_id, &decoder_def);
-      g_text_classes_registered.insert(rt);
     }
+    g_text_classes_registered.insert(rt);
   }
 
   JSValue global = JS_GetGlobalObject(ctx);

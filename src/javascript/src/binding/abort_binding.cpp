@@ -69,7 +69,9 @@ void EnsureAbortSignalClassRegistered(JSRuntime* rt)
 {
   std::lock_guard<std::mutex> lock(g_abort_signal_class_mutex);
   JS_NewClassID(rt, &g_abort_signal_class_id);
-  if (g_abort_signal_class_registered.contains(rt)) {
+  // A reused JSRuntime address must not skip registration (see
+  // xhr_binding.cpp); JS_IsRegisteredClass is the authoritative check.
+  if (JS_IsRegisteredClass(rt, g_abort_signal_class_id)) {
     return;
   }
   JSClassDef def;

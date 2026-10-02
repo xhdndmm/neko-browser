@@ -569,6 +569,14 @@ public:
   // Returns the number of pump iterations performed.
   int PumpScriptTimersUntilQuiet(int max_iterations = 1000);
 
+  // Re-reads the active document's <title> into the cached Tab title.  The
+  // navigation commit captured the title once; scripts keep changing
+  // document.title afterwards (async XHR handlers, timers), and the tab strip
+  // / history must follow like in a real browser.  Worker thread only; the
+  // caller holds the page DOM lock, this takes the controller mutex for the
+  // cached field.
+  void RefreshTabTitle(Tab& tab);
+
   // Worker-thread scroll bridging.  |SetTabScrollOffset| records the page's
   // current vertical scroll offset (the GUI reports it from its scroll bar);
   // |SetTabScrollRequest| records a script-requested scroll (window.scrollTo /

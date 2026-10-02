@@ -150,7 +150,9 @@ void EnsureIntersectionObserverClassRegistered(JSRuntime* rt)
 {
   std::lock_guard<std::mutex> lock(g_intersection_observer_class_mutex);
   JS_NewClassID(rt, &g_intersection_observer_class_id);
-  if (g_intersection_observer_class_registered.contains(rt)) {
+  // A reused JSRuntime address must not skip registration (see
+  // xhr_binding.cpp); JS_IsRegisteredClass is the authoritative check.
+  if (JS_IsRegisteredClass(rt, g_intersection_observer_class_id)) {
     return;
   }
   JSClassDef def;

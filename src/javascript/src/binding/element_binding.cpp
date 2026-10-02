@@ -1733,7 +1733,9 @@ void EnsureDatasetClassRegistered(JSRuntime* rt)
 {
   std::lock_guard<std::mutex> lock(g_dataset_class_mutex);
   JS_NewClassID(rt, &g_dataset_class_id);
-  if (g_dataset_class_registered.find(rt) == g_dataset_class_registered.end()) {
+  // A reused JSRuntime address must not skip registration (see
+  // xhr_binding.cpp); JS_IsRegisteredClass is the authoritative check.
+  if (!JS_IsRegisteredClass(rt, g_dataset_class_id)) {
     g_dataset_exotic.get_property = &DatasetGetProperty;
     g_dataset_exotic.set_property = &DatasetSetProperty;
     g_dataset_exotic.get_own_property_names = &DatasetGetOwnPropertyNames;

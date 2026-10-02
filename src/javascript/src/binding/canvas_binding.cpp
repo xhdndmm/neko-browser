@@ -135,7 +135,9 @@ void EnsureCanvasClassRegistered(JSRuntime* runtime)
   if (g_canvas_class_id == 0) {
     JS_NewClassID(runtime, &g_canvas_class_id);
   }
-  if (!g_canvas_class_registered.insert(runtime).second) {
+  // A reused JSRuntime address must not skip registration (see
+  // xhr_binding.cpp); JS_IsRegisteredClass is the authoritative check.
+  if (JS_IsRegisteredClass(runtime, g_canvas_class_id)) {
     return;
   }
   JSClassDef definition{};

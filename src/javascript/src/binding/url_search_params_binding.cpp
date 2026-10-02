@@ -280,7 +280,9 @@ void EnsureUrlSearchParamsClassRegistered(JSRuntime* rt)
 {
   std::lock_guard<std::mutex> lock(g_url_search_params_class_mutex);
   JS_NewClassID(rt, &g_url_search_params_class_id);
-  if (g_url_search_params_class_registered.insert(rt).second) {
+  // A reused JSRuntime address must not skip registration (see
+  // xhr_binding.cpp); JS_IsRegisteredClass is the authoritative check.
+  if (!JS_IsRegisteredClass(rt, g_url_search_params_class_id)) {
     JSClassDef definition{};
     definition.class_name = "URLSearchParams";
     definition.finalizer = &UrlSearchParamsFinalizer;

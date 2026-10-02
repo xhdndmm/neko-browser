@@ -1599,6 +1599,21 @@ void BrowserController::ProduceFrame(Tab& tab)
   tab.frame_dirty = false;
 }
 
+void BrowserController::RefreshTabTitle(Tab& tab)
+{
+  if (tab.page == nullptr) {
+    return;
+  }
+  const std::string title = tab.page->document()->Title();
+  if (title.empty()) {
+    return; // keep the URL fallback set at commit time
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (tab.title != title) {
+    tab.title = title;
+  }
+}
+
 int BrowserController::PumpScriptTimersUntilQuiet(int max_iterations)
 {
   Tab* tab = ActiveTab();
@@ -1634,6 +1649,9 @@ int BrowserController::PumpScriptTimersUntilQuiet(int max_iterations)
   const int iterations =
       ::neko::browser::PumpScriptTimersUntilQuiet(*tab->script_runtime, max_iterations);
   if (iterations > 0 && tab->page != nullptr) {
+    // The pump ran scripts: document.title may have changed (this is how the
+    // headless dump-dom path sees a title set by a deferred callback).
+    RefreshTabTitle(*tab);
     // Timers may have mutated the DOM; re-run the cascade so the next
     // Layout/Rasterize reflects the new state, and pick up image sources the
     // callbacks assigned (lazy loading after the initial pass).  Batches that
@@ -1721,6 +1739,9 @@ void BrowserController::PumpScriptTimers()
   }
   if (tab->script_runtime != nullptr && tab->page != nullptr) {
     if (tab->script_runtime->RunPendingTimers() > 0) {
+      // The pump ran scripts: document.title follows them (async XHR
+      // handlers, timers), like the tab strip in a real browser.
+      RefreshTabTitle(*tab);
       // Timers may have mutated the DOM; re-run the cascade so the next
       // Layout/Rasterize reflects the new state, and fetch the image sources
       // assigned by lazy-loading callbacks (a claimed pass: steady state is one

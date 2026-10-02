@@ -159,7 +159,9 @@ void InstallFormDataGlobal(JSContext* ctx, JSValue global)
   {
     std::lock_guard<std::mutex> lock(g_form_data_class_mutex);
     JS_NewClassID(runtime, &g_form_data_class_id);
-    if (g_form_data_class_registered.insert(runtime).second) {
+    // A reused JSRuntime address must not skip registration (see
+    // xhr_binding.cpp); JS_IsRegisteredClass is the authoritative check.
+    if (!JS_IsRegisteredClass(runtime, g_form_data_class_id)) {
       JSClassDef definition{};
       definition.class_name = "FormData";
       definition.finalizer = &FormDataFinalizer;

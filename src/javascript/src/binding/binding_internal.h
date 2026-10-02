@@ -620,6 +620,17 @@ struct XhrWrapper
   JSValue on_abort = JS_UNDEFINED;
   // addEventListener("load"|"error"|"readystatechange"|"abort", fn) entries.
   std::vector<std::pair<std::string, JSValue>> listeners;
+  // Deferred (async) completion: send() already fetched the response into the
+  // pending_* payload, but the DONE transition and the readystatechange/
+  // load|error events wait for the next Impl::RunPendingTimers pump so
+  // handlers assigned after send() observe them (browser task semantics).
+  bool pending_delivery = false;
+  bool pending_network_error = false;
+  int pending_status = 0;
+  std::string pending_status_text;
+  std::string pending_response_text;
+  std::string pending_response_url;
+  std::vector<std::pair<std::string, std::string>> pending_response_headers;
 };
 
 void EnsureXhrClassRegistered(JSRuntime* rt);
@@ -633,6 +644,12 @@ void InstallXhrGlobal(JSContext* ctx, Impl& impl);
 // before the binder is torn down.
 void InstallWebSocketGlobal(JSContext* ctx, Impl& impl);
 int PumpWebSocketEvents(Impl& impl);
+
+// xhr_binding.cpp — delivers queued async XMLHttpRequest completions
+// (readystatechange + load|error) on the runtime's thread; called from
+// Impl::RunPendingTimers.  Returns the number of deliveries, so the
+// timer-until-quiet loops keep pumping while a completion was consumed.
+int PumpXhrCompletions(Impl& impl);
 void ShutdownWebSockets(Impl& impl);
 
 // canvas_binding.cpp — minimal HTML Canvas 2D context.
@@ -774,6 +791,19 @@ struct Impl
   std::vector<RafEntry> raf_queue;
   std::vector<RafEntry> raf_pending;
   int64_t next_raf_id = 1;
+
+  // Async XMLHttpRequest completions queued by send() (the transport itself
+  // is synchronous; delivery is a later task).  RunPendingTimers drains the
+  // queue -- PumpXhrCompletions -- so every pump site gets the DONE
+  // transition without extra wiring.  |self| is a Dup'd reference keeping
+  // the XHR object alive until its events fire.
+  struct PendingXhrCompletion
+  {
+    XhrWrapper* wrapper = nullptr;
+    JSValue self = JS_UNDEFINED;
+    bool network_error = false;
+  };
+  std::vector<PendingXhrCompletion> pending_xhr_completions;
 
   // window.matchMedia listeners: one entry per registered callback, scoped to
   // the MediaQueryList it was registered on.  Re-evaluated and fired on

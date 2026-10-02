@@ -1699,6 +1699,10 @@ TEST(BrowserControllerTest, XhrFetchesAndDeliversResponse)
   controller.NewTab();
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
 
+  // send() queues the DONE task; the frame pump delivers it (the UI does this
+  // on its script timer, like any real browser event loop).
+  controller.PumpScriptTimers();
+
   EXPECT_EQ(fetch.RequestCount(), 2u); // page + XHR request
   EXPECT_EQ(controller.ActiveTab()->title, "payload-42");
 }
@@ -1729,6 +1733,7 @@ TEST(BrowserControllerTest, XhrHttpErrorStatusSurfaced)
   BrowserController controller(tp.path(), std::ref(fetch));
   controller.NewTab();
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  controller.PumpScriptTimers(); // deliver the queued DONE task
 
   EXPECT_EQ(controller.ActiveTab()->title, "load-status-404");
 }
@@ -1758,6 +1763,7 @@ TEST(BrowserControllerTest, XhrTransportErrorFiresOnError)
   BrowserController controller(tp.path(), std::ref(fetch));
   controller.NewTab();
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  controller.PumpScriptTimers(); // deliver the queued DONE task
 
   EXPECT_EQ(controller.ActiveTab()->title, "error-state-4-status-0");
 }

@@ -866,7 +866,9 @@ void EnsureEventClassRegistered(JSRuntime* rt)
 {
   std::lock_guard<std::mutex> lock(g_event_class_mutex);
   JS_NewClassID(rt, &g_event_class_id);
-  if (g_event_class_registered.find(rt) == g_event_class_registered.end()) {
+  // A reused JSRuntime address must not skip registration (see
+  // xhr_binding.cpp); JS_IsRegisteredClass is the authoritative check.
+  if (!JS_IsRegisteredClass(rt, g_event_class_id)) {
     JSClassDef def;
     std::memset(&def, 0, sizeof(def));
     def.class_name = "Event";

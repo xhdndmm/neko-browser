@@ -48,7 +48,9 @@ void EnsureClassRegistered(JSRuntime* rt)
   std::lock_guard<std::mutex> lock(g_message_port_class_mutex);
   if (g_message_port_class_id == 0)
     JS_NewClassID(rt, &g_message_port_class_id);
-  if (g_message_port_class_registered.contains(rt))
+  // A reused JSRuntime address must not skip registration (see
+  // xhr_binding.cpp); JS_IsRegisteredClass is the authoritative check.
+  if (JS_IsRegisteredClass(rt, g_message_port_class_id))
     return;
   JSClassDef class_definition{};
   class_definition.class_name = "MessagePort";

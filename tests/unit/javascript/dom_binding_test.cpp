@@ -3567,13 +3567,20 @@ TEST(DomBinderXhrTest, XhrLifecycleAndEvents)
       }
     };
     xhr.onload = function() { globalThis.log += ':loaded-' + xhr.statusText; };
-    let listener_fired = false;
-    xhr.addEventListener('load', function() { listener_fired = true; });
+    xhr.addEventListener('load', function() { globalThis.listener_fired = true; });
     xhr.send();
-    globalThis.listener_fired = listener_fired;
+    // Async mode (the default): nothing is delivered yet; the DONE
+    // transition and the events wait for the next pump.
+    globalThis.immediate = xhr.readyState + ':' + xhr.status + ':' + globalThis.log;
   )";
   const auto run = binder.Evaluate(script);
   ASSERT_TRUE(run.has_value()) << "eval error: " << (run.has_value() ? "" : run.error().message());
+  auto immediate = binder.Evaluate("globalThis.immediate");
+  ASSERT_TRUE(immediate.has_value());
+  ASSERT_TRUE(immediate.value().ToString().has_value());
+  EXPECT_EQ(immediate.value().ToString().value(), "1:0:")
+      << "send() must not deliver synchronously in async mode";
+  (void)binder.RunPendingTimers();
   auto log = binder.Evaluate("globalThis.log");
   ASSERT_TRUE(log.has_value());
   auto text = log.value().ToString();
@@ -3602,16 +3609,110 @@ TEST(DomBinderXhrTest, XhrNetworkErrorFiresOnError)
     xhr.onerror = function() { globalThis.out += 'error'; };
     xhr.onload = function() { globalThis.out += 'load'; };
     xhr.send();
-    globalThis.out += '-state' + xhr.readyState + '-status' + xhr.status;
+    globalThis.immediate = 'state' + xhr.readyState + '-status' + xhr.status;
+    globalThis.xhr_ref = xhr;
   )";
   const auto run2 = binder.Evaluate(script);
   ASSERT_TRUE(run2.has_value()) << "eval error: "
                                 << (run2.has_value() ? "" : run2.error().message());
+  auto immediate = binder.Evaluate("globalThis.immediate");
+  ASSERT_TRUE(immediate.has_value());
+  ASSERT_TRUE(immediate.value().ToString().has_value());
+  EXPECT_EQ(immediate.value().ToString().value(), "state1-status0")
+      << "async mode delivers after send(), not inside it";
+  (void)binder.RunPendingTimers();
   auto out = binder.Evaluate("globalThis.out");
   ASSERT_TRUE(out.has_value());
   auto text = out.value().ToString();
   ASSERT_TRUE(text.has_value());
-  EXPECT_EQ(text.value(), "error-state4-status0");
+  EXPECT_EQ(text.value(), "error");
+  auto done = binder.Evaluate("globalThis.xhr_ref.readyState + ':' + globalThis.xhr_ref.status");
+  ASSERT_TRUE(done.has_value());
+  ASSERT_TRUE(done.value().ToString().has_value());
+  EXPECT_EQ(done.value().ToString().value(), "4:0");
+}
+
+// The jd.com loader pattern: handlers assigned AFTER send() must observe the
+// DONE transition and the load event (browser task semantics).
+TEST(DomBinderXhrTest, XhrAsyncDeliversEventsToHandlersAttachedAfterSend)
+{
+  dom::Document doc;
+  PageApis apis;
+  apis.resolve_url = [](const std::string& raw) {
+    return raw.rfind("http://", 0) == 0 ? raw : "http://test.local/" + raw;
+  };
+  apis.xhr_request = [](const std::string& url,
+                        const std::string&,
+                        const std::vector<std::pair<std::string, std::string>>&,
+                        const std::string&) -> base::Result<FetchResponse> {
+    FetchResponse out;
+    out.status = 200;
+    out.status_text = "OK";
+    out.final_url = url;
+    out.body = "late-body";
+    return base::Ok(std::move(out));
+  };
+  DomBinder binder(doc, apis);
+  const char* script = R"(
+    globalThis.order = [];
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', 'api/late');
+    xhr.send();
+    globalThis.order.push('sent:' + xhr.readyState);
+    xhr.onreadystatechange = function() {
+      if (xhr.readyState === 4) { globalThis.order.push('rsc4'); }
+    };
+    xhr.onload = function() {
+      globalThis.order.push('load:' + xhr.status + ':' + xhr.responseText);
+    };
+  )";
+  const auto run = binder.Evaluate(script);
+  ASSERT_TRUE(run.has_value()) << "eval error: " << (run.has_value() ? "" : run.error().message());
+  auto before = binder.Evaluate("globalThis.order.join(',')");
+  ASSERT_TRUE(before.has_value());
+  ASSERT_TRUE(before.value().ToString().has_value());
+  EXPECT_EQ(before.value().ToString().value(), "sent:1") << "no events before the pump";
+  (void)binder.RunPendingTimers();
+  auto after = binder.Evaluate("globalThis.order.join(',')");
+  ASSERT_TRUE(after.has_value());
+  ASSERT_TRUE(after.value().ToString().has_value());
+  EXPECT_EQ(after.value().ToString().value(), "sent:1,rsc4,load:200:late-body");
+}
+
+// open(..., false) keeps the fully-synchronous behaviour: send() completes
+// the request and fires the events inside the call.
+TEST(DomBinderXhrTest, XhrSyncModeCompletesInsideSend)
+{
+  dom::Document doc;
+  PageApis apis;
+  apis.resolve_url = [](const std::string& raw) {
+    return raw.rfind("http://", 0) == 0 ? raw : "http://test.local/" + raw;
+  };
+  apis.xhr_request = [](const std::string&,
+                        const std::string&,
+                        const std::vector<std::pair<std::string, std::string>>&,
+                        const std::string&) -> base::Result<FetchResponse> {
+    FetchResponse out;
+    out.status = 200;
+    out.status_text = "OK";
+    out.body = "sync-body";
+    return base::Ok(std::move(out));
+  };
+  DomBinder binder(doc, apis);
+  const char* script = R"(
+    globalThis.log = '';
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', 'api/sync', false);
+    xhr.onload = function() { globalThis.log += 'loaded'; };
+    xhr.send();
+    globalThis.done = xhr.readyState + ':' + xhr.status + ':' + xhr.responseText + ':' + globalThis.log;
+  )";
+  const auto run = binder.Evaluate(script);
+  ASSERT_TRUE(run.has_value()) << "eval error: " << (run.has_value() ? "" : run.error().message());
+  auto done = binder.Evaluate("globalThis.done");
+  ASSERT_TRUE(done.has_value());
+  ASSERT_TRUE(done.value().ToString().has_value());
+  EXPECT_EQ(done.value().ToString().value(), "4:200:sync-body:loaded");
 }
 
 TEST(DomBinderXhrTest, XhrReflectsResponseType)

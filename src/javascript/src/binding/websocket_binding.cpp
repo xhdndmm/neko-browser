@@ -398,11 +398,13 @@ void WebSocketFinalizer(JSRuntime* /*rt*/, JSValue val)
 void EnsureWebSocketClassRegistered(JSRuntime* rt)
 {
   std::lock_guard lock(g_websocket_class_mutex);
-  if (g_websocket_class_registered.count(rt) != 0) {
-    return;
-  }
   if (g_websocket_class_id == 0) {
     JS_NewClassID(rt, &g_websocket_class_id);
+  }
+  // A reused JSRuntime address must not skip registration (see
+  // xhr_binding.cpp); JS_IsRegisteredClass is the authoritative check.
+  if (JS_IsRegisteredClass(rt, g_websocket_class_id)) {
+    return;
   }
   JSClassDef def{};
   def.class_name = "WebSocket";

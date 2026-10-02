@@ -53,7 +53,9 @@ void EnsureNodeClassRegistered(JSRuntime* rt)
 {
   std::lock_guard<std::mutex> lock(g_class_mutex);
   JS_NewClassID(rt, &g_node_class_id);
-  if (g_class_registered.find(rt) == g_class_registered.end()) {
+  // A reused JSRuntime address must not skip registration (see
+  // xhr_binding.cpp); JS_IsRegisteredClass is the authoritative check.
+  if (!JS_IsRegisteredClass(rt, g_node_class_id)) {
     JSClassDef def;
     std::memset(&def, 0, sizeof(def));
     def.class_name = "Node";
@@ -73,7 +75,9 @@ void EnsureAttrClassRegistered(JSRuntime* rt)
 {
   std::lock_guard<std::mutex> lock(g_attr_class_mutex);
   JS_NewClassID(rt, &g_attr_class_id);
-  if (g_attr_class_registered.find(rt) == g_attr_class_registered.end()) {
+  // A reused JSRuntime address must not skip registration (see
+  // xhr_binding.cpp); JS_IsRegisteredClass is the authoritative check.
+  if (!JS_IsRegisteredClass(rt, g_attr_class_id)) {
     JSClassDef def;
     std::memset(&def, 0, sizeof(def));
     def.class_name = "Attr";
@@ -1406,6 +1410,16 @@ Impl::~Impl()
   }
   raf_pending.clear();
 
+  // Undelivered async XMLHttpRequest completions hold a Dup'd reference to
+  // the XHR object; release it before the runtime tears down.
+  for (PendingXhrCompletion& entry : pending_xhr_completions) {
+    if (entry.wrapper != nullptr) {
+      entry.wrapper->pending_delivery = false;
+    }
+    JS_FreeValue(ctx, entry.self);
+  }
+  pending_xhr_completions.clear();
+
   for (MediaListener& listener : media_listeners) {
     JS_FreeValue(ctx, listener.list);
     JS_FreeValue(ctx, listener.callback);
@@ -2058,6 +2072,7 @@ int Impl::RunPendingTimers()
   }
   int ran = RunPendingMessagePortTasks(*this);
   ran += PumpWebSocketEvents(*this);
+  ran += PumpXhrCompletions(*this);
   for (Timer& timer : due) {
     JSValue result = JS_Call(ctx, timer.callback, JS_UNDEFINED, 0, nullptr);
     if (JS_IsException(result)) {

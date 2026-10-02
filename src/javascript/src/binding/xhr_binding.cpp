@@ -7,11 +7,14 @@
 // onabort plus addEventListener for the same event types.
 //
 // Documented approximations:
-//   * The transport is synchronous (the engine's page pipeline is
-//     synchronous), so the DONE transition fires inside send().  Handlers
-//     registered before send() observe the full lifecycle, which is the
-//     universal loader pattern; code that assigns handlers after send()
-//     misses events (browsers deliver them asynchronously).
+//   * The transport is synchronous: send() performs the fetch inline (a
+//     blocking call into the browser layer), but DELIVERY is asynchronous --
+//     async-mode completions (the default) queue their DONE transition and
+//     the readystatechange/load|error events for the next pump
+//     (Impl::RunPendingTimers -> PumpXhrCompletions), so handlers registered
+//     before or after send() both observe the full lifecycle, like in a
+//     browser.  open(..., false) keeps the fully-synchronous behaviour
+//     (complete inside send()).
 //   * Non-GET methods depend on the browser layer's transport wiring; the
 //     callback rejects what it cannot perform.
 //   * withCredentials/timeout are accepted but inert; cookies always follow
@@ -76,6 +79,25 @@ XhrWrapper* XhrOf(JSContext* /*ctx*/, JSValueConst this_val)
     return w;
   }
   return nullptr;
+}
+
+// Drops a queued async completion for |w| (open()/abort() while in flight):
+// the XHR object is being reset, so the stored DONE transition must not fire
+// later against the new state.
+void CancelPendingXhrDelivery(Impl& impl, XhrWrapper* w)
+{
+  if (!w->pending_delivery) {
+    return;
+  }
+  w->pending_delivery = false;
+  auto& queue = impl.pending_xhr_completions;
+  for (auto it = queue.begin(); it != queue.end(); ++it) {
+    if (it->wrapper == w) {
+      JS_FreeValue(impl.ctx, it->self);
+      queue.erase(it);
+      break;
+    }
+  }
 }
 
 // Fires |type| ("readystatechange"|"load"|"error"|"abort") on the XHR:
@@ -167,6 +189,8 @@ JSValue XhrOpen(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* a
   w->status_text.clear();
   w->response_text.clear();
   w->response_headers.clear();
+  // open() aborts an in-flight request (DOM Standard §5.2 open() step 7).
+  CancelPendingXhrDelivery(*w->impl, w);
   w->ready_state = 1; // OPENED
   FireXhrEvent(ctx, w, this_val, "readystatechange");
   return JS_UNDEFINED;
@@ -204,6 +228,12 @@ JSValue XhrSend(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* a
   if (w->ready_state != 1) {
     return JS_ThrowTypeError(ctx, "send before open()");
   }
+  if (w->pending_delivery) {
+    // DOM Standard §5.1: send() while a request is in flight is an
+    // InvalidStateError (approximated with TypeError like the other state
+    // checks here).
+    return JS_ThrowTypeError(ctx, "send() while a request is already in flight");
+  }
   if (!w->impl->apis.xhr_request) {
     return JS_ThrowTypeError(ctx, "XMLHttpRequest is not available");
   }
@@ -217,6 +247,30 @@ JSValue XhrSend(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* a
   }
   const base::Result<FetchResponse> response =
       w->impl->apis.xhr_request(w->url, w->method, w->request_headers, body);
+  if (w->async_requested) {
+    // Async mode (the default): send() starts the request and returns;
+    // the DONE transition and the readystatechange/load|error events are
+    // queued and delivered by the next pump (Impl::RunPendingTimers ->
+    // PumpXhrCompletions), so handlers assigned AFTER send() observe them
+    // like in a browser (jd.com's module loader depends on that order).
+    // The transport itself stays synchronous -- the response is fetched
+    // here, blocking -- which is a documented approximation.
+    w->pending_delivery = true;
+    w->pending_network_error = !response.has_value();
+    if (response.has_value()) {
+      w->pending_status = response.value().status;
+      w->pending_status_text = response.value().status_text;
+      w->pending_response_text = response.value().body;
+      w->pending_response_url =
+          response.value().final_url.empty() ? w->url : response.value().final_url;
+      w->pending_response_headers = response.value().headers;
+    }
+    w->impl->pending_xhr_completions.push_back(
+        Impl::PendingXhrCompletion{w, JS_DupValue(ctx, this_val), w->pending_network_error});
+    return JS_UNDEFINED;
+  }
+  // Synchronous mode (open(..., false)): block and complete inside send(),
+  // exactly like before.
   w->ready_state = 4; // DONE
   if (!response.has_value()) {
     // Network error: status stays 0, body empty; fire readystatechange then
@@ -241,8 +295,9 @@ JSValue XhrAbort(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueCon
   if (w == nullptr) {
     return JS_ThrowTypeError(ctx, "not an XMLHttpRequest");
   }
-  // Nothing is ever in flight under the synchronous transport; reset the
-  // object and report abort when it had been opened.
+  // An in-flight async completion is dropped; the object resets and reports
+  // abort when it had been opened.
+  CancelPendingXhrDelivery(*w->impl, w);
   if (w->ready_state != 0) {
     w->ready_state = 0;
     w->status = 0;
@@ -464,7 +519,11 @@ void EnsureXhrClassRegistered(JSRuntime* rt)
 {
   std::lock_guard<std::mutex> lock(g_xhr_class_mutex);
   JS_NewClassID(rt, &g_xhr_class_id);
-  if (g_xhr_class_registered.find(rt) == g_xhr_class_registered.end()) {
+  // JS_IsRegisteredClass, not the runtime set: a freed JSRuntime's address
+  // can be reused, and the bookkeeping set alone would then skip
+  // registration in the new runtime (its objects would carry an unregistered
+  // class and corrupt the GC list at teardown).
+  if (!JS_IsRegisteredClass(rt, g_xhr_class_id)) {
     JSClassDef def;
     std::memset(&def, 0, sizeof(def));
     def.class_name = "XMLHttpRequest";
@@ -554,6 +613,48 @@ void InstallXhrGlobal(JSContext* ctx, Impl& impl)
 
   JS_FreeValue(ctx, proto);
   JS_FreeValue(ctx, global);
+}
+
+// Delivers queued async XMLHttpRequest completions on the runtime's thread
+// (Impl::RunPendingTimers).  Each delivery publishes the fetched response,
+// performs the DONE transition and fires readystatechange + load|error,
+// mirroring the browser task the send() enqueued.
+int PumpXhrCompletions(Impl& impl)
+{
+  if (impl.pending_xhr_completions.empty()) {
+    return 0;
+  }
+  std::vector<Impl::PendingXhrCompletion> pending;
+  pending.swap(impl.pending_xhr_completions);
+  int delivered = 0;
+  for (Impl::PendingXhrCompletion& entry : pending) {
+    XhrWrapper* w = entry.wrapper;
+    if (w == nullptr || !w->pending_delivery) {
+      JS_FreeValue(impl.ctx, entry.self);
+      continue;
+    }
+    w->pending_delivery = false;
+    w->ready_state = 4; // DONE
+    if (!entry.network_error) {
+      w->status = w->pending_status;
+      w->status_text = std::move(w->pending_status_text);
+      w->response_text = std::move(w->pending_response_text);
+      w->response_url = std::move(w->pending_response_url);
+      w->response_headers = std::move(w->pending_response_headers);
+    } else {
+      // Network error: status stays 0, body empty (DOM Standard §5.1 "the
+      // error steps").
+      w->status = 0;
+      w->status_text.clear();
+      w->response_text.clear();
+      w->response_headers.clear();
+    }
+    FireXhrEvent(impl.ctx, w, entry.self, "readystatechange");
+    FireXhrEvent(impl.ctx, w, entry.self, entry.network_error ? "error" : "load");
+    JS_FreeValue(impl.ctx, entry.self);
+    ++delivered;
+  }
+  return delivered;
 }
 
 } // namespace neko::javascript
