@@ -1754,6 +1754,14 @@ void StyleEngine::ComputeElement(dom::Element& element,
                                                      int action) {
     if (property == "color") {
       out.color = (action == 3 || action == 4) ? std::optional<css::Color>{} : inherited.color;
+    } else if (property == "fill") {
+      out.fill = (action == 3 || action == 4) ? std::optional<css::Color>{} : inherited.fill;
+      out.fill_none = (action == 3 || action == 4) ? false : inherited.fill_none;
+      out.fill_current = (action == 3 || action == 4) ? false : inherited.fill_current;
+    } else if (property == "stroke") {
+      out.stroke = (action == 3 || action == 4) ? std::optional<css::Color>{} : inherited.stroke;
+      out.stroke_none = (action == 3 || action == 4) ? false : inherited.stroke_none;
+      out.stroke_current = (action == 3 || action == 4) ? false : inherited.stroke_current;
     } else if (property == "font-size") {
       out.font_size = (action == 3 || action == 4) ? 16.0f : inherited.font_size;
     } else if (property == "font-weight") {
@@ -1786,6 +1794,12 @@ void StyleEngine::ComputeElement(dom::Element& element,
   // Resolve the computed style.
   ComputedStyle out;
   out.color = inherited.color;
+  out.fill = inherited.fill;
+  out.fill_none = inherited.fill_none;
+  out.fill_current = inherited.fill_current;
+  out.stroke = inherited.stroke;
+  out.stroke_none = inherited.stroke_none;
+  out.stroke_current = inherited.stroke_current;
   out.font_size = inherited.font_size;
   out.font_weight = inherited.font_weight;
   out.font_italic = inherited.font_italic;
@@ -2061,6 +2075,38 @@ void StyleEngine::ComputeElement(dom::Element& element,
       out.text_decoration_underline = (v.text == "underline");
     }
   }
+
+  // fill / stroke (CSS Fill and Stroke 3 §4–5 subset): the SVG paint
+  // properties are inherited.  `none` disables the paint; `currentColor`
+  // leaves a marker (each element resolves it against its own color when the
+  // inline-SVG serializer re-embeds the used value).  Paint servers
+  // (url(#...)) are NOT IMPLEMENTED and ignored, leaving the markup's own
+  // attribute in charge.
+  const auto apply_paint_property =
+      [&](const char* name, std::optional<css::Color>& color, bool& none, bool& current) {
+        const css::Declaration* d = find(name);
+        if (d == nullptr) {
+          return;
+        }
+        const css::CssValue v = css::ParseCssValue(d->value);
+        if (v.type == css::CssValue::Type::kColor) {
+          color = v.color;
+          none = false;
+          current = false;
+        } else if (v.type == css::CssValue::Type::kKeyword) {
+          if (v.text == "none") {
+            none = true;
+            color.reset();
+            current = false;
+          } else if (v.text == "currentcolor") {
+            current = true;
+            none = false;
+            color.reset();
+          }
+        }
+      };
+  apply_paint_property("fill", out.fill, out.fill_none, out.fill_current);
+  apply_paint_property("stroke", out.stroke, out.stroke_none, out.stroke_current);
 
   // visibility (CSS 2.2 §11.2).  Inherited (see resolve_inherited_subset), so
   // a hidden container hides its subtree unless a descendant declares

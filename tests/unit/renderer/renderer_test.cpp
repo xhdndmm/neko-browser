@@ -106,6 +106,65 @@ TEST(PageTest, InlineSvgRasterizesAtItsUsedCssSize)
   EXPECT_EQ(image.pixels()[offset + 2], 0);
 }
 
+TEST(PageTest, InlineSvgHonorsCssFillAndFillNone)
+{
+  // Stylesheet `fill` participates in inline-SVG painting (attribute values
+  // lose to the cascade; `none` disables the paint).  codeberg-style icon
+  // sheets drive their Octicons this way.
+  {
+    Page page;
+    ASSERT_TRUE(page.LoadHtml("<body style=\"margin:0\">"
+                              "<style>#icon rect{fill:#ff0000}</style>"
+                              "<svg id=\"icon\" width=\"10\" height=\"10\">"
+                              "<rect width=\"10\" height=\"10\" fill=\"#00ff00\"/>"
+                              "</svg></body>")
+                    .has_value());
+    page.Layout(100, 100);
+    paint::Rasterizer image = page.Rasterize(40, 40);
+    const std::size_t offset = (static_cast<std::size_t>(12) * 40 + 5) * 4;
+    EXPECT_EQ(image.pixels()[offset], 255) << "the CSS fill wins over the attribute";
+    EXPECT_EQ(image.pixels()[offset + 1], 0);
+  }
+  {
+    Page page;
+    ASSERT_TRUE(page.LoadHtml("<body style=\"margin:0\">"
+                              "<style>#icon rect{fill:none}</style>"
+                              "<svg id=\"icon\" width=\"10\" height=\"10\">"
+                              "<rect width=\"10\" height=\"10\" fill=\"#00ff00\"/>"
+                              "</svg></body>")
+                    .has_value());
+    page.Layout(100, 100);
+    paint::Rasterizer image = page.Rasterize(40, 40);
+    const std::size_t offset = (static_cast<std::size_t>(12) * 40 + 5) * 4;
+    EXPECT_EQ(image.pixels()[offset], 255) << "fill:none leaves the canvas background";
+    EXPECT_EQ(image.pixels()[offset + 1], 255);
+    EXPECT_EQ(image.pixels()[offset + 2], 255);
+  }
+}
+
+TEST(PageTest, InlineSvgCssStrokePaintsTheOutline)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body style=\"margin:0\">"
+                            "<style>#icon rect{fill:none;stroke:#0000ff;stroke-width:4}</style>"
+                            "<svg id=\"icon\" width=\"10\" height=\"10\">"
+                            "<rect x=\"2\" y=\"2\" width=\"6\" height=\"6\"/>"
+                            "</svg></body>")
+                  .has_value());
+  page.Layout(100, 100);
+  paint::Rasterizer image = page.Rasterize(40, 40);
+  // The icon sits on the text baseline (its 10px box occupies roughly rows
+  // 6..13); the 4px stroke covers the rect edge, the fill:none centre stays
+  // unpainted (canvas background).
+  const std::size_t edge = (static_cast<std::size_t>(8) * 40 + 2) * 4;
+  const std::size_t centre = (static_cast<std::size_t>(11) * 40 + 5) * 4;
+  EXPECT_EQ(image.pixels()[edge + 2], 255) << "blue stroke painted at the edge";
+  EXPECT_EQ(image.pixels()[edge + 1], 0);
+  EXPECT_EQ(image.pixels()[centre], 255) << "fill:none centre stays white (background)";
+  EXPECT_EQ(image.pixels()[centre + 1], 255);
+  EXPECT_EQ(image.pixels()[centre + 2], 255);
+}
+
 TEST(PageTest, InlineSvgResolvesCurrentColor)
 {
   // codeberg's Octicons and bilibili's trigger icons colour their paths with

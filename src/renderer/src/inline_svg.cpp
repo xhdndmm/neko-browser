@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <optional>
 #include <string_view>
 
 namespace neko::renderer {
@@ -76,10 +77,8 @@ void AppendEscaped(std::string& out, std::string_view text, bool attribute)
 // The computed color as #RRGGBB.  The SVG color parser accepts 3/6-digit hex
 // but not 8-digit (alpha is an independent fill-opacity / stop-opacity
 // concept in SVG 1.1), so alpha is dropped here.
-std::string ColorHex(const style::StyleEngine& styles, const dom::Element& element)
+std::string ColorToHex(const css::Color& color)
 {
-  static constexpr css::Color kDefault{0, 0, 0, 255};
-  const css::Color color = styles.StyleFor(element).color.value_or(kDefault);
   char buffer[8];
   std::snprintf(buffer,
                 sizeof(buffer),
@@ -90,6 +89,33 @@ std::string ColorHex(const style::StyleEngine& styles, const dom::Element& eleme
   return std::string(buffer);
 }
 
+std::string ElementColorHex(const style::StyleEngine& styles, const dom::Element& element)
+{
+  static constexpr css::Color kDefault{0, 0, 0, 255};
+  return ColorToHex(styles.StyleFor(element).color.value_or(kDefault));
+}
+
+// The element's CSS paint value (fill or stroke) as markup, when the cascade
+// sets one: `none`, a colour, or currentColor resolved against the element's
+// own colour.  Empty when the declaration does not exist, so the document's
+// own attribute (or the rasterizer default) stays in charge.
+std::optional<std::string>
+CssPaint(const style::StyleEngine& styles, const dom::Element& element, bool is_stroke)
+{
+  const style::ComputedStyle& computed = styles.StyleFor(element);
+  if (is_stroke ? computed.stroke_none : computed.fill_none) {
+    return std::string("none");
+  }
+  if (is_stroke ? computed.stroke_current : computed.fill_current) {
+    return ElementColorHex(styles, element);
+  }
+  const std::optional<css::Color>& color = is_stroke ? computed.stroke : computed.fill;
+  if (color.has_value()) {
+    return ColorToHex(*color);
+  }
+  return std::nullopt;
+}
+
 void SerializeElement(std::string& out,
                       const dom::Element& element,
                       const style::StyleEngine& styles,
@@ -97,7 +123,9 @@ void SerializeElement(std::string& out,
                       std::string_view root_width,
                       std::string_view root_height)
 {
-  const std::string color = ColorHex(styles, element);
+  const std::string color = ElementColorHex(styles, element);
+  const std::optional<std::string> css_fill = CssPaint(styles, element, /*is_stroke=*/false);
+  const std::optional<std::string> css_stroke = CssPaint(styles, element, /*is_stroke=*/true);
   const std::string_view tag = element.tag_name();
 
   out.push_back('<');
@@ -109,6 +137,10 @@ void SerializeElement(std::string& out,
       // the attributes alone would rasterize at the authored size.
       continue;
     }
+    if ((attr.name == "fill" && css_fill.has_value()) ||
+        (attr.name == "stroke" && css_stroke.has_value())) {
+      continue; // the cascade wins over the document's own paint attribute
+    }
     if (attr.name == "xmlns") {
       has_xmlns = true;
     }
@@ -116,6 +148,16 @@ void SerializeElement(std::string& out,
     out.append(attr.name);
     out.append("=\"");
     AppendEscaped(out, SubstituteCurrentColor(attr.value, color), /*attribute=*/true);
+    out.push_back('"');
+  }
+  if (css_fill.has_value()) {
+    out.append(" fill=\"");
+    AppendEscaped(out, *css_fill, /*attribute=*/true);
+    out.push_back('"');
+  }
+  if (css_stroke.has_value()) {
+    out.append(" stroke=\"");
+    AppendEscaped(out, *css_stroke, /*attribute=*/true);
     out.push_back('"');
   }
   if (is_root) {

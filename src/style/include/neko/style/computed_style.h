@@ -388,6 +388,19 @@ struct ComputedStyle
   std::optional<css::Color> color;
   bool text_decoration_underline = false;
 
+  // SVG paint (CSS Fill and Stroke 3 §4–5 subset), inherited like `color`.
+  // `currentColor` keeps a marker instead of a baked colour so each element
+  // resolves it against its own `color` (the inline-SVG serializer re-embeds
+  // the used value into the markup: the standalone rasterizer has no
+  // cascade).  `*_none` disables the paint; paint servers (url(#...)) are
+  // NOT IMPLEMENTED.
+  std::optional<css::Color> fill;
+  bool fill_none = false;
+  bool fill_current = false;
+  std::optional<css::Color> stroke;
+  bool stroke_none = false;
+  bool stroke_current = false;
+
   // List marker (CSS Lists 3 §4.1).  Only meaningful for display:list-item.
   // Inherited, so a <ul>/<ol> sets the marker type for its <li> descendants.
   ListStyleType list_style_type = ListStyleType::kNone;

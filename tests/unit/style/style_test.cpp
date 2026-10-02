@@ -54,6 +54,29 @@ TEST(StyleTest, DisplayInlineBlock)
   EXPECT_EQ(Style(engine, *doc, "span").display, Display::kInlineBlock);
 }
 
+TEST(StyleTest, FillAndStrokeAreInheritedSvgPaintProperties)
+{
+  // The inline-SVG serializer re-embeds the used values into the markup, so
+  // the computed model must carry inheritance, `none` and the currentColor
+  // marker (each element resolves it against its own color).
+  auto doc = MakeDoc("<body><svg style=\"fill:#ff0000;stroke:none\">"
+                     "<rect id=\"inherits\"/><rect id=\"own\" style=\"fill:none\"/>"
+                     "<rect id=\"cur\" style=\"fill:currentColor\"/></svg></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& inherits = Style(engine, *doc, "#inherits");
+  ASSERT_TRUE(inherits.fill.has_value());
+  EXPECT_EQ(inherits.fill->r, 255);
+  EXPECT_EQ(inherits.fill->g, 0);
+  EXPECT_TRUE(inherits.stroke_none);
+  const ComputedStyle& own = Style(engine, *doc, "#own");
+  EXPECT_TRUE(own.fill_none);
+  EXPECT_FALSE(own.fill.has_value());
+  const ComputedStyle& cur = Style(engine, *doc, "#cur");
+  EXPECT_TRUE(cur.fill_current);
+  EXPECT_FALSE(cur.fill.has_value());
+}
+
 TEST(StyleTest, FloatParsesLeftRightNone)
 {
   auto doc = MakeDoc("<body><div style=\"float:left\">a</div></body>");
