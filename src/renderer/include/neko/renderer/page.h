@@ -143,6 +143,13 @@ public:
   // skip refetching across reload passes).
   bool HasWebFont(const std::string& key) const;
 
+  // Claims |key| for a font fetch.  Returns false when it was already claimed
+  // (loaded or failed) in this document: the post-script stylesheet pass
+  // re-runs the font scan with the same declarations, and without this a URL
+  // that fails (jd.com references fonts whose host no longer resolves) was
+  // re-fetched and re-warned once per pass.  Thread-safe.
+  bool ClaimWebFont(const std::string& key);
+
   // Reads a UTF-8 file and loads it as HTML (encoding sniffing still applies).
   base::Result<void> LoadFile(std::string_view path);
 
@@ -448,7 +455,8 @@ private:
   std::vector<std::pair<const dom::Element*, bool>> pending_image_events_;
   // Keys of web fonts already registered (dedup across reload passes).
   std::set<std::string> loaded_webfont_keys_;
-
+  // Keys of web fonts already fetched or attempted (ClaimWebFont).
+  std::set<std::string> attempted_webfont_keys_;
   // Playback state for one animated image (per element).  The frame pixels
   // are kept in |images_| and overwritten in place on each advance so the
   // raw pointers the display list holds stay valid.

@@ -1129,6 +1129,12 @@ bool Page::HasWebFont(const std::string& key) const
   return loaded_webfont_keys_.count(key) != 0;
 }
 
+bool Page::ClaimWebFont(const std::string& key)
+{
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  return attempted_webfont_keys_.insert(key).second;
+}
+
 bool Page::LoadWebFont(const std::string& family,
                        int weight,
                        bool italic,

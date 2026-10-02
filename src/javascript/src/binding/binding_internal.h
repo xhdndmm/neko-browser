@@ -443,6 +443,9 @@ JSValue ElementGetVideoCurrentTime(JSContext* ctx, JSValueConst this_val);
 JSValue ElementSetVideoCurrentTime(JSContext* ctx, JSValueConst this_val, JSValueConst value);
 JSValue ElementGetVideoPaused(JSContext* ctx, JSValueConst this_val);
 
+// ui_binding.cpp: the Audio() media-element factory (HTML §4.8.12).
+void InstallAudioGlobal(JSContext* ctx, Impl& impl);
+
 // document_binding.cpp
 JSValue DOMParserConstructor(JSContext* ctx, JSValueConst new_target, int argc, JSValueConst* argv);
 JSValue

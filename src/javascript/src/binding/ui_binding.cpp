@@ -1054,11 +1054,14 @@ JSValue ElementGetCurrentSrc(JSContext* ctx, JSValueConst this_val)
   return JS_NewStringLen(ctx, resolved.data(), resolved.size());
 }
 
-// ---- HTMLMediaElement (video) ----------------------------------------------
+// ---- HTMLMediaElement (video/audio) ----------------------------------------
 
-bool IsVideoElement(const dom::Element* element)
+// <video> and <audio> share the HTMLMediaElement JS surface implemented here
+// (play/pause/currentTime/...); the page's media pipeline keys decoded state
+// by element, so an element with no decoded state simply no-ops.
+bool IsMediaElement(const dom::Element* element)
 {
-  return element != nullptr && element->tag_name() == "video";
+  return element != nullptr && (element->tag_name() == "video" || element->tag_name() == "audio");
 }
 
 JSValue
@@ -1069,8 +1072,8 @@ ElementPlayVideo(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueCon
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
-  if (!IsVideoElement(element)) {
-    return JS_ThrowTypeError(ctx, "play() is only defined on <video>");
+  if (!IsMediaElement(element)) {
+    return JS_ThrowTypeError(ctx, "play() is only defined on <video>/<audio>");
   }
   if (!impl->apis.video_play) {
     return JS_ThrowTypeError(ctx, "video playback is not available");
@@ -1087,8 +1090,8 @@ ElementPauseVideo(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueCo
   if (impl == nullptr || element == nullptr) {
     return JS_ThrowTypeError(ctx, "not an element");
   }
-  if (!IsVideoElement(element)) {
-    return JS_ThrowTypeError(ctx, "pause() is only defined on <video>");
+  if (!IsMediaElement(element)) {
+    return JS_ThrowTypeError(ctx, "pause() is only defined on <video>/<audio>");
   }
   if (impl->apis.video_pause) {
     impl->apis.video_pause(*element);
@@ -1100,7 +1103,7 @@ JSValue ElementGetVideoDuration(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
   dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
-  if (impl == nullptr || element == nullptr || !IsVideoElement(element) ||
+  if (impl == nullptr || element == nullptr || !IsMediaElement(element) ||
       !impl->apis.video_duration) {
     return JS_NewFloat64(ctx, std::nan(""));
   }
@@ -1112,7 +1115,7 @@ JSValue ElementGetVideoCurrentTime(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
   dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
-  if (impl == nullptr || element == nullptr || !IsVideoElement(element) ||
+  if (impl == nullptr || element == nullptr || !IsMediaElement(element) ||
       !impl->apis.video_current_time) {
     return JS_NewFloat64(ctx, 0);
   }
@@ -1123,7 +1126,7 @@ JSValue ElementSetVideoCurrentTime(JSContext* ctx, JSValueConst this_val, JSValu
 {
   Impl* impl = ImplFor(ctx, this_val);
   dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
-  if (impl == nullptr || element == nullptr || !IsVideoElement(element) || !impl->apis.video_seek) {
+  if (impl == nullptr || element == nullptr || !IsMediaElement(element) || !impl->apis.video_seek) {
     return JS_UNDEFINED;
   }
   double seconds = 0;
@@ -1139,11 +1142,45 @@ JSValue ElementGetVideoPaused(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
   dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
-  if (impl == nullptr || element == nullptr || !IsVideoElement(element) ||
+  if (impl == nullptr || element == nullptr || !IsMediaElement(element) ||
       !impl->apis.video_paused) {
     return JS_NewBool(ctx, 1);
   }
   return JS_NewBool(ctx, impl->apis.video_paused(*element) ? 1 : 0);
+}
+
+// HTML §4.8.12: Audio(src) returns a new <audio> element (an ordinary
+// HTMLAudioElement through the element prototype) and, when given, sets its
+// src attribute.  jd.com's accessibility script starts with `f = new Audio`.
+JSValue AudioConstructor(JSContext* ctx, JSValueConst /*new_target*/, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, JS_UNDEFINED);
+  if (impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "no page runtime");
+  }
+  auto element = std::make_unique<dom::Element>("audio");
+  dom::Element* raw = element.get();
+  impl->created[raw] = std::move(element);
+  if (argc >= 1 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0])) {
+    bool ok = false;
+    const std::string src = ArgString(ctx, argv[0], &ok);
+    if (!ok) {
+      return JS_EXCEPTION;
+    }
+    if (!src.empty()) {
+      raw->SetAttribute("src", src);
+      impl->MarkDomMediaDirty(raw);
+    }
+  }
+  return impl->WrapNode(raw);
+}
+
+void InstallAudioGlobal(JSContext* ctx, Impl& /*impl*/)
+{
+  JSValue global = JS_GetGlobalObject(ctx);
+  JSValue ctor = JS_NewCFunction2(ctx, AudioConstructor, "Audio", 0, JS_CFUNC_constructor, 0);
+  JS_SetPropertyStr(ctx, global, "Audio", ctor); // steals
+  JS_FreeValue(ctx, global);
 }
 
 [[maybe_unused]] JSValue ElementGetText(JSContext* ctx, JSValueConst this_val)

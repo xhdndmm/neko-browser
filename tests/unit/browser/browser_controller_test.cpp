@@ -1858,6 +1858,43 @@ TEST(BrowserControllerTest, FontFaceFetchedAndRegistered)
   EXPECT_THAT(fetch.Requests(), testing::Contains("http://example.com/css/fonts/icon.ttf"));
 }
 
+// A failing @font-face URL is fetched once per document, not once per
+// stylesheet pass: the post-script pass re-scans the same declarations, and
+// jd.com's dead font host used to be re-fetched (and re-warned) each time.
+TEST(BrowserControllerTest, FailedWebFontIsFetchedOncePerDocument)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><style>"
+                               "@font-face { font-family: deadfont;"
+                               " src: url('/dead.woff2'); }"
+                               "</style></head><body><p>x</p></body></html>"});
+  // No route for /dead.woff2: that fetch fails.
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  ASSERT_NE(tab->page, nullptr);
+  ASSERT_TRUE(WaitForSubresources([&fetch] { return fetch.RequestCount() >= 2u; }));
+
+  std::size_t font_requests = 0;
+  for (const std::string& url : fetch.Requests()) {
+    if (url == "http://example.com/dead.woff2") {
+      ++font_requests;
+    }
+  }
+  EXPECT_EQ(font_requests, 1u);
+  // Attempted (so later passes skip it) but not reported as loaded.
+  EXPECT_FALSE(tab->page->ClaimWebFont("http://example.com/dead.woff2"));
+  EXPECT_FALSE(tab->page->HasWebFont("http://example.com/dead.woff2"));
+}
+
 // @font-face with a data: src (the bilibili icon-font case): the bytes are
 // decoded locally by the network layer per RFC 2397, registered under the
 // family, and never travel over the network.

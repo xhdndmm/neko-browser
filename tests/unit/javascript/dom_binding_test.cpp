@@ -2856,6 +2856,31 @@ TEST_F(DomBinderTest, ElementDirReflectsTheAttribute)
                        "return el.hasAttribute('dir') === false && el.dir === ''; })()"));
 }
 
+// navigator.javaEnabled(): always false in modern browsers (applets are
+// gone).  jd.com's wl.js fingerprint collector calls it unconditionally and
+// aborted its whole init with "not a function" before this existed.
+TEST_F(DomBinderTest, NavigatorJavaEnabledIsFalse)
+{
+  EXPECT_TRUE(EvalBool("typeof navigator.javaEnabled === 'function'"));
+  EXPECT_TRUE(EvalBool("navigator.javaEnabled() === false"));
+}
+
+// HTML §4.8.12 Audio(src): the legacy factory returning an <audio> element,
+// with the src attribute set when given.  jd.com's accessibility script
+// (aria.js) constructs one at module init.
+TEST_F(DomBinderTest, AudioConstructorCreatesMediaElement)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var a = new Audio(); "
+                       "return a.tagName === 'AUDIO' && a.getAttribute('src') === null; })()"));
+  EXPECT_TRUE(EvalBool("(function(){ var a = new Audio('https://example.com/x.mp3'); "
+                       "return a.getAttribute('src') === 'https://example.com/x.mp3'; })()"));
+  // The media surface is shared with createElement('audio'): play/pause and
+  // the src accessor live on the element prototype.
+  EXPECT_TRUE(EvalBool("(function(){ var a = new Audio(); "
+                       "return typeof a.play === 'function' && typeof a.pause === 'function' "
+                       "&& typeof a.src === 'string'; })()"));
+}
+
 // window.matchMedia(query): returns a MediaQueryList evaluated against the
 // engine's fixed 800x600 viewport; the list exposes matches/media and the
 // standard no-op listener hooks (so scripts don't throw).

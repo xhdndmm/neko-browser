@@ -1026,6 +1026,15 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   JS_SetPropertyStr(
       ctx, navigator, "sendBeacon", JS_NewCFunction(ctx, send_beacon, "sendBeacon", 2));
 
+  // navigator.javaEnabled(): always false in modern browsers (applets are
+  // gone); jd.com's wl.js fingerprint collector calls it unconditionally.
+  auto java_enabled = [](JSContext* /*inner_ctx*/,
+                         JSValueConst /*this_val*/,
+                         int /*argc*/,
+                         JSValueConst* /*argv*/) -> JSValue { return JS_FALSE; };
+  JS_SetPropertyStr(
+      ctx, navigator, "javaEnabled", JS_NewCFunction(ctx, java_enabled, "javaEnabled", 0));
+
   // navigator.clipboard: stub object with writeText/readText returning resolved promises.
   JSValue clipboard = JS_NewObject(ctx);
   auto clipboard_write_text = [](JSContext* inner_ctx,
@@ -1322,6 +1331,9 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   }
   // WebSocket is always available (connects directly via neko::network).
   InstallWebSocketGlobal(ctx, *this);
+  // Audio(src): the legacy media-element factory (jd.com's aria.js does
+  // `new Audio` at module init).
+  InstallAudioGlobal(ctx, *this);
   JSValue blob_ctor = JS_NewCFunction2(ctx, BlobConstructor, "Blob", 2, JS_CFUNC_constructor, 0);
   JS_SetPropertyStr(ctx, window, "Blob", JS_DupValue(ctx, blob_ctor));
   JS_SetPropertyStr(ctx, global, "Blob", blob_ctor);

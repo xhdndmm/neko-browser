@@ -46,6 +46,20 @@ TEST(PageTest, LayoutAndDump)
   EXPECT_NE(dump.find("<div>"), std::string::npos);
 }
 
+// Web-font fetch claims are per-document and one-shot: the post-script
+// stylesheet pass re-runs the same @font-face scan, and a URL that already
+// failed (jd.com's fonts live on a host whose DNS record is gone) must not be
+// re-fetched — or re-warned — once per pass.
+TEST(PageTest, WebFontClaimsAreRecordedOnce)
+{
+  Page page;
+  EXPECT_TRUE(page.ClaimWebFont("https://cdn.example.com/a.woff2"));
+  EXPECT_FALSE(page.ClaimWebFont("https://cdn.example.com/a.woff2"));
+  // Claimed (attempted) is distinct from loaded.
+  EXPECT_FALSE(page.HasWebFont("https://cdn.example.com/a.woff2"));
+  EXPECT_TRUE(page.ClaimWebFont("https://cdn.example.com/b.woff2"));
+}
+
 TEST(PageTest, RasterizeProducesImage)
 {
   Page page;

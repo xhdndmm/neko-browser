@@ -3247,8 +3247,11 @@ void FetchWebFonts(renderer::Page& page,
       continue;
     }
     const std::string absolute = target.value().Serialize();
-    if (page.HasWebFont(absolute)) {
-      continue; // registered by an earlier load pass — skip refetch
+    if (!page.ClaimWebFont(absolute)) {
+      // Registered or attempted by an earlier load pass — skip the refetch.
+      // A URL that failed (jd.com's fonts live on a host whose DNS record is
+      // gone) used to be retried, and re-warned, once per stylesheet pass.
+      continue;
     }
     bool dup = false;
     for (PendingFont& p : pending) {
