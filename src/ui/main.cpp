@@ -8,6 +8,9 @@
 //                        M2 "isolated rendering mode"); every tab then runs
 //                        its page in its own process, so a crash there cannot
 //                        take the browser down.
+//   --network-process    Fetch documents through a network child process
+//                        (ADR 0016 M3a); DNS/TCP/TLS/HTTP run in the child,
+//                        cookies stay in the browser.
 
 #include "neko/base/logging.h"
 #include "neko/browser/preferences_keys.h"
@@ -53,11 +56,16 @@ int main(int argc, char** argv)
   // The flag has to be parsed before QApplication sees it (Qt would reject an
   // unknown option).
   neko::browser::RendererOptions renderer;
+  neko::browser::NetworkOptions network;
   std::vector<char*> qt_argv;
   qt_argv.reserve(static_cast<std::size_t>(argc));
   for (int i = 0; i < argc; ++i) {
     if (std::strcmp(argv[i], "--renderer-process") == 0) {
       renderer.enabled = true;
+      continue;
+    }
+    if (std::strcmp(argv[i], "--network-process") == 0) {
+      network.enabled = true;
       continue;
     }
     qt_argv.push_back(argv[i]);
@@ -79,7 +87,7 @@ int main(int argc, char** argv)
     neko::ui::i18n::ApplyLanguage(app, preferences.Get(neko::browser::prefs::kLanguage));
   }
 
-  neko::ui::BrowserWorker worker(profile, nullptr, renderer);
+  neko::ui::BrowserWorker worker(profile, nullptr, renderer, network);
   neko::ui::MainWindow window(&worker);
   window.show();
   return app.exec();

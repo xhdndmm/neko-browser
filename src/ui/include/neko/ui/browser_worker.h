@@ -35,7 +35,8 @@ class BrowserWorker : public QObject
 public:
   explicit BrowserWorker(QString profile_dir,
                          QObject* parent = nullptr,
-                         browser::RendererOptions renderer = {});
+                         browser::RendererOptions renderer = {},
+                         browser::NetworkOptions network = {});
   ~BrowserWorker() override;
 
   // -------------------------------------------------------------------------

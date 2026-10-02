@@ -2,6 +2,7 @@
 
 #include "neko/base/status.h"
 #include "neko/browser/download_manager.h"
+#include "neko/browser/network_session.h"
 #include "neko/browser/page_scripts.h"
 #include "neko/browser/renderer_session.h"
 #include "neko/image/image.h"
@@ -350,6 +351,18 @@ struct RendererOptions
   std::string executable;
 };
 
+// Network-process mode (ADR 0016 M3a).  When enabled, the browser fetches
+// documents through a network child (DNS/TCP/TLS/HTTP/1.1 run in its address
+// space); cookies stay browser-side and the child asks for each hop's cookie
+// header.  A dead child fails the fetch and is respawned on the next one.
+struct NetworkOptions
+{
+  bool enabled = false;
+  // Executable that serves --network-child.  Empty resolves the CLI binary
+  // next to the running executable.
+  std::string executable;
+};
+
 // The browser zoom ladder (Chrome-like steps between renderer::kMinUserZoom and
 // renderer::kMaxUserZoom).  Returns the next factor above |current| when
 // |direction| > 0, the next one below for |direction| < 0, or |current| when
@@ -376,11 +389,13 @@ public:
   using FetchFn = std::function<base::Result<network::HttpResponse>(
       const url::Url&, std::string_view cookie_header)>;
 
-  // Renderer-process mode (ADR 0016 M2): see RendererOptions.
+  // Renderer-process mode (ADR 0016 M2): see RendererOptions.  Network-process
+  // mode (ADR 0016 M3a): see NetworkOptions.
 
   explicit BrowserController(std::string profile_dir,
                              FetchFn fetch = {},
-                             RendererOptions renderer = RendererOptions());
+                             RendererOptions renderer = RendererOptions(),
+                             NetworkOptions network = NetworkOptions());
   ~BrowserController();
 
   BrowserController(const BrowserController&) = delete;
@@ -617,6 +632,11 @@ public:
   void ClearAllStorage();
   std::string CookieHeader(const url::Url& url, int64_t now) const;
 
+  // Spawns (or respawns after a crash) the network child.  Returns nullptr
+  // when network-process mode is off or the process cannot be started; the
+  // caller then falls back to the in-process network stack.
+  NetworkSession* EnsureNetworkSession();
+
   base::Result<void> Save();
   base::Result<void> Load();
 
@@ -712,6 +732,10 @@ private:
   RendererOptions renderer_;
   // Resolved path of the renderer executable (empty when resolution failed).
   std::string renderer_executable_;
+  NetworkOptions network_;
+  // Live network child (ADR 0016 M3a).  Null until the first fetch (or after
+  // a failure); respawned lazily by EnsureNetworkSession().
+  std::shared_ptr<NetworkSession> network_session_;
 
   // Guards every member the GUI can observe through the Snapshot* accessors:
   // tabs_/active_tab_/next_tab_id_, network_log_/console_log_ and the store

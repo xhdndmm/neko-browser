@@ -1,6 +1,6 @@
 # 架构决策记录 0016：多进程架构（进程模型 + IPC 设计 + 迁移路线）
 
-- 状态：**Accepted**（2026-08，M1 已实现；2026-09，M2 已实现；M3+ 路线见下）
+- 状态：**Accepted**（2026-08，M1 已实现；2026-09，M2 已实现；2026-10，M3a 已实现；M3b+/M4/M5 见下）
 - 决策者：架构组
 
 ## 背景
@@ -61,8 +61,14 @@ Browser 进程（UI + 控制器 + profile/storage + cookie/权限裁决）
   本地夹具页面并回传位图）。GUI 尚未接入（M2）。
 - **M2（已实现，2026-09）**：**渲染器会话**（持久子进程 + 交互协议）+ GUI 接入，
   见下节“M2 设计”。
-- **M3**：Network 进程（HTTP/TLS/DNS 搬出 Browser，Renderer 与 Network
-  经 Browser 中转或直连）；cookie 裁决留在 Browser。
+- **M3a（已实现，2026-10）**：**Network 进程首切片**——`NetworkSession` /
+  `RunNetworkChild`（`--network-child`）：DNS/TCP/TLS/HTTP 在子进程；Cookie
+  罐留在浏览器侧，子进程在每个跳（含重定向）经 `kCookieLookup` 回问、浏览器
+  以 CookieReply 应答（HttpOnly 值从不进入子进程）；顶层文档抓取走子进程
+  （CLI `--network-process`、GUI `--network-process` 、`BrowserController`
+  的 `NetworkOptions`）；子进程崩溃 = 单次抓取失败并按需重启，不带走浏览器。
+  **M3b（尚未）**：子资源/脚本/fetch() 也经 Network 进程（现仍走进程内栈）、
+  流式响应与 HTTP cache、渲染器↔网络进程的授权/直连模型。
 - **M4**：GPU 进程（SoftwareCompositor 的 GPU 实现 + 共享内存传输
   ——IPC 帧协议对位图足够，大帧走共享内存是 M4 的优化）。
 - **M5**：沙箱（Linux seccomp/namespace、Windows AppContainer、macOS
@@ -130,6 +136,38 @@ Browser 进程（UI + 控制器 + profile/storage + cookie/权限裁决）
   相同，但隔离模式不阻塞 GUI 线程。
 - **会话粒度**：每 tab 一个会话（同站点复用），不是跨 tab 共享的站点实例。
 - 文本光标（caret）在隔离模式下不闪烁（子进程帧不含光标图层）。
+
+## M3a 设计（已实现，2026-10）
+
+```text
+浏览器（BrowserController）                       网络子进程（--network-child）
+  │  kFetch{url, cookie_header} ──────────────▶  DNS → TCP → TLS → HTTP/1.1
+  │  ◀── kCookieLookup{hop_url} ──────────── HttpGet 的 HeaderProvider 逐跳回调
+  │  ── CookieReply{cookie} ──────────────▶
+  │  ◀── kResponse{status, headers, body} / kError{message}
+```
+
+- **协议**（`network_protocol.h`）：版本化二进制载荷（fetch/shutdown；
+  response/error/cookie-lookup；cookie-reply），字段有尺寸上限、响应体
+  48 MiB 帧上限，全部解码边界检查（对端是威胁模型的一部分）。
+- **会话**（`network_session.h`）：`Fetch` 同步阻塞（与控制器单线程模型一致），
+  收到 `kCookieLookup` 时调用浏览器侧回调并把结果回给子进程；子进程死亡时
+  通道关闭 → 本次抓取失败，`BrowserController` 在下一次抓取时惰性重启
+  （`EnsureNetworkSession`），并在重启失败时回退进程内网络栈。
+- **子进程**（`network_host.h`）：单线程循环；`HttpGet` 的 HeaderProvider
+  把每跳 URL 回传浏览器；DNS/TLS 信任库/重定向/压缩全在子进程执行
+  （复用现有 `neko::network` 实现，不重复造轮子）。
+- **GUI/CLI 接入**：`neko_browser_gui --network-process`、
+  `neko_browser --network-process --url ...`（非 renderer-process 路径）；
+  CLI 无 Cookie 罐时子进程仍然回问，浏览器回空串（行为与进程内一致）。
+- **测试**：13 个协议单元测试（含随机垃圾不崩溃、超限拒绝）+ 8 个会话/
+  端到端测试（本地回环 HTTP 服务器；重定向逐跳 Cookie 回调；连接失败
+  不致命；进程无法启动报错；控制器级 Cookie 罐跨导航回送）。
+
+**诚实边界（M3a）**：子资源（图片/CSS/字体/脚本）仍在渲染器子进程内直连抓取
+（不带 Cookie）；无流式传输/缓存/连接复用；子进程仍能访问文件系统与网络
+（安全沙箱是 M5）；`--network-process` 与 `--renderer-process` 不叠加
+（后者由渲染器子进程自行抓取，CLI 会告警提示）。
 
 ## 备选方案
 

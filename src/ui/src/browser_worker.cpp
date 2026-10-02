@@ -10,8 +10,10 @@ namespace neko::ui {
 
 BrowserWorker::BrowserWorker(QString profile_dir,
                              QObject* parent,
-                             browser::RendererOptions renderer)
-    : QObject(parent), controller_(profile_dir.toStdString(), {}, std::move(renderer))
+                             browser::RendererOptions renderer,
+                             browser::NetworkOptions network)
+    : QObject(parent),
+      controller_(profile_dir.toStdString(), {}, std::move(renderer), std::move(network))
 {
   // Load persisted profile data on the caller (GUI) thread at startup.
   auto loaded = controller_.Load();

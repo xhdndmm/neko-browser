@@ -207,8 +207,9 @@ graph LR
 - [x] **共享线程池**：BrowserController 持有，子资源抓取/解码/渲染复用同一池
 - [x] **字体缓存线程安全**：GlyphCache/FontFace/FontRegistry/TextWidth 记忆化
       全部互斥锁保护（修复字形缓存 UAF）
-- [x] **多进程架构 M1/M2 —— Phase 12**（Renderer 子进程 + `neko::ipc` + 渲染器
-      会话；沙箱与 Network/GPU 进程后续）
+- [x] **多进程架构 M1/M2/M3a —— Phase 12**（Renderer 子进程 + `neko::ipc` + 渲染器
+      会话；Network 子进程：顶层抓取 + 逐跳 Cookie 回问，ADR 0016 M3a；
+      子资源迁移（M3b）与沙箱/GPU 进程后续）
 
 ## Phase 10 — Security（M1 已起步）
 
@@ -262,7 +263,11 @@ graph LR
       （Cookie 权威在浏览器），子进程导航回传 redirect 由浏览器重跑；每 tab 每站点
       会话（同站复用、跨站/崩溃后重建）；GUI `--renderer-process` 下 WebView 绘制
       子进程帧并转发交互（视口尺寸上报、滚动条取子进程内容高度、hover 来自子进程）
-- [ ] M3：Network 进程（HTTP/TLS/DNS 搬出 Browser；cookie 裁决留在 Browser）
+- [x] **M3a：Network 进程首切片**（ADR 0016，2026-10）：DNS/TCP/TLS/HTTP 在子进程、
+      Cookie 罐留浏览器并逐跳回问（含重定向）、顶层文档抓取经子进程
+      （CLI/GUI `--network-process`）、崩溃隔离 + 惰性重启；13 协议 + 8 会话/
+      端到端测试
+- [ ] M3b：子资源/脚本/fetch 也经 Network 进程；流式响应与 HTTP cache
 - [ ] M4：GPU 进程（GPU 后端已就位；进程宿主 + 共享内存大帧传输未开始）
 - [ ] M5：沙箱（Linux seccomp/namespace、Windows AppContainer、macOS
       sandbox-exec）+ 站点隔离

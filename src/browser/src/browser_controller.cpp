@@ -491,11 +491,13 @@ std::string_view ToString(ContentType type)
 
 BrowserController::BrowserController(std::string profile_dir,
                                      FetchFn fetch,
-                                     RendererOptions renderer)
+                                     RendererOptions renderer,
+                                     NetworkOptions network)
     : profile_dir_(std::move(profile_dir)), fetch_(std::move(fetch)),
-      renderer_(std::move(renderer)), cookies_(profile_dir_), history_(profile_dir_),
-      bookmarks_(profile_dir_), local_storage_(profile_dir_), indexed_db_(profile_dir_),
-      preferences_(profile_dir_), passwords_(profile_dir_), downloads_(profile_dir_ + "/downloads")
+      renderer_(std::move(renderer)), network_(std::move(network)), cookies_(profile_dir_),
+      history_(profile_dir_), bookmarks_(profile_dir_), local_storage_(profile_dir_),
+      indexed_db_(profile_dir_), preferences_(profile_dir_), passwords_(profile_dir_),
+      downloads_(profile_dir_ + "/downloads")
 {
   if (renderer_.enabled) {
     renderer_executable_ =
@@ -509,8 +511,24 @@ BrowserController::BrowserController(std::string profile_dir,
   pool_ = std::make_unique<base::ThreadPool>();
   // Default fetch: compute cookies for each redirect hop from the controller's
   // cookie jar.  HttpGet invokes HeaderProvider with the current hop URL.
+  // With network-process mode the whole fetch runs in a child; the child asks
+  // back for each hop's cookies, so the jar (and HttpOnly values) stay here.
   if (!fetch_) {
     fetch_ = [this](const url::Url& u, std::string_view) {
+      if (network_.enabled) {
+        NetworkSession* session = EnsureNetworkSession();
+        if (session != nullptr) {
+          NetworkSession::CookieLookupFn lookup = [this](const url::Url& target) {
+            return CookieHeader(target, NowUnix());
+          };
+          auto fetched = session->Fetch(u, /*cookie_header=*/{}, lookup);
+          if (fetched.has_value()) {
+            return fetched;
+          }
+          NEKO_LOG_WARNING("network process fetch failed; falling back in-process: " +
+                           fetched.error().message());
+        }
+      }
       network::HeaderProvider provider;
       provider = [this](const url::Url& target) {
         const std::string cookie = CookieHeader(target, NowUnix());
@@ -522,6 +540,30 @@ BrowserController::BrowserController(std::string profile_dir,
       return network::HttpGet(u, 5, provider);
     };
   }
+}
+
+NetworkSession* BrowserController::EnsureNetworkSession()
+{
+  if (!network_.enabled) {
+    return nullptr;
+  }
+  if (network_session_ && network_session_->alive()) {
+    return network_session_.get();
+  }
+  const std::string executable =
+      network_.executable.empty() ? DefaultRendererExecutable() : network_.executable;
+  if (executable.empty()) {
+    NEKO_LOG_WARNING("network process mode requested but no executable was found");
+    return nullptr;
+  }
+  auto spawned = NetworkSession::Spawn(executable);
+  if (!spawned.has_value()) {
+    NEKO_LOG_WARNING("network process failed to start: " + spawned.error().message());
+    network_session_.reset();
+    return nullptr;
+  }
+  network_session_ = spawned.value();
+  return network_session_.get();
 }
 
 BrowserController::~BrowserController()

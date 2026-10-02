@@ -34,6 +34,12 @@ struct BrowserOptions
   // --renderer-session: internal mode — serve a live renderer session on
   // stdin/stdout (ADR 0016 M2; spawned by RendererSession).
   bool renderer_session = false;
+  // --network-process: fetch top-level documents through an out-of-process
+  // network child (ADR 0016 M3a; headless CLI).
+  bool network_process = false;
+  // --network-child: internal mode — serve network requests on stdin/stdout
+  // (spawned by NetworkSession).
+  bool network_child = false;
   // --verbose / --log-level <level>.
   base::LogLevel log_level = base::LogLevel::kInfo;
 

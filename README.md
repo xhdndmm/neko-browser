@@ -92,7 +92,7 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
   （Ctrl+F，Enter/Shift+Enter 跳转、n/m 计数、页内高亮）**、DevTools
   （DOM 树/网络日志/**JS Console REPL**）、历史/书签/下载/设置面板
 - **下载器**：Content-Disposition/URL 文件名、原子写入
-- **多进程（M1+M2，ADR 0016）**：`neko::ipc`（帧协议 Channel + 跨平台 Subprocess）+ **Renderer 子进程**；M1 为每页子进程（`--renderer-child`，CLI `--renderer-process`）；M2 为**渲染器会话**（`--renderer-session`：持久子进程 + 交互协议，GUI `neko_browser_gui --renderer-process` 下 WebView 绘制子进程帧、输入转发、每站点会话复用、崩溃后重建）—— **PARTIAL**（Network/GPU 进程与沙箱未开始；顶层文档与 Cookie 仍在浏览器侧）
+- **多进程（M1+M2+M3a，ADR 0016）**：`neko::ipc`（帧协议 Channel + 跨平台 Subprocess）+ **Renderer 子进程**；M1 为每页子进程（`--renderer-child`，CLI `--renderer-process`）；M2 为**渲染器会话**（`--renderer-session`：持久子进程 + 交互协议，GUI `neko_browser_gui --renderer-process` 下 WebView 绘制子进程帧、输入转发、每站点会话复用、崩溃后重建）；**M3a 为 Network 子进程**（`--network-child`：DNS/TCP/TLS/HTTP 在子进程，Cookie 罐留浏览器、逐跳回问；CLI/GUI `--network-process`，崩溃=单次抓取失败并惰性重启） —— **PARTIAL**（子资源仍进程内直连（M3b）；GPU 进程与沙箱未开始；顶层 Cookie 与导航仍在浏览器侧）
 - **CLI**：`--url` / `--dump-dom` / `--screenshot` / `--dump-history` /
   `--dump-bookmarks` / `--show-cookies` / `--download` / `--extract-pdf` /
   `--audio-info` / `--image-info` 等
@@ -100,8 +100,9 @@ Rasterization` 渲染管线，能抓取、解析、渲染**真实网站**，并�
 > **诚实声明**：**GPU 合成**：Linux 真实后端已实现并验证（EGL/OpenGL 3.3
 > core，headless、设备回读与软件合成逐字节一致）；Vulkan/Metal/D3D11、
 > swapchain 窗口呈现与 GPU 进程尚未实现。
-> **完整多进程架构**尚未实现（M1+M2 已交付：Renderer 子进程 + IPC +
-> 渲染器会话 + GUI 隔离渲染模式；无沙箱/Network/GPU 进程，DevTools 数据
+> **完整多进程架构**尚未实现（M1+M2+M3a 已交付：Renderer 子进程 + IPC +
+> 渲染器会话 + GUI 隔离渲染模式 + Network 子进程（顶层抓取、逐跳 Cookie 回问）；
+> 子资源仍进程内直连（M3b），无沙箱/GPU 进程，DevTools 数据
 > 未回传，见 ADR 0016）；
 > 视频解码已接入 FFmpeg（MP4/H.264、WebM/VP9 实测），`<video>` 元素
 > 支持子集（播放/暂停/seek/duration，无 controls/音轨/缓冲）

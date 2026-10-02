@@ -27,6 +27,9 @@ add_library(neko_browser_core
   src/renderer_protocol.cpp
   src/renderer_session.cpp
   src/renderer_session_host.cpp
+  src/network_protocol.cpp
+  src/network_session.cpp
+  src/network_host.cpp
   src/search_engines.cpp
 )
 add_library(neko::browser ALIAS neko_browser_core)

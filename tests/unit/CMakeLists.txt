@@ -228,6 +228,8 @@ add_executable(neko_browser_tests
   browser/renderer_mode_test.cpp
   browser/renderer_protocol_test.cpp
   browser/renderer_session_test.cpp
+  browser/network_protocol_test.cpp
+  browser/network_session_test.cpp
 )
 target_link_libraries(neko_browser_tests PRIVATE neko::browser neko::browser_options neko::graphics gmock_main)
 target_compile_definitions(neko_browser_tests PRIVATE

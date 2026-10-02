@@ -40,6 +40,10 @@ std::string UsageText()
          "      --renderer-session    Internal: serve a live renderer session on\n"
          "                            stdin/stdout (spawned by the GUI in\n"
          "                            --renderer-process mode).\n"
+         "      --network-process     Fetch top-level documents through an\n"
+         "                            out-of-process network child (ADR 0016 M3a).\n"
+         "      --network-child       Internal: serve network requests on\n"
+         "                            stdin/stdout (spawned by --network-process).\n"
          "      --verbose              Enable debug logging.\n"
          "      --log-level <level>    One of trace, debug, info, warning, error, fatal.\n"
          "\n"
@@ -85,6 +89,14 @@ ParseResult ParseCommandLine(int argc, char** argv)
     }
     if (arg == "--renderer-session") {
       result.options.renderer_session = true;
+      continue;
+    }
+    if (arg == "--network-process") {
+      result.options.network_process = true;
+      continue;
+    }
+    if (arg == "--network-child") {
+      result.options.network_child = true;
       continue;
     }
     if (arg == "--verbose") {

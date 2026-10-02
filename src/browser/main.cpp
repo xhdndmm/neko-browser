@@ -13,6 +13,8 @@
 #include "neko/browser/browser_controller.h"
 #include "neko/browser/browser_options.h"
 #include "neko/browser/hyperlink.h"
+#include "neko/browser/network_host.h"
+#include "neko/browser/network_session.h"
 #include "neko/browser/page_scripts.h"
 #include "neko/browser/renderer_host.h"
 #include "neko/browser/renderer_protocol.h"
@@ -37,6 +39,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <string>
 
@@ -79,23 +82,30 @@ std::string DefaultProfileDir()
 
 // |script_runtime|, when non-null, receives the page's JS binder so the caller
 // can drive the event loop after the load (see PumpUntilQuiet in main()).
-neko::base::Result<void>
-LoadTarget(neko::renderer::Page& page,
-           const std::string& target,
-           neko::storage::LocalStorage* local_storage,
-           neko::storage::IndexedDbStore* indexed_db,
-           int depth = 0,
-           std::shared_ptr<neko::javascript::DomBinder>* script_runtime = nullptr);
+// |document_fetch|, when set, replaces the in-process network stack for the
+// top-level document fetch (network-process mode, ADR 0016 M3a); it is
+// forwarded to recursive script navigations.
+neko::base::Result<void> LoadTarget(
+    neko::renderer::Page& page,
+    const std::string& target,
+    neko::storage::LocalStorage* local_storage,
+    neko::storage::IndexedDbStore* indexed_db,
+    int depth = 0,
+    std::shared_ptr<neko::javascript::DomBinder>* script_runtime = nullptr,
+    const std::function<neko::base::Result<neko::network::HttpResponse>(const neko::url::Url&)>&
+        document_fetch = {});
 
 // Loads a bare local path (no scheme) into the page and fetches its
 // subresources against an absolute file:// base so relative URLs resolve.
-neko::base::Result<void>
-LoadLocalTarget(neko::renderer::Page& page,
-                const std::string& target,
-                neko::storage::LocalStorage* local_storage,
-                neko::storage::IndexedDbStore* indexed_db,
-                int depth,
-                std::shared_ptr<neko::javascript::DomBinder>* script_runtime)
+neko::base::Result<void> LoadLocalTarget(
+    neko::renderer::Page& page,
+    const std::string& target,
+    neko::storage::LocalStorage* local_storage,
+    neko::storage::IndexedDbStore* indexed_db,
+    int depth,
+    std::shared_ptr<neko::javascript::DomBinder>* script_runtime,
+    const std::function<neko::base::Result<neko::network::HttpResponse>(const neko::url::Url&)>&
+        document_fetch)
 {
   const auto r = page.LoadFile(target);
   if (!r) {
@@ -129,7 +139,8 @@ LoadLocalTarget(neko::renderer::Page& page,
   }
   if (!requested.url.empty()) {
     NEKO_LOG_INFO("script navigated to " + requested.url);
-    return LoadTarget(page, requested.url, local_storage, indexed_db, depth + 1, script_runtime);
+    return LoadTarget(
+        page, requested.url, local_storage, indexed_db, depth + 1, script_runtime, document_fetch);
   }
   // Local page (opened by path without a scheme): fetch its subresources
   // against an absolute file:// base so relative URLs resolve.
@@ -147,12 +158,15 @@ LoadLocalTarget(neko::renderer::Page& page,
 // a depth cap so a redirect loop terminates.  When |local_storage| and
 // |indexed_db| are provided, page scripts get localStorage/indexedDB scoped
 // to the loaded page's origin.
-neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
-                                    const std::string& target,
-                                    neko::storage::LocalStorage* local_storage,
-                                    neko::storage::IndexedDbStore* indexed_db,
-                                    int depth,
-                                    std::shared_ptr<neko::javascript::DomBinder>* script_runtime)
+neko::base::Result<void> LoadTarget(
+    neko::renderer::Page& page,
+    const std::string& target,
+    neko::storage::LocalStorage* local_storage,
+    neko::storage::IndexedDbStore* indexed_db,
+    int depth,
+    std::shared_ptr<neko::javascript::DomBinder>* script_runtime,
+    const std::function<neko::base::Result<neko::network::HttpResponse>(const neko::url::Url&)>&
+        document_fetch)
 {
   constexpr int kMaxNavigationDepth = 20;
   if (depth >= kMaxNavigationDepth) {
@@ -166,7 +180,8 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
   // (mirrors BrowserController::NavigateToUrl, so the renderer child accepts
   // the same path forms the browser process does).
   if (neko::browser::IsWindowsLocalPath(target)) {
-    return LoadLocalTarget(page, target, local_storage, indexed_db, depth, script_runtime);
+    return LoadLocalTarget(
+        page, target, local_storage, indexed_db, depth, script_runtime, document_fetch);
   }
 #endif
   const auto parsed = neko::url::Url::Parse(target);
@@ -174,7 +189,9 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
     const neko::url::Url& url = parsed.value();
     if (url.scheme() == "http" || url.scheme() == "https") {
       NEKO_LOG_INFO("fetching " + url.Serialize());
-      const auto response = neko::network::HttpGet(url);
+      // Network-process mode routes the document fetch through the child
+      // (ADR 0016 M3a); everything else uses the in-process stack.
+      const auto response = document_fetch ? document_fetch(url) : neko::network::HttpGet(url);
       if (!response) {
         return neko::base::Err(response.error());
       }
@@ -229,13 +246,23 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
       // A script may have redirected the page (e.g. location.replace()).
       if (!requested.url.empty()) {
         NEKO_LOG_INFO("script navigated to " + requested.url);
-        return LoadTarget(
-            page, requested.url, local_storage, indexed_db, depth + 1, script_runtime);
+        return LoadTarget(page,
+                          requested.url,
+                          local_storage,
+                          indexed_db,
+                          depth + 1,
+                          script_runtime,
+                          document_fetch);
       }
       if (requested.is_reload) {
         NEKO_LOG_INFO("script reloaded " + url.Serialize());
-        return LoadTarget(
-            page, url.Serialize(), local_storage, indexed_db, depth + 1, script_runtime);
+        return LoadTarget(page,
+                          url.Serialize(),
+                          local_storage,
+                          indexed_db,
+                          depth + 1,
+                          script_runtime,
+                          document_fetch);
       }
       // Scripts may have injected <link rel=stylesheet> (e.g. Bing's
       // as-css-link) after the initial stylesheet pass; fetch those so the
@@ -295,8 +322,13 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
       }
       if (!requested.url.empty()) {
         NEKO_LOG_INFO("script navigated to " + requested.url);
-        return LoadTarget(
-            page, requested.url, local_storage, indexed_db, depth + 1, script_runtime);
+        return LoadTarget(page,
+                          requested.url,
+                          local_storage,
+                          indexed_db,
+                          depth + 1,
+                          script_runtime,
+                          document_fetch);
       }
       // Fetch the page's subresources: relative URLs resolve against the
       // file:// base so local pages behave like served ones.
@@ -311,7 +343,8 @@ neko::base::Result<void> LoadTarget(neko::renderer::Page& page,
         neko::base::Error::NotImplemented("unsupported URL scheme: " + url.scheme()));
   }
   // Not a URL at all: a bare local path.
-  return LoadLocalTarget(page, target, local_storage, indexed_db, depth, script_runtime);
+  return LoadLocalTarget(
+      page, target, local_storage, indexed_db, depth, script_runtime, document_fetch);
 }
 
 // Writes an image::Image as a binary PPM (P6), compositing alpha over white.
@@ -485,7 +518,8 @@ int main(int argc, char** argv)
   // stdout belongs to the wire protocol in both child modes; move any
   // std::cout writer (the page-script console printer) to stderr before the
   // child serves its first request.
-  if (parsed.options.renderer_child || parsed.options.renderer_session) {
+  if (parsed.options.renderer_child || parsed.options.renderer_session ||
+      parsed.options.network_child) {
     RedirectStdoutToStderr();
   }
 
@@ -499,6 +533,12 @@ int main(int argc, char** argv)
   // browser closes the pipe (spawned by RendererSession; ADR 0016 M2).
   if (parsed.options.renderer_session) {
     return neko::browser::RunRendererSession();
+  }
+
+  // Network child mode: serve network requests on stdin/stdout until the
+  // browser closes the pipe (spawned by NetworkSession; ADR 0016 M3a).
+  if (parsed.options.network_child) {
+    return neko::browser::RunNetworkChild();
   }
 
   const std::string profile_dir = parsed.options.profile_name.has_value()
@@ -714,6 +754,10 @@ int main(int argc, char** argv)
       std::cerr << "error: --renderer-process requires --url\n";
       return 1;
     }
+    if (parsed.options.network_process) {
+      NEKO_LOG_WARNING("--network-process does not apply to --renderer-process yet (the "
+                       "renderer child fetches with its own stack); ignoring it");
+    }
     neko::browser::RendererHost host(neko::browser::SelfExecutablePath());
     auto loaded = host.Load(parsed.options.url.value(), /*width=*/800, /*height=*/600);
     if (!loaded.has_value()) {
@@ -723,13 +767,33 @@ int main(int argc, char** argv)
     renderer_result = std::move(loaded.value());
     NEKO_LOG_INFO("renderer child loaded document title: " + renderer_result->title);
   } else if (parsed.options.url.has_value()) {
+    // Network-process mode (ADR 0016 M3a): the top-level document fetch runs
+    // in the child.  Subresource fetches still use the in-process stack in
+    // this milestone (documented limitation).
+    std::shared_ptr<neko::browser::NetworkSession> network_session;
+    std::function<neko::base::Result<neko::network::HttpResponse>(const neko::url::Url&)>
+        document_fetch;
+    if (parsed.options.network_process) {
+      auto spawned = neko::browser::NetworkSession::Spawn(neko::browser::SelfExecutablePath());
+      if (!spawned.has_value()) {
+        std::cerr << "error: cannot start network process: " << spawned.error().message() << "\n";
+        return 1;
+      }
+      network_session = spawned.value();
+      document_fetch = [network_session](const neko::url::Url& fetch_url) {
+        return network_session->Fetch(fetch_url,
+                                      /*cookie_header=*/{},
+                                      neko::browser::NetworkSession::CookieLookupFn{});
+      };
+    }
     std::shared_ptr<neko::javascript::DomBinder> script_runtime;
     const neko::base::Result<void> loaded = LoadTarget(page,
                                                        parsed.options.url.value(),
                                                        &local_storage,
                                                        &indexed_db,
                                                        /*depth=*/0,
-                                                       &script_runtime);
+                                                       &script_runtime,
+                                                       document_fetch);
     if (!loaded) {
       std::cerr << "error: " << loaded.error().message() << "\n";
       return 1;
