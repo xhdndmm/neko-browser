@@ -1523,7 +1523,41 @@ void BrowserController::ApplyDeferredImageFetchSignals(Tab& tab)
   }
 }
 
+void BrowserController::RecordFrameProduced(long long production_ms, long long now_ms)
+{
+  std::lock_guard<std::mutex> lock(stats_mutex_);
+  ++frame_stats_.frames;
+  frame_stats_.production.Record(production_ms);
+  if (last_frame_ms_ != 0) {
+    frame_stats_.interval.Record(now_ms - last_frame_ms_);
+  }
+  last_frame_ms_ = now_ms;
+}
+
+RuntimeStats BrowserController::SnapshotRuntimeStats() const
+{
+  std::lock_guard<std::mutex> lock(stats_mutex_);
+  RuntimeStats stats;
+  stats.pump = pump_turn_stats_;
+  stats.frames = frame_stats_;
+  return stats;
+}
+
 void BrowserController::ProduceFrame(Tab& tab)
+{
+  const auto frame_start = std::chrono::steady_clock::now();
+  ProduceFrameBody(tab);
+  // Count only frames that were actually produced (an empty or non-HTML tab
+  // clears the frame instead).
+  if (tab.frame != nullptr) {
+    const auto now = std::chrono::steady_clock::now();
+    RecordFrameProduced(
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - frame_start).count(),
+        std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count());
+  }
+}
+
+void BrowserController::ProduceFrameBody(Tab& tab)
 {
   if (tab.content_type != ContentType::kHtml || tab.page == nullptr) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1646,8 +1680,15 @@ int BrowserController::PumpScriptTimersUntilQuiet(int max_iterations)
   // Pick up what a finished pool-side late-image pass signalled (it must not
   // touch the Tab): repaint mark and follow-up pass.
   ApplyDeferredImageFetchSignals(*tab);
-  const int iterations =
-      ::neko::browser::PumpScriptTimersUntilQuiet(*tab->script_runtime, max_iterations);
+  // Measure the turns locally and merge once, so a GUI-thread snapshot can
+  // never observe a half-written series (stats_mutex_, not mutex_).
+  LatencyTracker pump_turns;
+  const int iterations = ::neko::browser::PumpScriptTimersUntilQuiet(
+      *tab->script_runtime, max_iterations, &pump_turns);
+  {
+    std::lock_guard<std::mutex> lock(stats_mutex_);
+    MergeLatency(pump_turn_stats_, pump_turns);
+  }
   if (iterations > 0 && tab->page != nullptr) {
     // The pump ran scripts: document.title may have changed (this is how the
     // headless dump-dom path sees a title set by a deferred callback).

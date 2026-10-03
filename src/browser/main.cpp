@@ -903,6 +903,10 @@ int main(int argc, char** argv)
     // of LoadTarget's pipeline, so it is measured on its own.  A requested
     // screenshot is excluded and shows up as wall_ms minus the phases.
     const auto post_load_start = std::chrono::steady_clock::now();
+    const auto elapsed_ms = [](std::chrono::steady_clock::time_point from,
+                               std::chrono::steady_clock::time_point to) {
+      return std::chrono::duration_cast<std::chrono::milliseconds>(to - from).count();
+    };
     // Drive the page's event loop before anything observes the document.  The
     // GUI pumps this from a 50 ms QTimer, but the headless entry points had no
     // event loop at all, so --screenshot / --dump-dom used to capture the page
@@ -912,13 +916,18 @@ int main(int argc, char** argv)
     // rendering).  Bounded by both an iteration cap and a 250 ms quiet budget
     // so a page that schedules work forever still terminates.
     if (script_runtime != nullptr) {
-      neko::browser::PumpScriptTimersUntilQuiet(*script_runtime);
+      // &perf.pump: per-turn durations, the smoothness signal (see
+      // perf_report.h).  Idle waiting between turns is excluded.
+      neko::browser::PumpScriptTimersUntilQuiet(
+          *script_runtime, neko::browser::kDefaultPumpIterations, &perf.pump);
       if (script_runtime->TakeDomDirty()) {
         // Timers mutated the DOM; re-run the cascade so the measured layout
         // reflects it.
         page.ReapplyStyles();
       }
     }
+    const auto pump_end = std::chrono::steady_clock::now();
+    perf.phases.pump = elapsed_ms(post_load_start, pump_end);
     // Lazy-loaded images: pages assign img.src / background-image from timer
     // and event callbacks *after* the initial subresource pass inside
     // LoadTarget, so those sources were never fetched and the screenshot
@@ -944,9 +953,13 @@ int main(int argc, char** argv)
         page.ReapplyStyles();
       }
     }
-    perf.phases.post_load = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                std::chrono::steady_clock::now() - post_load_start)
-                                .count();
+    // post_load is split so the two very different costs inside it are visible:
+    // the script/event pump above, and the late image rounds below.
+    {
+      const auto post_load_end = std::chrono::steady_clock::now();
+      perf.phases.late_images = elapsed_ms(pump_end, post_load_end);
+      perf.phases.post_load = elapsed_ms(post_load_start, post_load_end);
+    }
   } else {
     std::cout << "no URL given; run with --url <url> to load a page.\n";
   }

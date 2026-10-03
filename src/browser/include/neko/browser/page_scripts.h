@@ -1,6 +1,7 @@
 #pragma once
 
 #include "neko/base/thread_pool.h"
+#include "neko/browser/perf_report.h"
 #include "neko/javascript/dom_binding.h"
 #include "neko/javascript/script_engine.h"
 #include "neko/network/http.h"
@@ -124,10 +125,17 @@ RunPageScripts(renderer::Page& page,
 // |max_iterations| pump turns, and by a quiet budget -- a timer scheduled
 // further out than kPumpQuietBudget is treated as "settled" rather than waited
 // for.  Runaway timer chains therefore terminate on the iteration cap.
+//
+// |pump_stats|, when given, accumulates how long each pump turn took (the
+// RunPendingTimers call that runs due timers and delivers queued XHR
+// completions).  That turn is the unit a user perceives as a long task, so it
+// is the smoothness signal --perf-report publishes.  Waiting time between turns
+// is deliberately excluded: it is idle, not work.
 inline constexpr int kDefaultPumpIterations = 1000;
 inline constexpr int kPumpQuietBudgetMs = 250;
 
 int PumpScriptTimersUntilQuiet(javascript::DomBinder& binder,
-                               int max_iterations = kDefaultPumpIterations);
+                               int max_iterations = kDefaultPumpIterations,
+                               LatencyTracker* pump_stats = nullptr);
 
 } // namespace neko::browser

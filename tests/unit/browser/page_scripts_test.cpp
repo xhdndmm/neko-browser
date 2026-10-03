@@ -212,6 +212,33 @@ TEST(PageScriptsTest, FailedFetchIsReportedAndLaterScriptsStillRun)
       << errors.front();
 }
 
+// The pump tracker is the smoothness signal --perf-report publishes, so it must
+// actually observe the turns: a page with a deferred callback produces at least
+// one turn, and the count matches the turns the function reported.
+TEST(PageScriptsTest, PumpTrackerRecordsEveryTurn)
+{
+  renderer::Page page;
+  ScriptFetcherRecorder recorder(0);
+  base::ThreadPool pool(4);
+  const std::string html =
+      "<!DOCTYPE html><html><head><title></title></head><body>"
+      "<script>setTimeout(function () { document.title = 'late'; }, 0);</script>"
+      "</body></html>";
+  const std::shared_ptr<javascript::DomBinder> binder = RunScripts(page, html, recorder, pool);
+  ASSERT_NE(binder, nullptr);
+
+  LatencyTracker turns;
+  const int iterations = PumpScriptTimersUntilQuiet(*binder, kDefaultPumpIterations, &turns);
+  EXPECT_EQ(page.document()->Title(), "late");
+  EXPECT_GT(iterations, 0);
+  // The return value counts turns that ran work; the tracker also sees the final
+  // turn that found nothing due (it is still a turn, and it is the one that
+  // proves the page settled), so it is exactly one higher.
+  EXPECT_EQ(turns.count, static_cast<std::size_t>(iterations) + 1);
+  EXPECT_EQ(turns.samples_ms.size(), turns.count);
+  EXPECT_GE(turns.longest_ms, 0);
+}
+
 TEST(PageScriptsTest, InlineScriptsNeedNoFetch)
 {
   renderer::Page page;

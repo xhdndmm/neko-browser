@@ -74,6 +74,11 @@ void BrowserWorker::Navigate(int tab_id, const QString& input)
 // GUI snapshots (thread-safe; forward to the controller's locked copies)
 // ---------------------------------------------------------------------------
 
+browser::RuntimeStats BrowserWorker::SnapshotRuntimeStats() const
+{
+  return controller_.SnapshotRuntimeStats();
+}
+
 std::vector<browser::TabSnapshot> BrowserWorker::SnapshotTabs() const
 {
   return controller_.SnapshotTabs();

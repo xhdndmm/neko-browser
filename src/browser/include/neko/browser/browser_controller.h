@@ -4,6 +4,7 @@
 #include "neko/browser/download_manager.h"
 #include "neko/browser/network_session.h"
 #include "neko/browser/page_scripts.h"
+#include "neko/browser/perf_report.h"
 #include "neko/browser/renderer_session.h"
 #include "neko/image/image.h"
 #include "neko/javascript/dom_binding.h"
@@ -488,6 +489,11 @@ public:
   size_t SnapshotCookieCount() const;
   std::vector<storage::Cookie> SnapshotCookies() const;
   std::vector<NetworkLogEntry> SnapshotNetworkLog() const;
+
+  // Worker-side measurements for --perf-report: pump turn durations and frame
+  // production (see perf_report.h).  Guarded by its own mutex so it never
+  // interacts with |mutex_| lock ordering; safe to call from the GUI thread.
+  RuntimeStats SnapshotRuntimeStats() const;
   std::vector<ConsoleEntry> SnapshotConsoleLog() const;
 
   // What sits under a document point, for the page context menu.  Empty
@@ -745,6 +751,9 @@ private:
   // with it.  Called from the worker after any DOM/layout/scroll/viewport
   // change; the GUI only ever reads the result through TabSnapshot.
   void ProduceFrame(Tab& tab);
+  // The raster/relayout work behind ProduceFrame, split out so the public one
+  // can time it and record the frame (--perf-report; see RecordFrameProduced).
+  void ProduceFrameBody(Tab& tab);
   // Re-resolves |tab.hovered_element| from the last pointer position (worker
   // thread).  A page script can remove the previously hovered node, so the
   // stored raw pointer may dangle; callers re-resolve before any deferred use
@@ -803,6 +812,14 @@ private:
   // ThreadSanitizer reports it as a lock-order-inversion.  So: do all Page work
   // with mutex_ released, then take mutex_ only to publish or read tab state.
   mutable std::mutex mutex_;
+
+  // --perf-report measurement state.  Recorded on the worker thread, read from
+  // the GUI thread, so it has its own mutex (see SnapshotRuntimeStats).
+  void RecordFrameProduced(long long production_ms, long long now_ms);
+  mutable std::mutex stats_mutex_;
+  LatencyTracker pump_turn_stats_;
+  FrameStats frame_stats_;
+  long long last_frame_ms_ = 0;
 
   std::vector<std::unique_ptr<Tab>> tabs_;
   int active_tab_ = -1;

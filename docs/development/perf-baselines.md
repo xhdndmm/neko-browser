@@ -21,8 +21,22 @@ cmake --preset release && cmake --build --preset release --parallel
 {"wall_ms":13961,"requests":181,"connections_opened":49,"connections_reused":132,
  "connections_discarded":27,"bytes":19233480,
  "phases":{"document":202,"stylesheets1":975,"fonts1":899,"scripts":6442,
-           "stylesheets2":617,"fonts2":0,"images":559,"videos":0,"post_load":4162}}
+           "stylesheets2":617,"fonts2":0,"images":559,"videos":0,
+           "pump":5607,"late_images":293,"post_load":5900},
+ "pump_turns":16,"pump_over_50ms":2,"pump_total_ms":4800,
+ "pump_p50":0,"pump_p95":4726,"pump_max":4726,
+ "frames":0,"frame_over_50ms":0,
+ "frame_production_p50":0,"frame_production_p95":0,"frame_production_max":0,
+ "frame_interval_p50":0,"frame_interval_p95":0,"frame_interval_max":0}
 ```
+
+**`pump_*` 是流畅性的主指标**：一次「泵动作」= `DomBinder::RunPendingTimers()` 的一次调用，
+也就是到期定时器 + 排队中的 XHR 完成回调真正执行 JS 的那一轮——用户感知到的"长任务"
+就是这一轮。轮与轮之间的**等待不计入**（那是空闲，不是工作）。
+`pump_over_50ms` 是 ≥50 ms 的轮数（**纯信息，不作门禁**）。
+
+**`frames` 只在存在帧管线时非零**：headless `--dump-dom` 不产生帧，因此恒为 0；
+GUI 路径用下面的工具测（帧产出耗时 + 帧间隔）。
 
 - **计数器**（`requests`/`connections_*`/`bytes`）在同一页面内容下可重复：本次两次
   连续运行完全相同。页面内容轮换（bilibili 会个性化/轮播）会带来 ±1–2 请求、
@@ -30,6 +44,28 @@ cmake --preset release && cmake --build --preset release --parallel
 - **相位时间**是波动的（网络与机器负载），只作证据，**不作门禁**——见下"纪律"。
 - 相位语义见 `src/browser/include/neko/browser/perf_report.h`。`wall_ms` 含截图
   光栅化（因此 `wall_ms − Σphases` 大致就是截图时间）。
+
+## GUI 路径（帧与泵）
+
+```bash
+QT_QPA_PLATFORM=offscreen ./build/debug/bin/neko_gui_screenshot \
+    https://www.bilibili.com /tmp/shot.png --perf-report
+```
+
+它打印与 CLI 相同的 JSON 行（`frames` 段才有意义；计数器来自 GUI 路径自己走的
+`SharedHttpClient`）。**使用前先看这三点限制**：
+
+1. 该工具只跑到页面"就绪"（内容 + 非 loading + 首帧）为止，**不是稳态 FPS 测量**；
+   其就绪循环上限 200×50 ms = 10 s，重载页面可能超时——超时会向 stderr 打印
+   `page did not settle within 10 s`，此时的报告描述的是**未完成的加载**（实测
+   出现过 `requests=35`、`frames=0` 的这种样本，勿当结论）。
+2. **`pump_turns` 在该工具里恒为 0**：它用 `processEvents()` 驱动，不像真 GUI 那样
+   每 50 ms 触发 `PumpScriptTimers`。所以 GUI 的泵时长目前**测不到**——这是已知缺口，
+   需要一个"驱动 N 秒泵并统计帧/泵分布"的稳态 harness（下一项工作）。
+3. 帧数只覆盖加载窗口内的产出。
+
+实测（debug，bilibili，就绪样本）：`frames 2–3`、帧间隔 p50 ≈ 0.8–1.7 s、
+单帧产出最长 750–780 ms、`frame_over_50ms ≥ 1`——即**加载期间内容只在秒级粒度上更新**。
 
 ## 实测（2026-10-03，本机 Linux x86_64，同机同网，`--dump-dom`）
 
@@ -46,7 +82,10 @@ cmake --preset release && cmake --build --preset release --parallel
 | **scripts** | **11.1–19.7 s** | **5.21 / 5.82 s** | 6.44 / 6.88 s |
 | stylesheets2 | （含在 scripts 内） | 0.33 / 0.39 s | 0.62 / 0.82 s |
 | images | ~0.6 s | 0.41 / 0.62 s | 0.56 / 0.58 s |
-| **post_load** | ~4.3 s | （未单独测） | **4.06 / 4.16 s** |
+| **post_load** | ~4.3 s | **1.46 / 5.26 s** | **4.06 / 4.16 s** |
+| ├ pump（定时器/事件泵） | （未拆分） | **1.23 / 4.60 s** | （未单独测） |
+| └ late_images（晚到图片轮次） | （未拆分） | **0.23 / 0.67 s** | （未单独测） |
+| 单次泵动作最长 | （未测量） | **0.65 / 4.01 s**（`pump_max`） | 4.73 s（debug） |
 | XHR 类请求 | 33 个 / 12.9 s / 跨度 19.6 s / 每个 ~0.51 s | **32 个 / 3.6–5.3 s / 跨度 7.8 s / 中位 24–102 ms** | （含在 scripts + post_load） |
 
 关键结论（写入 ADR 0022 修订与 Council memo）：
@@ -55,8 +94,13 @@ cmake --preset release && cmake --build --preset release --parallel
    ~0.51 s 降到中位 24–102 ms。**"可回收 12.9 s"这一说法在 HEAD 上已过期**，
    P1 异步化的收益必须重新表述（上限 = Σ(耗时) − 最长单个请求，实际未知）。
 2. `scripts` 仍是最大单项（5.2–6.9 s）——剩余部分是脚本体抓取后的**执行**，不是传输。
-3. **`post_load` ≈ 4.1 s 是本轮新量化的未处理大项**（定时器泵 + 晚到图片轮次），
-   P0 完全没碰它；它和阻塞式 XHR 一样会让帧产出停摆。
+3. **`post_load` 已拆分，它的代价几乎全在泵里**：release 两次实测
+   `pump = 1.23 / 4.60 s` 对 `late_images = 0.23 / 0.67 s`，而且泵内**存在单轮
+   0.65 / 4.01 s 的动作**（`pump_max`，`pump_over_50ms = 2`）——一次 JS 回调链
+   就把 worker 独占数秒。**这是目前测得的最大流畅性问题**，量级超过阻塞式
+   XHR（32 次 × 中位 24–102 ms），而 P0 完全没碰它。注意它与墙钟的波动同源：
+   两次运行的 `scripts` 是 2.6 s 与 10.0 s，说明慢的那部分在 JS 抓取/执行，
+   而不是传输。
 4. 差异说明：`Σ(XHR 耗时) = 3.6 s` 却占 **7.8 s 跨度** → 剩余时间**不在传输**
    （JS 计算，或页面自己在等依赖）。这正需要 fixture A/B 与 send() 站点插桩来判定。
 
@@ -76,7 +120,9 @@ cmake --preset release && cmake --build --preset release --parallel
 - `--renderer-process` 下抓取发生在子进程，报告里的连接计数器描述的是**未被使用**的
   进程内 client；相位对渲染子进程模式亦不适用。
 - `bytes` 是**解码后**的响应体大小（含字体/图片/脚本），不含 HTTP 头。
-- 只覆盖**加载**：仓库目前仍**没有任何帧时间/jank/交互延迟指标**（Council 双方
-  独立确认），流畅性指标是下一步工作。
+- 流畅性指标现在**部分**覆盖：泵轮时长（CLI 可用）与帧产出/间隔（GUI 工具可用）；
+  仍缺：稳态 FPS、输入→帧延迟、以及 GUI 泵时长（见上文限制 2）。
+- 泵指标按"轮"聚合，**不区分**是定时器回调还是 XHR 完成回调；要归因到具体回调需要
+  在 binder 里按任务类型分别计时（后续）。
 - 尚无按资源类别拆分的字节统计（本页字体 108 文件 / 9.6 MB 这类数字仍来自临时
   插桩），拆分统计列为后续。

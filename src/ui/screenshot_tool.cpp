@@ -7,7 +7,9 @@
 // end-to-end visual validation in CI and locally.  With --renderer-process the
 // page is rendered by a renderer child (ADR 0016 M2).
 
+#include "neko/browser/perf_report.h"
 #include "neko/browser/preferences_keys.h"
+#include "neko/network/http_client.h"
 #include "neko/storage/preferences.h"
 #include "neko/ui/browser_worker.h"
 #include "neko/ui/i18n.h"
@@ -54,6 +56,7 @@ int main(int argc, char** argv)
   }
 
   neko::browser::RendererOptions renderer;
+  bool perf_report = false;
   QString url = QStringLiteral("about:blank");
   QString out = QStringLiteral("screenshot.png");
   bool have_url = false;
@@ -61,6 +64,10 @@ int main(int argc, char** argv)
     const std::string arg = argv[i];
     if (arg == "--renderer-process") {
       renderer.enabled = true;
+      continue;
+    }
+    if (arg == "--perf-report") {
+      perf_report = true;
       continue;
     }
     if (!have_url) {
@@ -75,6 +82,7 @@ int main(int argc, char** argv)
   window.resize(1100, 800);
   window.show();
 
+  const auto report_wall_start = std::chrono::steady_clock::now();
   worker.NavigateActive(url);
 
   // Wait until navigation and synchronous subresource loading complete, then
@@ -107,6 +115,16 @@ int main(int argc, char** argv)
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
 
+  if (!ready) {
+    // Bounded loop: a heavy page can still be loading when the cap expires.  Say
+    // so, because --perf-report would otherwise look like a complete-load
+    // measurement of a load that never finished (observed on bilibili: the
+    // report showed 35 requests and zero frames).
+    std::fprintf(stderr,
+                 "warning: page did not settle within 10 s; the screenshot and any "
+                 "--perf-report describe an incomplete load\n");
+  }
+
   // The frame is produced on the worker thread and published through a queued
   // StateChanged; let the WebView consume the latest snapshot (ADR 0020)
   // before grabbing, otherwise the shot can show the previous blank frame.
@@ -124,5 +142,26 @@ int main(int argc, char** argv)
     return 1;
   }
   std::printf("saved %s (%dx%d)\n", out.toLocal8Bit().constData(), shot.width(), shot.height());
+
+  if (perf_report) {
+    // The GUI path's smoothness artifact: pump turn durations and frame
+    // production (see perf_report.h and docs/development/perf-baselines.md).
+    // Deterministic counters and a load of timing evidence; nothing gates CI
+    // on the timing values.
+    const neko::browser::RuntimeStats runtime = worker.SnapshotRuntimeStats();
+    const neko::network::HttpClient::Stats network = neko::network::SharedHttpClient().stats();
+    neko::browser::PerfReport report;
+    report.wall_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now() - report_wall_start)
+                         .count();
+    report.pump = runtime.pump;
+    report.frames = runtime.frames;
+    report.counters.requests = network.requests;
+    report.counters.connections_opened = network.connections_opened;
+    report.counters.connections_reused = network.connections_reused;
+    report.counters.connections_discarded = network.connections_discarded;
+    report.counters.bytes = network.bytes;
+    std::printf("%s\n", neko::browser::FormatPerfReportLine(report).c_str());
+  }
   return 0;
 }

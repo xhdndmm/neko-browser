@@ -942,12 +942,23 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
   return binder;
 }
 
-int PumpScriptTimersUntilQuiet(javascript::DomBinder& binder, int max_iterations)
+int PumpScriptTimersUntilQuiet(javascript::DomBinder& binder,
+                               int max_iterations,
+                               LatencyTracker* pump_stats)
 {
   constexpr auto kQuietBudget = std::chrono::milliseconds(kPumpQuietBudgetMs);
   int iterations = 0;
   for (; iterations < max_iterations; ++iterations) {
-    if (binder.RunPendingTimers() > 0) {
+    // Time one turn: this is where due timers run and queued XHR completions
+    // are delivered, i.e. where a page's script work actually executes.
+    const auto turn_start = std::chrono::steady_clock::now();
+    const int ran = binder.RunPendingTimers();
+    if (pump_stats != nullptr) {
+      pump_stats->Record(std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - turn_start)
+                             .count());
+    }
+    if (ran > 0) {
       continue; // ran something; go round again
     }
     // Nothing was due.  Stop unless a timer is scheduled close enough to now
