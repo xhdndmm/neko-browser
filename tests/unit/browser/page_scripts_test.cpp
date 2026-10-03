@@ -245,6 +245,8 @@ TEST(PageScriptsTest, PumpTrackerRecordsEveryTurn)
 // evaluation (QuickJS), module loading, lifecycle handlers, and the cascade the
 // engine re-runs afterwards.  Times cannot be gated (TESTING.md), so the counts
 // are what a test asserts.
+// Segment COUNTS are asserted, not durations: a `>= 0` on a value that is only
+// ever accumulated is tautological, and TESTING.md forbids gating on times.
 TEST(PageScriptsTest, RecordsScriptPhaseSegments)
 {
   renderer::Page page;
@@ -259,27 +261,69 @@ TEST(PageScriptsTest, RecordsScriptPhaseSegments)
       RunScripts(page, html, recorder, pool, {}, &timings);
   ASSERT_NE(binder, nullptr);
 
-  EXPECT_EQ(timings.fetches, 1u);     // the external body was waited for
-  EXPECT_EQ(timings.evaluations, 2u); // external + inline
-  EXPECT_EQ(timings.events, 1u);      // one DOMContentLoaded/load dispatch pair
-  EXPECT_EQ(timings.restyles, 1u);    // the cascade after scripts
-  EXPECT_GE(timings.fetch_ms, 0);
-  EXPECT_GE(timings.exec_ms, 0);
-  EXPECT_GE(timings.restyle_ms, 0);
+  EXPECT_EQ(timings.fetches, 1u);          // the external body was waited for
+  EXPECT_EQ(timings.evaluations, 2u);      // external + inline
+  EXPECT_EQ(timings.event_dispatches, 2u); // DOMContentLoaded and load
+  EXPECT_EQ(timings.restyles, 1u);         // the cascade after scripts
+  EXPECT_EQ(timings.modules, 0u);          // classic scripts only
+  // /a.js appends 'A' (see ScriptFetcherRecorder); the inline script adds '!'.
+  EXPECT_EQ(page.document()->Title(), "A!");
+
+  // The out-parameter is optional: the same page produces the same DOM without
+  // it (this is the only meaningful thing the absent-timings path can assert).
+  renderer::Page unmeasured;
+  const std::shared_ptr<javascript::DomBinder> plain = RunScripts(unmeasured, html, recorder, pool);
+  ASSERT_NE(plain, nullptr);
+  EXPECT_EQ(unmeasured.document()->Title(), "A!");
+}
+
+// The module segment is ~85% of the script phase on a real site, so it must be
+// covered: a module script must land in |modules| and in neither of the classic
+// segments, which is exactly the boundary the split claims.
+TEST(PageScriptsTest, ModuleScriptsAreNotCountedAsClassicScripts)
+{
+  renderer::Page page;
+  ScriptFetcherRecorder recorder(1); // the module entry fetch
+  base::ThreadPool pool(4);
+  ScriptTimings timings;
+  const std::string html = "<!DOCTYPE html><html><head><title></title>"
+                           "<script type=\"module\" src=\"/m.js\"></script>"
+                           "</head><body></body></html>";
+  recorder.SetReply("/m.js", ScriptFetcherRecorder::Reply{true, "document.title = 'module';"});
+  const std::shared_ptr<javascript::DomBinder> binder =
+      RunScripts(page, html, recorder, pool, {}, &timings);
+  ASSERT_NE(binder, nullptr);
+
+  EXPECT_EQ(timings.modules, 1u);
+  EXPECT_EQ(timings.evaluations, 0u);      // not a classic script
+  EXPECT_EQ(timings.fetches, 0u);          // the entry fetch belongs to the module segment
+  EXPECT_EQ(timings.event_dispatches, 2u); // still two lifecycle dispatches
+  EXPECT_EQ(page.document()->Title(), "module");
+}
+
+// Pins the ScriptTimings -> LoadPhases mapping: five assignments of the same
+// shape, so a swapped pair would otherwise go unnoticed.
+TEST(PageScriptsTest, ScriptTimingsMapToDistinctPhases)
+{
+  ScriptTimings timings;
+  timings.fetch_ms = 11;
+  timings.exec_ms = 22;
+  timings.modules_ms = 33;
+  timings.events_ms = 44;
+  timings.restyle_ms = 55;
+
+  LoadPhases phases;
+  ApplyScriptTimings(timings, phases);
+  EXPECT_EQ(phases.scripts_fetch, 11);
+  EXPECT_EQ(phases.scripts_exec, 22);
+  EXPECT_EQ(phases.scripts_modules, 33);
+  EXPECT_EQ(phases.scripts_events, 44);
+  EXPECT_EQ(phases.scripts_restyle, 55);
+  // The total is measured around RunPageScripts, not derived here.
+  EXPECT_EQ(phases.scripts, 0);
 }
 
 // Without an out-param nothing is measured and behaviour is unchanged.
-TEST(PageScriptsTest, RecordsNothingWhenTimingsAreNotRequested)
-{
-  renderer::Page page;
-  ScriptFetcherRecorder recorder(0);
-  base::ThreadPool pool(4);
-  const std::shared_ptr<javascript::DomBinder> binder =
-      RunScripts(page, ThreeScriptPage(), recorder, pool);
-  ASSERT_NE(binder, nullptr);
-  EXPECT_EQ(page.document()->Title(), "ABC");
-}
-
 TEST(PageScriptsTest, InlineScriptsNeedNoFetch)
 {
   renderer::Page page;

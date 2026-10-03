@@ -59,21 +59,47 @@ struct PageScriptServices
 // prefetch landed they interleave (script 1 runs while scripts 2..N download),
 // so a single "scripts" number cannot say which one to work on.  Module scripts
 // fetch their imports through the runtime, so their I/O is counted in neither.
+// Where the script phase spent its time.  The costs are very different -- blocked
+// on the network versus running script -- and after the parallel prefetch landed
+// they interleave (script 1 runs while scripts 2..N download), so a single
+// "scripts" number cannot say which one to work on.
+//
+// Segment calibration (what each number does and does not cover):
+//   * fetch_ms/fetches: classic external bodies only.  A prefetch hit counts the
+//     wait it actually was, which is the point of the segment.
+//   * modules_ms/modules: a MIXED quantity -- the module entry fetch plus
+//     EvaluateModule, which itself fetches that module's imports.  It does not
+//     separate network from CPU, so it cannot by itself support a claim like "the
+//     cost is evaluation, not the network"; an import-heavy module would inflate
+//     it with I/O.  Splitting it into module fetch/eval is deliberately deferred
+//     until the bytecode-cache work needs it.
+//   * event_dispatches: dispatch CALLS, not listeners that ran.  A page with
+//     scripts performs two per load (DOMContentLoaded and load), so a page with no
+//     listeners still reports two -- the count says the dispatches happened, not
+//     that they cost anything.
+//   * restyle_ms: the cascade the engine re-runs after scripts mutated the DOM.
+// Times are accumulated in nanoseconds and converted once, because six
+// truncating conversions could leave a residual that looks like a measurement gap.
 struct ScriptTimings
 {
-  long long fetch_ms = 0;   // blocked waiting for an external classic script body
-  long long exec_ms = 0;    // classic script: binder->Evaluate (parse+compile+run)
-  long long module_ms = 0;  // module scripts: their fetches plus evaluation
-  long long events_ms = 0;  // DOMContentLoaded / load handler dispatch
-  long long restyle_ms = 0; // the cascade re-run after scripts mutated the DOM
+  long long fetch_ms = 0;
+  long long exec_ms = 0;
+  long long modules_ms = 0;
+  long long events_ms = 0;
+  long long restyle_ms = 0;
   // Counts: deterministic, unlike the times, so a test can assert that each
   // segment was actually measured (and a future CI gate can count, not time).
   std::size_t fetches = 0;
   std::size_t evaluations = 0;
   std::size_t modules = 0;
-  std::size_t events = 0;
+  std::size_t event_dispatches = 0;
   std::size_t restyles = 0;
 };
+
+// Folds a measurement into a load report field by field.  A free function so a
+// test can pin the mapping: inlined in main.cpp a swapped pair would go unnoticed
+// by every test.
+void ApplyScriptTimings(const ScriptTimings& timings, LoadPhases& phases);
 
 // A navigation requested by a page script through window.location (href
 // assignment, assign(), replace(), or reload()).  After RunPageScripts

@@ -313,11 +313,9 @@ neko::base::Result<void> LoadTarget(
             &script_timings);
       }
       phase(&phases.scripts);
-      phases.scripts_fetch = script_timings.fetch_ms;
-      phases.scripts_exec = script_timings.exec_ms;
-      phases.scripts_modules = script_timings.module_ms;
-      phases.scripts_events = script_timings.events_ms;
-      phases.scripts_restyle = script_timings.restyle_ms;
+      // One mapping function, pinned by a test (a swapped pair inlined here
+      // would go unnoticed by every test).
+      neko::browser::ApplyScriptTimings(script_timings, phases);
       // A script may have redirected the page (e.g. location.replace()).
       if (!requested.url.empty()) {
         NEKO_LOG_INFO("script navigated to " + requested.url);

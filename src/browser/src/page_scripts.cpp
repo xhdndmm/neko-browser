@@ -649,6 +649,33 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
   }
 
   auto binder = std::make_shared<javascript::DomBinder>(*document, apis);
+
+  // Script-phase measurement: the sites below accumulate raw nanoseconds and
+  // counts here, and the already-converted values are published once at the end
+  // (see ScriptTimings in the header for what each segment does and does not
+  // cover).
+  struct ScriptAccumulator
+  {
+    long long fetch_ns = 0;
+    std::size_t fetches = 0;
+    long long exec_ns = 0;
+    std::size_t evaluations = 0;
+    long long modules_ns = 0;
+    std::size_t modules = 0;
+    long long events_ns = 0;
+    std::size_t event_dispatches = 0;
+    long long restyle_ns = 0;
+    std::size_t restyles = 0;
+    static long long ToMs(long long ns)
+    {
+      return ns / 1000000;
+    }
+  } acc;
+  const auto elapsed_ns = [](std::chrono::steady_clock::time_point start) {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() -
+                                                                start)
+        .count();
+  };
   binder->SetConsoleSink(std::move(sink));
 
   // Runs one classic script body (inline text or fetched external file);
@@ -705,12 +732,8 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     binder->SetCurrentScript(script);
     const auto exec_start = std::chrono::steady_clock::now();
     const auto result = binder->Evaluate(source, filename);
-    if (timings != nullptr) {
-      ++timings->evaluations;
-      timings->exec_ms += std::chrono::duration_cast<std::chrono::milliseconds>(
-                              std::chrono::steady_clock::now() - exec_start)
-                              .count();
-    }
+    ++acc.evaluations;
+    acc.exec_ns += elapsed_ns(exec_start);
     binder->SetCurrentScript(nullptr);
     if (!result.has_value()) {
       const std::string message = result.error().message();
@@ -820,12 +843,8 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
       const auto fetch_start = std::chrono::steady_clock::now();
       const base::Result<network::HttpResponse> response =
           prefetched_ready ? prefetched_entry->second.get() : fetch(target.value());
-      if (timings != nullptr) {
-        ++timings->fetches;
-        timings->fetch_ms += std::chrono::duration_cast<std::chrono::milliseconds>(
-                                 std::chrono::steady_clock::now() - fetch_start)
-                                 .count();
-      }
+      ++acc.fetches;
+      acc.fetch_ns += elapsed_ns(fetch_start);
       if (!response) {
         const std::string message =
             "script: fetch failed for " + absolute + ": " + response.error().message();
@@ -865,12 +884,8 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
   auto run_module_source = [&](std::string_view source, const std::string& url) {
     const auto module_start = std::chrono::steady_clock::now();
     const auto result = binder->EvaluateModule(source, url);
-    if (timings != nullptr) {
-      ++timings->modules;
-      timings->module_ms += std::chrono::duration_cast<std::chrono::milliseconds>(
-                                std::chrono::steady_clock::now() - module_start)
-                                .count();
-    }
+    ++acc.modules;
+    acc.modules_ns += elapsed_ns(module_start);
     if (!result.has_value()) {
       report_error("Uncaught [" + url + "] " + result.error().message());
     }
@@ -888,13 +903,11 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
       if (!loaded_module_urls.insert(module_url).second) {
         return; // same-URL entry already evaluated
       }
+      // The entry fetch is part of the module segment (which is therefore a
+      // network+CPU mix), but not part of |fetches|, which counts classic bodies.
       const auto module_fetch_start = std::chrono::steady_clock::now();
       const auto response = fetch(target.value());
-      if (timings != nullptr) {
-        timings->module_ms += std::chrono::duration_cast<std::chrono::milliseconds>(
-                                  std::chrono::steady_clock::now() - module_fetch_start)
-                                  .count();
-      }
+      acc.modules_ns += elapsed_ns(module_fetch_start);
       if (!response.has_value()) {
         report_error("module script: fetch failed for " + module_url + ": " +
                      response.error().message());
@@ -966,13 +979,12 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     // attached to one of these two events -- it is script work, not layout.
     const auto events_start = std::chrono::steady_clock::now();
     binder->DispatchDocumentEvent("DOMContentLoaded");
+    // Counted per dispatch (two per load), because that is what the number means:
+    // a page with no listeners still dispatches both.
+    ++acc.event_dispatches;
     binder->DispatchDocumentEvent("load");
-    if (timings != nullptr) {
-      ++timings->events;
-      timings->events_ms += std::chrono::duration_cast<std::chrono::milliseconds>(
-                                std::chrono::steady_clock::now() - events_start)
-                                .count();
-    }
+    ++acc.event_dispatches;
+    acc.events_ns += elapsed_ns(events_start);
   }
 
   // Scripts may have mutated the DOM; re-run the cascade so layout reflects
@@ -981,14 +993,31 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
   {
     const auto restyle_start = std::chrono::steady_clock::now();
     page.ReapplyStyles();
-    if (timings != nullptr) {
-      ++timings->restyles;
-      timings->restyle_ms += std::chrono::duration_cast<std::chrono::milliseconds>(
-                                 std::chrono::steady_clock::now() - restyle_start)
-                                 .count();
-    }
+    ++acc.restyles;
+    acc.restyle_ns += elapsed_ns(restyle_start);
+  }
+  if (timings != nullptr) {
+    timings->fetch_ms = ScriptAccumulator::ToMs(acc.fetch_ns);
+    timings->exec_ms = ScriptAccumulator::ToMs(acc.exec_ns);
+    timings->modules_ms = ScriptAccumulator::ToMs(acc.modules_ns);
+    timings->events_ms = ScriptAccumulator::ToMs(acc.events_ns);
+    timings->restyle_ms = ScriptAccumulator::ToMs(acc.restyle_ns);
+    timings->fetches = acc.fetches;
+    timings->evaluations = acc.evaluations;
+    timings->modules = acc.modules;
+    timings->event_dispatches = acc.event_dispatches;
+    timings->restyles = acc.restyles;
   }
   return binder;
+}
+
+void ApplyScriptTimings(const ScriptTimings& timings, LoadPhases& phases)
+{
+  phases.scripts_fetch = timings.fetch_ms;
+  phases.scripts_exec = timings.exec_ms;
+  phases.scripts_modules = timings.modules_ms;
+  phases.scripts_events = timings.events_ms;
+  phases.scripts_restyle = timings.restyle_ms;
 }
 
 int PumpScriptTimersUntilQuiet(javascript::DomBinder& binder,

@@ -32,28 +32,37 @@ python3 tools/perf_report.py --unit s /tmp/perf.jsonl
 原始行（供脚本消费）：
 
 ```json
-{"wall_ms":13961,"requests":181,"connections_opened":49,"connections_reused":132,
- "connections_discarded":27,"bytes":19233480,
- "phases":{"document":202,"stylesheets1":975,"fonts1":899,
-           "scripts":6442,"scripts_fetch":215,"scripts_exec":130,
-           "scripts_modules":5057,"scripts_events":0,"scripts_restyle":500,
-           "stylesheets2":617,"fonts2":0,"images":559,"videos":0,
-           "pump":5607,"late_images":293,"post_load":5900},
- "pump_turns":16,"pump_over_50ms":2,"pump_total_ms":4800,
- "pump_breakdown":{"timers_ms":372,"timers":95,"jobs_ms":104,"job_rounds":95,
-                   "xhr_ms":0,"xhr":8,"raf_ms":2494,"raf":38,
+{"wall_ms":17993,"requests":181,"connections_opened":50,"connections_reused":131,
+ "connections_discarded":27,"bytes":18781086,
+ "phases":{"document":1108,"stylesheets1":601,"fonts1":1112,
+           "scripts":8518,"scripts_fetch":985,"scripts_exec":51,
+           "scripts_modules":7346,"scripts_events":0,"scripts_restyle":129,
+           "stylesheets2":390,"fonts2":0,"images":1036,"videos":0,
+           "pump":4459,"late_images":720,"post_load":5179},
+ "pump_turns":16,"pump_over_50ms":1,"pump_total_ms":4016,
+ "pump_p50":0,"pump_p95":3992,"pump_max":3992,
+ "pump_breakdown":{"timers_ms":69,"timers":103,"jobs_ms":11,"job_rounds":103,
+                   "xhr_ms":0,"xhr":9,"raf_ms":3929,"raf":38,
                    "ports_ms":0,"ports":0,"websockets_ms":0,"websockets":0},
- "pump_p50":0,"pump_p95":4726,"pump_max":4726,
- "frames":0,"frame_over_50ms":0,
- "frame_production_p50":0,"frame_production_p95":0,"frame_production_max":0,
- "frame_interval_p50":0,"frame_interval_p95":0,"frame_interval_max":0}
+ "frames":0,"frame_over_50ms":0,"frame_production_p50":0,"frame_production_p95":0,
+ "frame_production_max":0,"frame_interval_p50":0,"frame_interval_p95":0,
+ "frame_interval_max":0}
 ```
+
+> 上面是**一次真实运行**（release，bilibili）的完整一行，所有字段互相对得上：
+> 脚本五段之和 8511 ms 对 `scripts = 8518 ms`（残差 7 ms），
+> `post_load = pump + late_images`（4459 + 720 = 5179）。**不要把不同运行的字段拼在一起**：
+> 这段曾经就是把拆分后的键粘进拆分前的 `scripts` 基线，凭空造出 540 ms 的"缺口"。
 
 **`scripts_*` 把脚本阶段拆开**（此前只有一个 `scripts`，无法判断该优化什么）：
 `scripts_fetch`＝阻塞等经典脚本体；`scripts_exec`＝`Evaluate`（解析+编译+执行）；
 `scripts_modules`＝模块脚本（`EvaluateModule` 及其 import 抓取）；`scripts_events`＝
 `DOMContentLoaded`/`load` 处理器；`scripts_restyle`＝脚本后引擎重跑的全量样式级联。
-五段之和 ≈ `scripts`（实测未归属仅 8–11 ms，说明拆分闭合）。
+五段在 `RunPageScripts` 内部计时，而 `scripts` 是在它外层测的，所以两者之差就是**残差**：
+DOM 里收集 `<script>`、import-map 解析、并行预取的提交与去重集合、以及三个执行 pass 的
+循环开销（模块 body 本身在 `fetch()` 内产出、在模块计时器**之内**，不是残差）。计时内部按**纳秒累加、出口一次
+换算**，因此残差不是六段各自截断的堆积（上一次的实现是逐段截断，"未归属 8–11 ms"不足以
+证明闭合，现已修正）。实测残差 7–11 ms。
 
 **`pump_breakdown` 说明那些轮里到底跑了什么**（没有它，一个 2.7 s 的轮子毫无可操作性）：
 `timers`/`timers_ms`（到期 `setTimeout`/`setInterval`）、
@@ -136,6 +145,7 @@ QT_QPA_PLATFORM=offscreen ./build/debug/bin/neko_gui_screenshot \
    50 ms 泵一次、每轮只排空少量回调。真 GUI 的泵时长仍缺稳态 harness（见上文限制 2）。
    可操作方向：(a) 给 headless 泵也加"每轮 rAF 上限"（模仿帧预算，让轮与轮之间能推进），
    (b) 建 GUI 稳态 harness 后再判断交互路径的真实分布。
+   （与第 5 条的脚本段是**两笔独立开销**：见上表，泵与脚本段在相位里分开计量。）
 4. **`post_load` 已拆分，它的代价几乎全在泵里**：release 两次实测
    `pump = 1.23 / 4.60 s` 对 `late_images = 0.23 / 0.67 s`，而且泵内**存在单轮
    0.65 / 4.01 s 的动作**（`pump_max`，`pump_over_50ms = 2`）——一次 JS 回调链
@@ -143,13 +153,16 @@ QT_QPA_PLATFORM=offscreen ./build/debug/bin/neko_gui_screenshot \
    XHR（32 次 × 中位 24–102 ms），而 P0 完全没碰它。注意它与墙钟的波动同源：
    两次运行的 `scripts` 是 2.6 s 与 10.0 s，说明慢的那部分在 JS 抓取/执行，
    而不是传输。
-5. **脚本阶段的瓶颈是 QuickJS 求值模块，不是网络**（2026-10 拆分后实测，debug）：
-   `scripts ≈ 5.9–6.7 s`，其中 `scripts_modules = 5.06–6.04 s`（约 85%）、
-   `scripts_restyle = 0.48–0.50 s`、`scripts_fetch = 0.09–0.22 s`、
-   `scripts_exec = 0.13 s`、`scripts_events = 0`。也就是说页面那 1.6 MB 的 ES module
-   在解释器里求值 5–6 秒，经典脚本与网络几乎无关。可行的优化方向是**字节码缓存**
-   （首访后 `JS_WriteObject` 落盘、后续 `JS_ReadObject` 跳过解析+编译）与降低绑定开销，
-   而不是继续优化传输。
+5. **脚本阶段的绝大部分在 `scripts_modules`**（拆分后实测；release 例：
+   `scripts = 8518 ms`，其中 modules 7346、fetch 985、restyle 129、exec 51、events 0）——
+   即瓶颈是那个约 1.6 MB 的 bundle，而不是经典脚本体或传输。
+   **但必须说清该字段的口径**：`scripts_modules` 是**混合量**——模块入口抓取 +
+   `EvaluateModule`（其中还会抓取该模块的 import），它**不区分网络与 CPU**。
+   本页的 bundle 没有 import，因此这里几乎全是求值；但对 import 密集的页面，该字段会被
+   I/O 抬高，**不能**用它单独支撑"贵在求值不在网络"的结论。真要断言，需要把
+   `module_fetch`/`module_eval` 拆开——留到字节码缓存那一步一起做。
+   候选优化仍是**字节码缓存**（首访后 `JS_WriteObject` 落盘、后续 `JS_ReadObject`
+   跳过解析+编译）与降低绑定开销。
 6. 差异说明：`Σ(XHR 耗时) = 3.6 s` 却占 **7.8 s 跨度** → 剩余时间**不在传输**
    （JS 计算，或页面自己在等依赖）。这正需要 fixture A/B 与 send() 站点插桩来判定。
 
@@ -168,6 +181,8 @@ QT_QPA_PLATFORM=offscreen ./build/debug/bin/neko_gui_screenshot \
 
 - `--renderer-process` 下抓取发生在子进程，报告里的连接计数器描述的是**未被使用**的
   进程内 client；相位对渲染子进程模式亦不适用。
+- **`phases.scripts_*` 只在 CLI 的进程内加载路径填写**（与 `phases` 同源）：GUI 帧报告、
+  渲染子进程、网络子进程模式下它们恒为 0，此时 0 的含义是"该路径未测量"，不是"没耗时"。
 - `bytes` 是**解码后**的响应体大小（含字体/图片/脚本），不含 HTTP 头。
 - 流畅性指标现在**部分**覆盖：泵轮时长（CLI 可用）与帧产出/间隔（GUI 工具可用）；
   仍缺：稳态 FPS、输入→帧延迟、以及 GUI 泵时长（见上文限制 2）。
