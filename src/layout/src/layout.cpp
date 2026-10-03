@@ -854,6 +854,25 @@ std::optional<std::int64_t> ParseNonNegativeInt(const dom::Element& element, std
 // floats and positioning are out of scope for this measurement.  Text is
 // measured through |registry| (real advances with per-character fallback)
 // when provided, else with the monospace fallback.
+// Horizontal space a box needs beyond its own content: its padding and border,
+// plus the marker gutter when it is a list item (the marker is drawn in a gutter
+// inside the item's content box).  Intrinsic-width bookkeeping must count this for
+// every box it measures (CSS Sizing 1 §5), otherwise a shrink-to-fit container
+// comes out narrower than its own content and text wraps where a browser would not:
+// miaow.com's list broke after "(" because the auto-width table sized to the text
+// width while the item's content box was that minus the list padding and the
+// marker gap.  Percentage padding resolves against an indefinite width here, so it
+// contributes nothing (the same choice browsers make for intrinsic sizing).
+float HorizontalBoxExtras(const style::ComputedStyle& style)
+{
+  float extras = ResolveSize(style.padding_left, 0) + ResolveSize(style.padding_right, 0) +
+                 ResolveSize(style.border_left, 0) + ResolveSize(style.border_right, 0);
+  if (style.display == style::Display::kListItem) {
+    extras += kListMarkerGap;
+  }
+  return extras;
+}
+
 IntrinsicWidths MeasureContent(const dom::Element& element,
                                const style::StyleEngine& styles,
                                const graphics::FontRegistry* registry)
@@ -1017,17 +1036,18 @@ IntrinsicWidths MeasureContent(const dom::Element& element,
                              child_style.display == style::Display::kTableRow ||
                              child_style.display == style::Display::kTableCell ||
                              child_style.display == style::Display::kTableCaption;
+    const float child_extras = HorizontalBoxExtras(child_style);
     if (block_level) {
       // Block-level content starts a new line.
       flush_line();
       const IntrinsicWidths cw = MeasureContent(child_el, styles, registry);
-      out.min = std::max(out.min, cw.min);
-      out.max = std::max(out.max, cw.max);
+      out.min = std::max(out.min, cw.min + child_extras);
+      out.max = std::max(out.max, cw.max + child_extras);
     } else {
       // Inline content flows onto the current line.
       const IntrinsicWidths cw = MeasureContent(child_el, styles, registry);
-      line_min = std::max(line_min, cw.min);
-      line_max += cw.max;
+      line_min = std::max(line_min, cw.min + child_extras);
+      line_max += cw.max + child_extras;
     }
   }
   flush_line();
@@ -4750,8 +4770,12 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       // Intrinsic widths for auto column sizing.
       for (CellInfo& cell : cells) {
         const IntrinsicWidths w = MeasureContent(*cell.element, styles, registry);
-        cell.min_width = w.min;
-        cell.max_width = w.max;
+        // A column must be wide enough for the cell's content *plus* the cell's own
+        // padding and border (CSS 2.1 §17.5.2.2); leaving them out made every padded
+        // cell too narrow.
+        const float cell_extras = HorizontalBoxExtras(cell.style);
+        cell.min_width = w.min + cell_extras;
+        cell.max_width = w.max + cell_extras;
       }
 
       // width:auto tables shrink to fit their content (CSS2.1 17.5.2):

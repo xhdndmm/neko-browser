@@ -121,6 +121,30 @@ std::size_t CountAtomicBoxes(const LayoutBox& box)
 // A table inside <center> must still lay out its cells as columns: with <center>
 // treated as an unknown inline the cells got no geometry at all (the whole table
 // collapsed into stacked content on a real page).
+// Intrinsic widths must be *outer* widths: a box's own padding/border and a list
+// item's marker gutter belong to the space it needs.  Without them a shrink-to-fit
+// container (an auto-width table) came out narrower than its own content, so the
+// text wrapped where a browser would not -- miaow.com's list broke after "(" for
+// exactly this reason (the table sized to the text width, 213, while the item's
+// content box was 213 minus the list padding and the marker gap).
+TEST(LayoutTest, AutoWidthTableAccountsForChildPaddingAndMarker)
+{
+  Page page = Build("<html><body><table id=\"t\"><tr><td><ul>"
+                    "<li id=\"li\">Christian (ClearCase page)</li>"
+                    "</ul></td></tr></table></body></html>");
+  const LayoutBox* li = FindBox(*page.root, "#li", *page.doc);
+  ASSERT_NE(li, nullptr);
+  // One line: the table must be wide enough for the text plus the marker gutter.
+  EXPECT_EQ(li->lines.size(), 1u);
+
+  // The same content without the wrapper is the control (one line there too).
+  Page control = Build("<html><body><ul><li id=\"li2\">Christian (ClearCase page)</li>"
+                       "</ul></body></html>");
+  const LayoutBox* li2 = FindBox(*control.root, "#li2", *control.doc);
+  ASSERT_NE(li2, nullptr);
+  EXPECT_EQ(li2->lines.size(), 1u);
+}
+
 TEST(LayoutTest, CenterWrapperKeepsTableColumns)
 {
   Page page = Build("<html><body><center><table><tr>"
