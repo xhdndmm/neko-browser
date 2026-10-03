@@ -263,6 +263,20 @@ base::Result<std::size_t> Socket::Send(std::string_view data)
   return sent;
 }
 
+base::Result<bool> Socket::HasPendingInput()
+{
+  for (;;) {
+    const int ready =
+        platform::WaitSocket(fd_, /*want_read=*/true, /*want_write=*/false, /*timeout_ms=*/0);
+    if (ready >= 0) {
+      return ready > 0;
+    }
+    if (!platform::IsInterrupted(platform::LastError())) {
+      return base::Err(base::Error::Network("wait for readable failed"));
+    }
+  }
+}
+
 base::Result<std::string> Socket::Receive(std::size_t max_bytes, int timeout_ms)
 {
   std::string out;
@@ -327,6 +341,39 @@ base::Result<Socket::ReceiveOutcome> Socket::ReceiveWithOutcome(std::size_t max_
     outcome.data.append(buffer, static_cast<std::size_t>(n));
   }
   return outcome;
+}
+
+base::Result<std::string> Socket::ReadSome(std::size_t max_bytes, int timeout_ms)
+{
+  if (max_bytes == 0) {
+    return std::string();
+  }
+  char buffer[16384];
+  for (;;) {
+    const int ready =
+        platform::WaitSocket(fd_, /*want_read=*/true, /*want_write=*/false, timeout_ms);
+    if (ready == 0) {
+      return std::string(); // timeout: nothing arrived
+    }
+    if (ready < 0) {
+      if (platform::IsInterrupted(platform::LastError())) {
+        continue;
+      }
+      return base::Err(base::Error::Network("wait for readable failed"));
+    }
+    const std::size_t want = std::min<std::size_t>(max_bytes, sizeof(buffer));
+    const int n = platform::ReceiveBytes(fd_, buffer, want);
+    if (n == 0) {
+      return std::string(); // EOF
+    }
+    if (n < 0) {
+      if (platform::IsInterrupted(platform::LastError())) {
+        continue;
+      }
+      return base::Err(base::Error::Network("recv failed"));
+    }
+    return std::string(buffer, static_cast<std::size_t>(n));
+  }
 }
 
 base::Result<std::string> Socket::ReceiveAll(int timeout_ms)

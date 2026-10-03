@@ -31,10 +31,33 @@
   负载、负载百分号解码、缺省 `text/plain;charset=US-ASCII`、无 padding 与
   空白容忍、非法字符/尾部置位拒绝；所有子资源（样式表、脚本、@font-face、
   图片、`fetch()`）都走同一入口，因此内联 base64 资源不需要网络
+- **keep-alive 连接复用（ADR 0022）**：`network::HttpClient` 按 origin
+  （scheme+host+port+超时+代理+信任锚）持有空闲连接，`HttpGet()` 经进程级
+  `SharedHttpClient()` 自动复用（每 origin 最多 8 条空闲、60 s 过期）；
+  复用条件是响应 framing 有界且无 `Connection: close`、连接上无残留字节；
+  复用前用非消费式 `HasPendingInput()` 确认对端未关闭；失败重发仅限
+  「复用的连接、收到任何响应字节之前」（GET 幂等）。实现细节：
+  `Socket/TlsSocket::ReadSome()` 单次读取原语（有数据立即返回，
+  不等待填满缓冲区）——framing 感知的读取方绝不能等待属于下一条消息的字节。
+  实测 bilibili.com：183 个请求从 183 次新建 TCP+TLS 降到 54 次，129 个走热连接。
+  另外脚本体现在**并行预取、按文档序执行**（`RunPageScripts`）
+
+### 连接身份与 SIGPIPE（ADR 0022 修订 1）
+
+- 连接身份 = origin + 超时 + **生效的**代理（显式或 `HTTPS_PROXY`/`NO_PROXY` 解析
+  结果）+ 信任锚。只按 origin 分池会让「直连建立的连接被代理请求复用」（反之亦然）。
+- SIGPIPE：`platform::EnsureInitialized()` 在 SIGPIPE 仍为 `SIG_DFL` 时置为
+  `SIG_IGN`（不覆盖嵌入方 handler），`SendBytes` 另加 `MSG_NOSIGNAL`。TLS 经
+  OpenSSL socket BIO（`write(2)`）无法逐调用屏蔽，而连接池让「写对端已关闭的连接」
+  成为常态；没有这条保证，测试/嵌入方会被 SIGPIPE 杀掉。
+- 握手期对端关闭（代理不再转发、中间盒重置）单独报错：**未收到证书**，提示检查
+  网络路径或 HTTPS 代理——不再误报为证书校验失败。
 
 ## 未实现
 
-- keep-alive 连接复用、HTTP/2、HTTP/3、brotli
+- HTTP/2、HTTP/3、brotli
+- per-origin 并发上限与排队（并发突发仍会一次开多条连接）、TLS 会话复用
+- HTTP 缓存（内存/磁盘）：重复访问仍全量重下
 - 超时/取消的完整生命周期管理
 - 自有根证书计划（root store）：信任锚完全来自运行主机，macOS 未接 Keychain
   （只读 `/etc/ssl/cert.pem`），Windows 的 ROOT 库尚无运行期测试

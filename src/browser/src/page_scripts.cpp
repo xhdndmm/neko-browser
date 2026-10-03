@@ -22,6 +22,7 @@
 #include <chrono>
 #include <ctime>
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <optional>
@@ -29,6 +30,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -198,6 +200,7 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
                                                       const std::string& base_url,
                                                       ScriptFetcher fetch,
                                                       javascript::ScriptEngine::ConsoleSink sink,
+                                                      base::ThreadPool& pool,
                                                       const PageScriptServices& services,
                                                       ScriptRequestedNavigation* out_navigation)
 {
@@ -739,6 +742,54 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     }
   };
 
+  // ---- Parallel prefetch of external script bodies ----------------------
+  // A browser's preload scanner fetches every script resource while the
+  // parser is still running, and only *execution* stays in document order.
+  // Fetching each body at execution time instead serialised the whole page's
+  // scripts: on bilibili.com that was seven full round trips back to back
+  // (~4 s of the load), the second-largest cost after connection setup
+  // (ADR 0022).  URL resolution and inline bodies are read here, on the
+  // calling thread, because the DOM is worker-confined (ADR 0020); only the
+  // network work goes to |pool|.
+  std::unordered_map<std::string, std::shared_future<base::Result<network::HttpResponse>>>
+      prefetched;
+  {
+    std::vector<std::string> urls; // unique, in document order
+    for (dom::Element* script : scripts) {
+      if (IsModuleScript(*script) || !script->HasAttribute("src")) {
+        continue; // module bodies load through the ES module loader
+      }
+      const std::optional<std::string_view> src = script->GetAttribute("src");
+      if (!src.has_value()) {
+        continue;
+      }
+      const base::Result<url::Url> target =
+          base.has_value() ? url::Url::Parse(*src, base.value()) : url::Url::Parse(*src);
+      if (!target.has_value()) {
+        continue; // reported with the same message at execution time
+      }
+      const std::string absolute = target.value().Serialize();
+      if (prefetched.count(absolute) != 0) {
+        continue; // two tags naming one resource fetch it once
+      }
+      prefetched.emplace(absolute, std::shared_future<base::Result<network::HttpResponse>>());
+      urls.push_back(absolute);
+    }
+    for (const std::string& absolute : urls) {
+      // The parser resolves relative specifiers against the same base at
+      // execution time, so the absolute URL is a stable key.
+      prefetched[absolute] =
+          pool.Submit([&fetch, absolute]() -> base::Result<network::HttpResponse> {
+                const base::Result<url::Url> target = url::Url::Parse(absolute);
+                if (!target.has_value()) {
+                  return base::Err(target.error());
+                }
+                return fetch(target.value());
+              })
+              .share();
+    }
+  }
+
   // Returns the executable source of one <script>, or nullopt when the
   // element must be skipped (empty, or its external fetch failed).
   auto script_source = [&](dom::Element* script) -> std::optional<std::string> {
@@ -754,10 +805,15 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
         }
         return std::nullopt;
       }
-      const auto response = fetch(target.value());
+      const std::string absolute = target.value().Serialize();
+      const auto prefetched_entry = prefetched.find(absolute);
+      const bool prefetched_ready =
+          prefetched_entry != prefetched.end() && prefetched_entry->second.valid();
+      const base::Result<network::HttpResponse> response =
+          prefetched_ready ? prefetched_entry->second.get() : fetch(target.value());
       if (!response) {
-        const std::string message = "script: fetch failed for " + target.value().Serialize() +
-                                    ": " + response.error().message();
+        const std::string message =
+            "script: fetch failed for " + absolute + ": " + response.error().message();
         NEKO_LOG_WARNING(message);
         if (error_sink) {
           error_sink("error", message);

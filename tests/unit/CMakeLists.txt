@@ -144,6 +144,7 @@ gtest_discover_tests(neko_graphics_tests DISCOVERY_MODE PRE_TEST)
 # -----------------------------------------------------------------------------
 add_executable(neko_network_tests
   network/network_test.cpp
+  network/http_client_test.cpp
   network/dns_test.cpp
   network/websocket_test.cpp
 )
@@ -226,6 +227,7 @@ gtest_discover_tests(neko_ipc_tests DISCOVERY_MODE PRE_TEST)
 add_executable(neko_browser_tests
   browser/options_test.cpp
   browser/browser_controller_test.cpp
+  browser/page_scripts_test.cpp
   browser/hyperlink_test.cpp
   browser/renderer_mode_test.cpp
   browser/renderer_protocol_test.cpp

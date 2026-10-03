@@ -1,5 +1,6 @@
 #pragma once
 
+#include "neko/base/thread_pool.h"
 #include "neko/javascript/dom_binding.h"
 #include "neko/javascript/script_engine.h"
 #include "neko/network/http.h"
@@ -104,6 +105,7 @@ RunPageScripts(renderer::Page& page,
                const std::string& base_url,
                ScriptFetcher fetch,
                javascript::ScriptEngine::ConsoleSink sink,
+               base::ThreadPool& pool,
                const PageScriptServices& services = {},
                ScriptRequestedNavigation* out_navigation = nullptr);
 

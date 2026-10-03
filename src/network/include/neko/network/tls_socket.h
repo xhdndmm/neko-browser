@@ -75,6 +75,19 @@ public:
   // received so far.
   base::Result<std::string> ReceiveAll(int timeout_ms = 10000);
 
+  // Reads once.  Returns as soon as any bytes are available, without waiting to
+  // fill |max_bytes|; an empty result means the deadline elapsed or the peer
+  // closed.  This is the primitive a framing-aware reader needs: it must never
+  // sit waiting for bytes that belong to a *later* message (which is what makes
+  // a persistent HTTP/1.1 connection usable at all).
+  base::Result<std::string> ReadSome(std::size_t max_bytes, int timeout_ms = 10000);
+
+  // Non-consuming readiness probe, TLS-aware.  |true| when application data or
+  // a TLS record (including close_notify) is waiting, |false| when the
+  // connection is idle.  Used to validate a pooled keep-alive connection
+  // before reuse; never consumes bytes.
+  base::Result<bool> HasPendingInput();
+
   void Close();
   bool IsOpen() const;
 

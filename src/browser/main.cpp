@@ -142,6 +142,8 @@ neko::base::Result<void> LoadLocalTarget(
   if (!r) {
     return r;
   }
+  // Shared pool for the parallel script prefetch and the subresource passes.
+  neko::base::ThreadPool pool;
   neko::browser::ScriptRequestedNavigation requested;
   neko::browser::PageScriptServices services;
   services.local_storage = local_storage;
@@ -155,6 +157,7 @@ neko::base::Result<void> LoadLocalTarget(
         [](std::string_view level, std::string_view text) {
           std::cout << "[" << level << "] " << text << "\n";
         },
+        pool,
         services,
         &requested);
   } else {
@@ -165,6 +168,7 @@ neko::base::Result<void> LoadLocalTarget(
         [](std::string_view level, std::string_view text) {
           std::cout << "[" << level << "] " << text << "\n";
         },
+        pool,
         services,
         &requested);
   }
@@ -181,7 +185,6 @@ neko::base::Result<void> LoadLocalTarget(
   }
   // Local page (opened by path without a scheme): fetch its subresources
   // against an absolute file:// base so relative URLs resolve.
-  neko::base::ThreadPool pool;
   const std::string base_url =
       "file://" + std::filesystem::absolute(std::filesystem::path(target)).generic_string();
   neko::browser::FetchExternalStylesheets(page, base_url, FetchAny, pool);
@@ -272,6 +275,7 @@ neko::base::Result<void> LoadTarget(
             [](std::string_view level, std::string_view text) {
               std::cout << "[" << level << "] " << text << "\n";
             },
+            pool,
             services,
             &requested);
       } else {
@@ -282,6 +286,7 @@ neko::base::Result<void> LoadTarget(
             [](std::string_view level, std::string_view text) {
               std::cout << "[" << level << "] " << text << "\n";
             },
+            pool,
             services,
             &requested);
       }
@@ -341,6 +346,7 @@ neko::base::Result<void> LoadTarget(
       if (!r) {
         return r;
       }
+      neko::base::ThreadPool pool;
       neko::browser::ScriptRequestedNavigation requested;
       neko::browser::PageScriptServices services;
       services.local_storage = local_storage;
@@ -356,6 +362,7 @@ neko::base::Result<void> LoadTarget(
             [](std::string_view level, std::string_view text) {
               std::cout << "[" << level << "] " << text << "\n";
             },
+            pool,
             services,
             &requested);
       } else {
@@ -366,6 +373,7 @@ neko::base::Result<void> LoadTarget(
             [](std::string_view level, std::string_view text) {
               std::cout << "[" << level << "] " << text << "\n";
             },
+            pool,
             services,
             &requested);
       }
@@ -382,7 +390,6 @@ neko::base::Result<void> LoadTarget(
       }
       // Fetch the page's subresources: relative URLs resolve against the
       // file:// base so local pages behave like served ones.
-      neko::base::ThreadPool pool;
       neko::browser::FetchExternalStylesheets(page, url.Serialize(), FetchAny, pool);
       neko::browser::FetchWebFonts(page, url.Serialize(), FetchAny, pool);
       neko::browser::FetchPageImages(page, url.Serialize(), FetchAny, pool);

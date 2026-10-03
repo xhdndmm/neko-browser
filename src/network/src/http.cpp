@@ -1,18 +1,25 @@
 #include "neko/network/http.h"
 
+#include "neko/base/logging.h"
 #include "neko/base/string_util.h"
 #include "neko/base/version.h"
 #include "neko/network/compression.h"
+#include "neko/network/http_client.h"
 #include "neko/network/socket.h"
 #include "neko/network/tls_socket.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace neko::network {
 namespace {
@@ -567,19 +574,28 @@ template <typename Transport> struct ResponseReader
 
   Transport& transport;
   std::string buffer; // bytes read but not yet consumed
+  // Bytes received from the transport while serving this response.  Zero when
+  // the connection failed before producing any response byte, which is what
+  // tells the pool that a failed *reused* connection may be retried safely.
+  std::size_t bytes_received = 0;
 
   static constexpr std::size_t kChunkBytes = 16384;
   static constexpr std::size_t kMaxHeaderBytes = 256 * 1024;
 
   // Appends the next chunk from the transport.  Returns false when the peer
-  // closed (or the timeout elapsed) with no data.
+  // closed (or the timeout elapsed) with no data.  Reads once rather than
+  // filling kChunkBytes: on a persistent connection there are no bytes left to
+  // wait for once the current message has been consumed.
   base::Result<bool> Fill()
   {
-    const base::Result<std::string> chunk = transport.Receive(kChunkBytes);
+    const base::Result<std::string> chunk = transport.ReadSome(kChunkBytes);
     if (!chunk) {
       return base::Err(chunk.error());
     }
     const bool got = !chunk.value().empty();
+    if (got) {
+      bytes_received += chunk.value().size();
+    }
     buffer += chunk.value();
     return got;
   }
@@ -699,70 +715,220 @@ base::Result<std::string> ReadChunkedBody(ResponseReader<Transport>& reader)
   }
 }
 
-// Sends |request| over a transport (Socket or TlsSocket) and parses the raw
-// response.  The two transports expose the same Send/Receive interface.
-template <typename Transport>
-base::Result<HttpResponse> PerformRequest(Transport& transport, const std::string& request)
+// One live HTTP/1.1 connection to an origin: a plain TCP socket or a TLS
+// socket, plus whatever bytes were read past the previous response.  Owned by
+// the client's pool and leased to exactly one request at a time, which is what
+// keeps the single-thread-per-connection rule of Socket / TlsSocket intact.
+class PooledConnection
 {
-  const base::Result<std::size_t> sent = transport.Send(request);
-  if (!sent) {
-    return base::Err(sent.error());
+public:
+  PooledConnection(std::unique_ptr<Socket> plain, std::unique_ptr<TlsSocket> tls, int timeout_ms)
+      : plain_(std::move(plain)), tls_(std::move(tls)), timeout_ms_(timeout_ms)
+  {}
+
+  base::Result<std::size_t> Send(std::string_view data)
+  {
+    return tls_ != nullptr ? tls_->Send(data) : plain_->Send(data);
   }
 
-  ResponseReader<Transport> reader(transport);
+  // One read: returns as soon as bytes are available (see ResponseReader).
+  base::Result<std::string> ReadSome(std::size_t max_bytes)
+  {
+    return tls_ != nullptr ? tls_->ReadSome(max_bytes, timeout_ms_)
+                           : plain_->ReadSome(max_bytes, timeout_ms_);
+  }
+
+  // True when the peer closed this connection (or sent unsolicited bytes)
+  // while it was idle in the pool.  A healthy idle keep-alive connection
+  // reports false.  Probe errors count as "do not reuse".
+  bool IsReusable()
+  {
+    const base::Result<bool> pending =
+        tls_ != nullptr ? tls_->HasPendingInput() : plain_->HasPendingInput();
+    return pending.has_value() && !pending.value();
+  }
+
+  // Bytes already read past the previous response.  Must be empty for the
+  // connection to be pooled again: this client never pipelines, so trailing
+  // bytes mean the peer is not speaking the framing we expect.
+  std::string leftover;
+
+private:
+  std::unique_ptr<Socket> plain_;
+  std::unique_ptr<TlsSocket> tls_;
+  int timeout_ms_ = 10000;
+};
+
+// Dials a fresh connection for |url| (plain TCP, or TCP + TLS handshake).
+base::Result<std::unique_ptr<PooledConnection>> DialConnection(const url::Url& url,
+                                                               const TlsOptions& options)
+{
+  if (url.scheme() == "https") {
+    const base::Result<TlsOptions> configured =
+        TlsOptionsWithEnvironmentProxy(url.host(), url.effective_port(), options);
+    if (!configured) {
+      return base::Err(configured.error());
+    }
+    base::Result<TlsSocket> tls =
+        TlsSocket::Connect(url.host(), url.effective_port(), configured.value());
+    if (!tls) {
+      return base::Err(tls.error());
+    }
+    return base::Ok(std::make_unique<PooledConnection>(
+        nullptr, std::make_unique<TlsSocket>(std::move(tls.value())), options.timeout_ms));
+  }
+  base::Result<Socket> socket = Socket::Connect(url.host(), url.effective_port());
+  if (!socket) {
+    return base::Err(socket.error());
+  }
+  return base::Ok(std::make_unique<PooledConnection>(
+      std::make_unique<Socket>(std::move(socket.value())), nullptr, options.timeout_ms));
+}
+
+// The result of one request/response exchange on one connection.
+struct AttemptResult
+{
+  // base::Result has no default constructor: start from an explicit "not
+  // attempted" error that every path below overwrites.
+  base::Result<HttpResponse> response = base::Err(base::Error::Network("request not attempted"));
+  // At least one byte of the response arrived.  A failure with no byte at all
+  // on a *reused* connection means the pooled connection was dead, so the
+  // request can be repeated on a fresh one without double-applying anything.
+  bool response_started = false;
+  // The connection is still in a known-good state and may be pooled again.
+  bool reusable = false;
+};
+
+// True when |value| contains |token| as a comma-separated header field value
+// element (RFC 9110 5.6.1), case-insensitive.
+bool HeaderValueHasToken(std::string_view value, std::string_view token)
+{
+  std::size_t pos = 0;
+  while (pos <= value.size()) {
+    const std::size_t comma = value.find(',', pos);
+    const std::string_view element = TrimView(
+        value.substr(pos, comma == std::string_view::npos ? std::string_view::npos : comma - pos));
+    if (base::AsciiEqualsIgnoreCase(element, token)) {
+      return true;
+    }
+    if (comma == std::string_view::npos) {
+      return false;
+    }
+    pos = comma + 1;
+  }
+  return false;
+}
+
+// Whether the response leaves the connection usable for a further request.
+// A `Connection: close` (however it is spelled) always wins; otherwise an
+// HTTP/1.1 response is persistent.  An HTTP/1.0 peer that answers with a full
+// Content-Length body and no keep-alive header is optimistically pooled: if it
+// then closed the socket, the pending-input probe or the retry-once path drops
+// it, so the optimistic case costs an optimisation, never correctness.
+bool ResponseAllowsReuse(const HttpResponse& response)
+{
+  for (const HttpHeader& header : response.headers) {
+    if (header.name == "connection") {
+      if (HeaderValueHasToken(header.value, "close")) {
+        return false;
+      }
+      if (HeaderValueHasToken(header.value, "keep-alive")) {
+        return true;
+      }
+    }
+  }
+  return true;
+}
+
+// Sends |request| over |transport| and parses the raw response.  The connection
+// is left byte-clean (no unconsumed bytes) exactly when the result is reusable.
+AttemptResult PerformRequest(PooledConnection& transport, const std::string& request)
+{
+  AttemptResult attempt;
+  const base::Result<std::size_t> sent = transport.Send(request);
+  if (!sent) {
+    attempt.response = base::Err(sent.error());
+    return attempt;
+  }
+
+  ResponseReader<PooledConnection> reader(transport);
+  // A pooled connection normally has nothing buffered; carry anything over so
+  // the byte stream stays in order even if a peer sent extra data.
+  reader.buffer = std::move(transport.leftover);
+
+  // A failure once the response has started is never retried: the peer may have
+  // acted on the request, and a half-read body is not a repeatable exchange.
+  const auto fail = [&attempt, &reader](const base::Error& error) {
+    attempt.response_started = reader.bytes_received > 0;
+    attempt.response = base::Err(error);
+    return std::move(attempt);
+  };
+
   const base::Result<std::string> header_block = reader.ReadHeaders();
   if (!header_block) {
-    return base::Err(header_block.error());
+    return fail(header_block.error());
   }
   HttpResponse response;
   const base::Result<void> headers = ParseResponseHeaders(header_block.value(), response);
   if (!headers) {
-    return base::Err(headers.error());
+    return fail(headers.error());
   }
   const base::Result<BodyFraming> framing = ClassifyBody(response);
   if (!framing) {
-    return base::Err(framing.error());
+    return fail(framing.error());
   }
+
+  // A delimited response is poolable when nothing of it is left unread and the
+  // response itself did not ask for the connection to close.  An until-close
+  // body is by definition not poolable (the connection is spent).
+  const auto finish = [&attempt, &reader, &response](bool delimited) {
+    const bool clean = delimited && reader.buffer.empty();
+    attempt.response_started = true;
+    attempt.reusable = clean && ResponseAllowsReuse(response);
+    attempt.response = base::Ok(std::move(response));
+    return std::move(attempt);
+  };
+
   switch (framing.value().kind) {
   case BodyFraming::Kind::kChunked: {
     const base::Result<std::string> body = ReadChunkedBody(reader);
     if (!body) {
-      return base::Err(body.error());
+      return fail(body.error());
     }
     response.body = std::move(body.value());
-    return response;
+    return finish(/*delimited=*/true);
   }
   case BodyFraming::Kind::kContentLength: {
     const base::Result<std::string> body = reader.ReadExactly(framing.value().length);
     if (!body) {
-      return base::Err(body.error());
+      return fail(body.error());
     }
     response.body = std::move(body.value());
-    return response;
+    return finish(/*delimited=*/true);
   }
   case BodyFraming::Kind::kNone:
     response.body.clear();
-    return response;
+    return finish(/*delimited=*/true);
   case BodyFraming::Kind::kUntilClose:
     // No framing: read until the connection closes (or the timeout).  The
     // TLS layer treats a missing close_notify as EOF, so this terminates on
     // real-world CDN servers too.
     for (;;) {
       const base::Result<std::string> chunk =
-          transport.Receive(ResponseReader<Transport>::kChunkBytes);
+          transport.ReadSome(ResponseReader<PooledConnection>::kChunkBytes);
       if (!chunk) {
-        return base::Err(chunk.error());
+        return fail(chunk.error());
       }
       if (chunk.value().empty()) {
-        return response;
+        return finish(/*delimited=*/false);
       }
       if (chunk.value().size() > kMaxBodySize - response.body.size()) {
-        return base::Err(base::Error::Parse("response body too large"));
+        return fail(base::Error::Parse("response body too large"));
       }
       response.body += chunk.value();
     }
   }
-  return response;
+  return attempt;
 }
 
 base::Result<HttpResponse> DecodeDataUrl(std::string_view url)
@@ -819,23 +985,13 @@ base::Result<HttpResponse> DecodeDataUrl(std::string_view url)
   return response;
 }
 
-base::Result<HttpResponse> HttpGet(const url::Url& url,
-                                   int redirect_limit,
-                                   const HeaderProvider& extra_headers,
-                                   const TlsOptions& tls_options)
-{
-  if (url.scheme() == "data") {
-    // A data: URL never touches the network, but every resource loader in the
-    // engine (stylesheets, scripts, @font-face, images, fetch()) funnels
-    // through HttpGet — decoding it here gives them all support at once.
-    // The fragment is not part of the resource, hence Serialize(false).
-    return DecodeDataUrl(url.Serialize(/*include_fragment=*/false));
-  }
-  if (url.scheme() != "http" && url.scheme() != "https") {
-    return base::Err(base::Error::NotImplemented("unsupported URL scheme '" + url.scheme() +
-                                                 "' (only http/https)"));
-  }
+namespace {
 
+// Builds the HTTP/1.1 GET request line and headers for |url|.  The request is
+// persistent (no `Connection: close`): the connection goes back to the pool
+// unless the response says otherwise.
+std::string BuildGetRequest(const url::Url& url, const HeaderProvider& extra_headers)
+{
   std::string request = "GET ";
   // The request target must be percent-encoded (RFC 3986): raw path/query
   // bytes must not reach the request line (defense in depth against CRLF
@@ -853,7 +1009,6 @@ base::Result<HttpResponse> HttpGet(const url::Url& url,
     request += std::to_string(url.port().value());
   }
   request += "\r\n";
-  request += "Connection: close\r\n";
   request += "User-Agent: ";
   request += base::GetUserAgent();
   request += "\r\n";
@@ -879,68 +1034,308 @@ base::Result<HttpResponse> HttpGet(const url::Url& url,
     }
   }
   request += "\r\n";
+  return request;
+}
 
-  // Fetch over the scheme-appropriate transport (plain TCP for http, TLS
-  // for https) and parse the response.
-  base::Result<HttpResponse> response = [&]() -> base::Result<HttpResponse> {
+// Identity of a pool lane: connections are only interchangeable when they lead
+// to the same origin *and* were dialed with the same trust/proxy/timeout
+// settings (a test's extra CA must never be silently reused for a request that
+// did not ask for it, and a connection's read timeout is fixed at dial time).
+struct ConnectionKey
+{
+  std::string scheme;
+  std::string host;
+  std::uint16_t port = 0;
+  int timeout_ms = 10000;
+  std::size_t proxy_hash = 0;
+  std::size_t trust_anchor_hash = 0;
+
+  bool operator==(const ConnectionKey& other) const
+  {
+    return scheme == other.scheme && host == other.host && port == other.port &&
+           timeout_ms == other.timeout_ms && proxy_hash == other.proxy_hash &&
+           trust_anchor_hash == other.trust_anchor_hash;
+  }
+};
+
+struct ConnectionKeyHash
+{
+  std::size_t operator()(const ConnectionKey& key) const noexcept
+  {
+    std::size_t hash = std::hash<std::string>{}(key.scheme);
+    const auto mix = [&hash](std::size_t value) {
+      // 64-bit golden-ratio mixing keeps multi-field keys from colliding in
+      // the low bits (the port and the two hashes are small integers).
+      hash ^= value + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+    };
+    mix(std::hash<std::string>{}(key.host));
+    mix(key.port);
+    mix(static_cast<std::size_t>(key.timeout_ms));
+    mix(key.proxy_hash);
+    mix(key.trust_anchor_hash);
+    return hash;
+  }
+};
+
+} // namespace
+
+struct HttpClient::Impl
+{
+  struct Idle
+  {
+    std::unique_ptr<PooledConnection> connection;
+    std::chrono::steady_clock::time_point idle_since;
+  };
+
+  static ConnectionKey KeyFor(const url::Url& url, const TlsOptions& options)
+  {
+    ConnectionKey key;
+    key.scheme = url.scheme();
+    key.host = url.host();
+    key.port = url.effective_port();
+    key.timeout_ms = options.timeout_ms;
+    // The *route* to an origin is part of a connection's identity, not just the
+    // origin: with HTTPS_PROXY set (and the host not excluded by NO_PROXY) the
+    // connection is dialed through the proxy, so it must not be interchangeable
+    // with one dialed directly.  Resolving the proxy exactly as the dial does
+    // keeps a direct connection from serving a proxied request (and the
+    // reverse) when the environment changes -- which is what tests do.
     if (url.scheme() == "https") {
-      const base::Result<TlsOptions> configured =
-          TlsOptionsWithEnvironmentProxy(url.host(), url.effective_port(), tls_options);
-      if (!configured) {
-        return base::Err(configured.error());
+      const base::Result<TlsOptions> effective =
+          TlsOptionsWithEnvironmentProxy(url.host(), url.effective_port(), options);
+      if (!effective) {
+        return key; // the dial reports the same configuration error
       }
-      base::Result<TlsSocket> tls =
-          TlsSocket::Connect(url.host(), url.effective_port(), configured.value());
-      if (!tls) {
-        return base::Err(tls.error());
+      if (!effective.value().proxy_host.empty()) {
+        key.proxy_hash = std::hash<std::string>{}(effective.value().proxy_host + ":" +
+                                                  std::to_string(effective.value().proxy_port));
       }
-      return PerformRequest(tls.value(), request);
+    } else if (!options.proxy_host.empty()) {
+      key.proxy_hash =
+          std::hash<std::string>{}(options.proxy_host + ":" + std::to_string(options.proxy_port));
     }
-    base::Result<Socket> socket = Socket::Connect(url.host(), url.effective_port());
-    if (!socket) {
-      return base::Err(socket.error());
+    if (!options.extra_ca_cert_pem.empty()) {
+      key.trust_anchor_hash = std::hash<std::string>{}(options.extra_ca_cert_pem);
     }
-    return PerformRequest(socket.value(), request);
-  }();
-  if (!response) {
-    return base::Err(response.error());
+    return key;
   }
 
-  // Follow redirects.
-  const int status = response.value().status_code;
-  if ((status == 301 || status == 302 || status == 303 || status == 307 || status == 308) &&
-      redirect_limit > 0) {
-    const std::string location = response.value().GetHeader("location");
-    if (!location.empty()) {
-      const base::Result<url::Url> next = url::Url::Parse(location, url);
-      if (next) {
-        // Refuse to downgrade an https request to plaintext http: silently
-        // following such a redirect is SSL stripping.  The caller can retry
-        // the Location explicitly if it wants to.
-        if (url.scheme() == "https" && next.value().scheme() == "http") {
-          return base::Err(base::Error::NotImplemented("refusing https->http redirect downgrade"));
+  // Leases a connection to |key|: the most recently returned healthy idle one,
+  // or a fresh dial.  Idle connections the peer closed while they sat in the
+  // pool are dropped here rather than costing a request.
+  base::Result<std::unique_ptr<PooledConnection>>
+  Acquire(const ConnectionKey& key, const url::Url& url, const TlsOptions& options, bool* reused)
+  {
+    *reused = false;
+    for (;;) {
+      std::unique_ptr<PooledConnection> candidate;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto lane = idle_.find(key);
+        if (lane != idle_.end()) {
+          const auto now = std::chrono::steady_clock::now();
+          while (!lane->second.empty()) {
+            Idle entry = std::move(lane->second.back());
+            lane->second.pop_back();
+            if (now - entry.idle_since > std::chrono::milliseconds(HttpClient::kIdleTimeoutMs)) {
+              ++stats_.connections_discarded;
+              continue; // expired: closed by ~unique_ptr, try the next one
+            }
+            candidate = std::move(entry.connection);
+            break;
+          }
+          if (lane->second.empty()) {
+            idle_.erase(lane);
+          }
         }
-        return HttpGet(next.value(), redirect_limit - 1, extra_headers, tls_options);
+      }
+      if (candidate == nullptr) {
+        break;
+      }
+      if (candidate->IsReusable()) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ++stats_.connections_reused;
+        *reused = true;
+        return base::Ok(std::move(candidate));
+      }
+      // The peer closed it (or left unexpected bytes): drop it and try the
+      // next candidate.
+      std::lock_guard<std::mutex> lock(mutex_);
+      ++stats_.connections_discarded;
+    }
+
+    base::Result<std::unique_ptr<PooledConnection>> dialed = DialConnection(url, options);
+    if (!dialed) {
+      return dialed; // dialed.error() carries the TLS/connect failure
+    }
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      ++stats_.connections_opened;
+    }
+    return dialed;
+  }
+
+  void Release(const ConnectionKey& key, std::unique_ptr<PooledConnection> connection)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<Idle>& lane = idle_[key];
+    if (lane.size() >= HttpClient::kMaxIdlePerOrigin) {
+      ++stats_.connections_discarded; // destroyed here: the socket closes
+      return;
+    }
+    lane.push_back(Idle{std::move(connection), std::chrono::steady_clock::now()});
+  }
+
+  void Discard(std::unique_ptr<PooledConnection> connection)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ++stats_.connections_discarded;
+    connection.reset();
+  }
+
+  void CountRequest()
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ++stats_.requests;
+  }
+
+  std::mutex mutex_;
+  std::unordered_map<ConnectionKey, std::vector<Idle>, ConnectionKeyHash> idle_;
+  Stats stats_;
+};
+
+HttpClient::HttpClient() : impl_(std::make_unique<Impl>()) {}
+
+HttpClient::~HttpClient() = default;
+
+HttpClient::Stats HttpClient::stats() const
+{
+  std::lock_guard<std::mutex> lock(impl_->mutex_);
+  return impl_->stats_;
+}
+
+void HttpClient::CloseIdleConnections()
+{
+  std::lock_guard<std::mutex> lock(impl_->mutex_);
+  impl_->idle_.clear();
+}
+
+// One request/response exchange, no redirect handling.
+base::Result<HttpResponse> HttpClient::GetOnce(const url::Url& url,
+                                               const HeaderProvider& extra_headers,
+                                               const TlsOptions& tls_options)
+{
+  if (url.scheme() != "http" && url.scheme() != "https") {
+    return base::Err(base::Error::NotImplemented("unsupported URL scheme '" + url.scheme() +
+                                                 "' (only http/https)"));
+  }
+  const std::string request = BuildGetRequest(url, extra_headers);
+  const ConnectionKey key = Impl::KeyFor(url, tls_options);
+  impl_->CountRequest();
+
+  base::Result<HttpResponse> last = base::Err(base::Error::Network("request was not attempted"));
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    bool reused = false;
+    base::Result<std::unique_ptr<PooledConnection>> lease =
+        impl_->Acquire(key, url, tls_options, &reused);
+    if (!lease) {
+      return base::Err(lease.error());
+    }
+    AttemptResult result = PerformRequest(*lease.value(), request);
+    // Retry exactly once, and only when a *pooled* connection failed before
+    // producing a single byte: that is the "the peer closed it while it was
+    // idle" case, where repeating an idempotent GET is safe.  A failure with
+    // response bytes on the wire, or on a freshly dialed connection, is real.
+    const bool retryable =
+        !result.response.has_value() && reused && !result.response_started && attempt == 0;
+    if (result.reusable) {
+      impl_->Release(key, std::move(lease.value()));
+    } else {
+      impl_->Discard(std::move(lease.value()));
+    }
+    last = std::move(result.response);
+    if (!retryable) {
+      return last;
+    }
+  }
+  return last;
+}
+
+base::Result<HttpResponse> HttpClient::Get(const url::Url& url,
+                                           int redirect_limit,
+                                           const HeaderProvider& extra_headers,
+                                           const TlsOptions& tls_options)
+{
+  if (url.scheme() == "data") {
+    // A data: URL never touches the network, but every resource loader in the
+    // engine (stylesheets, scripts, @font-face, images, fetch()) funnels
+    // through HttpGet — decoding it here gives them all support at once.
+    // The fragment is not part of the resource, hence Serialize(false).
+    return DecodeDataUrl(url.Serialize(/*include_fragment=*/false));
+  }
+
+  url::Url current = url;
+  for (;;) {
+    base::Result<HttpResponse> response = GetOnce(current, extra_headers, tls_options);
+    if (!response) {
+      return response;
+    }
+    const int status = response.value().status_code;
+    const bool is_redirect =
+        status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+    if (is_redirect && redirect_limit > 0) {
+      const std::string location = response.value().GetHeader("location");
+      if (!location.empty()) {
+        const base::Result<url::Url> next = url::Url::Parse(location, current);
+        if (next) {
+          // Refuse to downgrade an https request to plaintext http: silently
+          // following such a redirect is SSL stripping.  The caller can retry
+          // the Location explicitly if it wants to.
+          if (current.scheme() == "https" && next.value().scheme() == "http") {
+            return base::Err(
+                base::Error::NotImplemented("refusing https->http redirect downgrade"));
+          }
+          current = next.value();
+          --redirect_limit;
+          continue;
+        }
       }
     }
-  }
-
-  // Record the URL this response came from.  Redirects return their own
-  // (already final) response above, so reaching here means |url| is final.
-  response.value().final_url = url.Serialize();
-
-  // Decode the body per Content-Encoding (RFC 7231 §3.1.2).  An unsupported
-  // coding is an explicit error rather than returning corrupted content.
-  const std::string content_encoding = response.value().GetHeader("content-encoding");
-  if (!content_encoding.empty() && !base::AsciiEqualsIgnoreCase(content_encoding, "identity")) {
-    const base::Result<std::string> decoded =
-        DecodeContentEncodings(content_encoding, response.value().body);
-    if (!decoded) {
-      return base::Err(decoded.error());
+    // The response is final (or a redirect we are not following): record the
+    // URL it came from, then decode the body per Content-Encoding (RFC 7231
+    // §3.1.2).  An unsupported coding is an explicit error rather than
+    // returning corrupted content.
+    HttpResponse out = std::move(response.value());
+    out.final_url = current.Serialize();
+    const std::string content_encoding = out.GetHeader("content-encoding");
+    if (!content_encoding.empty() && !base::AsciiEqualsIgnoreCase(content_encoding, "identity")) {
+      const base::Result<std::string> decoded = DecodeContentEncodings(content_encoding, out.body);
+      if (!decoded) {
+        return base::Err(decoded.error());
+      }
+      out.body = std::move(decoded.value());
     }
-    response.value().body = std::move(decoded.value());
+    return base::Ok(std::move(out));
   }
-  return response;
+}
+
+HttpClient& SharedHttpClient()
+{
+  // One pool for the whole process: every existing HttpGet caller (stylesheet
+  // / script / image / font / fetch loaders) gets connection reuse without
+  // threading a client through the engine.  Function-local static so the
+  // process-wide pool is initialized on first use (no static init order
+  // dependency); it is destroyed at exit, after the engine's threads are gone.
+  static HttpClient shared;
+  return shared;
+}
+
+base::Result<HttpResponse> HttpGet(const url::Url& url,
+                                   int redirect_limit,
+                                   const HeaderProvider& extra_headers,
+                                   const TlsOptions& tls_options)
+{
+  return SharedHttpClient().Get(url, redirect_limit, extra_headers, tls_options);
 }
 
 } // namespace neko::network

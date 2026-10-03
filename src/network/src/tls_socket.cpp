@@ -162,6 +162,17 @@ TlsSocket::Connect(std::string_view host, uint16_t port, const TlsOptions& optio
   if (hs != 1) {
     const int err = SSL_get_error(ssl.get(), hs);
     if (err == SSL_ERROR_SSL) {
+#ifdef SSL_R_UNEXPECTED_EOF_WHILE_READING
+      // The peer went away mid-handshake: no certificate was ever presented,
+      // so reporting "certificate verification failed" sends the reader down
+      // the wrong path.  This is what a proxy that stops tunnelling, a
+      // middlebox reset, or an unreachable server edge looks like.
+      if (ERR_GET_REASON(ERR_peek_error()) == SSL_R_UNEXPECTED_EOF_WHILE_READING) {
+        return base::Err(base::Error::Network(
+            "the peer closed the connection during the TLS handshake for " + host_str +
+            " (no certificate was received; check the network path or any HTTPS proxy in use)"));
+      }
+#endif
       // The most common failure is certificate verification; surface the
       // OpenSSL message (e.g. "certificate verify failed").
       return base::Err(base::Error::Network("TLS handshake / certificate verification failed for " +
@@ -195,6 +206,56 @@ base::Result<std::size_t> TlsSocket::Send(std::string_view data)
     sent += static_cast<std::size_t>(n);
   }
   return sent;
+}
+
+base::Result<std::string> TlsSocket::ReadSome(std::size_t max_bytes, int timeout_ms)
+{
+  if (impl_->ssl == nullptr) {
+    return base::Err(base::Error::Network("TLS: not connected"));
+  }
+  if (max_bytes == 0) {
+    return std::string();
+  }
+  char buffer[16384];
+  std::string out;
+  while (out.empty()) {
+    // Hand back data already buffered inside the TLS layer before waiting.
+    if (SSL_pending(impl_->ssl.get()) <= 0) {
+      const int pr = platform::WaitSocket(impl_->tcp.fd(),
+                                          /*want_read=*/true,
+                                          /*want_write=*/false,
+                                          timeout_ms);
+      if (pr == 0) {
+        return out; // timeout: nothing arrived
+      }
+      if (pr < 0) {
+        if (platform::IsInterrupted(platform::LastError())) {
+          continue;
+        }
+        return base::Err(base::Error::Network("TLS wait for readable failed"));
+      }
+    }
+    const std::size_t want = std::min<std::size_t>(max_bytes, sizeof(buffer));
+    const int n = SSL_read(impl_->ssl.get(), buffer, static_cast<int>(want));
+    if (n > 0) {
+      out.append(buffer, static_cast<std::size_t>(n));
+      break;
+    }
+    const int err = SSL_get_error(impl_->ssl.get(), n);
+    if (err == SSL_ERROR_ZERO_RETURN) {
+      return out; // clean TLS shutdown
+    }
+    if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+      continue;
+    }
+    if (err == SSL_ERROR_SSL || (err == SSL_ERROR_SYSCALL && n == 0)) {
+      // The peer closed the TCP connection without a complete close_notify
+      // (RFC 8448 §6.1); the HTTP layer validates the message framing.
+      return out;
+    }
+    return base::Err(base::Error::Network("TLS read failed: " + SslErrorString()));
+  }
+  return out;
 }
 
 base::Result<std::string> TlsSocket::Receive(std::size_t max_bytes, int timeout_ms)
@@ -247,6 +308,32 @@ base::Result<std::string> TlsSocket::Receive(std::size_t max_bytes, int timeout_
     return base::Err(base::Error::Network("TLS read failed: " + SslErrorString()));
   }
   return out;
+}
+
+base::Result<bool> TlsSocket::HasPendingInput()
+{
+  if (impl_->ssl == nullptr) {
+    return base::Err(base::Error::Network("TLS: not connected"));
+  }
+  // Application data already handed to OpenSSL by an earlier read counts as
+  // pending: a pooled connection must be byte-clean before it is reused.
+  if (SSL_pending(impl_->ssl.get()) > 0) {
+    return true;
+  }
+  for (;;) {
+    const int ready = platform::WaitSocket(impl_->tcp.fd(),
+                                           /*want_read=*/true,
+                                           /*want_write=*/false,
+                                           /*timeout_ms=*/0);
+    if (ready >= 0) {
+      // A readable TLS connection with no application data pending is a
+      // control record (close_notify / alert) or a TCP FIN: not reusable.
+      return ready > 0;
+    }
+    if (!platform::IsInterrupted(platform::LastError())) {
+      return base::Err(base::Error::Network("TLS wait for readable failed"));
+    }
+  }
 }
 
 base::Result<TlsSocket::ReceiveOutcome> TlsSocket::ReceiveWithOutcome(std::size_t max_bytes,

@@ -1,5 +1,6 @@
 #include "neko/network/compression.h"
 #include "neko/network/http.h"
+#include "neko/network/http_client.h"
 #include "neko/network/socket.h"
 #include "neko/network/tls_socket.h"
 #include "neko/url/url.h"
@@ -397,7 +398,11 @@ TestCert GenerateLocalhostCert()
 class TestTlsServer
 {
 public:
-  TestTlsServer() : cert_(GenerateLocalhostCert())
+  // |keep_alive| makes the server answer further requests on the same TLS
+  // connection instead of closing after one; the default (false) preserves the
+  // one-request-per-connection behaviour the other TLS tests rely on.
+  explicit TestTlsServer(bool keep_alive = false)
+      : keep_alive_(keep_alive), cert_(GenerateLocalhostCert())
   {
     listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd_ < 0) {
@@ -437,12 +442,29 @@ public:
 
   ~TestTlsServer()
   {
+    // Accept new connections while earlier ones are still open (the client
+    // pools keep-alive connections, and a test may talk through a proxy), and
+    // never wait for the client to hang up: shut the live sockets down so the
+    // handlers finish.
+    std::vector<std::thread> handlers;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      for (const int fd : connection_fds_) {
+        ::shutdown(fd, SHUT_RDWR);
+      }
+      handlers.swap(handler_threads_);
+    }
     if (listen_fd_ >= 0) {
       ::shutdown(listen_fd_, SHUT_RDWR);
       ::close(listen_fd_);
     }
     if (thread_.joinable()) {
       thread_.join();
+    }
+    for (std::thread& handler : handlers) {
+      if (handler.joinable()) {
+        handler.join();
+      }
     }
     if (ctx_ != nullptr) {
       SSL_CTX_free(ctx_);
@@ -464,6 +486,13 @@ public:
     return cert_.cert_pem;
   }
 
+  // Raw request headers of every handled request, in order.
+  std::vector<std::string> Requests()
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return requests_;
+  }
+
 private:
   void Run()
   {
@@ -474,51 +503,77 @@ private:
       if (cfd < 0) {
         return;
       }
-      SSL* ssl = SSL_new(ctx_);
-      if (ssl != nullptr) {
-        SSL_set_fd(ssl, cfd);
-        if (SSL_accept(ssl) == 1) {
-          char buffer[4096];
-          std::string request;
-          while (request.find("\r\n\r\n") == std::string::npos) {
-            const int n = SSL_read(ssl, buffer, sizeof(buffer));
-            if (n <= 0) {
-              break;
-            }
-            request.append(buffer, static_cast<std::size_t>(n));
+      std::lock_guard<std::mutex> lock(mutex_);
+      connection_fds_.push_back(cfd);
+      handler_threads_.emplace_back([this, cfd] {
+        HandleConnection(cfd);
+        ::close(cfd);
+      });
+    }
+  }
+
+  void HandleConnection(int cfd)
+  {
+    SSL* ssl = SSL_new(ctx_);
+    if (ssl == nullptr) {
+      return;
+    }
+    SSL_set_fd(ssl, cfd);
+    if (SSL_accept(ssl) == 1) {
+      bool keep_serving = true;
+      while (keep_serving) {
+        char buffer[4096];
+        std::string request;
+        while (request.find("\r\n\r\n") == std::string::npos) {
+          const int n = SSL_read(ssl, buffer, sizeof(buffer));
+          if (n <= 0) {
+            keep_serving = false;
+            break;
           }
-          const std::size_t ps = request.find(' ');
-          const std::size_t pe = request.find(' ', ps + 1);
-          const std::string path = ps != std::string::npos && pe != std::string::npos
-                                       ? request.substr(ps + 1, pe - ps - 1)
-                                       : "/";
-          std::string response;
-          if (path == "/downgrade") {
-            // A https server redirecting to plaintext http (SSL stripping).
-            response = "HTTP/1.1 302 Found\r\nLocation: http://example.invalid/\r\n"
-                       "Content-Length: 0\r\n\r\n";
-          } else {
-            // "<h1>Hello TLS</h1>" is 18 bytes; Content-Length must match
-            // exactly (a mismatch is a truncated response and the client now
-            // rejects it).
-            response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 18\r\n"
-                       "\r\n<h1>Hello TLS</h1>";
-          }
-          SSL_write(ssl, response.data(), static_cast<int>(response.size()));
-          if (path == "/abrupt-close") {
-            // Simulate a CDN that closes the TCP connection WITHOUT a
-            // close_notify alert after sending the full response (observed
-            // on real sites such as sohu/bing).  The client must accept the
-            // complete response even though the TLS stream is truncated.
-            SSL_free(ssl);
-            ::close(cfd);
-            continue;
-          }
+          request.append(buffer, static_cast<std::size_t>(n));
         }
-        SSL_shutdown(ssl);
-        SSL_free(ssl);
+        if (!keep_serving || request.find("\r\n\r\n") == std::string::npos) {
+          break;
+        }
+        const std::size_t ps = request.find(' ');
+        const std::size_t pe = request.find(' ', ps + 1);
+        const std::string path = ps != std::string::npos && pe != std::string::npos
+                                     ? request.substr(ps + 1, pe - ps - 1)
+                                     : "/";
+        std::string response;
+        if (path == "/downgrade") {
+          // A https server redirecting to plaintext http (SSL stripping).
+          response = "HTTP/1.1 302 Found\r\nLocation: http://example.invalid/\r\n"
+                     "Content-Length: 0\r\n\r\n";
+        } else {
+          // "<h1>Hello TLS</h1>" is 18 bytes; Content-Length must match
+          // exactly (a mismatch is a truncated response and the client now
+          // rejects it).
+          response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 18\r\n"
+                     "\r\n<h1>Hello TLS</h1>";
+        }
+        SSL_write(ssl, response.data(), static_cast<int>(response.size()));
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          requests_.push_back(request);
+        }
+        if (path == "/abrupt-close") {
+          // Simulate a CDN that closes the TCP connection WITHOUT a
+          // close_notify alert after sending the full response (observed
+          // on real sites such as sohu/bing).  The client must accept the
+          // complete response even though the TLS stream is truncated.
+          SSL_free(ssl);
+          ssl = nullptr;
+          break;
+        }
+        if (!keep_alive_) {
+          break;
+        }
       }
-      ::close(cfd);
+    }
+    if (ssl != nullptr) {
+      SSL_shutdown(ssl);
+      SSL_free(ssl);
     }
   }
 
@@ -527,6 +582,11 @@ private:
   std::thread thread_;
   SSL_CTX* ctx_ = nullptr;
   TestCert cert_;
+  bool keep_alive_ = false;
+  std::mutex mutex_;
+  std::vector<std::string> requests_;
+  std::vector<std::thread> handler_threads_;
+  std::vector<int> connection_fds_;
 };
 
 class TestConnectProxy
@@ -562,6 +622,16 @@ public:
 
   ~TestConnectProxy()
   {
+    // A test server must not depend on the client closing the connection: the
+    // engine pools keep-alive connections now, so nothing guarantees an EOF
+    // here.  Shut the relayed sockets down so Relay() returns and the accept
+    // thread (and the upstream relay it joins) can finish.
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      for (const int fd : open_fds_) {
+        ::shutdown(fd, SHUT_RDWR);
+      }
+    }
     if (listen_fd_ >= 0) {
       ::shutdown(listen_fd_, SHUT_RDWR);
       ::close(listen_fd_);
@@ -587,6 +657,13 @@ public:
   }
 
 private:
+  // Sockets the relay loop reads from, so the destructor can end it.
+  void TrackConnection(int fd)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    open_fds_.push_back(fd);
+  }
+
   static void Relay(int from, int to)
   {
     char buffer[4096];
@@ -616,6 +693,7 @@ private:
     if (client_fd < 0) {
       return;
     }
+    TrackConnection(client_fd);
     std::string request;
     char buffer[4096];
     while (request.find("\r\n\r\n") == std::string::npos) {
@@ -641,6 +719,7 @@ private:
       ::close(client_fd);
       return;
     }
+    TrackConnection(target.value().fd());
     static constexpr std::string_view response = "HTTP/1.1 200 Connection Established\r\n\r\n";
     ::send(client_fd, response.data(), response.size(), 0);
     std::thread upstream([&target, client_fd] { Relay(client_fd, target.value().fd()); });
@@ -654,6 +733,7 @@ private:
   std::thread thread_;
   std::mutex mutex_;
   std::string request_;
+  std::vector<int> open_fds_;
 };
 #endif
 
@@ -904,6 +984,107 @@ TEST(TlsTest, GetFromLocalTlsServer)
   EXPECT_EQ(result.value().body, "<h1>Hello TLS</h1>");
 }
 
+// A peer that accepts the TCP connection and closes it before answering any
+// handshake byte (a proxy that stops tunnelling, a middlebox reset, an
+// unreachable edge).  The error must name what happened: no certificate was
+// received, so blaming certificate verification is misleading.
+class TestTlsResetServer
+{
+public:
+  TestTlsResetServer()
+  {
+    listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (listen_fd_ < 0) {
+      return;
+    }
+    int yes = 1;
+    ::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+    if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 ||
+        ::listen(listen_fd_, 1) != 0) {
+      ::close(listen_fd_);
+      listen_fd_ = -1;
+      return;
+    }
+    socklen_t len = sizeof(addr);
+    if (::getsockname(listen_fd_, reinterpret_cast<sockaddr*>(&addr), &len) != 0) {
+      ::close(listen_fd_);
+      listen_fd_ = -1;
+      return;
+    }
+    port_ = ntohs(addr.sin_port);
+    thread_ = std::thread([this] {
+      sockaddr_in client{};
+      socklen_t client_len = sizeof(client);
+      const int cfd = ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&client), &client_len);
+      if (cfd >= 0) {
+        ::close(cfd); // no TLS ServerHello, no close_notify: just gone
+      }
+    });
+  }
+
+  ~TestTlsResetServer()
+  {
+    if (listen_fd_ >= 0) {
+      ::shutdown(listen_fd_, SHUT_RDWR);
+      ::close(listen_fd_);
+    }
+    if (thread_.joinable()) {
+      thread_.join();
+    }
+  }
+
+  bool IsValid() const
+  {
+    return listen_fd_ >= 0;
+  }
+  uint16_t port() const
+  {
+    return port_;
+  }
+
+private:
+  int listen_fd_ = -1;
+  uint16_t port_ = 0;
+  std::thread thread_;
+};
+
+// Writing to a socket whose peer has closed must come back as a failed write,
+// never as a process-killing SIGPIPE.  The TLS path cannot ask for that per
+// call (OpenSSL's socket BIO uses write(2)), so the network module takes over
+// the *default* SIGPIPE disposition.  Applications do this too, but a library
+// that reuses connections the peer may have closed cannot rely on it.
+TEST(SocketTest, NetworkIoDoesNotLeaveSigpipeAtItsDefaultDisposition)
+{
+#ifndef _WIN32
+  // Touch the network stack first so the module's one-time initialization has
+  // run (port 1 on loopback is refused, which is all that is needed).
+  (void)Socket::Connect("127.0.0.1", 1, /*timeout_ms=*/500);
+  struct sigaction current = {};
+  ASSERT_EQ(::sigaction(SIGPIPE, nullptr, &current), 0);
+  EXPECT_NE(current.sa_handler, SIG_DFL)
+      << "a write to a closed socket would terminate the process";
+#endif
+}
+
+TEST(TlsTest, PeerClosingDuringTheHandshakeIsReportedAsAPeerClose)
+{
+  TestTlsResetServer server;
+  ASSERT_TRUE(server.IsValid());
+  const auto url = url::Url::Parse("https://localhost:" + std::to_string(server.port()) + "/");
+  ASSERT_TRUE(url.has_value());
+
+  const auto result = HttpGet(url.value());
+  ASSERT_FALSE(result.has_value());
+  const std::string message = result.error().message();
+  EXPECT_NE(message.find("closed the connection during the TLS handshake"), std::string::npos)
+      << message;
+  EXPECT_EQ(message.find("certificate verification failed"), std::string::npos) << message;
+}
+
 TEST(TlsTest, GetThroughHttpConnectProxy)
 {
   TestTlsServer server;
@@ -923,6 +1104,49 @@ TEST(TlsTest, GetThroughHttpConnectProxy)
   EXPECT_NE(
       proxy.Request().find("CONNECT localhost:" + std::to_string(server.port()) + " HTTP/1.1\r\n"),
       std::string::npos);
+}
+
+// The *route* to an origin is part of a connection's identity.  With
+// HTTPS_PROXY set (and the host not excluded by NO_PROXY) the connection is
+// dialed through the proxy, so it must not be interchangeable with one that was
+// dialed directly -- otherwise a NO_PROXY host could silently travel through
+// the proxy, and the reverse.
+TEST(TlsTest, DoesNotReuseADirectConnectionWhenAProxyAppears)
+{
+  TestTlsServer server(/*keep_alive=*/true);
+  TestConnectProxy proxy;
+  ASSERT_TRUE(server.IsValid());
+  ASSERT_TRUE(proxy.IsValid());
+  TlsOptions options;
+  options.extra_ca_cert_pem = server.cert_pem();
+  const auto url = url::Url::Parse("https://localhost:" + std::to_string(server.port()) + "/");
+  ASSERT_TRUE(url.has_value());
+  // A per-test client, so the pooled connection really is this test's own.
+  HttpClient client;
+
+  // First request: direct (no proxy in the environment).
+  const auto direct = client.Get(url.value(), 5, {}, options);
+  ASSERT_TRUE(direct.has_value()) << direct.error().message();
+  EXPECT_EQ(client.stats().connections_opened, 1u);
+  EXPECT_EQ(proxy.Request(), ""); // nothing has gone through the proxy yet
+
+  // Second request: same origin, now behind a proxy.  NO_PROXY is emptied so
+  // localhost is proxied like any other host.
+  ScopedEnvironmentVariable lower("https_proxy",
+                                  "http://127.0.0.1:" + std::to_string(proxy.port()));
+  ScopedEnvironmentVariable upper("HTTPS_PROXY",
+                                  "http://127.0.0.1:" + std::to_string(proxy.port()));
+  ScopedEnvironmentVariable no_proxy("NO_PROXY", "");
+  ScopedEnvironmentVariable lower_no_proxy("no_proxy", "");
+
+  const auto proxied = client.Get(url.value(), 5, {}, options);
+  ASSERT_TRUE(proxied.has_value()) << proxied.error().message();
+  EXPECT_EQ(proxied.value().body, "<h1>Hello TLS</h1>");
+  EXPECT_EQ(client.stats().connections_opened, 2u); // a new route needs a new connection
+  EXPECT_NE(
+      proxy.Request().find("CONNECT localhost:" + std::to_string(server.port()) + " HTTP/1.1\r\n"),
+      std::string::npos)
+      << "the second request reused the direct connection instead of the proxy";
 }
 
 TEST(TlsTest, UsesHttpsProxyEnvironmentVariable)

@@ -162,13 +162,17 @@ mutex，就是 use-after-free。`browser_controller.cpp` 中所有「取 DOM 锁
 当前 I/O 模型是**线程池 + 阻塞套接字**，不是事件循环：
 
 - HTTP(S) 抓取：每个请求一个池线程，内部同步 `Socket::Connect` → TLS 握手
-  → 读写，带连接/读/总超时与重定向、压缩、缓存（见 `docs/networking/`）。
+  → 读写，带连接/读/总超时与重定向、压缩（见 `docs/networking/`）。
+  **连接复用**（ADR 0022）：`HttpClient` 按 origin 持有空闲 keep-alive 连接
+  （每 origin 最多 8 条、空闲 60 s），复用前用非消费式探测确认对端未关闭；
+  仅当「复用的连接在收到任何响应字节之前失败」时才新建连接重发一次（GET 幂等）。
 - DNS：每次解析自建 UDP socket + 重试（3 次默认），缓存命中则完全不发包；
   没有 getaddrinfo 阻塞池。
 - 好处：实现简单、超时可预期、无回调地狱；代价：请求数受池大小限制，
   大量并发请求会排队。
 - **NOT IMPLEMENTED**：epoll/kqueue/IOCP 事件循环、HTTP/2 多路复用、
-  连接池复用、QUIC/HTTP/3。这些是性能演进项，接口边界已保留在
+  per-origin 并发上限（并发突发仍会一次开多条连接，没有排队）、
+  TLS 会话复用、HTTP 缓存、QUIC/HTTP/3。这些是性能演进项，接口边界已保留在
   `network::` 内部（引擎其他部分只见项目自有接口，不见第三方网络 API）。
 
 ---
@@ -182,6 +186,8 @@ mutex，就是 use-after-free。`browser_controller.cpp` 中所有「取 DOM 锁
 | `RasterizeInto` 分带并行与串行逐字节一致（含尾部不满带） | `tests/unit/renderer`（`PageTest.ParallelBandedRasterizeMatchesSerial`） |
 | 字形缓存跨线程 | `tests/unit/graphics`（缓存/并发用例） |
 | DNS 缓存与超时 | `tests/unit/network`（12 个用例，含本地 UDP 服务器） |
+| HTTP 连接池复用/重试 | `tests/unit/network`（`http_client_test`，8 个用例：本地 keep-alive 服务器 + 连接计数；含对端静默关闭后的单次重发） |
+| 脚本并行预取与文档序执行 | `tests/unit/browser`（`page_scripts_test`，4 个用例：并发 in-flight 断言 + 执行顺序 + 去重 + 失败语义） |
 | WebSocket 线程模型 | `tests/unit/network` + JS 绑定测试（事件在泵中派发） |
 | 渲染进程协议/会话 | `tests/unit/browser`（`renderer_protocol_test`、`renderer_session_test`、`renderer_mode_test`） |
 | 崩溃与回退路径 | `renderer_session_test`（`ChildCrashIsDetectedAndReported`、子进程无法启动、协议往返/版本） |

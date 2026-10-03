@@ -77,3 +77,6 @@ coverage/
 *.profdata
 lcov.info
 coverage.info
+
+# neko_gui_screenshot default output
+screenshot.png

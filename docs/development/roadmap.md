@@ -228,6 +228,13 @@ graph LR
 
 ## Phase 11 — Performance（M1 已起步）
 
+- [x] **HTTP 连接复用 + 脚本并行预取**（2026-10，ADR 0022）：按 origin 的
+      keep-alive 空闲连接池（复用前探测、失败重发一次幂等 GET）、
+      `ReadSome()` 单次读取原语（修掉「常连后每次读都等满超时」）、
+      `RunPageScripts` 脚本体并行预取 + 保持文档序执行；实测 bilibili.com
+      新建 TCP+TLS 从 183 次降至 54 次，墙钟中位数 ≈18.3 s → ≈11.4 s；
+      **后续**：同步 XHR 真异步化（当前最大单项等待）、HTTP 缓存、
+      per-origin 并发上限、TLS 会话复用
 - [x] **显示列表缓存**：Page 按版本号增量重建 Painter 输出（内容未变不重生成）
 - [x] **并行带栅格化** + 整数定点 alpha 混合 + 缓冲复用（Resize 不重分配）
 - [x] **滚动 blit**：WebView 视口光栅缓存，滚动仅内存搬移 + 补绘露出带

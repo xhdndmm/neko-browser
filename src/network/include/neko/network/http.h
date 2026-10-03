@@ -51,6 +51,9 @@ using HeaderProvider = std::function<std::vector<HttpHeader>(const url::Url&)>;
 // Malformed URLs and payloads return InvalidArgument / Parse errors.
 base::Result<HttpResponse> DecodeDataUrl(std::string_view url);
 
+// Follows this many redirect hops before returning the 3xx response itself.
+inline constexpr int kDefaultRedirectLimit = 5;
+
 // Sends a GET request and returns the final response, following redirects
 // (301/302/303/307/308) up to |redirect_limit| times.  |extra_headers| is
 // consulted for each hop.  http:// and https:// are supported; https://
@@ -58,8 +61,11 @@ base::Result<HttpResponse> DecodeDataUrl(std::string_view url);
 // (e.g. an extra trust anchor for tests).  Response bodies are decoded per
 // Content-Encoding (gzip / deflate).  data: URLs are decoded locally (see
 // DecodeDataUrl).  Any other scheme returns a NOT IMPLEMENTED error.
+//
+// Connections are pooled and reused per origin (see http_client.h); pass an
+// own HttpClient instead when an isolated pool is needed.
 base::Result<HttpResponse> HttpGet(const url::Url& url,
-                                   int redirect_limit = 5,
+                                   int redirect_limit = kDefaultRedirectLimit,
                                    const HeaderProvider& extra_headers = {},
                                    const TlsOptions& tls_options = {});
 

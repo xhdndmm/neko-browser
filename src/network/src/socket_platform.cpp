@@ -10,6 +10,7 @@
 #ifndef _WIN32
 #include <arpa/inet.h>
 #include <cerrno>
+#include <csignal>
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/time.h>
@@ -43,6 +44,26 @@ bool EnsureInitialized()
   }();
   return initialized;
 #else
+  // SIGPIPE: by default, writing to a socket whose peer has closed kills the
+  // whole process.  Network I/O must report a failed write instead -- and the
+  // TLS path cannot opt out per call, because OpenSSL's socket BIO writes with
+  // write(2), which cannot carry MSG_NOSIGNAL (see SendBytes for the plain
+  // path, which does).  Every connection the pool reuses may have been closed
+  // by the peer while it sat idle, so this is not a corner case.
+  //
+  // Only the *default* disposition is taken over: an embedder that installed
+  // its own SIGPIPE handler keeps it.
+  static const bool pipe_ignored = [] {
+    struct sigaction current = {};
+    if (::sigaction(SIGPIPE, nullptr, &current) != 0 || current.sa_handler != SIG_DFL) {
+      return true;
+    }
+    struct sigaction ignore = {};
+    ignore.sa_handler = SIG_IGN;
+    ::sigaction(SIGPIPE, &ignore, nullptr);
+    return true;
+  }();
+  (void)pipe_ignored;
   return true;
 #endif
 }
@@ -182,6 +203,10 @@ int SendBytes(int fd, const char* data, std::size_t length)
       static_cast<int>(std::min<std::size_t>(length, static_cast<std::size_t>(INT_MAX)));
 #ifdef _WIN32
   return ::send(ToSocket(fd), data, bounded, 0);
+#elif defined(MSG_NOSIGNAL)
+  // Belt and braces with EnsureInitialized's SIGPIPE handling: a failed write
+  // is reported as an error rather than delivered as a signal.
+  return static_cast<int>(::send(fd, data, static_cast<std::size_t>(bounded), MSG_NOSIGNAL));
 #else
   return static_cast<int>(::send(fd, data, static_cast<std::size_t>(bounded), 0));
 #endif

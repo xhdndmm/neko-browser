@@ -2486,6 +2486,7 @@ void BrowserController::LoadBytes(Tab& tab,
           return fetch_(script_url, CookieHeader(script_url, NowUnix()));
         },
         [this](std::string_view level, std::string_view text) { LogConsole(level, text); },
+        pool(),
         services,
         &tab.pending_script_navigation);
 
