@@ -43,6 +43,11 @@ struct BrowserOptions
   // --perf-report: print one machine-readable JSON line of load counters and
   // phase timings (see perf_report.h and docs/development/perf-baselines.md).
   bool perf_report = false;
+  // --raf-per-turn <n>: cap requestAnimationFrame callbacks served per pump turn
+  // (0 = unlimited).  A measurement knob: it exists so the budget can be A/B'd on
+  // the same page instead of being a constant nobody can vary.  Unset means the
+  // engine default (javascript::DomBinder's), which is what the GUI uses.
+  std::optional<std::size_t> raf_per_turn;
   // --verbose / --log-level <level>.
   base::LogLevel log_level = base::LogLevel::kInfo;
 

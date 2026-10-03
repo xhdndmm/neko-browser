@@ -2067,6 +2067,16 @@ long long ElapsedMs(std::chrono::steady_clock::time_point start)
 
 } // namespace
 
+void Impl::SetRafPerTurnLimit(std::size_t limit)
+{
+  raf_per_turn_limit = limit;
+}
+
+std::size_t Impl::raf_per_turn_limit_value() const
+{
+  return raf_per_turn_limit;
+}
+
 int Impl::RunPendingTimers(DomBinder::TurnBreakdown* breakdown)
 {
   if (breakdown != nullptr) {
@@ -2153,12 +2163,16 @@ int Impl::RunPendingRaf()
   if (raf_queue.empty()) {
     return 0;
   }
-  // Move the queued callbacks to a pending list (a callback may queue more
-  // frames, which must not run in the same pump).
-  for (RafEntry& entry : raf_queue) {
-    raf_pending.push_back(std::move(entry));
+  // Move at most |raf_per_turn_limit| callbacks to the pending list (a callback
+  // may queue more frames, which must not run in the same pump).  Anything over
+  // the budget stays queued, in order, for the next turn -- see the contract on
+  // DomBinder::SetRafPerTurnLimit.
+  const std::size_t budget = raf_per_turn_limit == 0 ? raf_queue.size() : raf_per_turn_limit;
+  const std::size_t take = std::min(budget, raf_queue.size());
+  for (std::size_t i = 0; i < take; ++i) {
+    raf_pending.push_back(std::move(raf_queue[i]));
   }
-  raf_queue.clear();
+  raf_queue.erase(raf_queue.begin(), raf_queue.begin() + static_cast<std::ptrdiff_t>(take));
   const auto elapsed = std::chrono::steady_clock::now() - performance_origin;
   const double timestamp = std::chrono::duration<double, std::milli>(elapsed).count();
   int ran = 0;

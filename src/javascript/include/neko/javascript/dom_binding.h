@@ -392,6 +392,28 @@ public:
   // needs (a 4 s turn tells you nothing until you know which segment owns it).
   int RunPendingTimers(TurnBreakdown* breakdown = nullptr);
 
+  // How many requestAnimationFrame callbacks one pump turn may serve; the rest
+  // stay queued for the next turn.  0 means "no limit" (the pre-budget
+  // behaviour).
+  //
+  // Why a budget: a browser runs every callback registered before the frame in
+  // that frame, so a page with 38 queued callbacks blocks until all of them
+  // finish -- measured at 0.8-4 s on a real site (see
+  // docs/development/perf-baselines.md).  The engine's pump is a generic work
+  // turn (timers, promise jobs, completions and rAF together), so bounding rAF
+  // work per turn keeps one turn from monopolising the worker.  Deferring a
+  // callback to the next turn is a documented approximation of the frame model.
+  //
+  // Default: unlimited.  A/B measurement showed the budget cutting the longest
+  // turn (median 1128 -> 793 ms at a limit of two) while sometimes doubling the
+  // summed turn time -- the callbacks each still run once, but interleaving makes
+  // the page recompute layout between batches.  The trade is only worth taking if
+  // frames actually advance, which the GUI steady-state harness measures; the
+  // default stays off until it says otherwise.
+  static constexpr std::size_t kUnlimitedRafPerTurn = 0;
+  void SetRafPerTurnLimit(std::size_t limit);
+  std::size_t raf_per_turn_limit() const;
+
   // The deadline of the next pending timer, or nullopt when none.
   [[nodiscard]] std::optional<std::chrono::steady_clock::time_point> NextTimerDeadline() const;
 

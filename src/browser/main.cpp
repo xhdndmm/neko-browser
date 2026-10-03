@@ -922,6 +922,12 @@ int main(int argc, char** argv)
     // page's content lives (framework hydration, lazy chunks, deferred
     // rendering).  Bounded by both an iteration cap and a 250 ms quiet budget
     // so a page that schedules work forever still terminates.
+    if (script_runtime != nullptr && parsed.options.raf_per_turn.has_value()) {
+      // Measurement knob (--raf-per-turn): the pump that follows is where the
+      // load's accumulated rAF queue is drained, which is the batch the budget
+      // exists to bound.
+      script_runtime->SetRafPerTurnLimit(parsed.options.raf_per_turn.value());
+    }
     if (script_runtime != nullptr) {
       // &perf.pump: per-turn durations, the smoothness signal (see
       // perf_report.h).  Idle waiting between turns is excluded.

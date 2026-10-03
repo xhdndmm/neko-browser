@@ -69,6 +69,16 @@ int DomBinder::RunPendingTimers(TurnBreakdown* breakdown)
   return impl_->RunPendingTimers(breakdown);
 }
 
+void DomBinder::SetRafPerTurnLimit(std::size_t limit)
+{
+  impl_->SetRafPerTurnLimit(limit);
+}
+
+std::size_t DomBinder::raf_per_turn_limit() const
+{
+  return impl_->raf_per_turn_limit_value();
+}
+
 std::optional<std::chrono::steady_clock::time_point> DomBinder::NextTimerDeadline() const
 {
   return impl_->NextTimerDeadline();

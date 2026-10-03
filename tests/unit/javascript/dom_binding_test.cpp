@@ -3764,6 +3764,51 @@ TEST(DomBinderPumpBreakdownTest, AttributesEnabledAndDisabledSegments)
   EXPECT_GE(binder.RunPendingTimers(), 0);
 }
 
+// The per-turn requestAnimationFrame budget: a page with many queued callbacks
+// used to block the worker for the whole batch (measured at 0.8-4 s on a real
+// site), so the pump serves at most |limit| per turn and defers the rest.
+TEST(DomBinderPumpBreakdownTest, RafBudgetSpreadsCallbacksOverTurns)
+{
+  auto doc = html::Parser(R"(<!doctype html><html><body><div id="d"></div></body></html>)").Parse();
+  DomBinder binder(*doc, PageApis{});
+  // Default is off: the budget is opt-in until the GUI harness justifies it.
+  EXPECT_EQ(binder.raf_per_turn_limit(), DomBinder::kUnlimitedRafPerTurn);
+
+  // Three callbacks with distinct bodies, so order is observable without the
+  // classic loop-variable capture mistake.
+  ASSERT_TRUE(binder
+                  .Evaluate("globalThis.order=[];"
+                            "requestAnimationFrame(function(){ globalThis.order.push(0); });"
+                            "requestAnimationFrame(function(){ globalThis.order.push(1); });"
+                            "requestAnimationFrame(function(){ globalThis.order.push(2); });")
+                  .has_value());
+
+  binder.SetRafPerTurnLimit(1);
+  int turns_with_raf = 0;
+  for (int i = 0; i < 6; ++i) {
+    DomBinder::TurnBreakdown turn;
+    binder.RunPendingTimers(&turn);
+    EXPECT_LE(turn.raf, 1u); // the budget holds every turn
+    if (turn.raf > 0) {
+      ++turns_with_raf;
+    }
+  }
+  EXPECT_EQ(turns_with_raf, 3); // one callback per turn
+  EXPECT_EQ(binder.Evaluate("globalThis.order.join(',')").value().ToString().value(), "0,1,2");
+
+  // Zero means unlimited: the whole queue runs in one turn, as before the budget.
+  binder.SetRafPerTurnLimit(DomBinder::kUnlimitedRafPerTurn);
+  ASSERT_TRUE(binder
+                  .Evaluate("globalThis.order=[];"
+                            "for (var i = 0; i < 12; i++) { requestAnimationFrame(function(){"
+                            "  globalThis.order.push(1); }); }")
+                  .has_value());
+  DomBinder::TurnBreakdown bulk;
+  binder.RunPendingTimers(&bulk);
+  EXPECT_EQ(bulk.raf, 12u);
+  EXPECT_EQ(binder.Evaluate("globalThis.order.length").value().ToString().value(), "12");
+}
+
 TEST(DomBinderXhrTest, XhrLifecycleAndEvents)
 {
   dom::Document doc;

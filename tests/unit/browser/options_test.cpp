@@ -99,6 +99,18 @@ TEST(OptionsTest, PerfReportFlag)
   EXPECT_TRUE(r.options.dump_dom);
 }
 
+// --raf-per-turn is the knob that makes the rAF budget measurable (0 = unlimited);
+// an unset value means the engine default, so the option must distinguish the two.
+TEST(OptionsTest, RafPerTurnFlag)
+{
+  EXPECT_FALSE(Parse({"--dump-dom"}).options.raf_per_turn.has_value());
+  EXPECT_EQ(Parse({"--raf-per-turn", "0"}).options.raf_per_turn.value(), 0u);
+  EXPECT_EQ(Parse({"--raf-per-turn", "16"}).options.raf_per_turn.value(), 16u);
+  EXPECT_EQ(Parse({"--raf-per-turn"}).action, ParseResult::Action::kError);
+  EXPECT_EQ(Parse({"--raf-per-turn", "x"}).action, ParseResult::Action::kError);
+  EXPECT_EQ(Parse({"--raf-per-turn", "-1"}).action, ParseResult::Action::kError);
+}
+
 TEST(OptionsTest, DisableGpuFlag)
 {
   const ParseResult r = Parse({"--disable-gpu"});

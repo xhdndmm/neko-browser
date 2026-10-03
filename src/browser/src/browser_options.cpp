@@ -1,5 +1,6 @@
 #include "neko/browser/browser_options.h"
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -18,6 +19,8 @@ std::string UsageText()
          "      --headless             Run without a GUI (engine-only mode).\n"
          "      --url <url>            URL to navigate to.\n"
          "      --dump-dom             Dump the DOM after load (requires Phase 3).\n"
+         "      --raf-per-turn <n>      Cap requestAnimationFrame callbacks per pump\n"
+         "                            turn (0 = unlimited; default: engine value).\n"
          "      --perf-report           Print one JSON line of load counters and\n"
          "                            phase timings (docs/development/perf-baselines.md).\n"
          "      --screenshot <path>    Render a screenshot to <path> (requires Phase 6).\n"
@@ -99,6 +102,27 @@ ParseResult ParseCommandLine(int argc, char** argv)
     }
     if (arg == "--network-child") {
       result.options.network_child = true;
+      continue;
+    }
+    if (arg == "--raf-per-turn") {
+      if (i + 1 >= args.size()) {
+        result.action = ParseResult::Action::kError;
+        result.error_message = "--raf-per-turn requires a value";
+        return result;
+      }
+      try {
+        const long long value = std::stoll(std::string(args[++i]));
+        if (value < 0) {
+          result.action = ParseResult::Action::kError;
+          result.error_message = "--raf-per-turn must be >= 0";
+          return result;
+        }
+        result.options.raf_per_turn = static_cast<std::size_t>(value);
+      } catch (const std::exception&) {
+        result.action = ParseResult::Action::kError;
+        result.error_message = "--raf-per-turn requires a number";
+        return result;
+      }
       continue;
     }
     if (arg == "--perf-report") {

@@ -324,6 +324,30 @@ TEST(PageScriptsTest, ScriptTimingsMapToDistinctPhases)
 }
 
 // Without an out-param nothing is measured and behaviour is unchanged.
+// The budget must not strand callbacks: PumpScriptTimersUntilQuiet keeps turning
+// while a turn reports work, so a deferred batch is drained over several turns and
+// the page still settles.
+TEST(PageScriptsTest, RafBudgetIsDrainedByTheQuietPump)
+{
+  renderer::Page page;
+  ScriptFetcherRecorder recorder(0);
+  base::ThreadPool pool(4);
+  const std::string html = "<!DOCTYPE html><html><head><title></title></head><body>"
+                           "<script>for (var i = 0; i < 5; i++) {"
+                           "  requestAnimationFrame(function(){ document.title += 'r'; }); }"
+                           "</script></body></html>";
+  const std::shared_ptr<javascript::DomBinder> binder = RunScripts(page, html, recorder, pool);
+  ASSERT_NE(binder, nullptr);
+  binder->SetRafPerTurnLimit(2);
+
+  PumpStats stats;
+  const int iterations = PumpScriptTimersUntilQuiet(*binder, kDefaultPumpIterations, &stats);
+  EXPECT_EQ(page.document()->Title(), "rrrrr"); // every callback ran
+  EXPECT_EQ(stats.breakdown.raf, 5u);
+  // Five callbacks at two per turn need at least three turns of rAF work.
+  EXPECT_GE(iterations, 3);
+}
+
 TEST(PageScriptsTest, InlineScriptsNeedNoFetch)
 {
   renderer::Page page;

@@ -806,6 +806,14 @@ struct Impl
   };
   std::vector<RafEntry> raf_queue;
   std::vector<RafEntry> raf_pending;
+  // Cap on callbacks served per pump turn.  Default: unlimited, i.e. the
+  // pre-budget behaviour.  A/B on a real page (see
+  // docs/development/perf-baselines.md) showed the budget cutting the longest
+  // turn by about 30% while sometimes doubling the summed turn time, because
+  // interleaving makes the page recompute layout between batches; whether that
+  // trade is worth it depends on whether frames actually advance, which the GUI
+  // steady-state harness measures.  Until it says otherwise the default is off.
+  std::size_t raf_per_turn_limit = 0;
   int64_t next_raf_id = 1;
 
   // Async XMLHttpRequest completions queued by send() (the transport itself
@@ -1090,6 +1098,8 @@ struct Impl
   std::unique_ptr<dom::Node> ReleaseOwned(dom::Node* node);
 
   int RunPendingTimers(DomBinder::TurnBreakdown* breakdown = nullptr);
+  void SetRafPerTurnLimit(std::size_t limit);
+  std::size_t raf_per_turn_limit_value() const;
   int RunPendingRaf();
   std::optional<std::chrono::steady_clock::time_point> NextTimerDeadline() const;
   void DispatchToNode(dom::Node* node, std::string_view type);
