@@ -79,6 +79,11 @@ browser::RuntimeStats BrowserWorker::SnapshotRuntimeStats() const
   return controller_.SnapshotRuntimeStats();
 }
 
+void BrowserWorker::SetRafPerTurnLimit(std::size_t limit)
+{
+  controller_.SetRafPerTurnLimit(limit);
+}
+
 std::vector<browser::TabSnapshot> BrowserWorker::SnapshotTabs() const
 {
   return controller_.SnapshotTabs();

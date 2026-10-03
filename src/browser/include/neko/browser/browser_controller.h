@@ -494,6 +494,12 @@ public:
   // production (see perf_report.h).  Guarded by its own mutex so it never
   // interacts with |mutex_| lock ordering; safe to call from the GUI thread.
   RuntimeStats SnapshotRuntimeStats() const;
+
+  // Opt-in per-turn requestAnimationFrame budget for the pump this controller
+  // runs (see javascript::DomBinder).  0 leaves the engine default.  A
+  // measurement knob: the GUI steady-state harness sets it to A/B the budget on
+  // the interactive path.
+  void SetRafPerTurnLimit(std::size_t limit);
   std::vector<ConsoleEntry> SnapshotConsoleLog() const;
 
   // What sits under a document point, for the page context menu.  Empty
@@ -818,6 +824,9 @@ private:
   void RecordFrameProduced(long long production_ms, long long now_ms);
   mutable std::mutex stats_mutex_;
   PumpStats pump_turn_stats_;
+  // Guarded by stats_mutex_ with the measurements above: written by the GUI
+  // thread, read by the worker when it pumps.
+  std::size_t raf_per_turn_limit_ = 0;
   FrameStats frame_stats_;
   long long last_frame_ms_ = 0;
 

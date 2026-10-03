@@ -96,6 +96,14 @@ struct ScriptTimings
   std::size_t restyles = 0;
 };
 
+// Folds one measured pump turn (duration plus what it ran) into |stats|.  Shared
+// by the CLI pump loop and the GUI's PumpScriptTimers, which calls
+// RunPendingTimers directly -- the two paths must not drift apart in how a turn
+// is recorded.
+void AddPumpTurn(PumpStats& stats,
+                 long long turn_ms,
+                 const javascript::DomBinder::TurnBreakdown& turn);
+
 // Folds a measurement into a load report field by field.  A free function so a
 // test can pin the mapping: inlined in main.cpp a swapped pair would go unnoticed
 // by every test.

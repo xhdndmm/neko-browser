@@ -11,6 +11,7 @@
 #include "neko/ui/browser_worker.h"
 #include "neko/ui/i18n.h"
 #include "neko/ui/main_window.h"
+#include "neko/ui/steady_state.h"
 #include "neko/ui/web_view.h"
 
 #include <QApplication>
@@ -158,6 +159,40 @@ void SendKey(QWidget* widget, int key, Qt::KeyboardModifiers mods = Qt::NoModifi
   QKeyEvent release(QEvent::KeyRelease, key, mods);
   QApplication::sendEvent(widget, &press);
   QApplication::sendEvent(widget, &release);
+}
+
+// The steady-state harness drives the GUI's own cadence and must therefore see
+// what a session sees: frames being produced and pump turns being served.  The
+// counts are asserted (deterministic); the durations it reports are evidence, not
+// a gate (TESTING.md, "时间相关测试").
+TEST(UiSmokeTest, SteadyStateDrivesTheGuiCadence)
+{
+  TempProfile tp;
+  const std::string html_file = tp.path() + "/anim.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(
+                  html_file,
+                  "<html><head><title>anim</title></head><body><div id=\"t\">x</div>"
+                  "<script>var n=0;function tick(){n++;"
+                  "document.getElementById('t').textContent='f'+n;"
+                  "requestAnimationFrame(tick);}requestAnimationFrame(tick);</script>"
+                  "</body></html>")
+                  .has_value());
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  worker.NewTab(QString::fromStdString(html_file), /*activate=*/true);
+
+  neko::ui::SteadyStateOptions options;
+  options.duration = std::chrono::milliseconds(400);
+  options.interval = std::chrono::milliseconds(25);
+  const neko::ui::SteadyStateResult result = neko::ui::RunSteadyState(worker, options);
+
+  EXPECT_TRUE(result.ready) << "a local page must settle well inside the ready timeout";
+  const neko::browser::RuntimeStats stats = worker.SnapshotRuntimeStats();
+  EXPECT_GE(stats.frames.frames, 1u);
+  EXPECT_GE(stats.pump.turns.count, 1u);
+  // The animation loop queues one callback per frame; the pump must have served
+  // some of them (the count is deterministic even though the timing is not).
+  EXPECT_GE(stats.pump.breakdown.raf, 1u);
 }
 
 TEST(UiSmokeTest, RendersLocalHtmlPage)

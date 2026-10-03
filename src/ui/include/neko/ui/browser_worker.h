@@ -56,6 +56,10 @@ public:
   // Worker-side pump/frame measurements for the screenshot tool's
   // --perf-report (see perf_report.h).
   browser::RuntimeStats SnapshotRuntimeStats() const;
+  // Opt-in per-turn requestAnimationFrame budget for the pump (0 = engine
+  // default); the steady-state harness uses it to A/B the budget on the
+  // interactive path.
+  void SetRafPerTurnLimit(std::size_t limit);
   std::vector<browser::ConsoleEntry> SnapshotConsoleLog() const;
   // Context-menu point query for one tab (thread-safe synchronous read).
   browser::PointInfo QueryPoint(int tab_id, float doc_x, float doc_y) const;

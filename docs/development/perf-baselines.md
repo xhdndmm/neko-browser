@@ -75,6 +75,9 @@ DOM 里收集 `<script>`、import-map 解析、并行预取的提交与去重集
 就是这一轮。轮与轮之间的**等待不计入**（那是空闲，不是工作）。
 `pump_over_50ms` 是 ≥50 ms 的轮数（**纯信息，不作门禁**）。
 
+（`--raf-per-turn` 与泵统计对**两条路径都生效**：CLI 走浏览器层的泵函数，GUI 走
+`BrowserController::PumpScriptTimers`，它直接调用 `RunPendingTimers`——两处都接上了。）
+
 **`frames` 只在存在帧管线时非零**：headless `--dump-dom` 不产生帧，因此恒为 0；
 GUI 路径用下面的工具测（帧产出耗时 + 帧间隔）。
 
@@ -100,12 +103,49 @@ QT_QPA_PLATFORM=offscreen ./build/debug/bin/neko_gui_screenshot \
    `page did not settle within 10 s`，此时的报告描述的是**未完成的加载**（实测
    出现过 `requests=35`、`frames=0` 的这种样本，勿当结论）。
 2. **`pump_turns` 在该工具里恒为 0**：它用 `processEvents()` 驱动，不像真 GUI 那样
-   每 50 ms 触发 `PumpScriptTimers`。所以 GUI 的泵时长目前**测不到**——这是已知缺口，
-   需要一个"驱动 N 秒泵并统计帧/泵分布"的稳态 harness（下一项工作）。
+   每 50 ms 触发 `PumpScriptTimers`。要看 GUI 的泵与帧分布请用下面的**稳态 harness**。
 3. 帧数只覆盖加载窗口内的产出。
 
 实测（debug，bilibili，就绪样本）：`frames 2–3`、帧间隔 p50 ≈ 0.8–1.7 s、
 单帧产出最长 750–780 ms、`frame_over_50ms ≥ 1`——即**加载期间内容只在秒级粒度上更新**。
+
+## GUI 稳态 harness（`neko_gui_perf`）
+
+```bash
+./build/release/bin/neko_gui_perf <url> [--seconds N] [--interval-ms N] \
+    [--raf-per-turn N] [--profile <dir>] [--quiet]
+```
+
+它**先有界等待页面安定**（默认 15 s，未安定会向 stderr 告警），再按 GUI 自己的节拍
+（每 50 ms 泵一次 + 处理 Qt 事件）驱动 N 秒，最后打印与 `--perf-report` **同一行 JSON**
+（外加一行人类可读摘要）。它不创建窗口：`NewTab` 就够给控制器一个活动标签，而没有
+MainWindow 就没有隐藏的 50 ms 定时器与本 harness 抢节拍——所以 `pump_turns` 精确等于
+本工具驱动的轮数。
+
+读什么：
+- `frames` / `frame_production_p50|max`：出帧数量与**单帧成本**；
+- `frame_interval_p50|p95|max`：**帧节奏**（交互感受的主信号）；
+- `pump_turns` / `pump_max` / `pump_breakdown`：哪一轮阻塞、那一轮跑了什么。
+
+实测（release，bilibili）：安定耗时 8.7 s；随后 4 s 窗口 **22 帧**、单帧 p50 5 ms /
+最长 180 ms、**帧间隔 p50 188 ms / max 231 ms**、泵 24 轮、最长一轮 **898 ms**。
+即该页稳态内容更新约 5 帧/秒，且存在接近 1 秒的单轮停顿。
+
+### 用它做 rAF 预算 A/B：第一次结论是"不确定"
+
+3 档 × 2 轮（release，bilibili，4 s 窗口）：
+
+| budget | frames | interval max | 最长泵轮 | pump_total |
+| --- | --- | --- | --- | --- |
+| 0（默认） | 24 / **0** | 311 / — | 1028 / **3873** | 1063 / 3873 |
+| 2 | 17 / 13 | 251 / 1141 | **64** / 1016 | 360 / 2013 |
+| 8 | 3 / 4 | 784 / 1039 | 1033 / 1068 | 1769 / 2069 |
+
+同一档内两次运行差异极大（真实站点内容轮换 + 懒加载），**2 轮采样不足以判定**：budget=2
+一次给出 64 ms 的最长轮，另一次 1016 ms。要得到结论需要：(a) **本地固定夹具**（已知数量与
+已知工作量的 rAF 回调）而非真实站点；(b) 每档 ≥8 次采样；(c) 把判定落在**确定性计数**
+（每轮回调数、总回调数）而不是帧计时上。因此 rAF 预算**保持默认关闭**，本 harness 是把
+它变成可判定问题的工具。
 
 ## 实测（2026-10-03，本机 Linux x86_64，同机同网，`--dump-dom`）
 

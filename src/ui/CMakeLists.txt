@@ -63,6 +63,7 @@ add_library(neko_ui
   src/web_view.cpp
   src/main_window.cpp
   src/i18n.cpp
+  src/steady_state.cpp
   ${NEKO_I18N_QRC}
   include/neko/ui/browser_worker.h
   include/neko/ui/web_view.h
@@ -86,3 +87,9 @@ apply_compiler_warnings(neko_browser_gui)
 add_executable(neko_gui_screenshot screenshot_tool.cpp)
 target_link_libraries(neko_gui_screenshot PRIVATE neko::ui)
 apply_compiler_warnings(neko_gui_screenshot)
+
+# Steady-state smoothness measurement for the GUI path (see steady_state.h and
+# docs/development/perf-baselines.md).  Offscreen by default, so it runs headless.
+add_executable(neko_gui_perf gui_perf_tool.cpp)
+target_link_libraries(neko_gui_perf PRIVATE neko::ui)
+apply_compiler_warnings(neko_gui_perf)

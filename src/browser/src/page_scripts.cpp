@@ -1011,6 +1011,26 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
   return binder;
 }
 
+void AddPumpTurn(PumpStats& stats,
+                 long long turn_ms,
+                 const javascript::DomBinder::TurnBreakdown& turn)
+{
+  stats.turns.Record(turn_ms);
+  PumpBreakdown& into = stats.breakdown;
+  into.timers_ms += turn.timers_ms;
+  into.timers += turn.timers;
+  into.jobs_ms += turn.jobs_ms;
+  into.job_rounds += turn.job_rounds;
+  into.xhr_ms += turn.xhr_ms;
+  into.xhr += turn.xhr;
+  into.raf_ms += turn.raf_ms;
+  into.raf += turn.raf;
+  into.ports_ms += turn.ports_ms;
+  into.ports += turn.ports;
+  into.websockets_ms += turn.websockets_ms;
+  into.websockets += turn.websockets;
+}
+
 void ApplyScriptTimings(const ScriptTimings& timings, LoadPhases& phases)
 {
   phases.scripts_fetch = timings.fetch_ms;
@@ -1035,22 +1055,11 @@ int PumpScriptTimersUntilQuiet(javascript::DomBinder& binder,
     const auto turn_start = std::chrono::steady_clock::now();
     const int ran = binder.RunPendingTimers(pump_stats != nullptr ? &turn : nullptr);
     if (pump_stats != nullptr) {
-      pump_stats->turns.Record(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                   std::chrono::steady_clock::now() - turn_start)
-                                   .count());
-      PumpBreakdown& into = pump_stats->breakdown;
-      into.timers_ms += turn.timers_ms;
-      into.timers += turn.timers;
-      into.jobs_ms += turn.jobs_ms;
-      into.job_rounds += turn.job_rounds;
-      into.xhr_ms += turn.xhr_ms;
-      into.xhr += turn.xhr;
-      into.raf_ms += turn.raf_ms;
-      into.raf += turn.raf;
-      into.ports_ms += turn.ports_ms;
-      into.ports += turn.ports;
-      into.websockets_ms += turn.websockets_ms;
-      into.websockets += turn.websockets;
+      AddPumpTurn(*pump_stats,
+                  std::chrono::duration_cast<std::chrono::milliseconds>(
+                      std::chrono::steady_clock::now() - turn_start)
+                      .count(),
+                  turn);
     }
     if (ran > 0) {
       continue; // ran something; go round again

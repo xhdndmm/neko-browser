@@ -1534,6 +1534,12 @@ void BrowserController::RecordFrameProduced(long long production_ms, long long n
   last_frame_ms_ = now_ms;
 }
 
+void BrowserController::SetRafPerTurnLimit(std::size_t limit)
+{
+  std::lock_guard<std::mutex> lock(stats_mutex_);
+  raf_per_turn_limit_ = limit;
+}
+
 RuntimeStats BrowserController::SnapshotRuntimeStats() const
 {
   std::lock_guard<std::mutex> lock(stats_mutex_);
@@ -1682,6 +1688,18 @@ int BrowserController::PumpScriptTimersUntilQuiet(int max_iterations)
   ApplyDeferredImageFetchSignals(*tab);
   // Measure the turns locally and merge once, so a GUI-thread snapshot can
   // never observe a half-written series (stats_mutex_, not mutex_).
+  // Apply the harness's rAF budget, if one was set, to the runtime that is about
+  // to pump (read under stats_mutex_ because the GUI thread owns the setter).
+  {
+    std::size_t limit = 0;
+    {
+      std::lock_guard<std::mutex> lock(stats_mutex_);
+      limit = raf_per_turn_limit_;
+    }
+    if (limit != 0) {
+      tab->script_runtime->SetRafPerTurnLimit(limit);
+    }
+  }
   PumpStats pump_turns;
   const int iterations = ::neko::browser::PumpScriptTimersUntilQuiet(
       *tab->script_runtime, max_iterations, &pump_turns);
@@ -1779,7 +1797,32 @@ void BrowserController::PumpScriptTimers()
     return;
   }
   if (tab->script_runtime != nullptr && tab->page != nullptr) {
-    if (tab->script_runtime->RunPendingTimers() > 0) {
+    // This is the GUI's pump path (it calls RunPendingTimers directly rather than
+    // the browser-layer PumpScriptTimersUntilQuiet), so the rAF budget and the
+    // pump measurement belong here too -- otherwise --raf-per-turn and
+    // --perf-report would describe the CLI only.
+    std::size_t raf_limit = 0;
+    {
+      std::lock_guard<std::mutex> lock(stats_mutex_);
+      raf_limit = raf_per_turn_limit_;
+    }
+    if (raf_limit != 0) {
+      tab->script_runtime->SetRafPerTurnLimit(raf_limit);
+    }
+    javascript::DomBinder::TurnBreakdown turn;
+    const auto turn_start = std::chrono::steady_clock::now();
+    const int pumped = tab->script_runtime->RunPendingTimers(&turn);
+    {
+      PumpStats turn_stats;
+      AddPumpTurn(turn_stats,
+                  std::chrono::duration_cast<std::chrono::milliseconds>(
+                      std::chrono::steady_clock::now() - turn_start)
+                      .count(),
+                  turn);
+      std::lock_guard<std::mutex> lock(stats_mutex_);
+      MergePump(pump_turn_stats_, turn_stats);
+    }
+    if (pumped > 0) {
       // The pump ran scripts: document.title follows them (async XHR
       // handlers, timers), like the tab strip in a real browser.
       RefreshTabTitle(*tab);
