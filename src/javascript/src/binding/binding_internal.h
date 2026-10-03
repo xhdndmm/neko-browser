@@ -1089,7 +1089,7 @@ struct Impl
   void TakeOwnership(dom::Node* node, std::unique_ptr<dom::Node> owned);
   std::unique_ptr<dom::Node> ReleaseOwned(dom::Node* node);
 
-  int RunPendingTimers();
+  int RunPendingTimers(DomBinder::TurnBreakdown* breakdown = nullptr);
   int RunPendingRaf();
   std::optional<std::chrono::steady_clock::time_point> NextTimerDeadline() const;
   void DispatchToNode(dom::Node* node, std::string_view type);

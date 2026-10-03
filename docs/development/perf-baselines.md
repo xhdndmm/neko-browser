@@ -26,6 +26,9 @@ cmake --preset release && cmake --build --preset release --parallel
            "stylesheets2":617,"fonts2":0,"images":559,"videos":0,
            "pump":5607,"late_images":293,"post_load":5900},
  "pump_turns":16,"pump_over_50ms":2,"pump_total_ms":4800,
+ "pump_breakdown":{"timers_ms":372,"timers":95,"jobs_ms":104,"job_rounds":95,
+                   "xhr_ms":0,"xhr":8,"raf_ms":2494,"raf":38,
+                   "ports_ms":0,"ports":0,"websockets_ms":0,"websockets":0},
  "pump_p50":0,"pump_p95":4726,"pump_max":4726,
  "frames":0,"frame_over_50ms":0,
  "frame_production_p50":0,"frame_production_p95":0,"frame_production_max":0,
@@ -37,6 +40,12 @@ cmake --preset release && cmake --build --preset release --parallel
 `scripts_modules`＝模块脚本（`EvaluateModule` 及其 import 抓取）；`scripts_events`＝
 `DOMContentLoaded`/`load` 处理器；`scripts_restyle`＝脚本后引擎重跑的全量样式级联。
 五段之和 ≈ `scripts`（实测未归属仅 8–11 ms，说明拆分闭合）。
+
+**`pump_breakdown` 说明那些轮里到底跑了什么**（没有它，一个 2.7 s 的轮子毫无可操作性）：
+`timers`/`timers_ms`（到期 `setTimeout`/`setInterval`）、
+`job_rounds`/`jobs_ms`（promise 续体）、`xhr`/`xhr_ms`（排队的 XHR 完成投递）、
+`raf`/`raf_ms`（`requestAnimationFrame` 回调）、`ports`、`websockets`。
+六段与一轮互斥穷尽（各段耗时之和 ≈ 该轮耗时）。
 
 **`pump_*` 是流畅性的主指标**：一次「泵动作」= `DomBinder::RunPendingTimers()` 的一次调用，
 也就是到期定时器 + 排队中的 XHR 完成回调真正执行 JS 的那一轮——用户感知到的"长任务"
@@ -102,21 +111,32 @@ QT_QPA_PLATFORM=offscreen ./build/debug/bin/neko_gui_screenshot \
    ~0.51 s 降到中位 24–102 ms。**"可回收 12.9 s"这一说法在 HEAD 上已过期**，
    P1 异步化的收益必须重新表述（上限 = Σ(耗时) − 最长单个请求，实际未知）。
 2. `scripts` 仍是最大单项（5.2–6.9 s）——剩余部分是脚本体抓取后的**执行**，不是传输。
-3. **`post_load` 已拆分，它的代价几乎全在泵里**：release 两次实测
+3. **泵里的长任务归因（2026-10 实测，debug，两次运行）**：
+   `pump_turns ≈ 12`、`pump_max ≈ 2.7–2.9 s`，而 breakdown 显示该轮是
+   **`raf = 38` 个回调、`raf_ms ≈ 2.5–2.7 s`**；`timers = 95`（0.35–0.37 s）、
+   `job_rounds = 95`（0.10 s）、**`xhr = 8` 且 `xhr_ms = 0`**、ports/websockets 为 0。
+   即：**此前"32 个 XHR 完成回调挤在同一轮"的猜测被实测否证**——XHR 投递几乎不耗时，
+   昂贵的是 rAF 回调。
+   重要限定：headless CLI 的泵**没有帧节拍**，加载期间累积的 rAF 回调会在**同一轮被一次排空**
+   （38 个一次跑完），因此这个"2.7 s 单轮"至少部分是 **headless 路径的产物**；真 GUI 每
+   50 ms 泵一次、每轮只排空少量回调。真 GUI 的泵时长仍缺稳态 harness（见上文限制 2）。
+   可操作方向：(a) 给 headless 泵也加"每轮 rAF 上限"（模仿帧预算，让轮与轮之间能推进），
+   (b) 建 GUI 稳态 harness 后再判断交互路径的真实分布。
+4. **`post_load` 已拆分，它的代价几乎全在泵里**：release 两次实测
    `pump = 1.23 / 4.60 s` 对 `late_images = 0.23 / 0.67 s`，而且泵内**存在单轮
    0.65 / 4.01 s 的动作**（`pump_max`，`pump_over_50ms = 2`）——一次 JS 回调链
    就把 worker 独占数秒。**这是目前测得的最大流畅性问题**，量级超过阻塞式
    XHR（32 次 × 中位 24–102 ms），而 P0 完全没碰它。注意它与墙钟的波动同源：
    两次运行的 `scripts` 是 2.6 s 与 10.0 s，说明慢的那部分在 JS 抓取/执行，
    而不是传输。
-4. **脚本阶段的瓶颈是 QuickJS 求值模块，不是网络**（2026-10 拆分后实测，debug）：
+5. **脚本阶段的瓶颈是 QuickJS 求值模块，不是网络**（2026-10 拆分后实测，debug）：
    `scripts ≈ 5.9–6.7 s`，其中 `scripts_modules = 5.06–6.04 s`（约 85%）、
    `scripts_restyle = 0.48–0.50 s`、`scripts_fetch = 0.09–0.22 s`、
    `scripts_exec = 0.13 s`、`scripts_events = 0`。也就是说页面那 1.6 MB 的 ES module
    在解释器里求值 5–6 秒，经典脚本与网络几乎无关。可行的优化方向是**字节码缓存**
    （首访后 `JS_WriteObject` 落盘、后续 `JS_ReadObject` 跳过解析+编译）与降低绑定开销，
    而不是继续优化传输。
-5. 差异说明：`Σ(XHR 耗时) = 3.6 s` 却占 **7.8 s 跨度** → 剩余时间**不在传输**
+6. 差异说明：`Σ(XHR 耗时) = 3.6 s` 却占 **7.8 s 跨度** → 剩余时间**不在传输**
    （JS 计算，或页面自己在等依赖）。这正需要 fixture A/B 与 send() 站点插桩来判定。
 
 ## 纪律（Council 收敛项）

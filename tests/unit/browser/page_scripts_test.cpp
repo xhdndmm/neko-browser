@@ -229,16 +229,16 @@ TEST(PageScriptsTest, PumpTrackerRecordsEveryTurn)
   const std::shared_ptr<javascript::DomBinder> binder = RunScripts(page, html, recorder, pool);
   ASSERT_NE(binder, nullptr);
 
-  LatencyTracker turns;
+  PumpStats turns;
   const int iterations = PumpScriptTimersUntilQuiet(*binder, kDefaultPumpIterations, &turns);
   EXPECT_EQ(page.document()->Title(), "late");
   EXPECT_GT(iterations, 0);
   // The return value counts turns that ran work; the tracker also sees the final
   // turn that found nothing due (it is still a turn, and it is the one that
   // proves the page settled), so it is exactly one higher.
-  EXPECT_EQ(turns.count, static_cast<std::size_t>(iterations) + 1);
-  EXPECT_EQ(turns.samples_ms.size(), turns.count);
-  EXPECT_GE(turns.longest_ms, 0);
+  EXPECT_EQ(turns.turns.count, static_cast<std::size_t>(iterations) + 1);
+  EXPECT_EQ(turns.turns.samples_ms.size(), turns.turns.count);
+  EXPECT_GE(turns.turns.longest_ms, 0);
 }
 
 // The scripts phase is split into segments because they need different fixes:

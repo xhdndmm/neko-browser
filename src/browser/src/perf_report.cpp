@@ -77,6 +77,23 @@ void MergeLatency(LatencyTracker& into, const LatencyTracker& from)
   }
 }
 
+void MergePump(PumpStats& into, const PumpStats& from)
+{
+  MergeLatency(into.turns, from.turns);
+  into.breakdown.timers_ms += from.breakdown.timers_ms;
+  into.breakdown.timers += from.breakdown.timers;
+  into.breakdown.jobs_ms += from.breakdown.jobs_ms;
+  into.breakdown.job_rounds += from.breakdown.job_rounds;
+  into.breakdown.xhr_ms += from.breakdown.xhr_ms;
+  into.breakdown.xhr += from.breakdown.xhr;
+  into.breakdown.raf_ms += from.breakdown.raf_ms;
+  into.breakdown.raf += from.breakdown.raf;
+  into.breakdown.ports_ms += from.breakdown.ports_ms;
+  into.breakdown.ports += from.breakdown.ports;
+  into.breakdown.websockets_ms += from.breakdown.websockets_ms;
+  into.breakdown.websockets += from.breakdown.websockets;
+}
+
 std::string FormatPerfReportLine(const PerfReport& report)
 {
   std::string out = "{\"wall_ms\":";
@@ -127,13 +144,39 @@ std::string FormatPerfReportLine(const PerfReport& report)
   out += '}';
 
   out += ",\"pump_turns\":";
-  out += std::to_string(report.pump.count);
+  out += std::to_string(report.pump.turns.count);
   out += ",\"pump_over_50ms\":";
-  out += std::to_string(report.pump.over_50ms);
+  out += std::to_string(report.pump.turns.over_50ms);
   out += ",\"pump_total_ms\":";
-  out += std::to_string(report.pump.total_ms);
+  out += std::to_string(report.pump.turns.total_ms);
   out += ',';
-  AppendSummary(out, "pump", report.pump);
+  AppendSummary(out, "pump", report.pump.turns);
+  // What the turns ran: the attribution a long turn needs.
+  out += "\"pump_breakdown\":{\"timers_ms\":";
+  out += std::to_string(report.pump.breakdown.timers_ms);
+  out += ",\"timers\":";
+  out += std::to_string(report.pump.breakdown.timers);
+  out += ",\"jobs_ms\":";
+  out += std::to_string(report.pump.breakdown.jobs_ms);
+  out += ",\"job_rounds\":";
+  out += std::to_string(report.pump.breakdown.job_rounds);
+  out += ",\"xhr_ms\":";
+  out += std::to_string(report.pump.breakdown.xhr_ms);
+  out += ",\"xhr\":";
+  out += std::to_string(report.pump.breakdown.xhr);
+  out += ",\"raf_ms\":";
+  out += std::to_string(report.pump.breakdown.raf_ms);
+  out += ",\"raf\":";
+  out += std::to_string(report.pump.breakdown.raf);
+  out += ",\"ports_ms\":";
+  out += std::to_string(report.pump.breakdown.ports_ms);
+  out += ",\"ports\":";
+  out += std::to_string(report.pump.breakdown.ports);
+  out += ",\"websockets_ms\":";
+  out += std::to_string(report.pump.breakdown.websockets_ms);
+  out += ",\"websockets\":";
+  out += std::to_string(report.pump.breakdown.websockets);
+  out += "},";
 
   out += "\"frames\":";
   out += std::to_string(report.frames.frames);

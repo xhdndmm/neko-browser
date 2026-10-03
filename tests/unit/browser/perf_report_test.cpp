@@ -37,11 +37,19 @@ PerfReport SampleReport()
   report.phases.pump = 5607;
   report.phases.late_images = 293;
   report.phases.post_load = 5900;
-  report.pump.Record(0);
-  report.pump.Record(4726);
+  report.pump.turns.Record(0);
+  report.pump.turns.Record(4726);
   for (int i = 0; i < 14; ++i) {
-    report.pump.Record(0);
+    report.pump.turns.Record(0);
   }
+  report.pump.breakdown.timers = 95;
+  report.pump.breakdown.timers_ms = 372;
+  report.pump.breakdown.job_rounds = 95;
+  report.pump.breakdown.jobs_ms = 104;
+  report.pump.breakdown.xhr = 8;
+  report.pump.breakdown.xhr_ms = 0;
+  report.pump.breakdown.raf = 38;
+  report.pump.breakdown.raf_ms = 2494;
   report.frames.frames = 3;
   report.frames.production.Record(18);
   report.frames.interval.Record(817);
@@ -62,6 +70,10 @@ TEST(PerfReportTest, FormatsFixedKeyOrderOnOneLine)
             "\"videos\":0,\"pump\":5607,\"late_images\":293,\"post_load\":5900},"
             "\"pump_turns\":16,\"pump_over_50ms\":1,\"pump_total_ms\":4726,"
             "\"pump_p50\":0,\"pump_p95\":4726,\"pump_max\":4726,"
+            "\"pump_breakdown\":{\"timers_ms\":372,\"timers\":95,\"jobs_ms\":104,"
+            "\"job_rounds\":95,\"xhr_ms\":0,\"xhr\":8,\"raf_ms\":2494,"
+            "\"raf\":38,\"ports_ms\":0,\"ports\":0,\"websockets_ms\":0,"
+            "\"websockets\":0},"
             "\"frames\":3,\"frame_over_50ms\":0,"
             "\"frame_production_p50\":18,\"frame_production_p95\":18,"
             "\"frame_production_max\":18,"

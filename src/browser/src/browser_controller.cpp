@@ -1682,12 +1682,12 @@ int BrowserController::PumpScriptTimersUntilQuiet(int max_iterations)
   ApplyDeferredImageFetchSignals(*tab);
   // Measure the turns locally and merge once, so a GUI-thread snapshot can
   // never observe a half-written series (stats_mutex_, not mutex_).
-  LatencyTracker pump_turns;
+  PumpStats pump_turns;
   const int iterations = ::neko::browser::PumpScriptTimersUntilQuiet(
       *tab->script_runtime, max_iterations, &pump_turns);
   {
     std::lock_guard<std::mutex> lock(stats_mutex_);
-    MergeLatency(pump_turn_stats_, pump_turns);
+    MergePump(pump_turn_stats_, pump_turns);
   }
   if (iterations > 0 && tab->page != nullptr) {
     // The pump ran scripts: document.title may have changed (this is how the

@@ -366,7 +366,31 @@ public:
   // ---- Event loop ---------------------------------------------------------
   // Runs every timer whose deadline has passed (setTimeout/setInterval).
   // Returns the number of timers executed.
-  int RunPendingTimers();
+  // What one pump turn spent its time on, and how many items it ran.  The
+  // definition lives in this layer (not the browser layer) to keep the
+  // dependency direction browser -> javascript; the browser reporter folds it in.
+  // The segments partition the turn: each millisecond is attributed to one of
+  // them, so the parts add up to the turn and nothing hides in "other".
+  struct TurnBreakdown
+  {
+    long long timers_ms = 0;
+    std::size_t timers = 0; // due setTimeout/setInterval
+    long long jobs_ms = 0;
+    std::size_t job_rounds = 0; // promise continuations
+    long long xhr_ms = 0;
+    std::size_t xhr = 0; // queued XMLHttpRequest deliveries
+    long long raf_ms = 0;
+    std::size_t raf = 0; // requestAnimationFrame callbacks
+    long long ports_ms = 0;
+    std::size_t ports = 0; // MessagePort tasks
+    long long websockets_ms = 0;
+    std::size_t websockets = 0; // WebSocket events
+  };
+
+  // Runs the due work once.  |breakdown|, when given, is reset and filled with
+  // what this single turn spent its time on -- the attribution a long pump turn
+  // needs (a 4 s turn tells you nothing until you know which segment owns it).
+  int RunPendingTimers(TurnBreakdown* breakdown = nullptr);
 
   // The deadline of the next pending timer, or nullopt when none.
   [[nodiscard]] std::optional<std::chrono::steady_clock::time_point> NextTimerDeadline() const;

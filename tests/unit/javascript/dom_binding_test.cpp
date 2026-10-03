@@ -3701,6 +3701,69 @@ TEST(DomBinderXhrTest, XhrWritableAttributesAreAccepted)
   EXPECT_TRUE(ok.value().ToBoolean().value_or(false));
 }
 
+// One pump turn's attribution: what the turn actually ran.  This is what makes a
+// long turn actionable -- measuring a real page with it showed the 2.7 s turn on
+// bilibili belongs to 38 requestAnimationFrame callbacks (2.5 s), not to the XHR
+// deliveries (8 of them, 0 ms), which is the opposite of the initial guess.
+TEST(DomBinderPumpBreakdownTest, AttributesEnabledAndDisabledSegments)
+{
+  auto doc = html::Parser(R"(<!doctype html><html><body><div id="d"></div></body></html>)").Parse();
+  PageApis apis;
+  apis.xhr_request = [](const std::string&,
+                        const std::string&,
+                        const std::vector<std::pair<std::string, std::string>>&,
+                        const std::string&) -> base::Result<FetchResponse> {
+    FetchResponse out;
+    out.status = 200;
+    out.body = "ok";
+    return base::Ok(std::move(out));
+  };
+  DomBinder binder(*doc, apis);
+
+  ASSERT_TRUE(binder
+                  .Evaluate(R"(
+            globalThis.ran = {timer:0, raf:0, xhr:0};
+            setTimeout(function(){ globalThis.ran.timer++; }, 0);
+            requestAnimationFrame(function(){ globalThis.ran.raf++; });
+            var x = new XMLHttpRequest();
+            x.onload = function(){ globalThis.ran.xhr++; };
+            x.open('GET','/data', true);
+            x.send();
+          )")
+                  .has_value());
+
+  // A page with no MessagePort/WebSocket work attributes nothing to them (the
+  // first turn does run the due setTimeout, so |timers| is not asserted here).
+  DomBinder::TurnBreakdown first;
+  binder.RunPendingTimers(&first);
+  EXPECT_EQ(first.ports, 0u);
+  EXPECT_EQ(first.websockets, 0u);
+  EXPECT_EQ(first.ports_ms, 0);
+  EXPECT_EQ(first.websockets_ms, 0);
+
+  bool saw_all = false;
+  for (int i = 0; i < 8 && !saw_all; ++i) {
+    DomBinder::TurnBreakdown turn;
+    binder.RunPendingTimers(&turn);
+    // Each segment is attributed to this turn, never to another one.
+    EXPECT_LE(turn.timers, 1u);
+    EXPECT_LE(turn.raf, 1u);
+    EXPECT_EQ(turn.ports, 0u);
+    EXPECT_EQ(turn.websockets, 0u);
+    if (turn.timers > 0 || turn.raf > 0 || turn.xhr > 0) {
+      EXPECT_GE(turn.timers_ms, 0);
+      EXPECT_GE(turn.raf_ms, 0);
+    }
+    saw_all = binder.Evaluate("globalThis.ran.timer>0").value().ToBoolean().value_or(false) &&
+              binder.Evaluate("globalThis.ran.raf>0").value().ToBoolean().value_or(false) &&
+              binder.Evaluate("globalThis.ran.xhr>0").value().ToBoolean().value_or(false);
+  }
+  EXPECT_TRUE(saw_all) << "a timer, a rAF callback and an XHR delivery should all have run";
+
+  // With no out-parameter the call still works (the parameter is optional).
+  EXPECT_GE(binder.RunPendingTimers(), 0);
+}
+
 TEST(DomBinderXhrTest, XhrLifecycleAndEvents)
 {
   dom::Document doc;

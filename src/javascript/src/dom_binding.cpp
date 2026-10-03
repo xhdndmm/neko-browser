@@ -64,9 +64,9 @@ void DomBinder::SetModuleSpecifierResolver(ScriptEngine::SpecifierResolver resol
   impl_->engine.SetModuleSpecifierResolver(std::move(resolver));
 }
 
-int DomBinder::RunPendingTimers()
+int DomBinder::RunPendingTimers(TurnBreakdown* breakdown)
 {
-  return impl_->RunPendingTimers();
+  return impl_->RunPendingTimers(breakdown);
 }
 
 std::optional<std::chrono::steady_clock::time_point> DomBinder::NextTimerDeadline() const

@@ -2054,8 +2054,24 @@ std::unique_ptr<dom::Node> Impl::ReleaseOwned(dom::Node* node)
   return nullptr;
 }
 
-int Impl::RunPendingTimers()
+namespace {
+
+// Milliseconds elapsed since |start|.  Local to this file: the pump breakdown is
+// the only consumer.
+long long ElapsedMs(std::chrono::steady_clock::time_point start)
 {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                               start)
+      .count();
+}
+
+} // namespace
+
+int Impl::RunPendingTimers(DomBinder::TurnBreakdown* breakdown)
+{
+  if (breakdown != nullptr) {
+    *breakdown = DomBinder::TurnBreakdown{};
+  }
   const auto now = std::chrono::steady_clock::now();
   // Snapshot the due timers before running any callback: a callback may add
   // or clear timers, which would invalidate iterators.
@@ -2082,10 +2098,23 @@ int Impl::RunPendingTimers()
       ++it;
     }
   }
-  int ran = RunPendingMessagePortTasks(*this);
-  ran += PumpWebSocketEvents(*this);
-  ran += PumpXhrCompletions(*this);
+  const auto ports_start = std::chrono::steady_clock::now();
+  const int ports = RunPendingMessagePortTasks(*this);
+  const auto sockets_start = std::chrono::steady_clock::now();
+  const int sockets = PumpWebSocketEvents(*this);
+  const auto xhr_start = std::chrono::steady_clock::now();
+  const int xhr = PumpXhrCompletions(*this);
+  if (breakdown != nullptr) {
+    breakdown->ports_ms += ElapsedMs(ports_start);
+    breakdown->ports += static_cast<std::size_t>(ports);
+    breakdown->websockets_ms += ElapsedMs(sockets_start);
+    breakdown->websockets += static_cast<std::size_t>(sockets);
+    breakdown->xhr_ms += ElapsedMs(xhr_start);
+    breakdown->xhr += static_cast<std::size_t>(xhr);
+  }
+  int ran = ports + sockets + xhr;
   for (Timer& timer : due) {
+    const auto timer_start = std::chrono::steady_clock::now();
     JSValue result = JS_Call(ctx, timer.callback, JS_UNDEFINED, 0, nullptr);
     if (JS_IsException(result)) {
       JS_FreeValue(ctx, JS_GetException(ctx));
@@ -2093,14 +2122,29 @@ int Impl::RunPendingTimers()
       JS_FreeValue(ctx, result);
     }
     JS_FreeValue(ctx, timer.callback);
+    if (breakdown != nullptr) {
+      breakdown->timers_ms += ElapsedMs(timer_start);
+      ++breakdown->timers;
+    }
     // Promise continuations created by the callback make progress before the
     // next timer runs.
+    const auto jobs_start = std::chrono::steady_clock::now();
     engine.RunPendingJobs();
+    if (breakdown != nullptr) {
+      breakdown->jobs_ms += ElapsedMs(jobs_start);
+      ++breakdown->job_rounds;
+    }
     ++ran;
   }
   // requestAnimationFrame callbacks queued since the last pump also run here
   // (the GUI pumps this on its frame timer).
-  ran += RunPendingRaf();
+  const auto raf_start = std::chrono::steady_clock::now();
+  const int raf = RunPendingRaf();
+  if (breakdown != nullptr) {
+    breakdown->raf_ms += ElapsedMs(raf_start);
+    breakdown->raf += static_cast<std::size_t>(raf);
+  }
+  ran += raf;
   return ran;
 }
 

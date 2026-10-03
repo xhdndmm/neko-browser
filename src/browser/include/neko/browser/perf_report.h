@@ -81,26 +81,58 @@ struct FrameStats
   LatencyTracker interval;   // steady_clock gap between frames
 };
 
-// What the worker side (BrowserController) publishes for the GUI path: the
-// script/event pump turns it served and the frames it produced.  The headless
-// CLI fills pump from its own load; only a frame pipeline fills |frames|.
-struct RuntimeStats
-{
-  LatencyTracker pump;
-  FrameStats frames;
-};
-
 // Adds |from| into |into| (counters always; samples up to the cap).  Used to
 // publish a locally measured batch without holding a lock while it is measured:
 // the pump and frame paths measure into a local tracker and merge once, so a
 // concurrent reader never sees a half-written series.
 void MergeLatency(LatencyTracker& into, const LatencyTracker& from);
 
+// What the pump turns actually ran, mirrored from the JS layer's measurement
+// (javascript::DomBinder::TurnBreakdown).  A four-second turn tells you nothing
+// until you know which segment owns it -- on a real page the answer decides
+// whether the fix belongs in XHR delivery, in timer callbacks, or in promise
+// continuations.
+struct PumpBreakdown
+{
+  long long timers_ms = 0;
+  std::size_t timers = 0;
+  long long jobs_ms = 0;
+  std::size_t job_rounds = 0;
+  long long xhr_ms = 0;
+  std::size_t xhr = 0;
+  long long raf_ms = 0;
+  std::size_t raf = 0;
+  long long ports_ms = 0;
+  std::size_t ports = 0;
+  long long websockets_ms = 0;
+  std::size_t websockets = 0;
+};
+
+// Pump measurement: per-turn durations (the smoothness signal) plus what those
+// turns ran.  The CLI measures one load; the GUI accumulates across a session,
+// which is why the pieces are merged rather than assigned.
+struct PumpStats
+{
+  LatencyTracker turns;
+  PumpBreakdown breakdown;
+};
+
+// What the worker side (BrowserController) publishes for the GUI path: the
+// script/event pump turns it served and the frames it produced.  The headless
+// CLI fills pump from its own load; only a frame pipeline fills |frames|.
+struct RuntimeStats
+{
+  PumpStats pump;
+  FrameStats frames;
+};
+
+void MergePump(PumpStats& into, const PumpStats& from);
+
 struct PerfReport
 {
   LoadPhases phases;
   LoadCounters counters;
-  LatencyTracker pump; // pump turns observed by this run
+  PumpStats pump; // pump turns observed by this run, and what they ran
   FrameStats frames;
   long long wall_ms = 0; // whole run, including a requested screenshot
 };

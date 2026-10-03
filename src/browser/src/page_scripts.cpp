@@ -993,19 +993,35 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
 
 int PumpScriptTimersUntilQuiet(javascript::DomBinder& binder,
                                int max_iterations,
-                               LatencyTracker* pump_stats)
+                               PumpStats* pump_stats)
 {
   constexpr auto kQuietBudget = std::chrono::milliseconds(kPumpQuietBudgetMs);
   int iterations = 0;
   for (; iterations < max_iterations; ++iterations) {
     // Time one turn: this is where due timers run and queued XHR completions
     // are delivered, i.e. where a page's script work actually executes.
+    // The binder fills a TurnBreakdown for this one turn; the browser-side
+    // PumpBreakdown mirrors it so reporting stays in this layer.
+    javascript::DomBinder::TurnBreakdown turn;
     const auto turn_start = std::chrono::steady_clock::now();
-    const int ran = binder.RunPendingTimers();
+    const int ran = binder.RunPendingTimers(pump_stats != nullptr ? &turn : nullptr);
     if (pump_stats != nullptr) {
-      pump_stats->Record(std::chrono::duration_cast<std::chrono::milliseconds>(
-                             std::chrono::steady_clock::now() - turn_start)
-                             .count());
+      pump_stats->turns.Record(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now() - turn_start)
+                                   .count());
+      PumpBreakdown& into = pump_stats->breakdown;
+      into.timers_ms += turn.timers_ms;
+      into.timers += turn.timers;
+      into.jobs_ms += turn.jobs_ms;
+      into.job_rounds += turn.job_rounds;
+      into.xhr_ms += turn.xhr_ms;
+      into.xhr += turn.xhr;
+      into.raf_ms += turn.raf_ms;
+      into.raf += turn.raf;
+      into.ports_ms += turn.ports_ms;
+      into.ports += turn.ports;
+      into.websockets_ms += turn.websockets_ms;
+      into.websockets += turn.websockets;
     }
     if (ran > 0) {
       continue; // ran something; go round again

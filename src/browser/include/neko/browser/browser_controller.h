@@ -817,7 +817,7 @@ private:
   // the GUI thread, so it has its own mutex (see SnapshotRuntimeStats).
   void RecordFrameProduced(long long production_ms, long long now_ms);
   mutable std::mutex stats_mutex_;
-  LatencyTracker pump_turn_stats_;
+  PumpStats pump_turn_stats_;
   FrameStats frame_stats_;
   long long last_frame_ms_ = 0;
 

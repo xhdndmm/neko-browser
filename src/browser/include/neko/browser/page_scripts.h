@@ -148,16 +148,16 @@ RunPageScripts(renderer::Page& page,
 // further out than kPumpQuietBudget is treated as "settled" rather than waited
 // for.  Runaway timer chains therefore terminate on the iteration cap.
 //
-// |pump_stats|, when given, accumulates how long each pump turn took (the
-// RunPendingTimers call that runs due timers and delivers queued XHR
-// completions).  That turn is the unit a user perceives as a long task, so it
-// is the smoothness signal --perf-report publishes.  Waiting time between turns
-// is deliberately excluded: it is idle, not work.
+// |pump_stats|, when given, accumulates how long each pump turn took *and what
+// that turn ran* (due timers, promise continuations, XHR deliveries, rAF,
+// MessagePort and WebSocket events).  The turn is the unit a user perceives as a
+// long task, and the breakdown is what makes a long turn actionable.  Waiting
+// time between turns is deliberately excluded: it is idle, not work.
 inline constexpr int kDefaultPumpIterations = 1000;
 inline constexpr int kPumpQuietBudgetMs = 250;
 
 int PumpScriptTimersUntilQuiet(javascript::DomBinder& binder,
                                int max_iterations = kDefaultPumpIterations,
-                               LatencyTracker* pump_stats = nullptr);
+                               PumpStats* pump_stats = nullptr);
 
 } // namespace neko::browser
