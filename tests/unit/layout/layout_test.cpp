@@ -145,6 +145,32 @@ TEST(LayoutTest, AutoWidthTableAccountsForChildPaddingAndMarker)
   EXPECT_EQ(li2->lines.size(), 1u);
 }
 
+// A whitespace-only inline piece still occupies a space on its line.  Measuring it
+// as zero made an auto-width table exactly one space narrower than the line it has
+// to hold, so the last word wrapped (miaow.com's list, whose text is split across
+// <a> elements with " (" between them).
+TEST(LayoutTest, AutoWidthTableCountsWhitespaceBetweenInlinePieces)
+{
+  Page page = Build("<html><body><table><tr><td><ul><li id=\"li\">"
+                    "<a href=\"#\">Christian</a> (<a href=\"#\">ClearCase page</a>)"
+                    "</li></ul></td></tr></table></body></html>");
+  const LayoutBox* li = FindBox(*page.root, "#li", *page.doc);
+  ASSERT_NE(li, nullptr);
+  EXPECT_EQ(li->lines.size(), 1u);
+
+  // The same content with an explicit width is the control: it must also be one
+  // line, so a failure above is about the intrinsic width, not about wrapping.
+  // The width is generous because this harness has no font registry: layout falls
+  // back to a per-character estimate (26 characters x 16px), much wider than the
+  // real advance a browser measures.
+  Page explicit_width = Build("<html><body><table style=\"width:700px\"><tr><td><ul><li id=\"li2\">"
+                              "<a href=\"#\">Christian</a> (<a href=\"#\">ClearCase page</a>)"
+                              "</li></ul></td></tr></table></body></html>");
+  const LayoutBox* li2 = FindBox(*explicit_width.root, "#li2", *explicit_width.doc);
+  ASSERT_NE(li2, nullptr);
+  EXPECT_EQ(li2->lines.size(), 1u);
+}
+
 TEST(LayoutTest, CenterWrapperKeepsTableColumns)
 {
   Page page = Build("<html><body><center><table><tr>"

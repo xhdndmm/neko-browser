@@ -998,11 +998,24 @@ IntrinsicWidths MeasureContent(const dom::Element& element,
                                           style.font_italic,
                                           text,
                                           style.font_size));
+      // CollapseWhitespace trims both ends, but a piece that follows content keeps
+      // its leading space on the line: the line breaker only drops whitespace at a
+      // line start, and it advances by one space before the next word.  Measuring
+      // " (" as "(" therefore left an auto-width table one space narrower than the
+      // line it has to hold, and the last word wrapped -- miaow.com's list, whose
+      // text is split across <a> elements with " (" between them.  A whitespace-only
+      // piece is the same case with an empty body, so it needs no separate branch.
+      // The preserving values keep their whitespace verbatim and are unaffected.
+      const bool keeps_leading_space = line_max > 0.0f && !text.empty() &&
+                                       IsWordBreak(text.front()) &&
+                                       style.white_space != style::WhiteSpace::kPre &&
+                                       style.white_space != style::WhiteSpace::kPreWrap;
+      const std::string measured = MeasuredText(text, style.white_space);
       line_max += MeasureTextWidth(registry,
                                    style.font_family,
                                    style.font_weight,
                                    style.font_italic,
-                                   MeasuredText(text, style.white_space),
+                                   keeps_leading_space ? " " + measured : measured,
                                    style.font_size);
       continue;
     }
