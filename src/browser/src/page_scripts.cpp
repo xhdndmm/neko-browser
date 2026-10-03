@@ -239,9 +239,9 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     long long exec_ns = 0;
     std::size_t evaluations = 0;
     long long modules_ns = 0;
-    long long module_fetch_ns = 0;
+    long long sync_fetch_ns = 0;
+    std::size_t sync_fetch_calls = 0;
     std::size_t modules = 0;
-    std::size_t module_fetches = 0;
     long long events_ns = 0;
     std::size_t event_dispatches = 0;
     long long restyle_ns = 0;
@@ -250,7 +250,14 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     {
       return ns / 1000000;
     }
-  } acc;
+  };
+  // The page's own fetch()/XHR calls reach apis.fetch *after* RunPageScripts
+  // returns (the binder outlives it), so anything that lambda touches must be
+  // shared-owned: capturing a stack local by reference left a dangling reference,
+  // and post-load fetches wrote into a dead frame (undefined behaviour).  |acc|
+  // keeps its name and usage; the lambda holds |acc_owner|.
+  auto acc_owner = std::make_shared<ScriptAccumulator>();
+  ScriptAccumulator& acc = *acc_owner;
   const auto elapsed_ns = [](std::chrono::steady_clock::time_point start) {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() -
                                                                 start)
@@ -437,16 +444,18 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     // ScriptEngine::SetModuleFetcher), and QuickJS calls it *synchronously* from
     // inside EvaluateModule -- so this timer is what separates "waiting for
     // module sources" from "compiling and running them" (see ScriptTimings).
-    apis.fetch = [fetch, &acc, &elapsed_ns](
+    apis.fetch = [fetch, &elapsed_ns, acc_owner](
                      const std::string& url) -> base::Result<javascript::FetchResponse> {
       const base::Result<url::Url> parsed = url::Url::Parse(url);
       if (!parsed.has_value()) {
         return base::Err(base::Error::InvalidArgument("invalid URL"));
       }
-      const auto module_fetch_start = std::chrono::steady_clock::now();
+      // Every caller lands here -- the module loader during evaluation and the
+      // page's own fetch() calls -- and each blocks the JS thread on the network.
+      ++acc_owner->sync_fetch_calls;
+      const auto fetch_start = std::chrono::steady_clock::now();
       const base::Result<network::HttpResponse> response = fetch(parsed.value());
-      ++acc.module_fetches;
-      acc.module_fetch_ns += elapsed_ns(module_fetch_start);
+      acc_owner->sync_fetch_ns += elapsed_ns(fetch_start);
       if (!response.has_value()) {
         return base::Err(response.error());
       }
@@ -913,14 +922,14 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
       if (!loaded_module_urls.insert(module_url).second) {
         return; // same-URL entry already evaluated
       }
-      // The entry fetch is part of the module segment, and counts as a module
-      // fetch (it is a module source); |fetches| counts classic bodies only.
+      // The entry fetch is part of the module segment, and is one of the
+      // synchronous fetches; |fetches| counts classic script bodies only.
+      ++acc.sync_fetch_calls;
       const auto module_fetch_start = std::chrono::steady_clock::now();
       const auto response = fetch(target.value());
-      ++acc.module_fetches;
       const long long entry_fetch_ns = elapsed_ns(module_fetch_start);
       acc.modules_ns += entry_fetch_ns;
-      acc.module_fetch_ns += entry_fetch_ns;
+      acc.sync_fetch_ns += entry_fetch_ns;
       if (!response.has_value()) {
         report_error("module script: fetch failed for " + module_url + ": " +
                      response.error().message());
@@ -1013,17 +1022,17 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     timings->fetch_ms = ScriptAccumulator::ToMs(acc.fetch_ns);
     timings->exec_ms = ScriptAccumulator::ToMs(acc.exec_ns);
     timings->modules_ms = ScriptAccumulator::ToMs(acc.modules_ns);
-    timings->modules_fetch_ms = ScriptAccumulator::ToMs(acc.module_fetch_ns);
+    timings->modules_wait_ms = ScriptAccumulator::ToMs(acc.sync_fetch_ns);
     // The rest of the module segment is compile + run; clamped because the
     // fetch timer starts inside the segment it is subtracted from.
     timings->modules_eval_ms =
-        std::max<long long>(0, timings->modules_ms - timings->modules_fetch_ms);
+        std::max<long long>(0, timings->modules_ms - timings->modules_wait_ms);
     timings->events_ms = ScriptAccumulator::ToMs(acc.events_ns);
     timings->restyle_ms = ScriptAccumulator::ToMs(acc.restyle_ns);
     timings->fetches = acc.fetches;
     timings->evaluations = acc.evaluations;
     timings->modules = acc.modules;
-    timings->module_fetches = acc.module_fetches;
+    timings->sync_fetch_calls = acc.sync_fetch_calls;
     timings->event_dispatches = acc.event_dispatches;
     timings->restyles = acc.restyles;
   }
@@ -1055,8 +1064,9 @@ void ApplyScriptTimings(const ScriptTimings& timings, LoadPhases& phases)
   phases.scripts_fetch = timings.fetch_ms;
   phases.scripts_exec = timings.exec_ms;
   phases.scripts_modules = timings.modules_ms;
-  phases.scripts_modules_fetch = timings.modules_fetch_ms;
+  phases.scripts_modules_wait = timings.modules_wait_ms;
   phases.scripts_modules_eval = timings.modules_eval_ms;
+  phases.sync_fetch_calls = timings.sync_fetch_calls;
   phases.scripts_events = timings.events_ms;
   phases.scripts_restyle = timings.restyle_ms;
 }

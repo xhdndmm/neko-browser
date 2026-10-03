@@ -67,28 +67,24 @@ struct PageScriptServices
 // Segment calibration (what each number does and does not cover):
 //   * fetch_ms/fetches: classic external bodies only.  A prefetch hit counts the
 //     wait it actually was, which is the point of the segment.
-//   * modules_ms is the whole module segment; modules_fetch_ms is the part spent
-//     waiting for module sources (the entry fetch plus every import, which the
-//     module loader performs synchronously on the JS thread) and modules_eval_ms
-//     is the rest, i.e. compiling and running.  The split exists because the
-//     mixed number was actively misleading: stack sampling during a real load
-//     showed the process waiting on TLS reads inside the script phase, while pure
-//     QuickJS parses and compiles the same 1.57 MB bundle in 235 ms -- so the
-//     cost is the synchronous fetching, not the interpreting.
-//   * event_dispatches: dispatch CALLS, not listeners that ran.  A page with
-//     scripts performs two per load (DOMContentLoaded and load), so a page with no
-//     listeners still reports two -- the count says the dispatches happened, not
-//     that they cost anything.
-//   * restyle_ms: the cascade the engine re-runs after scripts mutated the DOM.
-// Times are accumulated in nanoseconds and converted once, because six
-// truncating conversions could leave a residual that looks like a measurement gap.
+//   * modules_wait_ms is the part of the module segment the JS thread spent blocked
+//     in apis.fetch: the module loader's imports *and* any page fetch() call made
+//     from that code.  Both block the JS thread on the network, which is the cost;
+//     naming it after module sources only would have been wrong, and measurement
+//     showed why (a modern bundle has one computed import("...") and no static
+//     ones, so a speculative scan finds nothing to prefetch -- see
+//     docs/development/perf-baselines.md).
+//   * modules_eval_ms is the rest: compiling and running.
+//   * modules_ms is the whole module segment (wait + eval).
+//   * sync_fetch_calls counts every apis.fetch call in the script phase, i.e. the
+//     requests that were serialized with JS execution.
 struct ScriptTimings
 {
   long long fetch_ms = 0;
   long long exec_ms = 0;
   long long modules_ms = 0;
-  long long modules_fetch_ms = 0; // ...of which: waiting for module sources
-  long long modules_eval_ms = 0;  // ...of which: compile + run
+  long long modules_wait_ms = 0; // ...of which: blocked in apis.fetch (imports + page fetch)
+  long long modules_eval_ms = 0; // ...of which: compile + run
   long long events_ms = 0;
   long long restyle_ms = 0;
   // Counts: deterministic, unlike the times, so a test can assert that each
@@ -96,7 +92,9 @@ struct ScriptTimings
   std::size_t fetches = 0;
   std::size_t evaluations = 0;
   std::size_t modules = 0;
-  std::size_t module_fetches = 0; // entry fetches plus imports
+  // Every apis.fetch call during the script phase (module imports and the page's
+  // own fetch()): the requests that were serialized with JS execution.
+  std::size_t sync_fetch_calls = 0;
   std::size_t event_dispatches = 0;
   std::size_t restyles = 0;
 };

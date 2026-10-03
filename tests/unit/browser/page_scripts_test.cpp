@@ -297,12 +297,12 @@ TEST(PageScriptsTest, ModuleScriptsAreNotCountedAsClassicScripts)
   EXPECT_EQ(timings.modules, 1u);
   EXPECT_EQ(timings.evaluations, 0u);      // not a classic script
   EXPECT_EQ(timings.fetches, 0u);          // the entry fetch belongs to the module segment
-  EXPECT_EQ(timings.module_fetches, 1u);   // ...and is counted as a module fetch
+  EXPECT_EQ(timings.sync_fetch_calls, 1u); // ...and is counted as a module fetch
   EXPECT_EQ(timings.event_dispatches, 2u); // still two lifecycle dispatches
   EXPECT_EQ(page.document()->Title(), "module");
   // The module segment is published as fetch + eval and must add up: the split is
   // what separates "waiting for sources" from "compiling and running them".
-  EXPECT_EQ(timings.modules_ms, timings.modules_fetch_ms + timings.modules_eval_ms);
+  EXPECT_EQ(timings.modules_ms, timings.modules_wait_ms + timings.modules_eval_ms);
 }
 
 // A module's static import is fetched by the module loader *inside* evaluation, so
@@ -326,9 +326,9 @@ TEST(PageScriptsTest, ModuleImportsCountAsModuleFetches)
       RunScripts(page, html, recorder, pool, {}, &timings);
   ASSERT_NE(binder, nullptr);
 
-  EXPECT_EQ(timings.modules, 1u);        // one <script type=module> entry
-  EXPECT_EQ(timings.module_fetches, 2u); // the entry plus the imported module
-  EXPECT_EQ(timings.modules_ms, timings.modules_fetch_ms + timings.modules_eval_ms);
+  EXPECT_EQ(timings.modules, 1u);          // one <script type=module> entry
+  EXPECT_EQ(timings.sync_fetch_calls, 2u); // the entry plus the imported module
+  EXPECT_EQ(timings.modules_ms, timings.modules_wait_ms + timings.modules_eval_ms);
   EXPECT_EQ(page.document()->Title(), "DM"); // the import ran before the importer
 }
 
@@ -340,7 +340,7 @@ TEST(PageScriptsTest, ScriptTimingsMapToDistinctPhases)
   timings.fetch_ms = 11;
   timings.exec_ms = 22;
   timings.modules_ms = 33;
-  timings.modules_fetch_ms = 34;
+  timings.modules_wait_ms = 34;
   timings.modules_eval_ms = 35;
   timings.events_ms = 44;
   timings.restyle_ms = 55;
@@ -350,7 +350,7 @@ TEST(PageScriptsTest, ScriptTimingsMapToDistinctPhases)
   EXPECT_EQ(phases.scripts_fetch, 11);
   EXPECT_EQ(phases.scripts_exec, 22);
   EXPECT_EQ(phases.scripts_modules, 33);
-  EXPECT_EQ(phases.scripts_modules_fetch, 34);
+  EXPECT_EQ(phases.scripts_modules_wait, 34);
   EXPECT_EQ(phases.scripts_modules_eval, 35);
   EXPECT_EQ(phases.scripts_events, 44);
   EXPECT_EQ(phases.scripts_restyle, 55);
@@ -381,6 +381,27 @@ TEST(PageScriptsTest, RafBudgetIsDrainedByTheQuietPump)
   EXPECT_EQ(stats.breakdown.raf, 5u);
   // Five callbacks at two per turn need at least three turns of rAF work.
   EXPECT_GE(iterations, 3);
+}
+
+// The binder outlives RunPageScripts, so apis.fetch is called again *after* the
+// load -- that is how a page's own fetch()/XHR works.  Anything that callback
+// touches must therefore be shared-owned: it used to capture a stack local by
+// reference, and these post-load calls wrote into a dead frame (undefined
+// behaviour, caught by ASan rather than by a failing assertion).
+TEST(PageScriptsTest, PageCanFetchAfterTheLoad)
+{
+  renderer::Page page;
+  ScriptFetcherRecorder recorder(0);
+  base::ThreadPool pool(4);
+  const std::shared_ptr<javascript::DomBinder> binder =
+      RunScripts(page, ThreeScriptPage(), recorder, pool);
+  ASSERT_NE(binder, nullptr);
+
+  // The scripts phase is over; the page now issues its own request.
+  const std::size_t before = recorder.fetch_count();
+  const auto fetched = binder->Evaluate("fetch('/late.json').then(function(){ return 1; })");
+  ASSERT_TRUE(fetched.has_value()) << fetched.error().message();
+  EXPECT_EQ(recorder.fetch_count(), before + 1);
 }
 
 TEST(PageScriptsTest, InlineScriptsNeedNoFetch)

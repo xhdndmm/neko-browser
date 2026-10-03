@@ -28,8 +28,9 @@ PerfReport SampleReport()
   report.phases.scripts_fetch = 215;
   report.phases.scripts_exec = 130;
   report.phases.scripts_modules = 5057;
-  report.phases.scripts_modules_fetch = 1556;
+  report.phases.scripts_modules_wait = 1556;
   report.phases.scripts_modules_eval = 3501;
+  report.phases.sync_fetch_calls = 26;
   report.phases.scripts_events = 2;
   report.phases.scripts_restyle = 500;
   report.phases.stylesheets2 = 617;
@@ -67,7 +68,8 @@ TEST(PerfReportTest, FormatsFixedKeyOrderOnOneLine)
             "\"connections_reused\":132,\"connections_discarded\":27,\"bytes\":19233480,"
             "\"phases\":{\"document\":202,\"stylesheets1\":975,\"fonts1\":899,"
             "\"scripts\":6442,\"scripts_fetch\":215,\"scripts_exec\":130,"
-            "\"scripts_modules\":5057,\"scripts_modules_fetch\":1556,\"scripts_modules_eval\":3501,"
+            "\"scripts_modules\":5057,\"scripts_modules_wait\":1556,\"scripts_modules_eval\":3501,"
+            "\"sync_fetch_calls\":26,"
             "\"scripts_events\":2,\"scripts_restyle\":500,"
             "\"stylesheets2\":617,\"fonts2\":0,\"images\":559,"
             "\"videos\":0,\"pump\":5607,\"late_images\":293,\"post_load\":5900},"
