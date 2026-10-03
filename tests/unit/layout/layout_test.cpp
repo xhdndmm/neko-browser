@@ -115,6 +115,48 @@ std::size_t CountAtomicBoxes(const LayoutBox& box)
   return count;
 }
 
+// A <pre> with a newline is two lines; with whitespace collapsed it was one, which
+// is what broke the ASCII art on a real page (the style-side rule is asserted in
+// StyleTest.PreElementPreservesWhitespaceByDefault).
+// A table inside <center> must still lay out its cells as columns: with <center>
+// treated as an unknown inline the cells got no geometry at all (the whole table
+// collapsed into stacked content on a real page).
+TEST(LayoutTest, CenterWrapperKeepsTableColumns)
+{
+  Page page = Build("<html><body><center><table><tr>"
+                    "<td id=\"a\">L</td><td id=\"b\">M</td><td id=\"c\">R</td>"
+                    "</tr></table></center></body></html>");
+  const LayoutBox* a = FindBox(*page.root, "#a", *page.doc);
+  const LayoutBox* b = FindBox(*page.root, "#b", *page.doc);
+  const LayoutBox* c = FindBox(*page.root, "#c", *page.doc);
+  ASSERT_NE(a, nullptr);
+  ASSERT_NE(b, nullptr);
+  ASSERT_NE(c, nullptr);
+  // One row: same y, increasing x.
+  EXPECT_FLOAT_EQ(a->y, b->y);
+  EXPECT_FLOAT_EQ(b->y, c->y);
+  EXPECT_LT(a->x, b->x);
+  EXPECT_LT(b->x, c->x);
+  EXPECT_GT(a->width, 0.0f);
+}
+
+TEST(LayoutTest, PreKeepsItsNewlinesAsSeparateLines)
+{
+  Page page = Build("<html><body><pre id=\"p\">first\n  second</pre></body></html>");
+  const LayoutBox* pre = FindBox(*page.root, "#p", *page.doc);
+  ASSERT_NE(pre, nullptr);
+  ASSERT_EQ(pre->lines.size(), 2u);
+  // The leading two spaces survive as part of the second line's text.
+  ASSERT_FALSE(pre->lines[1].runs.empty());
+  EXPECT_NE(pre->lines[1].runs.front().text.find("second"), std::string::npos);
+
+  // The same text in a normal block collapses to one line, which is the control.
+  Page collapsed = Build("<html><body><div id=\"d\">first\n  second</div></body></html>");
+  const LayoutBox* div = FindBox(*collapsed.root, "#d", *collapsed.doc);
+  ASSERT_NE(div, nullptr);
+  EXPECT_EQ(div->lines.size(), 1u);
+}
+
 TEST(LayoutTest, BlockFillsContainingBlock)
 {
   Page page = Build("<body><div>x</div></body>");

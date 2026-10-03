@@ -990,6 +990,41 @@ TEST(StyleTest, BoxSizingFromStylesheet)
   EXPECT_EQ(Style(engine, *doc, "#x").box_sizing, BoxSizing::kBorderBox);
 }
 
+// <pre> is defined by its whitespace handling: the UA stylesheet has to say
+// `white-space: pre`.  The property itself was implemented and the declaration was
+// simply missing, so every <pre> collapsed its newlines and indentation -- the
+// ASCII art on miaow.com rendered as one long line.
+// <center> is obsolete but still in the HTML rendering section's UA rules:
+// `center { display: block; text-align: center }`.  Without it the element was an
+// unknown inline, and a table inside it lost its layout entirely (miaow.com).
+TEST(StyleTest, CenterElementIsABlockThatCentersText)
+{
+  auto doc = html::Parser("<html><body><center id=\"c\"><table><tr><td id=\"d\">x</td>"
+                          "</tr></table></center></body></html>")
+                 .Parse();
+  style::StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  EXPECT_EQ(Style(engine, *doc, "#c").display, Display::kBlock);
+  EXPECT_EQ(Style(engine, *doc, "#c").text_align, TextAlign::kCenter);
+  // text-align inherits, which is what centers the table's cell contents too.
+  EXPECT_EQ(Style(engine, *doc, "#d").text_align, TextAlign::kCenter);
+}
+
+TEST(StyleTest, PreElementPreservesWhitespaceByDefault)
+{
+  auto doc = html::Parser("<html><body><pre id=\"p\">a\n  b</pre>"
+                          "<code id=\"c\">x</code></body></html>")
+                 .Parse();
+  style::StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  EXPECT_EQ(Style(engine, *doc, "#p").white_space, WhiteSpace::kPre);
+  // Monospace stays, and the browser-standard block margins apply.
+  EXPECT_EQ(Style(engine, *doc, "#p").font_family, Style(engine, *doc, "#c").font_family);
+  EXPECT_FLOAT_EQ(Style(engine, *doc, "#p").margin_top.value, 16.0f); // 1em of 16px
+  // A plain <code> is inline and keeps normal whitespace handling.
+  EXPECT_EQ(Style(engine, *doc, "#c").white_space, WhiteSpace::kNormal);
+}
+
 TEST(StyleTest, WhiteSpaceParses)
 {
   auto doc = MakeDoc("<body>"

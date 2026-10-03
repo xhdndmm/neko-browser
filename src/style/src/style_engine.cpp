@@ -151,7 +151,17 @@ ol { list-style-type: decimal; }
 ul ul, ul ol, ol ul, ol ol { margin-top: 0; margin-bottom: 0; }
 ul ul, ol ul { list-style-type: circle; }
 ul ul ul, ol ul ul { list-style-type: square; }
-pre { font-family: monospace; }
+/* §15.3.11 / CSS Text: a <pre> is defined by preserving whitespace -- without
+   this the declaration the property was implemented but never applied, so every
+   <pre> collapsed its newlines and indentation (ASCII art on real pages came out
+   as one long line).  The margins are the browser defaults. */
+pre { font-family: monospace; white-space: pre; margin-top: 1em; margin-bottom: 1em; }
+/* HTML rendering section: <center> is obsolete but still conforming, and its UA
+   rule is exactly this.  Without it the element was an unknown *inline*, so a
+   table inside it got no table formatting context at all: every cell lost its
+   geometry and the content came out stacked (miaow.com).  text-align inherits,
+   which is also what centers the cell contents. */
+center { display: block; text-align: center; }
 code { font-family: monospace; }
 b, strong { font-weight: bold; }
 i, em { font-style: italic; }

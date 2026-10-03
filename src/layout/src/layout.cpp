@@ -266,6 +266,18 @@ std::string CollapseWhitespace(std::string_view text)
   return out;
 }
 
+// Text as the layout must measure it: the preserving white-space values keep every
+// space (CSS Text 3 §3), so the collapsing that normal / pre-line need must not run
+// -- otherwise a <pre>'s intrinsic width is the width of its collapsed text and a
+// table cell holding it is sized wrong.
+std::string MeasuredText(std::string_view text, style::WhiteSpace white_space)
+{
+  if (white_space == style::WhiteSpace::kPre || white_space == style::WhiteSpace::kPreWrap) {
+    return std::string(text);
+  }
+  return CollapseWhitespace(text);
+}
+
 float ResolveSize(const style::SizeSpec& spec, float containing)
 {
   if (spec.is_clamp) {
@@ -625,14 +637,15 @@ void LayoutLines(std::vector<InlineItem>& items,
   auto add_word = [&](std::string_view word,
                       const style::ComputedStyle& style,
                       const dom::Element* element,
-                      const graphics::FontSelector* selector) {
+                      const graphics::FontSelector* selector,
+                      bool may_wrap = true) {
     const float word_width = selector != nullptr
                                  ? selector->TextWidth(word, style.font_size)
                                  : static_cast<float>(CountCodePoints(word)) * style.font_size;
     // Ensure the word fits on the current (or a lower) line; a word that
     // cannot fit even at a line start is pushed below any overlapping floats.
     // An item wider than the block itself is placed as-is (never dropped).
-    while (x + word_width > line_right) {
+    while (may_wrap && x + word_width > line_right) {
       const float prev_top = line_top;
       if (x > line_left) {
         flush_line(); // normal wrap to a new line
@@ -737,23 +750,60 @@ void LayoutLines(std::vector<InlineItem>& items,
       }
       continue;
     }
+    // white-space (CSS Text 3 §3) decides what happens to whitespace here, and
+    // this loop is where it happens: the inline items keep their source text and
+    // the collapsing is done while laying out lines.
+    //   pre / pre-wrap  keep every space, and a newline forces a line break;
+    //   pre-line        collapses spaces but keeps the newlines;
+    //   normal / nowrap collapse whitespace (nowrap also never wraps);
+    //   pre             additionally never wraps: a long line overflows.
+    const bool preserves_spaces = style.white_space == style::WhiteSpace::kPre ||
+                                  style.white_space == style::WhiteSpace::kPreWrap;
+    const bool preserves_newlines =
+        preserves_spaces || style.white_space == style::WhiteSpace::kPreLine;
+    const bool may_wrap = style.white_space != style::WhiteSpace::kNowrap &&
+                          style.white_space != style::WhiteSpace::kPre;
+    const float space_advance =
+        selector != nullptr ? selector->Advance(' ', style.font_size) : style.font_size * 0.5f;
+
     std::size_t start = 0;
     while (start < text.size()) {
-      // Collapse a whitespace run (CSS white-space: normal) into a single
-      // space; leading whitespace at a line start collapses to nothing (the
-      // HTML source indentation around an <img> must not shift it).
       if (IsWordBreak(text[start])) {
+        // A preserved newline is a forced break (CRLF counts once).
+        if (preserves_newlines && (text[start] == '\n' || text[start] == '\r')) {
+          ++start;
+          if (start < text.size() && text[start] == '\n') {
+            ++start;
+          }
+          flush_line();
+          continue;
+        }
+        const std::size_t whitespace_start = start;
         while (start < text.size() && IsWordBreak(text[start])) {
+          if (preserves_newlines && (text[start] == '\n' || text[start] == '\r')) {
+            break; // handled as a forced break on the next iteration
+          }
           ++start;
         }
-        const bool at_line_start = x == line_left && line.runs.empty() && line.boxes.empty();
-        if (!at_line_start) {
-          const float space_width = selector != nullptr ? selector->Advance(' ', style.font_size)
-                                                        : style.font_size * 0.5f;
-          if (x + space_width > line_right && x > line_left) {
-            flush_line();
+        if (preserves_spaces) {
+          // Every space in the run is significant (a <pre> indents with them).
+          for (std::size_t i = whitespace_start; i < start; ++i) {
+            if (may_wrap && x + space_advance > line_right && x > line_left) {
+              flush_line();
+            }
+            x += space_advance;
           }
-          x += space_width;
+        } else {
+          // Collapse the run into a single space; leading whitespace at a line
+          // start collapses to nothing (the HTML source indentation around an
+          // <img> must not shift it).
+          const bool at_line_start = x == line_left && line.runs.empty() && line.boxes.empty();
+          if (!at_line_start) {
+            if (may_wrap && x + space_advance > line_right && x > line_left) {
+              flush_line();
+            }
+            x += space_advance;
+          }
         }
       }
       if (start >= text.size()) {
@@ -774,7 +824,7 @@ void LayoutLines(std::vector<InlineItem>& items,
         }
       }
       const std::string_view word = std::string_view(text).substr(start, end - start);
-      add_word(word, style, item.element, selector);
+      add_word(word, style, item.element, selector, may_wrap);
       start = end;
     }
   }
@@ -862,7 +912,7 @@ IntrinsicWidths MeasureContent(const dom::Element& element,
     for (const dom::Node* child : element.ChildNodes()) {
       if (child->node_type() == dom::NodeType::kText) {
         const std::string& text = static_cast<const dom::Text&>(*child).data();
-        const std::string collapsed = CollapseWhitespace(text);
+        const std::string collapsed = MeasuredText(text, style.white_space);
         if (collapsed.empty()) {
           continue;
         }
@@ -933,7 +983,7 @@ IntrinsicWidths MeasureContent(const dom::Element& element,
                                    style.font_family,
                                    style.font_weight,
                                    style.font_italic,
-                                   CollapseWhitespace(text),
+                                   MeasuredText(text, style.white_space),
                                    style.font_size);
       continue;
     }
@@ -2983,8 +3033,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         // item (CSS Flexbox 1 §4) carrying the container's computed style.
         // Whitespace-only text between flex items is dropped.
         if (child->node_type() == dom::NodeType::kText) {
-          const std::string collapsed =
-              CollapseWhitespace(static_cast<const dom::Text&>(*child).data());
+          const std::string collapsed = MeasuredText(static_cast<const dom::Text&>(*child).data(),
+                                                     container_style.white_space);
           if (collapsed.empty()) {
             continue;
           }
