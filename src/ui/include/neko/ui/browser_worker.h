@@ -105,7 +105,10 @@ public:
   void SetScrollOffset(int tab_id, int y);
   // Renderer mode: the viewport the child should lay the page out for (the
   // WebView reports its size; a fresh frame is pulled when it changes).
-  void SetViewportSize(int tab_id, int width, int height);
+  // |width|/|height| are frame pixels (the widget's logical size times the
+  // display's device pixel ratio), so the page is rasterized at native resolution
+  // on HiDPI; layout converts them back to CSS pixels.
+  void SetViewportSize(int tab_id, int width, int height, float device_scale = 1.0f);
   // Post a script-requested scroll (window.scrollTo / element.scrollTop).
   void SetScrollRequest(int tab_id, int y);
   // Dispatches a keyboard event (keydown/keyup) to the page's script runtime.

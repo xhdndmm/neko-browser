@@ -1576,6 +1576,9 @@ void BrowserController::ProduceFrameBody(Tab& tab)
   }
   const int width = tab.viewport_width > 0 ? tab.viewport_width : kDefaultRemoteViewportWidth;
   const int height = tab.viewport_height > 0 ? tab.viewport_height : kDefaultRemoteViewportHeight;
+  // A page created after the viewport was reported (a navigation) still has to
+  // learn the display's scale; setting it here covers every path and is cheap.
+  tab.page->SetDeviceScaleFactor(tab.device_scale);
   // The viewport changed (or the page was never laid out): lay out here on the
   // worker thread.  SetTabViewport already lays out for a resize; this covers
   // the first frame after a load and any residual mismatch — including a
@@ -1955,7 +1958,7 @@ void BrowserController::SetTabScrollOffset(int tab_id, float y)
   PullRemoteFrame(*tab, /*force=*/false);
 }
 
-void BrowserController::SetTabViewport(int tab_id, int width, int height)
+void BrowserController::SetTabViewport(int tab_id, int width, int height, float device_scale)
 {
   Tab* tab = FindTab(tab_id);
   if (tab == nullptr) {
@@ -1963,7 +1966,8 @@ void BrowserController::SetTabViewport(int tab_id, int width, int height)
   }
   width = std::max(1, width);
   height = std::max(1, height);
-  if (tab->viewport_width == width && tab->viewport_height == height) {
+  if (tab->viewport_width == width && tab->viewport_height == height &&
+      tab->device_scale == device_scale) {
     return;
   }
   // Keep the Page alive for as long as the lock is held.  Declared *before*
@@ -1985,7 +1989,11 @@ void BrowserController::SetTabViewport(int tab_id, int width, int height)
     std::lock_guard<std::mutex> lock(mutex_);
     tab->viewport_width = width;
     tab->viewport_height = height;
+    tab->device_scale = device_scale;
     tab->frame_dirty = true;
+  }
+  if (tab->page != nullptr) {
+    tab->page->SetDeviceScaleFactor(device_scale);
   }
   if (IsRemoteTab(*tab)) {
     // The page is laid out for the new viewport inside the child (kSnapshot

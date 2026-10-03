@@ -464,9 +464,9 @@ std::optional<CaretGeometry> Page::FocusedCaretGeometry() const
   if (!FindCaretGeometry(*root_, focused_element_, geometry.x, geometry.y, geometry.height)) {
     return std::nullopt;
   }
-  geometry.x *= page_zoom_;
-  geometry.y *= page_zoom_;
-  geometry.height *= page_zoom_;
+  geometry.x *= frame_scale();
+  geometry.y *= frame_scale();
+  geometry.height *= frame_scale();
   return geometry;
 }
 
@@ -555,16 +555,35 @@ void CollectMatches(const layout::LayoutBox& box,
 
 } // namespace
 
+// The single scale between CSS pixels and frame pixels: the user's zoom times the
+// device scale factor.  Every conversion between the two spaces must use this --
+// sprinkling two factors through twelve sites is how one of them silently keeps a
+// 1x factor and a whole path lands at half resolution (HiDPI text was blurry for
+// exactly that reason: the frame was rasterized at logical size and the window
+// system scaled it up).
+float Page::frame_scale() const
+{
+  return page_zoom_ * device_scale_;
+}
+
+void Page::SetDeviceScaleFactor(float scale)
+{
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  // A sane range: 1 is the classic display, 2-3 are common HiDPI, and anything
+  // outside would be a caller bug rather than a display.
+  device_scale_ = std::clamp(scale, 0.5f, 8.0f);
+}
+
 float Page::viewport_css_width() const
 {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
-  return viewport_width_ / page_zoom_;
+  return viewport_width_ / frame_scale();
 }
 
 float Page::viewport_css_height() const
 {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
-  return viewport_height_ / page_zoom_;
+  return viewport_height_ / frame_scale();
 }
 
 std::vector<FindMatch> Page::FindMatches(std::string_view query)
@@ -587,10 +606,10 @@ std::vector<FindMatch> Page::FindMatches(std::string_view query)
   CollectMatches(*root_, fonts_, FoldAsciiLower(query), matches);
   // Every other geometry query reports device pixels; zoom scales this too.
   for (FindMatch& match : matches) {
-    match.x *= page_zoom_;
-    match.y *= page_zoom_;
-    match.width *= page_zoom_;
-    match.height *= page_zoom_;
+    match.x *= frame_scale();
+    match.y *= frame_scale();
+    match.width *= frame_scale();
+    match.height *= frame_scale();
   }
   return matches;
 }
@@ -664,8 +683,8 @@ void Page::LayoutLocked(float viewport_width, float viewport_height, bool apply_
     }
   }
   layout::LayoutEngine engine(styles_, &fonts_, this);
-  root_ =
-      engine.BuildLayoutTree(*document_, viewport_width / page_zoom_, viewport_height / page_zoom_);
+  root_ = engine.BuildLayoutTree(
+      *document_, viewport_width / frame_scale(), viewport_height / frame_scale());
   RasterizeInlineSvgImagesLocked();
   display_list_.reset();
   BumpVersion();
@@ -1379,7 +1398,7 @@ const paint::DisplayList& Page::EnsureDisplayList() const
   if (!display_list_.has_value() || display_list_version_ != version_) {
     const paint::Painter painter(root_.get());
     display_list_ = painter.Paint();
-    display_list_->Scale(page_zoom_);
+    display_list_->Scale(frame_scale());
     display_list_version_ = version_;
   }
   return *display_list_;
@@ -1513,7 +1532,7 @@ float Page::ContentHeight() const
   // content in the box tree, but browsers still scroll to it.
   float bottom = root_->height;
   AccumulateContentBottom(*root_, /*base_x=*/0, /*base_y=*/0, bottom);
-  return bottom * page_zoom_;
+  return bottom * frame_scale();
 }
 
 const dom::Element* Page::ElementAt(float x, float y) const
@@ -1522,7 +1541,7 @@ const dom::Element* Page::ElementAt(float x, float y) const
   if (root_ == nullptr) {
     return nullptr;
   }
-  return renderer::ElementAt(*root_, x / page_zoom_, y / page_zoom_);
+  return renderer::ElementAt(*root_, x / frame_scale(), y / frame_scale());
 }
 
 std::optional<ElementGeometry> Page::ElementBoxGeometry(const dom::Element& element)
@@ -1547,15 +1566,16 @@ std::optional<ElementGeometry> Page::ElementBoxGeometry(const dom::Element& elem
   // An element with its own layout box: report the box geometry directly.
   if (const layout::LayoutBox* box = FindElementBox(*root_, &element)) {
     ElementGeometry g;
-    g.x = box->x * page_zoom_;
-    g.y = box->y * page_zoom_;
-    g.width = box->width * page_zoom_;
-    g.height = box->height * page_zoom_;
-    g.border_top = box->border_top * page_zoom_;
-    g.border_left = box->border_left * page_zoom_;
-    g.client_width = std::max(0.0f, box->width - box->border_left - box->border_right) * page_zoom_;
+    g.x = box->x * frame_scale();
+    g.y = box->y * frame_scale();
+    g.width = box->width * frame_scale();
+    g.height = box->height * frame_scale();
+    g.border_top = box->border_top * frame_scale();
+    g.border_left = box->border_left * frame_scale();
+    g.client_width =
+        std::max(0.0f, box->width - box->border_left - box->border_right) * frame_scale();
     g.client_height =
-        std::max(0.0f, box->height - box->border_top - box->border_bottom) * page_zoom_;
+        std::max(0.0f, box->height - box->border_top - box->border_bottom) * frame_scale();
     return g;
   }
   // Inline text and replaced elements without their own box: aggregate their
@@ -1566,10 +1586,10 @@ std::optional<ElementGeometry> Page::ElementBoxGeometry(const dom::Element& elem
   float max_bottom = 0;
   if (CollectFragmentRect(*root_, &element, min_x, min_y, max_right, max_bottom)) {
     ElementGeometry g;
-    g.x = min_x * page_zoom_;
-    g.y = min_y * page_zoom_;
-    g.width = (max_right - min_x) * page_zoom_;
-    g.height = (max_bottom - min_y) * page_zoom_;
+    g.x = min_x * frame_scale();
+    g.y = min_y * frame_scale();
+    g.width = (max_right - min_x) * frame_scale();
+    g.height = (max_bottom - min_y) * frame_scale();
     g.client_width = g.width;
     g.client_height = g.height;
     return g;

@@ -241,10 +241,10 @@ void BrowserWorker::SetScrollOffset(int tab_id, int y)
   Post([this, tab_id, y] { controller_.SetTabScrollOffset(tab_id, static_cast<float>(y)); });
 }
 
-void BrowserWorker::SetViewportSize(int tab_id, int width, int height)
+void BrowserWorker::SetViewportSize(int tab_id, int width, int height, float device_scale)
 {
-  Post([this, tab_id, width, height] {
-    controller_.SetTabViewport(tab_id, width, height);
+  Post([this, tab_id, width, height, device_scale] {
+    controller_.SetTabViewport(tab_id, width, height, device_scale);
     // A changed viewport produces a fresh frame; let the GUI pick it up.
     emit StateChanged();
   });

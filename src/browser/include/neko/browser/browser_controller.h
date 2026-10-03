@@ -234,6 +234,8 @@ struct Tab
   // reported yet (the controller's default applies).
   int viewport_width = 0;
   int viewport_height = 0;
+  // Display device pixel ratio the frame is rasterized at (1.0 = classic).
+  float device_scale = 1.0f;
   float remote_frame_scroll_y = 0;
   // Hyperlink under the pointer as reported by the child (drives the GUI's
   // pointing-hand cursor; the browser process has no DOM in this mode).
@@ -600,7 +602,11 @@ public:
   // Renderer mode: records the viewport the child should lay the page out for
   // (the GUI reports its viewport size) and pulls a fresh frame when it
   // changed.
-  void SetTabViewport(int tab_id, int width, int height);
+  // |device_scale| is the display's device pixel ratio: the frame is rasterized
+  // at width*device_scale pixels so a HiDPI window shows native-resolution text
+  // instead of an upscaled frame (see Page::SetDeviceScaleFactor).  Layout stays
+  // in CSS pixels.  Renderer-process tabs ignore it (the child renders at 1x).
+  void SetTabViewport(int tab_id, int width, int height, float device_scale = 1.0f);
 
   // ---- Page zoom (Ctrl+= / Ctrl+- / Ctrl+0) -------------------------------
   // Per-tab user zoom, applied to the renderer's CSS-pixel mapping in both

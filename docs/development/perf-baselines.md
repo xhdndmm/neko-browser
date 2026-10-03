@@ -250,6 +250,33 @@ MainWindow 就没有隐藏的 50 ms 定时器与本 harness 抢节拍——所�
 重算布局/样式。墙钟没有改善（方差内甚至更差）。因此**默认保持 0（无限）**，`--raf-per-turn`
 作为实验旋钮保留；是否值得开启要看"帧是否真的推进"，这正是 GUI 稳态 harness 要回答的问题。
 
+## HiDPI：文字模糊的原因与修法（2026-10）
+
+现象：HiDPI 屏幕上整页发虚，文字最明显。原因**不是**字体光栅化，而是**整帧被放大**：
+
+- 全仓此前**没有任何 `devicePixelRatio` 处理**；
+- `WebView` 用**逻辑像素**（`viewport()->width()`）作为视口 → 帧按逻辑尺寸光栅化；
+- HTML 帧又是 1:1 画进窗口 → Qt 只能把 1100×800 的帧拉成 2200×1600 的设备像素。
+
+修法：引入**设备缩放**这一与 zoom 独立的比例，并让所有换算只走一个访问器
+（`Page::frame_scale() = zoom × device_scale`）：
+
+- `Page::SetDeviceScaleFactor()`：帧 = CSS × zoom × 设备缩放，而 **CSS 视口不变**
+  （`viewport_css_width()` 除回去）；
+- GUI 上报**物理像素**视口（逻辑 × DPR），并给 `QImage` 设 `devicePixelRatio`，
+  于是 Qt 1:1 绘制而不是放大；滚动范围/鼠标/光标/查找高亮按同一比例换算；
+- 渲染进程标签（`--renderer-process`）**仍是 1×**：子进程渲染尺寸由会话协议决定，
+  转发 DPR 需要改协议，列为后续。
+
+排除项（不是原因）：字形位置已取整到整数像素（更锐，不是糊的原因）；页面 zoom 在
+**布局期**生效，不是缩放位图；HTML 帧没有被我们缩放。
+
+验证：`PageTest.DeviceScaleFactorScalesTheFrameButNotTheCssViewport` 断言"帧随设备缩放、
+CSS 视口不变、命中测试一致"（确定性）；`QT_SCALE_FACTOR=2` 下实测 GUI 上报
+816×716 逻辑 → **1632×1432 帧**（修复前是 816×716 再被 Qt 放大），文字区"核心黑/中间灰"
+从 1.39 升到 1.70。**诚实边界**：offscreen 的 `grab()` 自身也会缩放窗口渲染，所以端到端的
+锐度需要在一块真实 HiDPI 屏幕上最终确认（在 GUI 里看文字边缘即可）。
+
 ## 纪律（Council 收敛项）
 
 - **不得用墙钟或 per-pump ms 阈值作 CI 门禁**：共享 runner 上必然 flake，且

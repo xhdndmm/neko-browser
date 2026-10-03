@@ -63,6 +63,10 @@ private:
   void HandleHover(const QPointF& viewport_pos);
   void HandleHoverClear();
   float ScrollY() const;
+  // The display's device pixel ratio: page/frame pixels are logical pixels times
+  // this (see Page::SetDeviceScaleFactor).  Every conversion between widget
+  // coordinates and page coordinates goes through it.
+  qreal DeviceScale() const;
   // Reports the viewport size to the worker (which lays the page out for it
   // and produces the frame) and applies the worker-reported hover cursor.
   void ReportViewport();

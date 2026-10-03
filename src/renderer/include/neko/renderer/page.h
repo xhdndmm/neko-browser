@@ -188,6 +188,13 @@ public:
   float SetUserZoom(float factor);
   float user_zoom() const;
 
+  // The device scale factor of the display the frame is drawn on (1.0 = classic,
+  // 2.0 = typical HiDPI).  The frame is rasterized at CSS pixels x zoom x this
+  // factor, so a HiDPI window gets native-resolution text instead of an upscaled
+  // frame; layout stays in CSS pixels (viewport_css_width divides it back out).
+  // Default 1.0, which is what every test and the offscreen tools use.
+  void SetDeviceScaleFactor(float scale);
+
   // Rasterizes the laid-out page into a |width| x |height| image.  |y_offset|
   // scrolls the visible region (see paint::Rasterizer::SetScrollOffset).  When
   // |pool| is non-null and the viewport is large enough the viewport is
@@ -428,8 +435,12 @@ private:
   std::unique_ptr<layout::LayoutBox> root_;
   float viewport_width_ = 800;
   float viewport_height_ = 0;
+  // CSS pixels -> frame pixels: user zoom times the device scale factor.  One
+  // accessor, so no conversion site can forget half of it.
+  float frame_scale() const;
   // CSS (root `zoom`) times user zoom; see SetUserZoom().
   float page_zoom_ = 1.0f;
+  float device_scale_ = 1.0f;
   float user_zoom_ = 1.0f;
 
   graphics::FontRegistry fonts_;

@@ -402,6 +402,44 @@ TEST(PageTest, ComputedStyleRejectsElementRemovedFromDocument)
   EXPECT_FALSE(page.TryGetComputedStyle(target, computed_style, tag_name));
 }
 
+// The device scale factor (HiDPI): the frame is rasterized at CSS pixels x zoom x
+// device scale, while layout and the CSS viewport stay in CSS pixels.  Before this
+// existed the frame was rasterized at logical size and the window system scaled it
+// up, which is why text was blurry on a HiDPI display.
+TEST(PageTest, DeviceScaleFactorScalesTheFrameButNotTheCssViewport)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<html><body><div id=\"box\" style=\"width:100px;height:50px\">"
+                            "</div></body></html>")
+                  .has_value());
+
+  page.SetDeviceScaleFactor(1.0f);
+  page.Layout(800.0f, 600.0f);
+  EXPECT_FLOAT_EQ(page.viewport_css_width(), 800.0f);
+  dom::Element* box = dom::QuerySelector(*page.document(), "#box");
+  ASSERT_NE(box, nullptr);
+  const std::optional<ElementGeometry> at_one = page.ElementBoxGeometry(*box);
+  ASSERT_TRUE(at_one.has_value());
+
+  page.SetDeviceScaleFactor(2.0f);
+  page.Layout(800.0f, 600.0f);
+  // The CSS viewport is unchanged (a 2x display does not show half the page)...
+  EXPECT_FLOAT_EQ(page.viewport_css_width(), 400.0f);
+  // ...while every geometry query reports frame pixels, i.e. twice as many.
+  const std::optional<ElementGeometry> at_two = page.ElementBoxGeometry(*box);
+  ASSERT_TRUE(at_two.has_value());
+  EXPECT_FLOAT_EQ(at_two->width, at_one->width * 2.0f);
+  EXPECT_FLOAT_EQ(at_two->height, at_one->height * 2.0f);
+  // Hit-testing goes through the same conversion: the point that found the box at
+  // scale 1 finds it at scale 2 when expressed in frame pixels.
+  const dom::Element* hit = page.ElementAt(at_two->x + 1.0f, at_two->y + 1.0f);
+  ASSERT_NE(hit, nullptr);
+  EXPECT_EQ(hit->GetAttribute("id").value_or(""), "box");
+
+  page.SetDeviceScaleFactor(1.0f);
+  EXPECT_FLOAT_EQ(page.viewport_css_width(), 800.0f);
+}
+
 TEST(PageTest, BodyZoomScalesLayoutAndPaint)
 {
   Page page;

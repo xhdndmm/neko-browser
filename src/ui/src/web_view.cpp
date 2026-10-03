@@ -16,6 +16,8 @@
 #include <QScrollBar>
 #include <QVBoxLayout>
 #include <QWheelEvent>
+#include <cmath>
+#include <cstdio>
 #include <memory>
 #include <optional>
 #include <string>
@@ -95,15 +97,26 @@ void WebView::Refresh()
 
 void WebView::ReportViewport()
 {
-  const int width = std::max(1, viewport()->width());
-  const int height = std::max(1, viewport()->height());
+  // Frame pixels: the widget's logical size times the display's device pixel
+  // ratio, so the page is rasterized at native resolution on HiDPI.  Layout
+  // converts them back to CSS pixels (Page::viewport_css_width), which is why the
+  // scale travels with the size.
+  const qreal scale = DeviceScale();
+  const int width = std::max(1, static_cast<int>(std::lround(viewport()->width() * scale)));
+  const int height = std::max(1, static_cast<int>(std::lround(viewport()->height() * scale)));
   if (reported_viewport_ && width == reported_viewport_w_ && height == reported_viewport_h_) {
     return;
   }
   reported_viewport_w_ = width;
   reported_viewport_h_ = height;
   reported_viewport_ = true;
-  worker_->SetViewportSize(tab_id_, width, height);
+  worker_->SetViewportSize(tab_id_, width, height, static_cast<float>(scale));
+}
+
+qreal WebView::DeviceScale() const
+{
+  const qreal scale = devicePixelRatioF();
+  return scale > 0.0 ? scale : 1.0;
 }
 
 void WebView::ApplyFrameCursor()
@@ -372,7 +385,9 @@ void WebView::ShowPageContextMenu(const QPoint& global_pos, const QPoint& viewpo
 
 float WebView::ScrollY() const
 {
-  return static_cast<float>(verticalScrollBar()->value());
+  // The scroll bar works in logical pixels (it belongs to the widget); the page
+  // works in frame pixels.
+  return static_cast<float>(static_cast<qreal>(verticalScrollBar()->value()) * DeviceScale());
 }
 
 void WebView::HandleLinkClick(const QPointF& viewport_pos)
@@ -387,8 +402,9 @@ void WebView::HandleLinkClick(const QPointF& viewport_pos)
   // dispatch runs on the worker thread: it hits the element, runs the page's
   // cancelable "click" event, and only then performs the default action
   // (hyperlink navigation) unless a listener called preventDefault().
-  const float doc_x = static_cast<float>(viewport_pos.x());
-  const float doc_y = static_cast<float>(viewport_pos.y()) + ScrollY();
+  const qreal scale = DeviceScale();
+  const float doc_x = static_cast<float>(viewport_pos.x() * scale);
+  const float doc_y = static_cast<float>(viewport_pos.y() * scale) + ScrollY();
   worker_->DispatchPointerClick(tab_id_, doc_x, doc_y);
 }
 
@@ -400,8 +416,9 @@ void WebView::HandleHover(const QPointF& viewport_pos)
   // The worker hit-tests against its own layout (the DOM lives there) and
   // reports the hyperlink under the pointer in the next snapshot; the cursor
   // follows ApplyFrameCursor().
-  const float doc_x = static_cast<float>(viewport_pos.x());
-  const float doc_y = static_cast<float>(viewport_pos.y()) + ScrollY();
+  const qreal scale = DeviceScale();
+  const float doc_x = static_cast<float>(viewport_pos.x() * scale);
+  const float doc_y = static_cast<float>(viewport_pos.y() * scale) + ScrollY();
   worker_->DispatchHover(tab_id_, doc_x, doc_y);
 }
 
@@ -419,7 +436,9 @@ void WebView::UpdateScrollRange()
   }
   // The worker reports the content height with every frame; the GUI never
   // walks the layout tree.
-  const int content_height = static_cast<int>(snapshot_.frame_content_height);
+  // frame_content_height is in frame pixels; the scroll bar is logical.
+  const qreal scale = DeviceScale();
+  const int content_height = static_cast<int>(std::lround(snapshot_.frame_content_height / scale));
   const int viewport_height = std::max(1, viewport()->height());
   verticalScrollBar()->setRange(0, std::max(0, content_height - viewport_height));
 }
@@ -524,10 +543,14 @@ void WebView::PaintFindHighlight(QPainter& painter)
   // FindMatch holds float (device px); QRectF is qreal (double on some
   // platforms).  Convert explicitly: an implicit float -> double conversion
   // would trip -Wdouble-promotion, which is an error in CI.
-  const QRectF rect(static_cast<qreal>(match.x),
-                    static_cast<qreal>(match.y) - static_cast<qreal>(verticalScrollBar()->value()),
-                    static_cast<qreal>(match.width),
-                    static_cast<qreal>(match.height));
+  // The match rectangle is in frame pixels (document coordinates); the overlay is
+  // drawn in logical pixels.
+  const qreal scale = DeviceScale();
+  const QRectF rect(static_cast<qreal>(match.x) / scale,
+                    static_cast<qreal>(match.y) / scale -
+                        static_cast<qreal>(verticalScrollBar()->value()),
+                    static_cast<qreal>(match.width) / scale,
+                    static_cast<qreal>(match.height) / scale);
   painter.fillRect(rect, QColor(255, 214, 0, 128));
   painter.setPen(QColor(180, 140, 0, 200));
   painter.drawRect(rect.adjusted(0, 0, -1, -1));
@@ -541,17 +564,23 @@ void WebView::PaintHtml(QPainter& painter)
   // writes through them; the const_cast only satisfies its API.
   const std::shared_ptr<const browser::RemoteFrame>& frame = snapshot_.frame;
   if (frame != nullptr && frame->width > 0 && frame->height > 0 && !frame->rgba.empty()) {
-    const QImage image(const_cast<std::uint8_t*>(frame->rgba.data()),
-                       frame->width,
-                       frame->height,
-                       QImage::Format_RGBA8888);
+    QImage image(const_cast<std::uint8_t*>(frame->rgba.data()),
+                 frame->width,
+                 frame->height,
+                 QImage::Format_RGBA8888);
+    // The frame is rasterized at device resolution; telling Qt its scale makes
+    // drawImage place it 1:1 in device pixels instead of upscaling it (which is
+    // what blurred everything on a HiDPI display).
+    image.setDevicePixelRatio(DeviceScale());
     painter.drawImage(0, 0, image);
   }
   // Caret overlay: the worker reports the focused element's geometry; the GUI
   // draws the blinking bar itself (blinking never touches the DOM).
   if (snapshot_.has_caret && caret_visible_ && snapshot_.caret_height > 0) {
-    const int y = static_cast<int>(snapshot_.caret_y) - verticalScrollBar()->value();
-    const int height = static_cast<int>(snapshot_.caret_height);
+    const qreal scale = DeviceScale();
+    const int y =
+        static_cast<int>(std::lround(snapshot_.caret_y / scale)) - verticalScrollBar()->value();
+    const int height = static_cast<int>(std::lround(snapshot_.caret_height / scale));
     if (y + height > 0 && y < viewport()->height()) {
       painter.fillRect(QRect(static_cast<int>(snapshot_.caret_x), y, 1, height), Qt::black);
     }
@@ -577,12 +606,17 @@ void WebView::PaintImage(QPainter& painter)
                snapshot_.image->width,
                snapshot_.image->height,
                QImage::Format_RGBA8888);
-  // Scale down to fit while keeping the aspect ratio.
-  const QImage scaled =
-      image.scaled(viewport()->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
-  painter.drawImage((viewport()->width() - scaled.width()) / 2,
-                    (viewport()->height() - scaled.height()) / 2,
-                    scaled);
+  // Scale to fit while keeping the aspect ratio -- in *device* pixels, so the
+  // result is as sharp as the display allows, and tagged with the scale so Qt
+  // does not scale it again.
+  const qreal scale = DeviceScale();
+  const QSize target(static_cast<int>(std::lround(viewport()->width() * scale)),
+                     static_cast<int>(std::lround(viewport()->height() * scale)));
+  const QImage scaled = image.scaled(target, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+  painter.drawImage(
+      (viewport()->width() - static_cast<int>(std::lround(scaled.width() / scale))) / 2,
+      (viewport()->height() - static_cast<int>(std::lround(scaled.height() / scale))) / 2,
+      scaled);
 }
 
 } // namespace neko::ui
