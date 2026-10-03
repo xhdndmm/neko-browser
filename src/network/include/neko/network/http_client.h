@@ -43,6 +43,7 @@ public:
     std::size_t connections_opened = 0;    // TCP+TLS dials
     std::size_t connections_reused = 0;    // requests served on a pooled connection
     std::size_t connections_discarded = 0; // reused/returned connections closed without reuse
+    std::size_t bytes = 0;                 // decoded response bytes delivered to callers
   };
 
   // Idle connections kept per origin; further returned connections are closed.

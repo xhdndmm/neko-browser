@@ -16,6 +16,7 @@
 #include "neko/browser/network_host.h"
 #include "neko/browser/network_session.h"
 #include "neko/browser/page_scripts.h"
+#include "neko/browser/perf_report.h"
 #include "neko/browser/renderer_host.h"
 #include "neko/browser/renderer_protocol.h"
 #include "neko/browser/renderer_session_host.h"
@@ -25,6 +26,7 @@
 #include "neko/media/audio.h"
 #include "neko/media/video.h"
 #include "neko/network/http.h"
+#include "neko/network/http_client.h"
 #include "neko/paint/ppm_writer.h"
 #include "neko/paint/rasterizer.h"
 #include "neko/pdf/pdf.h"
@@ -36,6 +38,7 @@
 #include "neko/url/url.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
@@ -123,7 +126,8 @@ neko::base::Result<void> LoadTarget(
     std::shared_ptr<neko::javascript::DomBinder>* script_runtime = nullptr,
     const std::function<neko::base::Result<neko::network::HttpResponse>(const neko::url::Url&)>&
         document_fetch = {},
-    std::string* final_url = nullptr);
+    std::string* final_url = nullptr,
+    neko::browser::PerfReport* perf = nullptr);
 
 // Loads a bare local path (no scheme) into the page and fetches its
 // subresources against an absolute file:// base so relative URLs resolve.
@@ -211,7 +215,8 @@ neko::base::Result<void> LoadTarget(
     std::shared_ptr<neko::javascript::DomBinder>* script_runtime,
     const std::function<neko::base::Result<neko::network::HttpResponse>(const neko::url::Url&)>&
         document_fetch,
-    std::string* final_url)
+    std::string* final_url,
+    neko::browser::PerfReport* perf)
 {
   constexpr int kMaxNavigationDepth = 20;
   if (depth >= kMaxNavigationDepth) {
@@ -233,6 +238,16 @@ neko::base::Result<void> LoadTarget(
   if (parsed.has_value()) {
     const neko::url::Url& url = parsed.value();
     if (url.scheme() == "http" || url.scheme() == "https") {
+      // --perf-report phase timings (perf_report.h).  Handed to |perf| at the
+      // end of this branch; a script-triggered navigation returns through the
+      // recursive call below, which is the load that actually happened.
+      neko::browser::LoadPhases phases;
+      auto phase_start = std::chrono::steady_clock::now();
+      const auto phase = [&phase_start, &phases](long long* slot) {
+        const auto now = std::chrono::steady_clock::now();
+        *slot = std::chrono::duration_cast<std::chrono::milliseconds>(now - phase_start).count();
+        phase_start = now;
+      };
       NEKO_LOG_INFO("fetching " + url.Serialize());
       // Network-process mode routes the document fetch through the child
       // (ADR 0016 M3a); everything else uses the in-process stack.
@@ -250,6 +265,7 @@ neko::base::Result<void> LoadTarget(
       if (!r) {
         return r;
       }
+      phase(&phases.document);
       neko::base::ThreadPool pool;
       // Fetch and apply external <link rel=stylesheet> sheets before scripts.
       neko::browser::FetchExternalStylesheets(
@@ -257,8 +273,10 @@ neko::base::Result<void> LoadTarget(
           url.Serialize(),
           [](const neko::url::Url& u, std::string_view) { return neko::network::HttpGet(u); },
           pool);
+      phase(&phases.stylesheets1);
       // Fetch and register @font-face web fonts so layout/paint see them.
       neko::browser::FetchWebFonts(page, url.Serialize(), FetchAny, pool);
+      phase(&phases.fonts1);
       // Phase 8 M2: execute the page's scripts (inline + external src=,
       // async/defer); scripts may mutate the DOM and RunPageScripts
       // re-applies styles inside.
@@ -290,6 +308,7 @@ neko::base::Result<void> LoadTarget(
             services,
             &requested);
       }
+      phase(&phases.scripts);
       // A script may have redirected the page (e.g. location.replace()).
       if (!requested.url.empty()) {
         NEKO_LOG_INFO("script navigated to " + requested.url);
@@ -300,7 +319,8 @@ neko::base::Result<void> LoadTarget(
                           depth + 1,
                           script_runtime,
                           document_fetch,
-                          final_url);
+                          final_url,
+                          perf);
       }
       if (requested.is_reload) {
         NEKO_LOG_INFO("script reloaded " + url.Serialize());
@@ -320,14 +340,17 @@ neko::base::Result<void> LoadTarget(
           url.Serialize(),
           [](const neko::url::Url& u, std::string_view) { return neko::network::HttpGet(u); },
           pool);
+      phase(&phases.stylesheets2);
       // Fonts declared by script-injected sheets load here too.
       neko::browser::FetchWebFonts(page, url.Serialize(), FetchAny, pool);
+      phase(&phases.fonts2);
       // Fetch and decode the page's <img>/<video> subresources (headless path).
       neko::browser::FetchPageImages(
           page,
           url.Serialize(),
           [](const neko::url::Url& u, std::string_view) { return neko::network::HttpGet(u); },
           pool);
+      phase(&phases.images);
       neko::browser::FetchPageVideos(
           page,
           url.Serialize(),
@@ -335,9 +358,13 @@ neko::base::Result<void> LoadTarget(
           pool);
       // Deliver the queued image load/error events: page onload="..."
       // attributes and listeners flip placeholder/fallback state off them.
+      phase(&phases.videos);
       FirePendingImageEvents(page, script_runtime != nullptr ? script_runtime->get() : nullptr);
       if (final_url != nullptr) {
         *final_url = url.Serialize();
+      }
+      if (perf != nullptr) {
+        perf->phases = phases;
       }
       return neko::base::Ok();
     }
@@ -386,7 +413,8 @@ neko::base::Result<void> LoadTarget(
                           depth + 1,
                           script_runtime,
                           document_fetch,
-                          final_url);
+                          final_url,
+                          perf);
       }
       // Fetch the page's subresources: relative URLs resolve against the
       // file:// base so local pages behave like served ones.
@@ -809,6 +837,10 @@ int main(int argc, char** argv)
     NEKO_LOG_WARNING("failed to load indexedDB profile");
   }
   neko::renderer::Page page;
+  // --perf-report bookkeeping (perf_report.h): wall clock for the whole run and
+  // the phase/counter payload printed at the end when the flag is set.
+  neko::browser::PerfReport perf;
+  const auto wall_start = std::chrono::steady_clock::now();
   // The renderer-process result (ADR 0016 M1): set when --renderer-process
   // routes the load through a child process instead of the in-process
   // pipeline.
@@ -860,12 +892,17 @@ int main(int argc, char** argv)
                                                        /*depth=*/0,
                                                        &script_runtime,
                                                        document_fetch,
-                                                       &loaded_base_url);
+                                                       &loaded_base_url,
+                                                       &perf);
     if (!loaded) {
       std::cerr << "error: " << loaded.error().message() << "\n";
       return 1;
     }
     NEKO_LOG_INFO("loaded document title: " + page.document()->Title());
+    // Landing 0: the post-load work (timer pump + late image rounds) is not part
+    // of LoadTarget's pipeline, so it is measured on its own.  A requested
+    // screenshot is excluded and shows up as wall_ms minus the phases.
+    const auto post_load_start = std::chrono::steady_clock::now();
     // Drive the page's event loop before anything observes the document.  The
     // GUI pumps this from a 50 ms QTimer, but the headless entry points had no
     // event loop at all, so --screenshot / --dump-dom used to capture the page
@@ -907,6 +944,9 @@ int main(int argc, char** argv)
         page.ReapplyStyles();
       }
     }
+    perf.phases.post_load = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - post_load_start)
+                                .count();
   } else {
     std::cout << "no URL given; run with --url <url> to load a page.\n";
   }
@@ -981,6 +1021,22 @@ int main(int argc, char** argv)
       }
       std::cout << "wrote screenshot: " << parsed.options.screenshot_path.value() << "\n";
     }
+  }
+
+  if (parsed.options.perf_report) {
+    // One JSON line on stdout; see perf_report.h and
+    // docs/development/perf-baselines.md.  With --renderer-process the child
+    // does the fetching, so the counters describe an unused in-process client.
+    const neko::network::HttpClient::Stats stats = neko::network::SharedHttpClient().stats();
+    perf.counters.requests = stats.requests;
+    perf.counters.connections_opened = stats.connections_opened;
+    perf.counters.connections_reused = stats.connections_reused;
+    perf.counters.connections_discarded = stats.connections_discarded;
+    perf.counters.bytes = stats.bytes;
+    perf.wall_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - wall_start)
+                       .count();
+    std::cout << neko::browser::FormatPerfReportLine(perf) << "\n";
   }
 
   NEKO_LOG_INFO("done");

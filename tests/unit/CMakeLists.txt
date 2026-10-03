@@ -226,6 +226,7 @@ gtest_discover_tests(neko_ipc_tests DISCOVERY_MODE PRE_TEST)
 # -----------------------------------------------------------------------------
 add_executable(neko_browser_tests
   browser/options_test.cpp
+  browser/perf_report_test.cpp
   browser/browser_controller_test.cpp
   browser/page_scripts_test.cpp
   browser/hyperlink_test.cpp

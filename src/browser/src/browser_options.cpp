@@ -18,6 +18,8 @@ std::string UsageText()
          "      --headless             Run without a GUI (engine-only mode).\n"
          "      --url <url>            URL to navigate to.\n"
          "      --dump-dom             Dump the DOM after load (requires Phase 3).\n"
+         "      --perf-report           Print one JSON line of load counters and\n"
+         "                            phase timings (docs/development/perf-baselines.md).\n"
          "      --screenshot <path>    Render a screenshot to <path> (requires Phase 6).\n"
          "      --dump-history         Print the browsing history.\n"
          "      --dump-bookmarks       Print the bookmarks.\n"
@@ -97,6 +99,10 @@ ParseResult ParseCommandLine(int argc, char** argv)
     }
     if (arg == "--network-child") {
       result.options.network_child = true;
+      continue;
+    }
+    if (arg == "--perf-report") {
+      result.options.perf_report = true;
       continue;
     }
     if (arg == "--verbose") {

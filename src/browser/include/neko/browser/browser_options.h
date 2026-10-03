@@ -40,6 +40,9 @@ struct BrowserOptions
   // --network-child: internal mode — serve network requests on stdin/stdout
   // (spawned by NetworkSession).
   bool network_child = false;
+  // --perf-report: print one machine-readable JSON line of load counters and
+  // phase timings (see perf_report.h and docs/development/perf-baselines.md).
+  bool perf_report = false;
   // --verbose / --log-level <level>.
   base::LogLevel log_level = base::LogLevel::kInfo;
 

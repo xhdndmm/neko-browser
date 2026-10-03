@@ -88,6 +88,17 @@ TEST(OptionsTest, DumpDomFlag)
   EXPECT_TRUE(r.options.dump_dom);
 }
 
+// --perf-report is the committed measurement surface: it must parse, and it
+// must default to off (a stray JSON line on stdout would break --dump-dom
+// consumers that do not ask for it).
+TEST(OptionsTest, PerfReportFlag)
+{
+  EXPECT_FALSE(Parse({"--dump-dom"}).options.perf_report);
+  const ParseResult r = Parse({"--dump-dom", "--perf-report"});
+  EXPECT_TRUE(r.options.perf_report);
+  EXPECT_TRUE(r.options.dump_dom);
+}
+
 TEST(OptionsTest, DisableGpuFlag)
 {
   const ParseResult r = Parse({"--disable-gpu"});

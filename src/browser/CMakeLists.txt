@@ -23,6 +23,7 @@ add_library(neko_browser_core
   src/download_manager.cpp
   src/hyperlink.cpp
   src/page_scripts.cpp
+  src/perf_report.cpp
   src/renderer_host.cpp
   src/renderer_protocol.cpp
   src/renderer_session.cpp

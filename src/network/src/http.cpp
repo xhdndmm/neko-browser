@@ -1255,6 +1255,12 @@ base::Result<HttpResponse> HttpClient::GetOnce(const url::Url& url,
     }
     last = std::move(result.response);
     if (!retryable) {
+      if (last.has_value()) {
+        // Count what callers actually receive (the redirect-followed body is
+        // counted once by the hop that produced it).  --perf-report reports it.
+        std::lock_guard<std::mutex> lock(impl_->mutex_);
+        impl_->stats_.bytes += last.value().body.size();
+      }
       return last;
     }
   }
