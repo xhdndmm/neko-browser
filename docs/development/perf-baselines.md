@@ -15,7 +15,21 @@ cmake --preset release && cmake --build --preset release --parallel
 ```
 
 `--perf-report` 在 stdout 追加**一行 JSON**（`--dump-dom` 的 DOM 也在 stdout，取以
-`{"wall_ms"` 开头的那行即可）：
+`{"wall_ms"` 开头的那行即可）。**推荐用仓库里的读取器**，它直接从管道挑出 JSON 行、
+支持多轮采样与中位数，并会提示确定性的计数器是否在样本间漂移：
+
+```bash
+./build/release/bin/neko_browser --headless --url <URL> --dump-dom --perf-report 2>/dev/null \
+  | python3 tools/perf_report.py                 # 单次
+# 多轮（推荐：3 次取中位数）
+for i in 1 2 3; do
+  ./build/release/bin/neko_browser --headless --url <URL> --dump-dom --perf-report 2>/dev/null \
+    | grep -o '{"wall_ms".*}' >> /tmp/perf.jsonl
+done
+python3 tools/perf_report.py --unit s /tmp/perf.jsonl
+```
+
+原始行（供脚本消费）：
 
 ```json
 {"wall_ms":13961,"requests":181,"connections_opened":49,"connections_reused":132,
