@@ -1109,6 +1109,44 @@ std::vector<std::unique_ptr<dom::Node>> TakeFragmentChildren(std::string_view ht
 // Element.insertAdjacentHTML(position, html): parses the fragment and inserts
 // it relative to the element — beforebegin/afterend outside (sibling) and
 // afterbegin/beforeend inside.
+namespace {
+
+// Resolves an insertAdjacent* position to its insertion point.  Returns false
+// (with a SyntaxError thrown) when the position is not one of the four.  |*parent|
+// is null for "beforebegin"/"afterend" on a detached element: nothing to do.
+bool ResolveAdjacentInsertionPoint(JSContext* ctx,
+                                   dom::Element* element,
+                                   const std::string& position,
+                                   dom::Node** parent,
+                                   dom::Node** reference)
+{
+  *parent = nullptr;
+  *reference = nullptr;
+  if (position == "beforeend") {
+    *parent = element;
+  } else if (position == "afterbegin") {
+    *parent = element;
+    *reference = element->first_child();
+  } else if (position == "beforebegin" || position == "afterend") {
+    *parent = element->parent();
+    if (*parent != nullptr) {
+      *reference = position == "beforebegin" ? element : SiblingOf(element, +1);
+    }
+  } else {
+    (void)ThrowDomException(
+        ctx, "SyntaxError", "insertAdjacent*: unknown position '" + position + "'");
+    return false;
+  }
+  return true;
+}
+
+} // namespace
+
+// Element.insertAdjacentHTML(position, html): parses the fragment and inserts it
+// relative to the element -- beforebegin/afterend outside (sibling) and
+// afterbegin/beforeend inside.  The fragment keeps its document order: inserting
+// each node *before the same anchor*, walking forwards, yields that order (the
+// previous backwards walk reversed multi-node fragments).
 JSValue
 ElementInsertAdjacentHTML(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
@@ -1129,31 +1167,89 @@ ElementInsertAdjacentHTML(JSContext* ctx, JSValueConst this_val, int argc, JSVal
   if (!ok) {
     return JS_EXCEPTION;
   }
+  dom::Node* parent = nullptr;
+  dom::Node* reference = nullptr;
+  if (!ResolveAdjacentInsertionPoint(ctx, element, position, &parent, &reference)) {
+    return JS_EXCEPTION;
+  }
+  if (parent == nullptr) {
+    return JS_UNDEFINED; // detached element: nothing to do
+  }
   std::vector<std::unique_ptr<dom::Node>> nodes = TakeFragmentChildren(html);
-  const auto insert_before =
-      [&](dom::Node* parent, std::unique_ptr<dom::Node>&& node, dom::Node* reference) {
-        parent->InsertBefore(std::move(node), reference);
-      };
-  if (position == "beforeend") {
-    for (auto& node : nodes) {
-      element->AppendChild(std::move(node));
-    }
-  } else if (position == "afterbegin") {
-    dom::Node* first = element->first_child();
-    for (auto it = nodes.rbegin(); it != nodes.rend(); ++it) {
-      element->InsertBefore(std::move(*it), first);
-    }
-  } else if (position == "beforebegin" || position == "afterend") {
-    dom::Node* parent = element->parent();
-    if (parent == nullptr) {
-      return JS_UNDEFINED; // detached element: nothing to do
-    }
-    dom::Node* reference = position == "beforebegin" ? element : SiblingOf(element, +1);
-    for (auto it = nodes.rbegin(); it != nodes.rend(); ++it) {
-      insert_before(parent, std::move(*it), reference);
-    }
+  for (auto& node : nodes) {
+    parent->InsertBefore(std::move(node), reference);
   }
   impl->MarkDomDirty(element);
+  return JS_UNDEFINED;
+}
+
+// Element.insertAdjacentElement(position, element): inserts an existing element
+// at the given position and returns it (null for a detached sibling position).
+JSValue
+ElementInsertAdjacentElement(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (impl == nullptr || element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  if (argc < 2) {
+    return JS_ThrowTypeError(ctx, "insertAdjacentElement requires (position, element)");
+  }
+  bool ok = false;
+  const std::string position = ToLower(ArgString(ctx, argv[0], &ok));
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  dom::Element* inserted = AsElement(UnwrapNode(ctx, argv[1]));
+  if (inserted == nullptr) {
+    return JS_ThrowTypeError(ctx, "insertAdjacentElement: argument is not an element");
+  }
+  dom::Node* parent = nullptr;
+  dom::Node* reference = nullptr;
+  if (!ResolveAdjacentInsertionPoint(ctx, element, position, &parent, &reference)) {
+    return JS_EXCEPTION;
+  }
+  if (parent == nullptr) {
+    return JS_NULL; // detached element: spec returns null
+  }
+  return InsertNodeChecked(ctx, impl, parent, inserted, reference, "insertAdjacentElement");
+}
+
+// Element.insertAdjacentText(position, text): inserts a new Text node holding
+// |text| at the given position.
+JSValue
+ElementInsertAdjacentText(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (impl == nullptr || element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  if (argc < 2) {
+    return JS_ThrowTypeError(ctx, "insertAdjacentText requires (position, text)");
+  }
+  bool ok = false;
+  const std::string position = ToLower(ArgString(ctx, argv[0], &ok));
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  const std::string text = ArgString(ctx, argv[1], &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  dom::Node* parent = nullptr;
+  dom::Node* reference = nullptr;
+  if (!ResolveAdjacentInsertionPoint(ctx, element, position, &parent, &reference)) {
+    return JS_EXCEPTION;
+  }
+  if (parent == nullptr) {
+    return JS_UNDEFINED;
+  }
+  // The new Text node goes straight into the DOM: JS gets no reference to it, so
+  // it needs no wrapper registry entry.
+  parent->InsertBefore(std::make_unique<dom::Text>(text), reference);
+  impl->MarkDomDirty(parent);
   return JS_UNDEFINED;
 }
 
@@ -1508,7 +1604,7 @@ void DefineClassListPrototype(JSContext* ctx, Impl& impl)
 
 void DefineElementPrototype(JSContext* ctx, Impl& impl)
 {
-  static const std::array<JSCFunctionListEntry, 18> kMethods = {{
+  static const std::array<JSCFunctionListEntry, 20> kMethods = {{
       JS_CFUNC_DEF("getAttribute", 1, ElementGetAttribute),
       JS_CFUNC_DEF("getAttributeNames", 0, ElementGetAttributeNames),
       JS_CFUNC_DEF("setAttribute", 2, ElementSetAttribute),
@@ -1524,6 +1620,8 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
       JS_CFUNC_DEF("closest", 1, ElementClosest),
       JS_CFUNC_DEF("remove", 0, ElementRemove),
       JS_CFUNC_DEF("insertAdjacentHTML", 2, ElementInsertAdjacentHTML),
+      JS_CFUNC_DEF("insertAdjacentElement", 2, ElementInsertAdjacentElement),
+      JS_CFUNC_DEF("insertAdjacentText", 2, ElementInsertAdjacentText),
       JS_CFUNC_DEF("getBoundingClientRect", 0, ElementGetBoundingClientRect),
       JS_CFUNC_DEF("play", 0, ElementPlayVideo),
       JS_CFUNC_DEF("pause", 0, ElementPauseVideo),

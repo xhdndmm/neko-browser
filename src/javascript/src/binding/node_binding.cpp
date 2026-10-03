@@ -101,6 +101,56 @@ bool InsertBorrowedFragment(Impl& impl,
 
 } // namespace
 
+// Shared insertion core: see binding_internal.h.  The ancestor check is part of
+// the spec's "ensure pre-insertion validity" and used to be missing from
+// insertBefore: inserting an ancestor into its own descendant left the tree
+// cyclic, which no later traversal survives.
+JSValue InsertNodeChecked(JSContext* ctx,
+                          Impl* impl,
+                          dom::Node* parent,
+                          dom::Node* child,
+                          dom::Node* reference,
+                          const char* operation)
+{
+  const std::string where(operation);
+  if (child == parent) {
+    return ThrowDomException(
+        ctx, "HierarchyRequestError", where + ": cannot insert a node into itself");
+  }
+  if (child->node_type() == dom::NodeType::kDocument) {
+    return ThrowDomException(
+        ctx, "HierarchyRequestError", where + ": cannot insert a Document node");
+  }
+  if (IsAncestorOf(child, parent)) {
+    return ThrowDomException(ctx, "HierarchyRequestError", where + ": cannot insert an ancestor");
+  }
+  if (parent->WouldExceedMaximumTreeDepth(*child)) {
+    return ThrowDomException(ctx, "HierarchyRequestError", where + ": maximum tree depth exceeded");
+  }
+  if (child->parent() != nullptr) {
+    dom::Node* previous_parent = child->parent();
+    std::unique_ptr<dom::Node> removed = previous_parent->RemoveChild(child);
+    impl->TakeOwnership(child, std::move(removed));
+    // A live collection rooted at the previous parent sees the node leave.
+    impl->MarkDomDirty(previous_parent);
+  }
+  std::unique_ptr<dom::Node> owned = impl->ReleaseOwned(child);
+  if (owned == nullptr) {
+    std::vector<dom::Node*> added;
+    if (InsertBorrowedFragment(*impl, parent, child, reference, added)) {
+      impl->RecordChildListMutation(parent, added, {});
+      impl->MarkDomDirty(parent);
+      return impl->WrapNode(child);
+    }
+    return JS_ThrowTypeError(ctx, "insertion: internal ownership error");
+  }
+  std::vector<dom::Node*> added;
+  InsertNodeWithFragmentSemantics(*impl, parent, std::move(owned), reference, added);
+  impl->RecordChildListMutation(parent, added, {});
+  impl->MarkDomDirty(parent);
+  return impl->WrapNode(child);
+}
+
 JSValue NodeAppendChild(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
@@ -115,44 +165,7 @@ JSValue NodeAppendChild(JSContext* ctx, JSValueConst this_val, int argc, JSValue
   if (child == nullptr) {
     return JS_ThrowTypeError(ctx, "appendChild: argument is not a node");
   }
-  if (child == parent) {
-    return ThrowDomException(
-        ctx, "HierarchyRequestError", "appendChild: cannot append a node to itself");
-  }
-  if (child->node_type() == dom::NodeType::kDocument) {
-    return ThrowDomException(
-        ctx, "HierarchyRequestError", "appendChild: cannot append a Document node");
-  }
-  if (IsAncestorOf(child, parent)) {
-    return ThrowDomException(
-        ctx, "HierarchyRequestError", "appendChild: cannot append an ancestor");
-  }
-  if (parent->WouldExceedMaximumTreeDepth(*child)) {
-    return ThrowDomException(
-        ctx, "HierarchyRequestError", "appendChild: maximum tree depth exceeded");
-  }
-  if (child->parent() != nullptr) {
-    dom::Node* previous_parent = child->parent();
-    std::unique_ptr<dom::Node> removed = previous_parent->RemoveChild(child);
-    impl->TakeOwnership(child, std::move(removed));
-    // A live collection rooted at the previous parent sees the node leave.
-    impl->MarkDomDirty(previous_parent);
-  }
-  std::unique_ptr<dom::Node> owned = impl->ReleaseOwned(child);
-  if (owned == nullptr) {
-    std::vector<dom::Node*> added;
-    if (InsertBorrowedFragment(*impl, parent, child, nullptr, added)) {
-      impl->RecordChildListMutation(parent, added, {});
-      impl->MarkDomDirty(parent);
-      return impl->WrapNode(child);
-    }
-    return JS_ThrowTypeError(ctx, "appendChild: internal ownership error");
-  }
-  std::vector<dom::Node*> added;
-  InsertNodeWithFragmentSemantics(*impl, parent, std::move(owned), nullptr, added);
-  impl->RecordChildListMutation(parent, added, {});
-  impl->MarkDomDirty(parent);
-  return impl->WrapNode(child);
+  return InsertNodeChecked(ctx, impl, parent, child, nullptr, "appendChild");
 }
 
 // DOM Node.append(...children): appends each argument as the last child, in
@@ -206,6 +219,123 @@ JSValue NodeReplaceChildren(JSContext* ctx, JSValueConst this_val, int argc, JSV
   return JS_UNDEFINED;
 }
 
+// DOM ParentNode.prepend(...nodes): inserts each argument before the node's
+// current first child, in argument order.  Node arguments only, like append (a
+// string argument is skipped: text conversion is a documented limitation).
+JSValue NodePrepend(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* parent = UnwrapNode(ctx, this_val);
+  if (impl == nullptr || parent == nullptr) {
+    return JS_ThrowTypeError(ctx, "prepend: detached node");
+  }
+  // The original first child stays the anchor: inserting every argument before
+  // it yields argument order followed by the previous content.
+  dom::Node* anchor = parent->first_child();
+  for (int i = 0; i < argc; ++i) {
+    dom::Node* child = UnwrapNode(ctx, argv[i]);
+    if (child == nullptr) {
+      continue; // string argument: documented limitation
+    }
+    JSValue result = InsertNodeChecked(ctx, impl, parent, child, anchor, "prepend");
+    if (JS_IsException(result)) {
+      return result;
+    }
+    JS_FreeValue(ctx, result);
+  }
+  impl->MarkDomDirty(parent);
+  return JS_UNDEFINED;
+}
+
+// DOM ChildNode.before(...nodes): inserts each argument before this node.
+JSValue NodeBefore(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
+  if (impl == nullptr || node == nullptr) {
+    return JS_ThrowTypeError(ctx, "before: detached node");
+  }
+  dom::Node* parent = node->parent();
+  if (parent == nullptr) {
+    return JS_UNDEFINED; // no parent: nothing to do
+  }
+  for (int i = 0; i < argc; ++i) {
+    dom::Node* child = UnwrapNode(ctx, argv[i]);
+    if (child == nullptr || child == node) {
+      continue; // string argument, or this node: nothing to do
+    }
+    JSValue result = InsertNodeChecked(ctx, impl, parent, child, node, "before");
+    if (JS_IsException(result)) {
+      return result;
+    }
+    JS_FreeValue(ctx, result);
+  }
+  impl->MarkDomDirty(parent);
+  return JS_UNDEFINED;
+}
+
+// DOM ChildNode.after(...nodes): inserts each argument after this node.
+JSValue NodeAfter(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
+  if (impl == nullptr || node == nullptr) {
+    return JS_ThrowTypeError(ctx, "after: detached node");
+  }
+  dom::Node* parent = node->parent();
+  if (parent == nullptr) {
+    return JS_UNDEFINED;
+  }
+  // The original next sibling is the anchor, so several arguments keep their
+  // order (and nullptr appends when this node is the last child).
+  dom::Node* anchor = SiblingOf(node, +1);
+  for (int i = 0; i < argc; ++i) {
+    dom::Node* child = UnwrapNode(ctx, argv[i]);
+    if (child == nullptr || child == node) {
+      continue;
+    }
+    JSValue result = InsertNodeChecked(ctx, impl, parent, child, anchor, "after");
+    if (JS_IsException(result)) {
+      return result;
+    }
+    JS_FreeValue(ctx, result);
+  }
+  impl->MarkDomDirty(parent);
+  return JS_UNDEFINED;
+}
+
+// DOM ChildNode.replaceWith(...nodes): inserts the arguments where this node is,
+// then removes it.
+JSValue NodeReplaceWith(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
+  if (impl == nullptr || node == nullptr) {
+    return JS_ThrowTypeError(ctx, "replaceWith: detached node");
+  }
+  dom::Node* parent = node->parent();
+  if (parent == nullptr) {
+    return JS_UNDEFINED;
+  }
+  for (int i = 0; i < argc; ++i) {
+    dom::Node* child = UnwrapNode(ctx, argv[i]);
+    if (child == nullptr || child == node) {
+      continue; // string argument, or this node (replacing with itself)
+    }
+    JSValue result = InsertNodeChecked(ctx, impl, parent, child, node, "replaceWith");
+    if (JS_IsException(result)) {
+      return result;
+    }
+    JS_FreeValue(ctx, result);
+  }
+  // Remove this node last: the arguments above used it as the insertion anchor.
+  std::unique_ptr<dom::Node> removed = parent->RemoveChild(node);
+  impl->TakeOwnership(node, std::move(removed));
+  impl->RecordChildListMutation(parent, {}, {node});
+  impl->MarkDomDirty(parent);
+  return JS_UNDEFINED;
+}
+
 JSValue NodeInsertBefore(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
@@ -225,35 +355,7 @@ JSValue NodeInsertBefore(JSContext* ctx, JSValueConst this_val, int argc, JSValu
     return ThrowDomException(
         ctx, "NotFoundError", "insertBefore: reference is not a child of this node");
   }
-  if (child == parent || child->node_type() == dom::NodeType::kDocument) {
-    return ThrowDomException(ctx, "HierarchyRequestError", "insertBefore: invalid node");
-  }
-  if (parent->WouldExceedMaximumTreeDepth(*child)) {
-    return ThrowDomException(
-        ctx, "HierarchyRequestError", "insertBefore: maximum tree depth exceeded");
-  }
-  if (child->parent() != nullptr) {
-    dom::Node* previous_parent = child->parent();
-    std::unique_ptr<dom::Node> removed = previous_parent->RemoveChild(child);
-    impl->TakeOwnership(child, std::move(removed));
-    // A live collection rooted at the previous parent sees the node leave.
-    impl->MarkDomDirty(previous_parent);
-  }
-  std::unique_ptr<dom::Node> owned = impl->ReleaseOwned(child);
-  if (owned == nullptr) {
-    std::vector<dom::Node*> added;
-    if (InsertBorrowedFragment(*impl, parent, child, reference, added)) {
-      impl->RecordChildListMutation(parent, added, {});
-      impl->MarkDomDirty(parent);
-      return impl->WrapNode(child);
-    }
-    return JS_ThrowTypeError(ctx, "insertBefore: internal ownership error");
-  }
-  std::vector<dom::Node*> added;
-  InsertNodeWithFragmentSemantics(*impl, parent, std::move(owned), reference, added);
-  impl->RecordChildListMutation(parent, added, {});
-  impl->MarkDomDirty(parent);
-  return impl->WrapNode(child);
+  return InsertNodeChecked(ctx, impl, parent, child, reference, "insertBefore");
 }
 
 JSValue NodeRemoveChild(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
@@ -858,10 +960,14 @@ JSValue NodeNormalize(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSVal
 
 void DefineNodePrototype(JSContext* ctx, Impl& impl)
 {
-  static const std::array<JSCFunctionListEntry, 13> kMethods = {{
+  static const std::array<JSCFunctionListEntry, 17> kMethods = {{
       JS_CFUNC_DEF("appendChild", 1, NodeAppendChild),
       JS_CFUNC_DEF("append", 0, NodeAppend),
+      JS_CFUNC_DEF("prepend", 0, NodePrepend),
       JS_CFUNC_DEF("replaceChildren", 0, NodeReplaceChildren),
+      JS_CFUNC_DEF("before", 0, NodeBefore),
+      JS_CFUNC_DEF("after", 0, NodeAfter),
+      JS_CFUNC_DEF("replaceWith", 0, NodeReplaceWith),
       JS_CFUNC_DEF("insertBefore", 2, NodeInsertBefore),
       JS_CFUNC_DEF("replaceChild", 2, NodeReplaceChild),
       JS_CFUNC_DEF("removeChild", 1, NodeRemoveChild),

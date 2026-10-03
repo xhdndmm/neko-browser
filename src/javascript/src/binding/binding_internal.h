@@ -326,6 +326,19 @@ NodeRemoveEventListener(JSContext* ctx, JSValueConst this_val, int argc, JSValue
 JSValue NodeDispatchEvent(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 dom::Node* SiblingOf(dom::Node* node, int offset);
 
+// Shared insertion core (node_binding.cpp) for appendChild/insertBefore and the
+// modern insertion methods (prepend/before/after/replaceWith) plus
+// Element.insertAdjacentElement: validates the insertion, adopts |child|
+// (removing it from its previous parent), inserts it before |reference|
+// (nullptr appends) and marks the DOM dirty.  Returns the wrapped |child|, or an
+// exception value when the insertion is invalid.
+JSValue InsertNodeChecked(JSContext* ctx,
+                          Impl* impl,
+                          dom::Node* parent,
+                          dom::Node* child,
+                          dom::Node* reference,
+                          const char* operation);
+
 // event_binding.cpp — maps an event type to its global handler property name
 // ("click" -> "onclick"); used by Impl::FireEventHandler (impl.cpp).
 const char* OnHandlerForType(std::string_view type);

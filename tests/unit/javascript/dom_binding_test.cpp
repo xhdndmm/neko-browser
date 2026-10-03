@@ -3075,6 +3075,132 @@ TEST_F(DomBinderTest, InsertAdjacentHTML)
   EXPECT_EQ(EvalString("document.getElementById('p1').nextSibling.id"), "i1");
 }
 
+// ParentNode.prepend / ChildNode.before/after/replaceWith.  These were missing
+// entirely, which broke real pages: example.com's own script calls
+// document.body.prepend(...) and threw "TypeError: not a function" (found with
+// the GUI screenshot tool's console output while measuring load performance).
+TEST_F(DomBinderTest, PrependInsertsAtTheFrontInArgumentOrder)
+{
+  EvalString("var d=document,m=d.getElementById('main');"
+             "var a=d.createElement('a');a.id='a1';"
+             "var b=d.createElement('b');b.id='b1';"
+             "m.prepend(a,b);");
+  // Element children (the fixture has whitespace text nodes, so firstChild is
+  // not necessarily an element).
+  EXPECT_EQ(EvalString("document.getElementById('main').children[0].id"), "a1");
+  EXPECT_EQ(EvalString("document.getElementById('main').children[1].id"), "b1");
+  // The previously first child follows the inserted nodes.
+  EXPECT_EQ(EvalString("document.getElementById('main').children[2].id"), "first");
+
+  // A node already in the tree moves instead of being cloned.
+  EXPECT_EQ(EvalString("(function(){var d=document,m=d.getElementById('main');"
+                       "m.prepend(d.getElementById('b1'));"
+                       "return d.getElementById('b1').parentNode.id;})()"),
+            "main");
+  EXPECT_EQ(EvalString("document.getElementById('main').children[0].id"), "b1");
+}
+
+TEST_F(DomBinderTest, BeforeAfterAndReplaceWithInsertAroundTheNode)
+{
+  EvalString("var d=document,m=d.getElementById('main');"
+             "var p=d.createElement('p');p.id='target';m.appendChild(p);"
+             "var i=d.createElement('i');i.id='i1';p.before(i);"
+             "var u=d.createElement('u');u.id='u1';p.after(u);");
+  // i1, target, u1 in document order.
+  EXPECT_EQ(EvalString("document.getElementById('i1').nextSibling.id"), "target");
+  EXPECT_EQ(EvalString("document.getElementById('target').nextSibling.id"), "u1");
+
+  // replaceWith swaps the node out, keeping the neighbours in order.
+  EvalString("var d=document,s=d.createElement('s');s.id='s1';"
+             "document.getElementById('target').replaceWith(s);");
+  EXPECT_EQ(EvalString("document.getElementById('target')===null?'gone':'present'"), "gone");
+  EXPECT_EQ(EvalString("document.getElementById('i1').nextSibling.id"), "s1");
+  EXPECT_EQ(EvalString("document.getElementById('s1').nextSibling.id"), "u1");
+}
+
+TEST_F(DomBinderTest, ModernInsertionRejectsCycles)
+{
+  // An ancestor must never be inserted into its own descendant.  appendChild
+  // already rejected this; insertBefore did not, and a cyclic tree does not
+  // survive later traversals.
+  const std::string setup = "var d=document;var outer=d.createElement('div');"
+                            "var inner=d.createElement('span');outer.appendChild(inner);";
+  EXPECT_TRUE(EvalBool("(function(){" + setup +
+                       "try{inner.insertBefore(outer,null);}catch(e){"
+                       "return e.name==='HierarchyRequestError';}return false;})()"));
+  EXPECT_TRUE(EvalBool("(function(){" + setup +
+                       "try{inner.replaceWith(outer);return false;}catch(e){"
+                       "return e.name==='HierarchyRequestError';}})()"));
+  EXPECT_TRUE(EvalBool("(function(){" + setup +
+                       "try{outer.prepend(outer);return false;}catch(e){"
+                       "return e.name==='HierarchyRequestError';}})()"));
+}
+
+TEST_F(DomBinderTest, InsertAdjacentElementAndText)
+{
+  EvalString("var d=document,m=d.getElementById('main');"
+             "var x=d.createElement('em');x.id='x';"
+             "var returned=m.insertAdjacentElement('beforeend',x);");
+  EXPECT_EQ(EvalString("document.getElementById('x').parentNode.id"), "main");
+  EXPECT_EQ(EvalString("document.getElementById('main').insertAdjacentElement('beforeend',"
+                       "document.createElement('em')).tagName"),
+            "EM");
+  // Returns the inserted element itself.
+  EXPECT_TRUE(EvalBool("(function(){var d=document,m=d.getElementById('main');"
+                       "var y=d.createElement('em');y.id='y';"
+                       "return m.insertAdjacentElement('afterbegin',y)===y;})()"));
+  EXPECT_EQ(EvalString("document.getElementById('main').children[0].id"), "y");
+
+  EvalString("document.getElementById('main').insertAdjacentText('beforeend','tail');");
+  EXPECT_EQ(EvalString("document.getElementById('main').lastChild.nodeValue"), "tail");
+
+  // A detached element has no sibling position: insertAdjacentElement returns
+  // null and insertAdjacentText is a no-op.
+  EXPECT_EQ(EvalString("(function(){var d=document;var lone=d.createElement('div');"
+                       "var r=lone.insertAdjacentElement('beforebegin',d.createElement('b'));"
+                       "return r===null?'null':'other';})()"),
+            "null");
+  EXPECT_EQ(EvalString("(function(){var d=document;var lone=d.createElement('div');"
+                       "lone.insertAdjacentText('beforebegin','t');"
+                       "return lone.childNodes.length;})()"),
+            "0");
+  // An unknown position is a SyntaxError, not a silent no-op.
+  EXPECT_TRUE(EvalBool("(function(){var d=document;try{"
+                       "d.getElementById('main').insertAdjacentText('sideways','t');"
+                       "return false;}catch(e){return e.name==='SyntaxError';}})()"));
+}
+
+// insertAdjacentHTML must keep the fragment's document order.  The previous
+// implementation walked the parsed nodes backwards, which reversed a
+// multi-node fragment (the existing test only ever inserted one node).
+TEST_F(DomBinderTest, InsertAdjacentHTMLKeepsFragmentOrder)
+{
+  EvalString("document.getElementById('main').insertAdjacentHTML('beforeend',"
+             "'<i id=\"o1\"></i><i id=\"o2\"></i><i id=\"o3\"></i>');");
+  EXPECT_EQ(EvalString("document.getElementById('o1').nextSibling.id"), "o2");
+  EXPECT_EQ(EvalString("document.getElementById('o2').nextSibling.id"), "o3");
+  EXPECT_EQ(EvalString("document.getElementById('main').lastChild.id"), "o3");
+
+  // Same for the inner-first position.
+  EvalString("document.getElementById('main').insertAdjacentHTML('afterbegin',"
+             "'<i id=\"f1\"></i><i id=\"f2\"></i>');");
+  EXPECT_EQ(EvalString("document.getElementById('main').firstChild.id"), "f1");
+  EXPECT_EQ(EvalString("document.getElementById('f1').nextSibling.id"), "f2");
+}
+
+// The exact chain example.com's s.js runs.
+TEST_F(DomBinderTest, ExampleComScriptChainRuns)
+{
+  EvalString("var d=document;B=d.body;"
+             "B.insertAdjacentHTML('beforeend','<p>a</p><p>b</p>');"
+             "P=[...B.querySelectorAll('p')];P[0].lang='en';B.prepend(P[0]);");
+  EXPECT_EQ(EvalString("document.body.firstChild.tagName"), "P");
+  EXPECT_EQ(EvalString("document.body.firstChild.lang"), "en");
+  // The fixture body already holds two paragraphs (one inside #main), so the
+  // script's two are added on top.
+  EXPECT_EQ(EvalString("document.querySelectorAll('p').length"), "4");
+}
+
 // ---------------------------------------------------------------------------
 // window.indexedDB — binding tests over the real storage core
 // ---------------------------------------------------------------------------
