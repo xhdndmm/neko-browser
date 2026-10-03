@@ -25,6 +25,11 @@ PerfReport SampleReport()
   report.phases.stylesheets1 = 975;
   report.phases.fonts1 = 899;
   report.phases.scripts = 6442;
+  report.phases.scripts_fetch = 215;
+  report.phases.scripts_exec = 130;
+  report.phases.scripts_modules = 5057;
+  report.phases.scripts_events = 0;
+  report.phases.scripts_restyle = 500;
   report.phases.stylesheets2 = 617;
   report.phases.fonts2 = 0;
   report.phases.images = 559;
@@ -51,7 +56,9 @@ TEST(PerfReportTest, FormatsFixedKeyOrderOnOneLine)
             "{\"wall_ms\":1234,\"requests\":181,\"connections_opened\":49,"
             "\"connections_reused\":132,\"connections_discarded\":27,\"bytes\":19233480,"
             "\"phases\":{\"document\":202,\"stylesheets1\":975,\"fonts1\":899,"
-            "\"scripts\":6442,\"stylesheets2\":617,\"fonts2\":0,\"images\":559,"
+            "\"scripts\":6442,\"scripts_fetch\":215,\"scripts_exec\":130,"
+            "\"scripts_modules\":5057,\"scripts_events\":0,\"scripts_restyle\":500,"
+            "\"stylesheets2\":617,\"fonts2\":0,\"images\":559,"
             "\"videos\":0,\"pump\":5607,\"late_images\":293,\"post_load\":5900},"
             "\"pump_turns\":16,\"pump_over_50ms\":1,\"pump_total_ms\":4726,"
             "\"pump_p50\":0,\"pump_p95\":4726,\"pump_max\":4726,"

@@ -133,7 +133,8 @@ std::shared_ptr<javascript::DomBinder> RunScripts(renderer::Page& page,
                                                   const std::string& html,
                                                   ScriptFetcherRecorder& recorder,
                                                   base::ThreadPool& pool,
-                                                  javascript::ScriptEngine::ConsoleSink sink = {})
+                                                  javascript::ScriptEngine::ConsoleSink sink = {},
+                                                  ScriptTimings* timings = nullptr)
 {
   if (!page.LoadHtml(html).has_value()) {
     return nullptr;
@@ -145,7 +146,8 @@ std::shared_ptr<javascript::DomBinder> RunScripts(renderer::Page& page,
       std::move(sink),
       pool,
       {},
-      nullptr);
+      nullptr,
+      timings);
 }
 
 TEST(PageScriptsTest, FetchesExternalScriptsInParallelAndExecutesInDocumentOrder)
@@ -237,6 +239,45 @@ TEST(PageScriptsTest, PumpTrackerRecordsEveryTurn)
   EXPECT_EQ(turns.count, static_cast<std::size_t>(iterations) + 1);
   EXPECT_EQ(turns.samples_ms.size(), turns.count);
   EXPECT_GE(turns.longest_ms, 0);
+}
+
+// The scripts phase is split into segments because they need different fixes:
+// evaluation (QuickJS), module loading, lifecycle handlers, and the cascade the
+// engine re-runs afterwards.  Times cannot be gated (TESTING.md), so the counts
+// are what a test asserts.
+TEST(PageScriptsTest, RecordsScriptPhaseSegments)
+{
+  renderer::Page page;
+  ScriptFetcherRecorder recorder(1);
+  base::ThreadPool pool(4);
+  ScriptTimings timings;
+  const std::string html = "<!DOCTYPE html><html><head><title></title>"
+                           "<script src=\"/a.js\"></script>"
+                           "<script>document.title += '!';</script>"
+                           "</head><body></body></html>";
+  const std::shared_ptr<javascript::DomBinder> binder =
+      RunScripts(page, html, recorder, pool, {}, &timings);
+  ASSERT_NE(binder, nullptr);
+
+  EXPECT_EQ(timings.fetches, 1u);     // the external body was waited for
+  EXPECT_EQ(timings.evaluations, 2u); // external + inline
+  EXPECT_EQ(timings.events, 1u);      // one DOMContentLoaded/load dispatch pair
+  EXPECT_EQ(timings.restyles, 1u);    // the cascade after scripts
+  EXPECT_GE(timings.fetch_ms, 0);
+  EXPECT_GE(timings.exec_ms, 0);
+  EXPECT_GE(timings.restyle_ms, 0);
+}
+
+// Without an out-param nothing is measured and behaviour is unchanged.
+TEST(PageScriptsTest, RecordsNothingWhenTimingsAreNotRequested)
+{
+  renderer::Page page;
+  ScriptFetcherRecorder recorder(0);
+  base::ThreadPool pool(4);
+  const std::shared_ptr<javascript::DomBinder> binder =
+      RunScripts(page, ThreeScriptPage(), recorder, pool);
+  ASSERT_NE(binder, nullptr);
+  EXPECT_EQ(page.document()->Title(), "ABC");
 }
 
 TEST(PageScriptsTest, InlineScriptsNeedNoFetch)

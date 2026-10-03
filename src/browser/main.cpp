@@ -242,6 +242,8 @@ neko::base::Result<void> LoadTarget(
       // end of this branch; a script-triggered navigation returns through the
       // recursive call below, which is the load that actually happened.
       neko::browser::LoadPhases phases;
+      // Script phase breakdown: blocked on the network vs running script.
+      neko::browser::ScriptTimings script_timings;
       auto phase_start = std::chrono::steady_clock::now();
       const auto phase = [&phase_start, &phases](long long* slot) {
         const auto now = std::chrono::steady_clock::now();
@@ -295,7 +297,8 @@ neko::base::Result<void> LoadTarget(
             },
             pool,
             services,
-            &requested);
+            &requested,
+            &script_timings);
       } else {
         neko::browser::RunPageScripts(
             page,
@@ -306,9 +309,15 @@ neko::base::Result<void> LoadTarget(
             },
             pool,
             services,
-            &requested);
+            &requested,
+            &script_timings);
       }
       phase(&phases.scripts);
+      phases.scripts_fetch = script_timings.fetch_ms;
+      phases.scripts_exec = script_timings.exec_ms;
+      phases.scripts_modules = script_timings.module_ms;
+      phases.scripts_events = script_timings.events_ms;
+      phases.scripts_restyle = script_timings.restyle_ms;
       // A script may have redirected the page (e.g. location.replace()).
       if (!requested.url.empty()) {
         NEKO_LOG_INFO("script navigated to " + requested.url);

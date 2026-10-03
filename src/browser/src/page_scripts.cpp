@@ -202,7 +202,8 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
                                                       javascript::ScriptEngine::ConsoleSink sink,
                                                       base::ThreadPool& pool,
                                                       const PageScriptServices& services,
-                                                      ScriptRequestedNavigation* out_navigation)
+                                                      ScriptRequestedNavigation* out_navigation,
+                                                      ScriptTimings* timings)
 {
   dom::Document* document = page.document();
   if (document == nullptr) {
@@ -702,7 +703,14 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
                 scripts.end());
   auto run_source = [&](dom::Element* script, std::string_view source, std::string_view filename) {
     binder->SetCurrentScript(script);
+    const auto exec_start = std::chrono::steady_clock::now();
     const auto result = binder->Evaluate(source, filename);
+    if (timings != nullptr) {
+      ++timings->evaluations;
+      timings->exec_ms += std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now() - exec_start)
+                              .count();
+    }
     binder->SetCurrentScript(nullptr);
     if (!result.has_value()) {
       const std::string message = result.error().message();
@@ -809,8 +817,15 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
       const auto prefetched_entry = prefetched.find(absolute);
       const bool prefetched_ready =
           prefetched_entry != prefetched.end() && prefetched_entry->second.valid();
+      const auto fetch_start = std::chrono::steady_clock::now();
       const base::Result<network::HttpResponse> response =
           prefetched_ready ? prefetched_entry->second.get() : fetch(target.value());
+      if (timings != nullptr) {
+        ++timings->fetches;
+        timings->fetch_ms += std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - fetch_start)
+                                 .count();
+      }
       if (!response) {
         const std::string message =
             "script: fetch failed for " + absolute + ": " + response.error().message();
@@ -848,7 +863,14 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
   // recompile, not the spec's single evaluation).
   std::set<std::string> loaded_module_urls;
   auto run_module_source = [&](std::string_view source, const std::string& url) {
+    const auto module_start = std::chrono::steady_clock::now();
     const auto result = binder->EvaluateModule(source, url);
+    if (timings != nullptr) {
+      ++timings->modules;
+      timings->module_ms += std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - module_start)
+                                .count();
+    }
     if (!result.has_value()) {
       report_error("Uncaught [" + url + "] " + result.error().message());
     }
@@ -866,7 +888,13 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
       if (!loaded_module_urls.insert(module_url).second) {
         return; // same-URL entry already evaluated
       }
+      const auto module_fetch_start = std::chrono::steady_clock::now();
       const auto response = fetch(target.value());
+      if (timings != nullptr) {
+        timings->module_ms += std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::steady_clock::now() - module_fetch_start)
+                                  .count();
+      }
       if (!response.has_value()) {
         report_error("module script: fetch failed for " + module_url + ": " +
                      response.error().message());
@@ -933,12 +961,33 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
   // (window-level listeners were registered on the document, so they run
   // too).  Approximation: real browsers fire load only after all subresources
   // finish, which this synchronous model has no signal for.
-  binder->DispatchDocumentEvent("DOMContentLoaded");
-  binder->DispatchDocumentEvent("load");
+  {
+    // Page handlers run here too, and a framework's hydration is typically
+    // attached to one of these two events -- it is script work, not layout.
+    const auto events_start = std::chrono::steady_clock::now();
+    binder->DispatchDocumentEvent("DOMContentLoaded");
+    binder->DispatchDocumentEvent("load");
+    if (timings != nullptr) {
+      ++timings->events;
+      timings->events_ms += std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - events_start)
+                                .count();
+    }
+  }
 
   // Scripts may have mutated the DOM; re-run the cascade so layout reflects
-  // the new state.
-  page.ReapplyStyles();
+  // the new state.  On a large document this is not cheap, and it is part of the
+  // script phase's wall time.
+  {
+    const auto restyle_start = std::chrono::steady_clock::now();
+    page.ReapplyStyles();
+    if (timings != nullptr) {
+      ++timings->restyles;
+      timings->restyle_ms += std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - restyle_start)
+                                 .count();
+    }
+  }
   return binder;
 }
 

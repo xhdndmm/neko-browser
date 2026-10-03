@@ -100,6 +100,16 @@ std::string FormatPerfReportLine(const PerfReport& report)
   out += std::to_string(report.phases.fonts1);
   out += ",\"scripts\":";
   out += std::to_string(report.phases.scripts);
+  out += ",\"scripts_fetch\":";
+  out += std::to_string(report.phases.scripts_fetch);
+  out += ",\"scripts_exec\":";
+  out += std::to_string(report.phases.scripts_exec);
+  out += ",\"scripts_modules\":";
+  out += std::to_string(report.phases.scripts_modules);
+  out += ",\"scripts_events\":";
+  out += std::to_string(report.phases.scripts_events);
+  out += ",\"scripts_restyle\":";
+  out += std::to_string(report.phases.scripts_restyle);
   out += ",\"stylesheets2\":";
   out += std::to_string(report.phases.stylesheets2);
   out += ",\"fonts2\":";

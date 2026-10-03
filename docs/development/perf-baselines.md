@@ -20,7 +20,9 @@ cmake --preset release && cmake --build --preset release --parallel
 ```json
 {"wall_ms":13961,"requests":181,"connections_opened":49,"connections_reused":132,
  "connections_discarded":27,"bytes":19233480,
- "phases":{"document":202,"stylesheets1":975,"fonts1":899,"scripts":6442,
+ "phases":{"document":202,"stylesheets1":975,"fonts1":899,
+           "scripts":6442,"scripts_fetch":215,"scripts_exec":130,
+           "scripts_modules":5057,"scripts_events":0,"scripts_restyle":500,
            "stylesheets2":617,"fonts2":0,"images":559,"videos":0,
            "pump":5607,"late_images":293,"post_load":5900},
  "pump_turns":16,"pump_over_50ms":2,"pump_total_ms":4800,
@@ -29,6 +31,12 @@ cmake --preset release && cmake --build --preset release --parallel
  "frame_production_p50":0,"frame_production_p95":0,"frame_production_max":0,
  "frame_interval_p50":0,"frame_interval_p95":0,"frame_interval_max":0}
 ```
+
+**`scripts_*` 把脚本阶段拆开**（此前只有一个 `scripts`，无法判断该优化什么）：
+`scripts_fetch`＝阻塞等经典脚本体；`scripts_exec`＝`Evaluate`（解析+编译+执行）；
+`scripts_modules`＝模块脚本（`EvaluateModule` 及其 import 抓取）；`scripts_events`＝
+`DOMContentLoaded`/`load` 处理器；`scripts_restyle`＝脚本后引擎重跑的全量样式级联。
+五段之和 ≈ `scripts`（实测未归属仅 8–11 ms，说明拆分闭合）。
 
 **`pump_*` 是流畅性的主指标**：一次「泵动作」= `DomBinder::RunPendingTimers()` 的一次调用，
 也就是到期定时器 + 排队中的 XHR 完成回调真正执行 JS 的那一轮——用户感知到的"长任务"
@@ -101,7 +109,14 @@ QT_QPA_PLATFORM=offscreen ./build/debug/bin/neko_gui_screenshot \
    XHR（32 次 × 中位 24–102 ms），而 P0 完全没碰它。注意它与墙钟的波动同源：
    两次运行的 `scripts` 是 2.6 s 与 10.0 s，说明慢的那部分在 JS 抓取/执行，
    而不是传输。
-4. 差异说明：`Σ(XHR 耗时) = 3.6 s` 却占 **7.8 s 跨度** → 剩余时间**不在传输**
+4. **脚本阶段的瓶颈是 QuickJS 求值模块，不是网络**（2026-10 拆分后实测，debug）：
+   `scripts ≈ 5.9–6.7 s`，其中 `scripts_modules = 5.06–6.04 s`（约 85%）、
+   `scripts_restyle = 0.48–0.50 s`、`scripts_fetch = 0.09–0.22 s`、
+   `scripts_exec = 0.13 s`、`scripts_events = 0`。也就是说页面那 1.6 MB 的 ES module
+   在解释器里求值 5–6 秒，经典脚本与网络几乎无关。可行的优化方向是**字节码缓存**
+   （首访后 `JS_WriteObject` 落盘、后续 `JS_ReadObject` 跳过解析+编译）与降低绑定开销，
+   而不是继续优化传输。
+5. 差异说明：`Σ(XHR 耗时) = 3.6 s` 却占 **7.8 s 跨度** → 剩余时间**不在传输**
    （JS 计算，或页面自己在等依赖）。这正需要 fixture A/B 与 send() 站点插桩来判定。
 
 ## 纪律（Council 收敛项）

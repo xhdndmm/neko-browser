@@ -54,6 +54,27 @@ struct PageScriptServices
   std::function<void(int, float)> set_scroll_request;
 };
 
+// Where the script phase spent its time.  The two costs are very different --
+// blocked on the network versus running script -- and after the parallel
+// prefetch landed they interleave (script 1 runs while scripts 2..N download),
+// so a single "scripts" number cannot say which one to work on.  Module scripts
+// fetch their imports through the runtime, so their I/O is counted in neither.
+struct ScriptTimings
+{
+  long long fetch_ms = 0;   // blocked waiting for an external classic script body
+  long long exec_ms = 0;    // classic script: binder->Evaluate (parse+compile+run)
+  long long module_ms = 0;  // module scripts: their fetches plus evaluation
+  long long events_ms = 0;  // DOMContentLoaded / load handler dispatch
+  long long restyle_ms = 0; // the cascade re-run after scripts mutated the DOM
+  // Counts: deterministic, unlike the times, so a test can assert that each
+  // segment was actually measured (and a future CI gate can count, not time).
+  std::size_t fetches = 0;
+  std::size_t evaluations = 0;
+  std::size_t modules = 0;
+  std::size_t events = 0;
+  std::size_t restyles = 0;
+};
+
 // A navigation requested by a page script through window.location (href
 // assignment, assign(), replace(), or reload()).  After RunPageScripts
 // returns, the caller should act on this instead of publishing the current
@@ -108,7 +129,8 @@ RunPageScripts(renderer::Page& page,
                javascript::ScriptEngine::ConsoleSink sink,
                base::ThreadPool& pool,
                const PageScriptServices& services = {},
-               ScriptRequestedNavigation* out_navigation = nullptr);
+               ScriptRequestedNavigation* out_navigation = nullptr,
+               ScriptTimings* timings = nullptr);
 
 // Drives |binder|'s event loop until it goes quiet, so deferred work actually
 // runs before the page is observed.  Returns the number of pump iterations.
