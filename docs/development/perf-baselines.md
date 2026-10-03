@@ -32,22 +32,29 @@ python3 tools/perf_report.py --unit s /tmp/perf.jsonl
 原始行（供脚本消费）：
 
 ```json
-{"wall_ms":17993,"requests":181,"connections_opened":50,"connections_reused":131,
- "connections_discarded":27,"bytes":18781086,
- "phases":{"document":1108,"stylesheets1":601,"fonts1":1112,
-           "scripts":8518,"scripts_fetch":985,"scripts_exec":51,
-           "scripts_modules":7346,"scripts_events":0,"scripts_restyle":129,
-           "stylesheets2":390,"fonts2":0,"images":1036,"videos":0,
-           "pump":4459,"late_images":720,"post_load":5179},
- "pump_turns":16,"pump_over_50ms":1,"pump_total_ms":4016,
- "pump_p50":0,"pump_p95":3992,"pump_max":3992,
- "pump_breakdown":{"timers_ms":69,"timers":103,"jobs_ms":11,"job_rounds":103,
-                   "xhr_ms":0,"xhr":9,"raf_ms":3929,"raf":38,
+{"wall_ms":6832,"requests":181,"connections_opened":54,"connections_reused":127,
+ "connections_discarded":27,"bytes":17581445,
+ "phases":{"document":383,"stylesheets1":202,"fonts1":621,
+           "scripts":3375,"scripts_fetch":95,"scripts_exec":49,
+           "scripts_modules":3102,"scripts_modules_fetch":1831,"scripts_modules_eval":1271,
+           "scripts_events":0,"scripts_restyle":127,
+           "stylesheets2":134,"fonts2":0,"images":608,"videos":0,
+           "pump":1244,"late_images":222,"post_load":1467},
+ "pump_turns":6,"pump_over_50ms":1,"pump_total_ms":1059,
+ "pump_p50":0,"pump_p95":1036,"pump_max":1036,
+ "pump_breakdown":{"timers_ms":63,"timers":89,"jobs_ms":3,"job_rounds":89,
+                   "xhr_ms":0,"xhr":7,"raf_ms":987,"raf":38,
                    "ports_ms":0,"ports":0,"websockets_ms":0,"websockets":0},
  "frames":0,"frame_over_50ms":0,"frame_production_p50":0,"frame_production_p95":0,
  "frame_production_max":0,"frame_interval_p50":0,"frame_interval_p95":0,
  "frame_interval_max":0}
 ```
+
+> 上面是**一次真实运行**（release，bilibili）的完整一行，字段互相对得上：
+> 脚本五段之和 3373 ms 对 `scripts = 3375 ms`（残差 2 ms），
+> `post_load = pump + late_images`（1244 + 222 = 1467）。
+> **不要把不同运行的字段拼在一起**：这段曾经就是把拆分后的键粘进拆分前的 `scripts`
+> 基线，凭空造出 540 ms 的"缺口"。
 
 > 上面是**一次真实运行**（release，bilibili）的完整一行，所有字段互相对得上：
 > 脚本五段之和 8511 ms 对 `scripts = 8518 ms`（残差 7 ms），
@@ -58,6 +65,11 @@ python3 tools/perf_report.py --unit s /tmp/perf.jsonl
 `scripts_fetch`＝阻塞等经典脚本体；`scripts_exec`＝`Evaluate`（解析+编译+执行）；
 `scripts_modules`＝模块脚本（`EvaluateModule` 及其 import 抓取）；`scripts_events`＝
 `DOMContentLoaded`/`load` 处理器；`scripts_restyle`＝脚本后引擎重跑的全量样式级联。
+`scripts_modules` 现在拆成 `scripts_modules_fetch`（等模块源码：入口 + 每个 import，模块加载器在
+JS 线程上**同步**取）与 `scripts_modules_eval`（其余：编译 + 执行）。这一刀是被数据逼出来的：
+混合口径曾让结论摇摆——纯 QuickJS 解析+编译同一个 1.57 MB bundle 只要 **235 ms**（`qjsc`），
+而 gdb 采样加载过程 4 次有 3 次落在 `TlsSocket::ReadSome` 上；拆开后两者各占一半（见结论 5）。
+
 五段在 `RunPageScripts` 内部计时，而 `scripts` 是在它外层测的，所以两者之差就是**残差**：
 DOM 里收集 `<script>`、import-map 解析、并行预取的提交与去重集合、以及三个执行 pass 的
 循环开销（模块 body 本身在 `fetch()` 内产出、在模块计时器**之内**，不是残差）。计时内部按**纳秒累加、出口一次
@@ -193,16 +205,18 @@ MainWindow 就没有隐藏的 50 ms 定时器与本 harness 抢节拍——所�
    XHR（32 次 × 中位 24–102 ms），而 P0 完全没碰它。注意它与墙钟的波动同源：
    两次运行的 `scripts` 是 2.6 s 与 10.0 s，说明慢的那部分在 JS 抓取/执行，
    而不是传输。
-5. **脚本阶段的绝大部分在 `scripts_modules`**（拆分后实测；release 例：
-   `scripts = 8518 ms`，其中 modules 7346、fetch 985、restyle 129、exec 51、events 0）——
-   即瓶颈是那个约 1.6 MB 的 bundle，而不是经典脚本体或传输。
-   **但必须说清该字段的口径**：`scripts_modules` 是**混合量**——模块入口抓取 +
-   `EvaluateModule`（其中还会抓取该模块的 import），它**不区分网络与 CPU**。
-   本页的 bundle 没有 import，因此这里几乎全是求值；但对 import 密集的页面，该字段会被
-   I/O 抬高，**不能**用它单独支撑"贵在求值不在网络"的结论。真要断言，需要把
-   `module_fetch`/`module_eval` 拆开——留到字节码缓存那一步一起做。
-   候选优化仍是**字节码缓存**（首访后 `JS_WriteObject` 落盘、后续 `JS_ReadObject`
-   跳过解析+编译）与降低绑定开销。
+5. **脚本阶段拆到底：模块段 = 等模块源码 + 编译执行，各占一半**（release，两次运行）：
+   `scripts` 2.1–4.7 s → `scripts_modules` 1.8–4.3 s，其中
+   `scripts_modules_fetch` **0.94–1.83 s**（入口 + import，同步等网络）、
+   `scripts_modules_eval` **0.83–2.79 s**（编译 + 执行）；经典脚本 `fetch` 0.19–0.22 s、
+   `exec` 0.05 s、`restyle` 0.12 s。
+   两个被先后说错的版本因此都要更正：**不是**"瓶颈全在 QuickJS 求值"（纯编译只要 235 ms），
+   也**不是**"全在等网络"（采样恰好落在抓取窗口）。真实情况是**两者各半**，所以下一步有两个
+   独立靶点：
+   - **同步模块抓取（0.9–1.8 s）**：模块的 import 在 JS 线程上串行下载。经典脚本在 P0 已有
+     **并行预取**，模块没有——把同一套预取/并行化用在模块加载器上，就是这条的修法。
+   - **解释执行（0.8–2.8 s）**：这是 QuickJS 解释器的固有速度（非 JIT）。字节码缓存只省掉其中
+     的编译部分（本 bundle 235 ms），因此它是**小项**，不是主菜。
 6. 差异说明：`Σ(XHR 耗时) = 3.6 s` 却占 **7.8 s 跨度** → 剩余时间**不在传输**
    （JS 计算，或页面自己在等依赖）。这正需要 fixture A/B 与 send() 站点插桩来判定。
 

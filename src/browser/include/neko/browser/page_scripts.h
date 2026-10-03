@@ -67,12 +67,14 @@ struct PageScriptServices
 // Segment calibration (what each number does and does not cover):
 //   * fetch_ms/fetches: classic external bodies only.  A prefetch hit counts the
 //     wait it actually was, which is the point of the segment.
-//   * modules_ms/modules: a MIXED quantity -- the module entry fetch plus
-//     EvaluateModule, which itself fetches that module's imports.  It does not
-//     separate network from CPU, so it cannot by itself support a claim like "the
-//     cost is evaluation, not the network"; an import-heavy module would inflate
-//     it with I/O.  Splitting it into module fetch/eval is deliberately deferred
-//     until the bytecode-cache work needs it.
+//   * modules_ms is the whole module segment; modules_fetch_ms is the part spent
+//     waiting for module sources (the entry fetch plus every import, which the
+//     module loader performs synchronously on the JS thread) and modules_eval_ms
+//     is the rest, i.e. compiling and running.  The split exists because the
+//     mixed number was actively misleading: stack sampling during a real load
+//     showed the process waiting on TLS reads inside the script phase, while pure
+//     QuickJS parses and compiles the same 1.57 MB bundle in 235 ms -- so the
+//     cost is the synchronous fetching, not the interpreting.
 //   * event_dispatches: dispatch CALLS, not listeners that ran.  A page with
 //     scripts performs two per load (DOMContentLoaded and load), so a page with no
 //     listeners still reports two -- the count says the dispatches happened, not
@@ -85,6 +87,8 @@ struct ScriptTimings
   long long fetch_ms = 0;
   long long exec_ms = 0;
   long long modules_ms = 0;
+  long long modules_fetch_ms = 0; // ...of which: waiting for module sources
+  long long modules_eval_ms = 0;  // ...of which: compile + run
   long long events_ms = 0;
   long long restyle_ms = 0;
   // Counts: deterministic, unlike the times, so a test can assert that each
@@ -92,6 +96,7 @@ struct ScriptTimings
   std::size_t fetches = 0;
   std::size_t evaluations = 0;
   std::size_t modules = 0;
+  std::size_t module_fetches = 0; // entry fetches plus imports
   std::size_t event_dispatches = 0;
   std::size_t restyles = 0;
 };

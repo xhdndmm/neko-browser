@@ -297,8 +297,39 @@ TEST(PageScriptsTest, ModuleScriptsAreNotCountedAsClassicScripts)
   EXPECT_EQ(timings.modules, 1u);
   EXPECT_EQ(timings.evaluations, 0u);      // not a classic script
   EXPECT_EQ(timings.fetches, 0u);          // the entry fetch belongs to the module segment
+  EXPECT_EQ(timings.module_fetches, 1u);   // ...and is counted as a module fetch
   EXPECT_EQ(timings.event_dispatches, 2u); // still two lifecycle dispatches
   EXPECT_EQ(page.document()->Title(), "module");
+  // The module segment is published as fetch + eval and must add up: the split is
+  // what separates "waiting for sources" from "compiling and running them".
+  EXPECT_EQ(timings.modules_ms, timings.modules_fetch_ms + timings.modules_eval_ms);
+}
+
+// A module's static import is fetched by the module loader *inside* evaluation, so
+// it lands in the same segment: it must raise the fetch count without inflating
+// the module count (which counts <script type="module"> entries).
+TEST(PageScriptsTest, ModuleImportsCountAsModuleFetches)
+{
+  renderer::Page page;
+  ScriptFetcherRecorder recorder(2); // /m.js plus its import
+  base::ThreadPool pool(4);
+  ScriptTimings timings;
+  recorder.SetReply("/m.js",
+                    ScriptFetcherRecorder::Reply{true,
+                                                 "import './dep.js';"
+                                                 "document.title += 'M';"});
+  recorder.SetReply("/dep.js", ScriptFetcherRecorder::Reply{true, "document.title += 'D';"});
+  const std::string html = "<!DOCTYPE html><html><head><title></title>"
+                           "<script type=\"module\" src=\"/m.js\"></script>"
+                           "</head><body></body></html>";
+  const std::shared_ptr<javascript::DomBinder> binder =
+      RunScripts(page, html, recorder, pool, {}, &timings);
+  ASSERT_NE(binder, nullptr);
+
+  EXPECT_EQ(timings.modules, 1u);        // one <script type=module> entry
+  EXPECT_EQ(timings.module_fetches, 2u); // the entry plus the imported module
+  EXPECT_EQ(timings.modules_ms, timings.modules_fetch_ms + timings.modules_eval_ms);
+  EXPECT_EQ(page.document()->Title(), "DM"); // the import ran before the importer
 }
 
 // Pins the ScriptTimings -> LoadPhases mapping: five assignments of the same
@@ -309,6 +340,8 @@ TEST(PageScriptsTest, ScriptTimingsMapToDistinctPhases)
   timings.fetch_ms = 11;
   timings.exec_ms = 22;
   timings.modules_ms = 33;
+  timings.modules_fetch_ms = 34;
+  timings.modules_eval_ms = 35;
   timings.events_ms = 44;
   timings.restyle_ms = 55;
 
@@ -317,6 +350,8 @@ TEST(PageScriptsTest, ScriptTimingsMapToDistinctPhases)
   EXPECT_EQ(phases.scripts_fetch, 11);
   EXPECT_EQ(phases.scripts_exec, 22);
   EXPECT_EQ(phases.scripts_modules, 33);
+  EXPECT_EQ(phases.scripts_modules_fetch, 34);
+  EXPECT_EQ(phases.scripts_modules_eval, 35);
   EXPECT_EQ(phases.scripts_events, 44);
   EXPECT_EQ(phases.scripts_restyle, 55);
   // The total is measured around RunPageScripts, not derived here.

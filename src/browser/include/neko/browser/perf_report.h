@@ -10,22 +10,24 @@ namespace neko::browser {
 // did not run (for example a page with no fonts, or a local-file load).
 struct LoadPhases
 {
-  long long document = 0;        // top-level document fetch
-  long long stylesheets1 = 0;    // external <link rel=stylesheet> pass
-  long long fonts1 = 0;          // @font-face pass
-  long long scripts = 0;         // whole script phase (RunPageScripts)
-  long long scripts_fetch = 0;   // ...of which: blocked waiting for script bodies
-  long long scripts_exec = 0;    // ...of which: classic script parse/compile/run
-  long long scripts_modules = 0; // ...of which: module scripts (fetch + evaluate)
-  long long scripts_events = 0;  // ...of which: DOMContentLoaded/load handlers
-  long long scripts_restyle = 0; // ...of which: cascade re-run after scripts
-  long long stylesheets2 = 0;    // script-injected stylesheets
-  long long fonts2 = 0;          // fonts declared by script-injected sheets
-  long long images = 0;          // <img>/<video> subresources
-  long long videos = 0;          // video subresources
-  long long pump = 0;            // script/event pump (PumpScriptTimersUntilQuiet)
-  long long late_images = 0;     // late image rounds after the pump
-  long long post_load = 0;       // pump + late_images (kept as the total)
+  long long document = 0;              // top-level document fetch
+  long long stylesheets1 = 0;          // external <link rel=stylesheet> pass
+  long long fonts1 = 0;                // @font-face pass
+  long long scripts = 0;               // whole script phase (RunPageScripts)
+  long long scripts_fetch = 0;         // ...of which: blocked waiting for script bodies
+  long long scripts_exec = 0;          // ...of which: classic script parse/compile/run
+  long long scripts_modules = 0;       // ...of which: module scripts (fetch + evaluate)
+  long long scripts_modules_fetch = 0; // ...of which: waiting for module sources
+  long long scripts_modules_eval = 0;  // ...of which: compile + run
+  long long scripts_events = 0;        // ...of which: DOMContentLoaded/load handlers
+  long long scripts_restyle = 0;       // ...of which: cascade re-run after scripts
+  long long stylesheets2 = 0;          // script-injected stylesheets
+  long long fonts2 = 0;                // fonts declared by script-injected sheets
+  long long images = 0;                // <img>/<video> subresources
+  long long videos = 0;                // video subresources
+  long long pump = 0;                  // script/event pump (PumpScriptTimersUntilQuiet)
+  long long late_images = 0;           // late image rounds after the pump
+  long long post_load = 0;             // pump + late_images (kept as the total)
 };
 
 // Connection and payload accounting, mirroring network::HttpClient::Stats.

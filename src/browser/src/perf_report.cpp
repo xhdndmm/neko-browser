@@ -123,6 +123,10 @@ std::string FormatPerfReportLine(const PerfReport& report)
   out += std::to_string(report.phases.scripts_exec);
   out += ",\"scripts_modules\":";
   out += std::to_string(report.phases.scripts_modules);
+  out += ",\"scripts_modules_fetch\":";
+  out += std::to_string(report.phases.scripts_modules_fetch);
+  out += ",\"scripts_modules_eval\":";
+  out += std::to_string(report.phases.scripts_modules_eval);
   out += ",\"scripts_events\":";
   out += std::to_string(report.phases.scripts_events);
   out += ",\"scripts_restyle\":";
