@@ -1,5 +1,7 @@
 # neko-browser
 
+>**由于成本问题，项目将不再继续维护！**
+
 <p>
   <a href="https://github.com/xhdndmm/neko-browser/stargazers"><img src="https://img.shields.io/github/stars/xhdndmm/neko-browser" alt="GitHub Stars"></a>
   <a href="https://github.com/xhdndmm/neko-browser/issues"><img src="https://img.shields.io/github/issues/xhdndmm/neko-browser" alt="GitHub Issues"></a>
@@ -9,7 +11,7 @@
   <a href="https://github.com/xhdndmm/neko-browser/releases"><img src="https://img.shields.io/github/downloads/xhdndmm/neko-browser/total" alt="Downloads"></a>
 </p>
 
-> **状态：引擎纵向切片 + Qt6 GUI + JavaScript runtime + 渲染器会话（多进程 M2）已达成**
+> 状态：引擎纵向切片 + Qt6 GUI + JavaScript runtime + 渲染器会话（多进程 M2）已达成
 > 一个从零开始、真正可编译可运行的**跨平台浏览器引擎与浏览器应用**，主要使用现代 C++20 编写。
 
 本项目不是 WebView 封装、不是截图工具、也不是玩具 HTML 渲染器。它已经能用
