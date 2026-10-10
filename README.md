@@ -1,7 +1,5 @@
 # neko-browser
 
->**由于成本问题，项目将不再继续维护！**
-
 <p>
   <a href="https://github.com/xhdndmm/neko-browser/stargazers"><img src="https://img.shields.io/github/stars/xhdndmm/neko-browser" alt="GitHub Stars"></a>
   <a href="https://github.com/xhdndmm/neko-browser/issues"><img src="https://img.shields.io/github/issues/xhdndmm/neko-browser" alt="GitHub Issues"></a>
