@@ -13,6 +13,7 @@
 #include "neko/dom/element.h"
 #include "neko/dom/query.h"
 #include "neko/image/image.h"
+#include "neko/layout/form_control.h"
 #include "neko/network/http.h"
 #include "neko/paint/rasterizer.h"
 #include "neko/security/origin.h"
@@ -151,6 +152,79 @@ std::string CollectFormData(const dom::Element& form)
     }
   }
   return out;
+}
+
+// Unchecks every other radio with the same name in |element|'s document.
+// The spec scopes a radio button group to the shared form owner; this engine
+// scopes it to the document (documented approximation).
+void UncheckRadioGroup(dom::Element& element)
+{
+  const std::string_view name = element.GetAttribute("name").value_or("");
+  if (name.empty()) {
+    return; // a nameless radio is its own group (HTML §4.10.5.3)
+  }
+  const dom::Node* root = &element;
+  while (root->parent() != nullptr) {
+    root = root->parent();
+  }
+  std::vector<dom::Node*> stack{const_cast<dom::Node*>(root)};
+  while (!stack.empty()) {
+    dom::Node* node = stack.back();
+    stack.pop_back();
+    if (node->node_type() == dom::NodeType::kElement) {
+      auto* el = static_cast<dom::Element*>(node);
+      if (el != &element && el->tag_name() == "input" &&
+          layout::ClassifyFormControl(*el) == layout::FormControlKind::kRadio &&
+          el->GetAttribute("name").value_or("") == name) {
+        el->RemoveAttribute("checked");
+      }
+    }
+    for (dom::Node* child : node->ChildNodes()) {
+      stack.push_back(child);
+    }
+  }
+}
+
+// Toggles a checkable input's checkedness (WHATWG §4.10.5.3 activation
+// behaviour).  Returns true when |element| is a checkable control — including
+// the disabled case, which is handled without changing state.  Checkedness is
+// the `checked` content attribute in this engine (the JS `checked` binding
+// and :checked read the same source).  A checked radio stays checked on
+// activation; checking one unchecks its same-name group.
+bool ToggleCheckableInput(dom::Element& element)
+{
+  const layout::FormControlKind kind = layout::ClassifyFormControl(element);
+  if (kind != layout::FormControlKind::kCheckbox && kind != layout::FormControlKind::kRadio) {
+    return false;
+  }
+  if (element.HasAttribute("disabled")) {
+    return true;
+  }
+  const bool was_checked = element.HasAttribute("checked");
+  if (kind == layout::FormControlKind::kRadio) {
+    if (!was_checked) {
+      element.SetAttribute("checked", "checked");
+      UncheckRadioGroup(element);
+    }
+    return true;
+  }
+  if (was_checked) {
+    element.RemoveAttribute("checked");
+  } else {
+    element.SetAttribute("checked", "checked");
+  }
+  return true;
+}
+
+// Fires the post-activation events of a checkable control: bubbling "input"
+// then "change" (change is dispatched through the cancelable helper, a
+// documented approximation of its non-cancelable spec behaviour).
+void DispatchToggleEvents(javascript::DomBinder* runtime, dom::Element& element)
+{
+  if (runtime != nullptr) {
+    runtime->DispatchInputEvent(element);
+    (void)runtime->DispatchCancelableEvent(element, "change");
+  }
 }
 
 // Walks from |node| up to find a submit button (<button> or <input
@@ -997,6 +1071,15 @@ bool BrowserController::DispatchPointerClick(int tab_id, float doc_x, float doc_
       return true; // preventDefault: the page handled the click.
     }
   }
+  // Default action: a checkable input toggles its checkedness (HTML
+  // §4.10.5.3).  The toggle changes the cascade (input:checked) and the
+  // widget paint state, so re-run styles; the frame pump rebuilds the rest.
+  if (ToggleCheckableInput(const_cast<dom::Element&>(*element))) {
+    dom::Element& el = const_cast<dom::Element&>(*element);
+    DispatchToggleEvents(tab->script_runtime.get(), el);
+    tab->page->ReapplyStyles();
+    return true;
+  }
   // Default action: navigate an <a href> hyperlink (or a clickable element
   // nested inside one).
   const std::optional<std::string> target = HyperlinkTarget(element, tab->url);
@@ -1245,9 +1328,17 @@ bool BrowserController::DispatchKeyboard(int tab_id,
   if (!not_canceled || type != "keydown") {
     return not_canceled;
   }
-  // Default actions: a printable character inserts into a focused text input,
-  // Backspace deletes, Enter submits the enclosing form (implicit submission).
+  // Default actions: Space toggles a focused checkable input (keyboard
+  // activation); otherwise a printable character inserts into a focused text
+  // input, Backspace deletes, Enter submits the enclosing form (implicit
+  // submission).
   dom::Element* control = tab->focused_element;
+  if (control != nullptr && (key == " " || key == "Space" || key == "Spacebar") &&
+      ToggleCheckableInput(*control)) {
+    DispatchToggleEvents(tab->script_runtime.get(), *control);
+    tab->page->ReapplyStyles();
+    return not_canceled;
+  }
   const bool input_is_text = control != nullptr && control->tag_name() == "input";
   const bool textarea_is_text = control != nullptr && control->tag_name() == "textarea";
   bool value_changed = false;

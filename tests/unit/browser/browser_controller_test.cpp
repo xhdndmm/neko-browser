@@ -754,6 +754,130 @@ TEST(BrowserControllerTest, KeyboardDispatchRunsPageListener)
   EXPECT_EQ(s.value(), "Enter:Enter:true");
 }
 
+// Clicking a checkable input toggles its checkedness (HTML §4.10.5.3
+// activation behaviour).  Checkedness is the `checked` attribute in this
+// engine (the same source the JS `checked` binding and :checked read).
+TEST(BrowserControllerTest, ClickTogglesCheckboxCheckedness)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body><input id=\"cb\" type=\"checkbox\">"
+                               "<input id=\"dis\" type=\"checkbox\" disabled></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  tab->page->Layout(800, 600);
+  dom::Element* cb = dom::QuerySelector(*tab->page->document(), "#cb");
+  dom::Element* dis = dom::QuerySelector(*tab->page->document(), "#dis");
+  ASSERT_NE(cb, nullptr);
+  ASSERT_NE(dis, nullptr);
+  const auto geometry = tab->page->ElementBoxGeometry(*cb);
+  ASSERT_TRUE(geometry.has_value());
+  const float x = geometry->x + geometry->width / 2.0f;
+  const float y = geometry->y + geometry->height / 2.0f;
+
+  EXPECT_FALSE(cb->HasAttribute("checked"));
+  controller.DispatchPointerClick(tab->id, x, y);
+  EXPECT_TRUE(cb->HasAttribute("checked"));
+  controller.DispatchPointerClick(tab->id, x, y);
+  EXPECT_FALSE(cb->HasAttribute("checked"));
+
+  // A disabled control never toggles.
+  const auto disabled_geometry = tab->page->ElementBoxGeometry(*dis);
+  ASSERT_TRUE(disabled_geometry.has_value());
+  controller.DispatchPointerClick(tab->id,
+                                  disabled_geometry->x + disabled_geometry->width / 2.0f,
+                                  disabled_geometry->y + disabled_geometry->height / 2.0f);
+  EXPECT_FALSE(dis->HasAttribute("checked"));
+}
+
+// Clicking a radio checks it and unchecks the same-name radios; clicking an
+// already-checked radio keeps it checked (radio activation never unchecks).
+TEST(BrowserControllerTest, ClickChecksRadioAndUnchecksSameNameGroup)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<input id=\"a\" type=\"radio\" name=\"g\">"
+                               "<input id=\"b\" type=\"radio\" name=\"g\" checked>"
+                               "<input id=\"c\" type=\"radio\" name=\"other\">"
+                               "</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  tab->page->Layout(800, 600);
+  dom::Element* a = dom::QuerySelector(*tab->page->document(), "#a");
+  dom::Element* b = dom::QuerySelector(*tab->page->document(), "#b");
+  dom::Element* c = dom::QuerySelector(*tab->page->document(), "#c");
+  ASSERT_NE(a, nullptr);
+  ASSERT_NE(b, nullptr);
+  ASSERT_NE(c, nullptr);
+  const auto click_point = [&tab](dom::Element* element) {
+    const auto geometry = tab->page->ElementBoxGeometry(*element);
+    return std::make_pair(geometry->x + geometry->width / 2.0f,
+                          geometry->y + geometry->height / 2.0f);
+  };
+
+  // Clicking #a checks it and unchecks #b (same group name).
+  {
+    const auto [x, y] = click_point(a);
+    controller.DispatchPointerClick(tab->id, x, y);
+  }
+  EXPECT_TRUE(a->HasAttribute("checked"));
+  EXPECT_FALSE(b->HasAttribute("checked"));
+  // #c has a different name: untouched, and clicking it does not uncheck #a.
+  EXPECT_FALSE(c->HasAttribute("checked"));
+  {
+    const auto [x, y] = click_point(c);
+    controller.DispatchPointerClick(tab->id, x, y);
+  }
+  EXPECT_TRUE(c->HasAttribute("checked"));
+  EXPECT_TRUE(a->HasAttribute("checked"));
+  // Clicking the checked #a again keeps it checked.
+  {
+    const auto [x, y] = click_point(a);
+    controller.DispatchPointerClick(tab->id, x, y);
+  }
+  EXPECT_TRUE(a->HasAttribute("checked"));
+}
+
+// Space toggles the focused checkable input (keyboard activation).
+TEST(BrowserControllerTest, SpaceTogglesFocusedCheckbox)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body><input id=\"cb\" type=\"checkbox\"></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  tab->page->Layout(800, 600);
+  dom::Element* cb = dom::QuerySelector(*tab->page->document(), "#cb");
+  ASSERT_NE(cb, nullptr);
+  const auto geometry = tab->page->ElementBoxGeometry(*cb);
+  ASSERT_TRUE(geometry.has_value());
+  // Click first (focus + toggle on), then Space (toggle off).
+  controller.DispatchPointerClick(tab->id,
+                                  geometry->x + geometry->width / 2.0f,
+                                  geometry->y + geometry->height / 2.0f);
+  EXPECT_TRUE(cb->HasAttribute("checked"));
+  controller.DispatchKeyboard(tab->id, "keydown", " ", "Space");
+  EXPECT_FALSE(cb->HasAttribute("checked"));
+  controller.DispatchKeyboard(tab->id, "keydown", " ", "Space");
+  EXPECT_TRUE(cb->HasAttribute("checked"));
+}
+
 TEST(BrowserControllerTest, SubmitButtonSubmitsFormWithEncodedData)
 {
   TempProfile tp;

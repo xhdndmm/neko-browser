@@ -46,6 +46,7 @@ struct Compound
     std::string value;
   };
   std::vector<Attribute> attributes;
+  std::vector<std::string> pseudos; // only "checked" is parsed (see query.h)
 };
 
 enum class Combinator
@@ -136,6 +137,17 @@ bool ParseCompound(std::string_view text, Compound& out)
         return false;
       }
       out.classes.emplace_back(text.substr(i + 1, j - i - 1));
+      i = j;
+    } else if (c == ':') {
+      // `:checked` is the one pseudo-class in this subset (query.h).
+      std::size_t j = i + 1;
+      while (j < text.size() && IsNameChar(text[j])) {
+        ++j;
+      }
+      if (text.substr(i + 1, j - i - 1) != "checked") {
+        return false;
+      }
+      out.pseudos.emplace_back("checked");
       i = j;
     } else if (c == '*') {
       ++i;
@@ -260,6 +272,11 @@ bool CompoundMatches(const Element& element, const Compound& compound)
       }
     }
   }
+  for (const std::string& pseudo : compound.pseudos) {
+    if (pseudo == "checked" && !MatchesCheckedPseudo(element)) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -306,6 +323,19 @@ void CollectMatches(Node& node, const SelectorChain& chain, std::vector<Element*
 }
 
 } // namespace
+
+bool MatchesCheckedPseudo(const Element& element)
+{
+  const std::string_view tag = element.tag_name();
+  if (tag == "option") {
+    return element.HasAttribute("selected");
+  }
+  if (tag != "input") {
+    return false;
+  }
+  const std::string type = ToLower(std::string(element.GetAttribute("type").value_or("")));
+  return (type == "checkbox" || type == "radio") && element.HasAttribute("checked");
+}
 
 bool MatchesCompoundSelector(const Element& element, std::string_view selector)
 {

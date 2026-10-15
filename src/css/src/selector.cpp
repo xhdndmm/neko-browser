@@ -1,5 +1,7 @@
 #include "neko/css/selector.h"
 
+#include "neko/dom/query.h"
+
 #include <optional>
 #include <string>
 #include <string_view>
@@ -502,6 +504,12 @@ bool PseudoClassMatches(const dom::Element& element,
     // :root matches the document's root element (the <html> element).
     const dom::Node* parent = element.parent();
     return parent != nullptr && parent->node_type() == dom::NodeType::kDocument;
+  }
+  if (pseudo == "checked") {
+    // :checked (HTML §4.10.5.3 + Selectors 4): shared with the DOM query
+    // subset so both matchers agree (one source of truth for checkedness --
+    // see dom::MatchesCheckedPseudo).
+    return dom::MatchesCheckedPseudo(element);
   }
   if (pseudo == "first-child") {
     return PreviousElementSibling(&element) == nullptr;

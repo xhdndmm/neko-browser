@@ -47,6 +47,42 @@ TEST(StyleTest, OpacityParsesClampsAndDoesNotInherit)
   EXPECT_FLOAT_EQ(Style(engine, *doc, "body").opacity, 0.5f);
 }
 
+// :checked (Selectors 4 / HTML §4.10.5.3) matches a checkable input's
+// checkedness and a selected <option>.  This engine models checkedness as
+// the `checked` content attribute (the same source the JS `checked` binding
+// and the widget paint read).
+TEST(StyleTest, CheckedPseudoClassMatchesCheckableState)
+{
+  auto doc = MakeDoc("<style>input:checked { color: #ff0000 }</style>"
+                     "<body>"
+                     "<input id=\"on\" type=\"checkbox\" checked>"
+                     "<input id=\"off\" type=\"checkbox\">"
+                     "<input id=\"ron\" type=\"RADIO\" checked>"
+                     "<input id=\"text\" type=\"text\" checked>"
+                     "<select><option id=\"sel\" selected>x</option>"
+                     "<option id=\"unsel\">y</option></select>"
+                     "</body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  auto matches = [&doc](const char* selector) {
+    return dom::QuerySelector(*doc, selector) != nullptr;
+  };
+  EXPECT_TRUE(matches("#on:checked"));
+  EXPECT_FALSE(matches("#off:checked"));
+  EXPECT_TRUE(matches("#ron:checked"));
+  // A text input with a stray checked attribute never matches.
+  EXPECT_FALSE(matches("#text:checked"));
+  EXPECT_TRUE(matches("#sel:checked"));
+  EXPECT_FALSE(matches("#unsel:checked"));
+
+  // The css matcher (the cascade) agrees: the rule colours the checked
+  // inputs and nothing else.
+  EXPECT_EQ(Style(engine, *doc, "#on").color, (css::Color{255, 0, 0, 255}));
+  EXPECT_EQ(Style(engine, *doc, "#ron").color, (css::Color{255, 0, 0, 255}));
+  EXPECT_NE(Style(engine, *doc, "#off").color, (css::Color{255, 0, 0, 255}));
+}
+
 TEST(StyleTest, UaDefaults)
 {
   auto doc = MakeDoc("<html><head><style>p{}</style></head><body><div>x</div><span>y</span><p>z</"
