@@ -219,6 +219,8 @@ struct CalcTerm
   // Multiplication/division in calc() require at least one number operand
   // (CSS Values 4 §10.5); a bare number is carried in |offset|.
   bool is_number = false;
+
+  bool operator==(const CalcTerm&) const = default;
 };
 
 // A length that may be a percentage (resolved against the containing block),
@@ -238,6 +240,8 @@ struct SizeSpec
   bool extremum_is_max = false; // max() vs min()
   bool is_clamp = false;        // clamp(MIN, VAL, MAX) = max(MIN, min(VAL, MAX))
   std::vector<CalcTerm> extremum_args;
+
+  bool operator==(const SizeSpec&) const = default;
 };
 
 // grid-auto-flow (CSS Grid Layout 1 §7.1): the placement direction for
@@ -275,6 +279,8 @@ struct GridTrack
   bool min_is_min_content = false;
   bool min_is_max_content = false;
   bool max_is_max_content = false;
+
+  bool operator==(const GridTrack&) const = default;
 };
 
 // A grid item's placement on one axis (grid-column / grid-row).
@@ -293,11 +299,18 @@ struct GridPlacement
   // first line with this name (a grid-template-areas name matches the area's
   // edge); kSpan spans to the next line with this name.  Empty = numeric.
   std::string name;
+
+  bool operator==(const GridPlacement&) const = default;
 };
 
 // Fully resolved style for one element (px values unless noted).
 struct ComputedStyle
 {
+  // Field-by-field equality (C++20 defaulted): the scoped restyle compares a
+  // recomputed style against the cached one to decide whether layout/paint
+  // must follow, so every new field participates automatically.
+  friend bool operator==(const ComputedStyle&, const ComputedStyle&) = default;
+
   Display display = Display::kInline; // CSS initial value
   Position position = Position::kStatic;
   Float floating = Float::kNone; // float: left/right/none

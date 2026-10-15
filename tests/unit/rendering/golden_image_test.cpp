@@ -220,8 +220,8 @@ TEST_P(GoldenImageTest, MatchesGoldenRaster)
 INSTANTIATE_TEST_SUITE_P(AllFixtures,
                          GoldenImageTest,
                          testing::ValuesIn(kFixtures),
-                         [](const testing::TestParamInfo<const char*>& info) {
-                           return std::string(info.param);
+                         [](const testing::TestParamInfo<const char*>& param) {
+                           return std::string(param.param);
                          });
 
 // Regenerating goldens must never silently drop fixtures: a fixture without a

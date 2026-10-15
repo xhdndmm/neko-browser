@@ -97,6 +97,13 @@ public:
   // reflects the new state.
   void ReapplyStyles();
 
+  // Scoped variant for attribute/class mutation batches (StyleEngine::
+  // RestyleAffected): recomputes the cascade only for the elements the batch
+  // can affect and rebuilds layout ONLY when a computed style actually
+  // changed.  Returns whether a restyle ran (false = nothing changed; the
+  // cached layout and display list remain valid).
+  bool ReapplyStylesFor(const std::vector<const dom::Element*>& roots);
+
   // Sets the element the pointer currently hovers over (or null), updating the
   // :hover pseudo-class and re-running the cascade/layout so the change is
   // reflected on the next rasterization.  |element| must be in this page's

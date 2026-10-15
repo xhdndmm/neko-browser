@@ -479,6 +479,19 @@ public:
   // need the late-fetch pass, not a full restyle.
   bool TakeStyleDirty();
 
+  // What a style-relevant mutation batch needs: the full ApplyStyles path
+  // (conservative mutations -- node tree edits, text edits, geometry
+  // attributes), or a scoped restyle of |roots| (attribute-only batches the
+  // cascade can resolve locally).  Consumes the batch; TakeStyleDirty()
+  // consumes it too, so use one or the other per batch.
+  struct StyleDirtyScope
+  {
+    bool dirty = false;
+    bool full_restyle = false;
+    std::vector<const dom::Element*> roots;
+  };
+  StyleDirtyScope TakeStyleDirtyScope();
+
   // Dispatches a synthetic document-level event (e.g. "DOMContentLoaded",
   // "load") to listeners registered on the document — which is where
   // window-level listeners are stored.  RunPageScripts calls this after the

@@ -53,6 +53,19 @@ public:
   // fresh document.
   void ApplyStyles(dom::Document& document);
 
+  // Recomputes the cascade for the elements an attribute/class mutation on
+  // |roots| can affect — each root's subtree plus the subtrees of its later
+  // siblings (a mutated element can be the left side of a sibling
+  // combinator; with no :has() in the supported selector set ancestors never
+  // depend on descendants) — and leaves every other cached computed style
+  // untouched.  Returns true when at least one computed style actually
+  // changed, i.e. when layout/paint must follow.
+  //
+  // Attribute/class mutations only: structural edits reorder siblings
+  // (:nth-child and friends) and must go through ApplyStyles.  Requires a
+  // prior ApplyStyles on the same document.
+  bool RestyleAffected(const std::vector<dom::Element*>& roots);
+
   // Sets the viewport used by @media queries.  The default is 800x600 so
   // documents styled before their first layout retain the engine default.
   void SetViewport(float width, float height);

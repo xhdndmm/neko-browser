@@ -116,9 +116,10 @@ int DatasetSetProperty(JSContext* ctx,
     el->SetAttribute(attr, value_str);
   }
   // data-* attributes are styled through [data-x] selectors on real sites:
-  // the mutation must mark the DOM dirty like setAttribute does.
+  // the mutation must mark the DOM dirty like setAttribute does.  They are
+  // style-only, so the batch stays on the scoped-restyle path.
   if (w->impl != nullptr) {
-    w->impl->MarkDomDirty(el);
+    w->impl->MarkAttrDirty(el, attr);
   }
   return 1;
 }
@@ -247,7 +248,7 @@ JSValue ElementSetClassName(JSContext* ctx, JSValueConst this_val, JSValueConst 
   } else {
     element->SetAttribute("class", cls);
   }
-  ImplFor(ctx, this_val)->MarkDomDirty(element);
+  ImplFor(ctx, this_val)->MarkAttrDirty(element, "class");
   return JS_UNDEFINED;
 }
 
@@ -735,7 +736,7 @@ void ApplyClassTokens(JSContext* ctx,
 {
   SetClassTokens(element, tokens);
   if (Impl* impl = ImplFor(ctx, this_val); impl != nullptr) {
-    impl->MarkDomDirty(&element);
+    impl->MarkAttrDirty(&element, "class");
   }
 }
 
@@ -1357,12 +1358,9 @@ JSValue ElementSetAttribute(JSContext* ctx, JSValueConst this_val, int argc, JSV
   Impl* impl = ImplFor(ctx, this_val);
   impl->RecordAttributeMutation(element, name);
   // Media-loading attributes (src/srcset/...) only need the late-fetch pass;
-  // everything else can affect the cascade and takes the full restyle path.
-  if (Impl::IsMediaLoadingAttribute(name)) {
-    impl->MarkDomMediaDirty(element);
-  } else {
-    impl->MarkDomDirty(element);
-  }
+  // style-only names take the scoped-restyle path; anything else can affect
+  // geometry outside the cascade and takes the full restyle path.
+  impl->MarkAttrDirty(element, name);
   return JS_UNDEFINED;
 }
 
@@ -1383,11 +1381,7 @@ JSValue ElementRemoveAttribute(JSContext* ctx, JSValueConst this_val, int argc, 
   element->RemoveAttribute(name);
   Impl* impl = ImplFor(ctx, this_val);
   impl->RecordAttributeMutation(element, name);
-  if (Impl::IsMediaLoadingAttribute(name)) {
-    impl->MarkDomMediaDirty(element);
-  } else {
-    impl->MarkDomDirty(element);
-  }
+  impl->MarkAttrDirty(element, name);
   return JS_UNDEFINED;
 }
 

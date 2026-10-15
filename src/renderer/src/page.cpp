@@ -494,6 +494,26 @@ void Page::ReapplyStylesLocked()
   BumpVersion();
 }
 
+bool Page::ReapplyStylesFor(const std::vector<const dom::Element*>& roots)
+{
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  if (document_ == nullptr || roots.empty()) {
+    return false;
+  }
+  std::vector<dom::Element*> mutable_roots;
+  mutable_roots.reserve(roots.size());
+  for (const dom::Element* element : roots) {
+    mutable_roots.push_back(const_cast<dom::Element*>(element));
+  }
+  if (!styles_.RestyleAffected(mutable_roots)) {
+    return false; // no computed style changed: layout and display list stay
+  }
+  LayoutLocked(viewport_width_, viewport_height_, false);
+  display_list_.reset();
+  BumpVersion();
+  return true;
+}
+
 float Page::SetUserZoom(float factor)
 {
   std::lock_guard<std::recursive_mutex> lock(mutex_);

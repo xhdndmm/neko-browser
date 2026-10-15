@@ -444,6 +444,40 @@ TEST_F(DomBinderTest, MediaSourceMutationsSkipTheStyleDirtyFlag)
   EXPECT_TRUE(binder_->TakeStyleDirty()) << "per-property style setters must restyle";
 }
 
+// Style-only attribute writes keep the batch on the scoped-restyle path
+// (roots only, no full restyle needed); geometry attributes the layout
+// engine reads directly and structural edits stay conservative.
+TEST_F(DomBinderTest, StyleOnlyAttributesKeepTheRestyleScoped)
+{
+  binder_->TakeDomDirty();
+  binder_->TakeStyleDirtyScope();
+
+  ASSERT_TRUE(EvalBool("(function(){ document.getElementById('first').classList.add('hot'); "
+                       "return true; })()"));
+  const auto scoped = binder_->TakeStyleDirtyScope();
+  EXPECT_TRUE(scoped.dirty);
+  EXPECT_FALSE(scoped.full_restyle);
+  ASSERT_EQ(scoped.roots.size(), 1u);
+
+  // setAttribute with a style-only name: still scoped.
+  ASSERT_TRUE(EvalBool("(function(){ document.getElementById('first')"
+                       "  .setAttribute('data-x', '1'); return true; })()"));
+  EXPECT_FALSE(binder_->TakeStyleDirtyScope().full_restyle);
+
+  // A geometry attribute (value: the layout reads it outside the cascade)
+  // falls back to the full path.
+  ASSERT_TRUE(EvalBool("(function(){ document.getElementById('first')"
+                       "  .setAttribute('value', 'typed'); return true; })()"));
+  const auto geometry = binder_->TakeStyleDirtyScope();
+  EXPECT_TRUE(geometry.dirty);
+  EXPECT_TRUE(geometry.full_restyle);
+
+  // Structural edits are conservative too.
+  ASSERT_TRUE(EvalBool("(function(){ var d = document.createElement('div');"
+                       "  document.body.appendChild(d); return true; })()"));
+  EXPECT_TRUE(binder_->TakeStyleDirtyScope().full_restyle);
+}
+
 TEST_F(DomBinderTest, UrlConstructsParsedValuesAndExposesPrototype)
 {
   EXPECT_TRUE(

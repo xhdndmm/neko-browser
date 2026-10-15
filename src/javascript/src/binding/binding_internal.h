@@ -914,16 +914,61 @@ struct Impl
   // and re-running the full restyle+relayout for each assignment froze real
   // pages (measured >600 ms per pass on bilibili).
   bool style_dirty_ = false;
+  // Scoped-restyle tracking (see StyleEngine::RestyleAffected).  An
+  // attribute mutation whose attribute can only affect the CASCADE (class,
+  // style, id, ...) records its element in |style_dirty_roots_|; every other
+  // mutation (node tree edits, text edits, geometry attributes the layout
+  // engine reads directly) is conservative and sets |full_restyle_|, which
+  // makes the browser run the full ApplyStyles path.
+  bool full_restyle_ = false;
+  std::vector<const dom::Element*> style_dirty_roots_;
   // Called by every JS DOM mutation handler (child list, attributes, class,
   // innerHTML, text content).  Setting the dirty flag lets the browser layer
   // re-run the style cascade; refreshing the live collections (childNodes /
   // children / getElementsBy* / forms / images / links / scripts) is what makes
-  // them spec-live rather than a snapshot taken at access time.
+  // them spec-live rather than a snapshot taken at access time.  Conservative:
+  // assumes the mutation may be structural and takes the full restyle path.
   void MarkDomDirty(const dom::Node* mutated = nullptr)
   {
     dom_dirty_ = true;
     style_dirty_ = true;
+    full_restyle_ = true;
     RefreshLiveCollections(mutated);
+  }
+  // An attribute write with a known name.  Style-only attributes (the
+  // allowlist below) keep the batch on the scoped-restyle path; anything
+  // else (value/size/rows/width/... -- attributes the layout engine reads
+  // directly, and any unknown name) falls back to the conservative full
+  // restyle.
+  void MarkAttrDirty(const dom::Element* element, std::string_view name)
+  {
+    if (IsMediaLoadingAttribute(name)) {
+      MarkDomMediaDirty(element);
+      return;
+    }
+    if (!IsStyleOnlyAttribute(name)) {
+      MarkDomDirty(element);
+      return;
+    }
+    dom_dirty_ = true;
+    style_dirty_ = true;
+    if (element != nullptr) {
+      style_dirty_roots_.push_back(element);
+    }
+    RefreshLiveCollections(element);
+  }
+  // Attribute names that can only change the cascade, never the geometry the
+  // layout engine derives outside the cascade.  data-* and aria-* are
+  // style-only as a family (the engine reads no layout geometry from them).
+  static bool IsStyleOnlyAttribute(std::string_view name)
+  {
+    if (name.starts_with("data-") || name.starts_with("aria-")) {
+      return true;
+    }
+    return name == "class" || name == "id" || name == "style" || name == "title" ||
+           name == "lang" || name == "dir" || name == "hidden" || name == "role" ||
+           name == "tabindex" || name == "translate" || name == "contenteditable" ||
+           name == "spellcheck";
   }
   // Media-loading attribute names: the element's src family.  They feed the
   // late-fetch pass but not the cascade (attribute selectors on src are not a
@@ -947,11 +992,23 @@ struct Impl
     dom_dirty_ = false;
     return dirty;
   }
+  // What a style-relevant mutation batch needs: the full ApplyStyles path
+  // (conservative mutations), or a scoped restyle of |roots| (attribute-only
+  // batches).  Consumes the batch.
+  DomBinder::StyleDirtyScope TakeStyleDirtyScope()
+  {
+    DomBinder::StyleDirtyScope out;
+    out.dirty = style_dirty_;
+    out.full_restyle = full_restyle_;
+    out.roots = std::move(style_dirty_roots_);
+    style_dirty_ = false;
+    full_restyle_ = false;
+    style_dirty_roots_.clear();
+    return out;
+  }
   bool TakeStyleDirty()
   {
-    const bool dirty = style_dirty_;
-    style_dirty_ = false;
-    return dirty;
+    return TakeStyleDirtyScope().dirty;
   }
 
   // The <script> element whose body is currently executing (WHATWG HTML

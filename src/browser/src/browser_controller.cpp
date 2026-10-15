@@ -227,6 +227,29 @@ void DispatchToggleEvents(javascript::DomBinder* runtime, dom::Element& element)
   }
 }
 
+// Reflects a script's style-relevant DOM mutations: the scoped restyle for
+// attribute-only batches (layout follows only when a computed style actually
+// changed), the full ApplyStyles path for conservative ones.  Returns whether
+// any style-relevant mutation was pending (callers OR it with the DOM flag
+// for the late-fetch pass).
+bool ReflectScriptStyleMutations(Tab& tab)
+{
+  if (tab.script_runtime == nullptr || tab.page == nullptr) {
+    return false;
+  }
+  const javascript::DomBinder::StyleDirtyScope scope =
+      tab.script_runtime->TakeStyleDirtyScope();
+  if (!scope.dirty) {
+    return false;
+  }
+  if (scope.full_restyle || scope.roots.empty()) {
+    tab.page->ReapplyStyles();
+  } else {
+    tab.page->ReapplyStylesFor(scope.roots);
+  }
+  return true;
+}
+
 // Moves keyboard focus to |element| (or clears it when null), firing blur on
 // the old target and focus on the new one (only when the target changes).
 void FocusControl(Tab* tab, dom::Element* element)
@@ -1138,11 +1161,8 @@ bool BrowserController::DispatchPointerClick(int tab_id, float doc_x, float doc_
     // A pointer handler may have mutated the DOM; reflect it before the
     // default action (which may navigate away).  Media-source mutations (a
     // lazy-load handler assigning img.src) only need the late-fetch pass.
-    const bool style_changed = tab->script_runtime->TakeStyleDirty();
+    const bool style_changed = ReflectScriptStyleMutations(*tab);
     const bool dom_changed = tab->script_runtime->TakeDomDirty();
-    if (style_changed) {
-      tab->page->ReapplyStyles();
-    }
     if (style_changed || dom_changed) {
       SchedulePendingImageFetch(*tab);
     }
@@ -1239,11 +1259,8 @@ void BrowserController::DispatchHover(int tab_id, float doc_x, float doc_y)
   }
   // A hover handler may mutate the DOM; reflect it.
   if (tab->script_runtime != nullptr) {
-    const bool style_changed = tab->script_runtime->TakeStyleDirty();
+    const bool style_changed = ReflectScriptStyleMutations(*tab);
     const bool dom_changed = tab->script_runtime->TakeDomDirty();
-    if (style_changed) {
-      tab->page->ReapplyStyles();
-    }
     if (style_changed || dom_changed) {
       SchedulePendingImageFetch(*tab);
     }
@@ -1343,11 +1360,8 @@ bool BrowserController::DispatchWheel(int tab_id, double delta_y)
   const bool not_canceled = tab->script_runtime->DispatchWheelEvent(*target, "wheel", delta_y);
   // A wheel handler may mutate the DOM (e.g. lazy-load placeholders); reflect
   // it so the change appears without waiting for the next navigation.
-  const bool wheel_style_changed = tab->script_runtime->TakeStyleDirty();
+  const bool wheel_style_changed = ReflectScriptStyleMutations(*tab);
   const bool wheel_dom_changed = tab->script_runtime->TakeDomDirty();
-  if (wheel_style_changed) {
-    tab->page->ReapplyStyles();
-  }
   if (wheel_style_changed || wheel_dom_changed) {
     SchedulePendingImageFetch(*tab);
   }
@@ -1478,10 +1492,12 @@ bool BrowserController::DispatchKeyboard(int tab_id,
   bool key_style_changed = value_changed;
   bool key_dom_changed = value_changed;
   if (!value_changed && tab->script_runtime != nullptr) {
-    key_style_changed = tab->script_runtime->TakeStyleDirty();
+    key_style_changed = ReflectScriptStyleMutations(*tab);
     key_dom_changed = tab->script_runtime->TakeDomDirty();
   }
-  if (key_style_changed) {
+  if (value_changed) {
+    // The value edit is geometry the layout reads outside the cascade: it
+    // always rebuilds (the scoped path cannot see it).
     tab->page->ReapplyStyles();
   }
   if (key_style_changed || key_dom_changed) {
@@ -1893,11 +1909,8 @@ int BrowserController::PumpScriptTimersUntilQuiet(int max_iterations)
     // Layout/Rasterize reflects the new state, and pick up image sources the
     // callbacks assigned (lazy loading after the initial pass).  Batches that
     // only re-pointed media sources (img.src) skip the restyle.
-    const bool style_changed = tab->script_runtime->TakeStyleDirty();
+    const bool style_changed = ReflectScriptStyleMutations(*tab);
     const bool dom_changed = tab->script_runtime->TakeDomDirty();
-    if (style_changed) {
-      tab->page->ReapplyStyles();
-    }
     if (style_changed || dom_changed) {
       SchedulePendingImageFetch(*tab);
     }
@@ -1950,11 +1963,8 @@ void BrowserController::PumpScriptTimers()
     io_active = tab->script_runtime->RefreshIntersectionObservers();
   }
   if ((image_events > 0 || io_active) && tab->script_runtime != nullptr && tab->page != nullptr) {
-    const bool style_changed = tab->script_runtime->TakeStyleDirty();
+    const bool style_changed = ReflectScriptStyleMutations(*tab);
     const bool dom_changed = tab->script_runtime->TakeDomDirty();
-    if (style_changed) {
-      tab->page->ReapplyStyles();
-    }
     if (style_changed || dom_changed) {
       SchedulePendingImageFetch(*tab);
     }
@@ -2011,11 +2021,8 @@ void BrowserController::PumpScriptTimers()
       // or network poll) or only re-pointed media sources skips the restyle:
       // the full cascade used to run on every 50 ms pump (>600 ms per pass on
       // bilibili).
-      const bool style_changed = tab->script_runtime->TakeStyleDirty();
+      const bool style_changed = ReflectScriptStyleMutations(*tab);
       const bool dom_changed = tab->script_runtime->TakeDomDirty();
-      if (style_changed) {
-        tab->page->ReapplyStyles();
-      }
       if (style_changed || dom_changed) {
         SchedulePendingImageFetch(*tab);
       }
@@ -2110,11 +2117,8 @@ void BrowserController::SetTabScrollOffset(int tab_id, float y)
         tab->script_runtime->DispatchDocumentEvent("scroll");
       }
       tab->script_runtime->RefreshIntersectionObservers();
-      const bool style_changed = tab->script_runtime->TakeStyleDirty();
+      const bool style_changed = ReflectScriptStyleMutations(*tab);
       const bool dom_changed = tab->script_runtime->TakeDomDirty();
-      if (style_changed) {
-        tab->page->ReapplyStyles();
-      }
       if (style_changed || dom_changed) {
         SchedulePendingImageFetch(*tab);
       }

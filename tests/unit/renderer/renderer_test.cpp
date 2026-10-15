@@ -406,6 +406,31 @@ TEST(PageTest, ComputedStyleRejectsElementRemovedFromDocument)
 // device scale, while layout and the CSS viewport stay in CSS pixels.  Before this
 // existed the frame was rasterized at logical size and the window system scaled it
 // up, which is why text was blurry on a HiDPI display.
+// The scoped restyle (attribute/class mutation batches) rebuilds layout ONLY
+// when a computed style actually changed; a no-op mutation keeps the cached
+// layout and display list (observable via the layout version).
+TEST(PageTest, ReapplyStylesForSkipsLayoutWhenNothingChanged)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<style>.boom { color: #ff0000 }</style>"
+                            "<body><div id=\"x\">hi</div></body>")
+                  .has_value());
+  page.Layout(200, 100);
+  dom::Element* x = dom::QuerySelector(*page.document(), "#x");
+  ASSERT_NE(x, nullptr);
+  const std::uint64_t before = page.layout_version();
+
+  // A class matching no rule: nothing in the cascade changes, so no relayout.
+  x->SetAttribute("class", "nothing");
+  EXPECT_FALSE(page.ReapplyStylesFor({x}));
+  EXPECT_EQ(page.layout_version(), before);
+
+  // A class that styles the element: relayout follows.
+  x->SetAttribute("class", "boom");
+  EXPECT_TRUE(page.ReapplyStylesFor({x}));
+  EXPECT_GT(page.layout_version(), before);
+}
+
 // position: fixed content draws at its viewport position regardless of the
 // scroll offset the raster runs at, while ordinary content scrolls away.
 TEST(PageTest, FixedContentStaysPinnedWhenScrolled)

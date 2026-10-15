@@ -1351,6 +1351,24 @@ bool MediaQueryMatches(std::string_view prelude, float viewport_width, float vie
 
 } // namespace
 
+// Defined below, with the cascade-index helpers.
+const css::StyleSheet& UaSheet();
+
+namespace {
+
+// The inherited style seeded at the document element (mirrors the CSS
+// initial values ComputeElement falls back to).
+ComputedStyle RootInheritedStyle()
+{
+  ComputedStyle root_style;
+  root_style.display = Display::kBlock;
+  root_style.font_size = 16;
+  root_style.line_height = 19.2f;
+  return root_style;
+}
+
+} // namespace
+
 void StyleEngine::ApplyStyles(dom::Document& document)
 {
   // Collect author sheets from <style> elements.  Externally loaded
@@ -1419,11 +1437,196 @@ void StyleEngine::ApplyStyles(dom::Document& document)
     active_ = nullptr;
   }
 
-  ComputedStyle root_style;
-  root_style.display = Display::kBlock;
-  root_style.font_size = 16;
-  root_style.line_height = 19.2f;
+  ComputedStyle root_style = RootInheritedStyle();
   ComputeElement(*root, root_style, root_style.font_size);
+}
+
+namespace {
+
+// Sibling-combinator bookkeeping for the scoped restyle.  A mutation on E
+// can change a later sibling S's style only through a rule containing a
+// sibling combinator (+ / ~).  When every such combinator is the chain's
+// LAST link, the affected S must match the rule's subject (last) compound,
+// so later siblings matching none of those compounds are skipped entirely.
+// A rule that continues past its sibling combinator (.x + .y .z) can carry
+// the subject deeper into any sibling's subtree: |unbounded| takes them all.
+struct SiblingScope
+{
+  std::vector<css::ComplexSelector> subjects; // single-compound selectors
+  bool unbounded = false;
+};
+
+void CollectSiblingRules(const std::vector<css::StyleRule>& rules, SiblingScope& out)
+{
+  for (const css::StyleRule& rule : rules) {
+    for (const css::ComplexSelector& selector : rule.selectors) {
+      bool sibling_chain = false;
+      bool ends_with_sibling = true;
+      for (std::size_t i = 0; i < selector.combinators.size(); ++i) {
+        const css::Combinator combinator = selector.combinators[i];
+        if (combinator == css::Combinator::kNextSibling ||
+            combinator == css::Combinator::kSubsequentSibling) {
+          sibling_chain = true;
+          ends_with_sibling = (i + 1 == selector.combinators.size());
+        }
+      }
+      if (!sibling_chain) {
+        continue;
+      }
+      if (!ends_with_sibling) {
+        out.unbounded = true;
+        continue;
+      }
+      css::ComplexSelector subject;
+      subject.compounds.push_back(selector.compounds.back());
+      out.subjects.push_back(std::move(subject));
+    }
+  }
+}
+
+void CollectSiblingRules(const css::StyleSheet& sheet, SiblingScope& out)
+{
+  CollectSiblingRules(sheet.rules, out);
+  for (const css::AtRule& at_rule : sheet.at_rules) {
+    CollectSiblingRules(at_rule.rules, out);
+  }
+}
+
+bool MatchesAnySubject(const dom::Element& element,
+                       const SiblingScope& scope,
+                       const css::MatchState& state)
+{
+  for (const css::ComplexSelector& subject : scope.subjects) {
+    if (css::MatchesSelector(element, subject, &state)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+} // namespace
+
+bool StyleEngine::RestyleAffected(const std::vector<dom::Element*>& roots)
+{
+  if (roots.empty()) {
+    return false;
+  }
+  if (styles_.empty()) {
+    return true; // no full pass ran yet: conservative
+  }
+
+  // Closure: each root's subtree plus the subtrees of the later siblings a
+  // sibling-combinator rule could reach (see SiblingScope).
+  SiblingScope sibling_scope;
+  CollectSiblingRules(UaSheet(), sibling_scope);
+  for (const css::StyleSheet& sheet : author_sheets_) {
+    CollectSiblingRules(sheet, sibling_scope);
+  }
+  for (const css::StyleSheet& sheet : external_sheets_) {
+    CollectSiblingRules(sheet, sibling_scope);
+  }
+  const css::MatchState match_state{hovered_, active_};
+
+  std::vector<dom::Element*> closure;
+  {
+    std::unordered_set<const dom::Element*> seen;
+    for (dom::Element* root : roots) {
+      if (seen.insert(root).second) {
+        closure.push_back(root);
+      }
+      // Later siblings in one pass over the parent's children (repeatedly
+      // scanning for "next" would be quadratic on wide parents).
+      const dom::Node* parent = root->parent();
+      if (parent == nullptr) {
+        continue;
+      }
+      bool after_root = false;
+      for (dom::Node* child : parent->ChildNodes()) {
+        if (child == root) {
+          after_root = true;
+          continue;
+        }
+        if (!after_root || child->node_type() != dom::NodeType::kElement) {
+          continue;
+        }
+        auto* sibling = static_cast<dom::Element*>(child);
+        if (!sibling_scope.unbounded && !MatchesAnySubject(*sibling, sibling_scope, match_state)) {
+          continue; // no sibling rule can style this one differently
+        }
+        if (seen.insert(sibling).second) {
+          closure.push_back(sibling);
+        }
+      }
+    }
+  }
+
+  // Top-down recompute: ComputeElement recurses into subtrees, so a closure
+  // entry whose ancestor is already being recomputed is skipped (its style
+  // lands from the ancestor's recursion).
+  bool changed = false;
+  std::unordered_set<const dom::Element*> covered;
+  for (dom::Element* element : closure) {
+    bool skip = false;
+    for (const dom::Node* p = element->parent(); p != nullptr; p = p->parent()) {
+      if (p->node_type() == dom::NodeType::kElement &&
+          covered.count(static_cast<const dom::Element*>(p)) != 0) {
+        skip = true;
+        break;
+      }
+    }
+    if (skip) {
+      continue;
+    }
+    // The inherited value comes from the parent's cached style (the mutation
+    // closure never touches ancestors, so it is current).
+    ComputedStyle inherited = RootInheritedStyle();
+    if (dom::Node* parent = element->parent();
+        parent != nullptr && parent->node_type() == dom::NodeType::kElement) {
+      const auto it = styles_.find(static_cast<const dom::Element*>(parent));
+      if (it == styles_.end()) {
+        return true; // inconsistent cache: fall back to a full pass
+      }
+      inherited = it->second;
+    }
+
+    // Snapshot the subtree, recompute, compare field by field.
+    std::vector<dom::Element*> subtree;
+    {
+      std::vector<dom::Node*> stack{element};
+      while (!stack.empty()) {
+        dom::Node* node = stack.back();
+        stack.pop_back();
+        if (node->node_type() == dom::NodeType::kElement) {
+          subtree.push_back(static_cast<dom::Element*>(node));
+        }
+        for (dom::Node* child : node->ChildNodes()) {
+          stack.push_back(child);
+        }
+      }
+    }
+    std::unordered_map<const dom::Element*, ComputedStyle> before;
+    before.reserve(subtree.size());
+    for (dom::Element* e : subtree) {
+      const auto it = styles_.find(e);
+      if (it != styles_.end()) {
+        before.emplace(e, it->second);
+      }
+    }
+
+    ComputeElement(*element, inherited, inherited.font_size);
+
+    for (dom::Element* e : subtree) {
+      covered.insert(e);
+      const auto now = styles_.find(e);
+      const auto was = before.find(e);
+      if (was == before.end() || now == styles_.end() || !(now->second == was->second)) {
+        changed = true;
+      }
+    }
+    // No early return: every closure element must end up recomputed (the
+    // cached styles stay consistent); |changed| is only the report.
+  }
+  return changed;
 }
 
 std::vector<css::FontFaceRule> StyleEngine::FontFaces() const

@@ -83,6 +83,63 @@ TEST(StyleTest, CheckedPseudoClassMatchesCheckableState)
   EXPECT_NE(Style(engine, *doc, "#off").color, (css::Color{255, 0, 0, 255}));
 }
 
+// The scoped restyle recomputes the closure an attribute mutation can
+// affect: the element's subtree plus its later siblings' subtrees (a mutated
+// element can be the left side of `+`/`~`), and nothing else.
+TEST(StyleTest, RestyleAffectedCoversSubtreeAndLaterSiblings)
+{
+  auto doc = MakeDoc("<style>.x { color: #ff0000 } .x + .y { color: #00ff00 }"
+                     " .x .z { color: #0000ff }</style>"
+                     "<body><div id=\"a\"><span id=\"zs\" class=\"z\">1</span></div>"
+                     "<div id=\"b\" class=\"y\">2</div>"
+                     "<div id=\"c\" class=\"y\">3</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  dom::Element* a = dom::QuerySelector(*doc, "#a");
+  dom::Element* b = dom::QuerySelector(*doc, "#b");
+  dom::Element* c = dom::QuerySelector(*doc, "#c");
+  dom::Element* z = dom::QuerySelector(*doc, "#zs");
+  ASSERT_NE(a, nullptr);
+  ASSERT_NE(b, nullptr);
+  ASSERT_NE(c, nullptr);
+  ASSERT_NE(z, nullptr);
+
+  a->SetAttribute("class", "x");
+  EXPECT_TRUE(engine.RestyleAffected({a}));
+  // The mutated element itself, its descendant, and the adjacent sibling
+  // match the new rules.
+  EXPECT_EQ(engine.StyleFor(*a).color, (css::Color{255, 0, 0, 255}));
+  EXPECT_EQ(engine.StyleFor(*z).color, (css::Color{0, 0, 255, 255}));
+  EXPECT_EQ(engine.StyleFor(*b).color, (css::Color{0, 255, 0, 255}));
+  // #c is recomputed (a later sibling) but `+` does not reach it: unchanged.
+  EXPECT_NE(engine.StyleFor(*c).color, (css::Color{0, 255, 0, 255}));
+}
+
+// A mutation whose class matches no rule changes no computed style: the
+// scoped restyle reports false so the caller can skip layout entirely.
+TEST(StyleTest, RestyleAffectedReportsNoChangeForNoOpMutations)
+{
+  auto doc = MakeDoc("<style>.x { color: #ff0000 }</style>"
+                     "<body><div id=\"a\" class=\"x\">1</div>"
+                     "<div id=\"b\">2</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  dom::Element* b = dom::QuerySelector(*doc, "#b");
+  ASSERT_NE(b, nullptr);
+
+  b->SetAttribute("class", "matches-nothing");
+  EXPECT_FALSE(engine.RestyleAffected({b}));
+  // Removing it again is a no-op for the cascade too.
+  b->RemoveAttribute("class");
+  EXPECT_FALSE(engine.RestyleAffected({b}));
+  // A real change is reported.
+  dom::Element* a = dom::QuerySelector(*doc, "#a");
+  ASSERT_NE(a, nullptr);
+  a->RemoveAttribute("class");
+  EXPECT_TRUE(engine.RestyleAffected({a}));
+  EXPECT_NE(engine.StyleFor(*a).color, (css::Color{255, 0, 0, 255}));
+}
+
 TEST(StyleTest, UaDefaults)
 {
   auto doc = MakeDoc("<html><head><style>p{}</style></head><body><div>x</div><span>y</span><p>z</"
