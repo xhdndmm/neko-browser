@@ -248,9 +248,22 @@ void Rasterizer::ExecuteCommands(const std::vector<DrawCommand>& commands,
                                  std::size_t begin,
                                  std::size_t end)
 {
+  // Saved scroll offsets for nested kPushFixed ranges: a fixed subtree is
+  // viewport-pinned, so the scroll shift is suspended while it executes.
+  std::vector<float> fixed_scrolls;
   for (std::size_t i = begin; i < end; ++i) {
     const DrawCommand& command = commands[i];
     switch (command.type) {
+    case CommandType::kPushFixed:
+      fixed_scrolls.push_back(scroll_offset_);
+      scroll_offset_ = 0;
+      break;
+    case CommandType::kPopFixed:
+      if (!fixed_scrolls.empty()) {
+        scroll_offset_ = fixed_scrolls.back();
+        fixed_scrolls.pop_back();
+      }
+      break;
     case CommandType::kPushGroup: {
       // Find the matching kPopGroup at the same nesting depth and hand the
       // enclosed range to the group renderer; an unmatched push treats the

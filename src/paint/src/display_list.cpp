@@ -132,6 +132,20 @@ void DisplayList::PopGroup()
   commands_.push_back(std::move(command));
 }
 
+void DisplayList::PushFixed()
+{
+  DrawCommand command;
+  command.type = CommandType::kPushFixed;
+  commands_.push_back(std::move(command));
+}
+
+void DisplayList::PopFixed()
+{
+  DrawCommand command;
+  command.type = CommandType::kPopFixed;
+  commands_.push_back(std::move(command));
+}
+
 void DisplayList::Scale(float factor)
 {
   if (factor == 1.0f) {

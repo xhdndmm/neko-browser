@@ -406,6 +406,54 @@ TEST(PageTest, ComputedStyleRejectsElementRemovedFromDocument)
 // device scale, while layout and the CSS viewport stay in CSS pixels.  Before this
 // existed the frame was rasterized at logical size and the window system scaled it
 // up, which is why text was blurry on a HiDPI display.
+// position: fixed content draws at its viewport position regardless of the
+// scroll offset the raster runs at, while ordinary content scrolls away.
+TEST(PageTest, FixedContentStaysPinnedWhenScrolled)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body style=\"margin:0\">"
+                            "<div id=\"fx\" style=\"position:fixed;left:0;top:0;width:100px;"
+                            "height:20px;background:#ff0000\"></div>"
+                            "<div style=\"width:100px;height:20px;background:#00ff00\"></div>"
+                            "<div style=\"height:2000px\"></div></body>")
+                  .has_value());
+  page.Layout(200, 100);
+  const paint::Rasterizer raster = page.Rasterize(200, 100, /*y_offset=*/50);
+  const auto pixel = [&raster](std::size_t x, std::size_t y) {
+    const std::size_t p = (y * static_cast<std::size_t>(raster.width()) + x) * 4;
+    return std::array<uint8_t, 3>{
+        raster.pixels()[p], raster.pixels()[p + 1], raster.pixels()[p + 2]};
+  };
+  // The fixed red bar is still at the top of the viewport...
+  EXPECT_EQ(pixel(5, 5), (std::array<uint8_t, 3>{255, 0, 0}));
+  // ...while the green block (document y 0..20) scrolled off the top.
+  EXPECT_EQ(pixel(5, 25), (std::array<uint8_t, 3>{255, 255, 255}));
+}
+
+// Hit-testing speaks document coordinates (screen + scroll); a fixed box is
+// laid out at its scroll-0 viewport position, so it must be found at
+// viewport y + scroll.
+TEST(PageTest, FixedContentHitTestsAtViewportPlusScroll)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body style=\"margin:0\">"
+                            "<div id=\"fx\" style=\"position:fixed;left:0;top:0;width:100px;"
+                            "height:20px\"></div>"
+                            "<div style=\"height:2000px\"></div></body>")
+                  .has_value());
+  page.Layout(200, 100);
+  (void)page.Rasterize(200, 100, /*y_offset=*/50);
+
+  const dom::Element* hit = page.ElementAt(5, 55); // screen y=5 + scroll 50
+  ASSERT_NE(hit, nullptr);
+  EXPECT_EQ(hit->GetAttribute("id").value_or(""), "fx");
+  // The fixed box is not at document y=5 (that is 55px above the current
+  // viewport top): the hit resolves to the in-flow filler instead.
+  const dom::Element* miss = page.ElementAt(5, 5);
+  ASSERT_NE(miss, nullptr);
+  EXPECT_NE(miss->GetAttribute("id").value_or(""), "fx");
+}
+
 TEST(PageTest, DeviceScaleFactorScalesTheFrameButNotTheCssViewport)
 {
   Page page;

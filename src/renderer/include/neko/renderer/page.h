@@ -435,6 +435,12 @@ private:
   std::unique_ptr<layout::LayoutBox> root_;
   float viewport_width_ = 800;
   float viewport_height_ = 0;
+  // The scroll offset of the last rendered frame (every Rasterize* path
+  // records its |y_offset| here).  Hit-testing and element geometry use it to
+  // align position: fixed boxes — laid out at their scroll-0 viewport
+  // position — with the document coordinates their callers speak.  Mutable:
+  // the Rasterize* entry points are const frame producers.
+  mutable float viewport_scroll_y_ = 0;
   // CSS pixels -> frame pixels: user zoom times the device scale factor.  One
   // accessor, so no conversion site can forget half of it.
   float frame_scale() const;

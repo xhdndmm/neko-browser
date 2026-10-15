@@ -860,6 +860,53 @@ TEST(LayoutTest, AbsolutePositioningAgainstRelativeAncestor)
   EXPECT_FLOAT_EQ(abs->y, rel->content_y() + rel->content_height() - 10.0f - abs->height);
 }
 
+// position: fixed anchors to the initial containing block (the viewport),
+// NOT to the positioned ancestor (CSS 2.2 §10.1): right:10px resolves against
+// the viewport width even inside an offset relative container.
+TEST(LayoutTest, FixedAnchorsToTheViewport)
+{
+  auto doc = html::Parser("<body><div style=\"position:relative;left:100px;top:50px;"
+                          "width:300px;height:200px\">"
+                          "<div id=\"fx\" style=\"position:fixed;right:10px;top:5px;width:40px;"
+                          "height:20px\">x</div></div></body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800, 600);
+
+  const LayoutBox* rel = FindBox(*root, "div", *doc);
+  ASSERT_NE(rel, nullptr);
+  ASSERT_EQ(rel->positioned_children.size(), 1u);
+  const LayoutBox* fixed = rel->positioned_children[0].get();
+  // Viewport coords: x = 800 - 10 - 40, y = 5 (not relative to the shifted
+  // relative container).
+  EXPECT_FLOAT_EQ(fixed->x, 750.0f);
+  EXPECT_FLOAT_EQ(fixed->y, 5.0f);
+}
+
+// bottom:0 on a fixed box fills to the viewport bottom (the viewport height
+// is its containing block height).
+TEST(LayoutTest, FixedBottomFillsToTheViewport)
+{
+  auto doc = html::Parser("<body><div id=\"fx\" style=\"position:fixed;left:0;right:0;top:0;"
+                          "bottom:0;height:auto;background:#ccc\">x</div></body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800, 600);
+
+  const LayoutBox* body = FindBox(*root, "body", *doc);
+  ASSERT_NE(body, nullptr);
+  ASSERT_EQ(body->positioned_children.size(), 1u);
+  const LayoutBox* fixed = body->positioned_children[0].get();
+  EXPECT_FLOAT_EQ(fixed->x, 0.0f);
+  EXPECT_FLOAT_EQ(fixed->y, 0.0f);
+  EXPECT_FLOAT_EQ(fixed->width, 800.0f);
+  EXPECT_FLOAT_EQ(fixed->height, 600.0f);
+}
+
 TEST(LayoutTest, AbsoluteUsesNearestPositionedAncestor)
 {
   // The containing block is the nearest positioned ancestor, skipping a

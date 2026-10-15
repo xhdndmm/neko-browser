@@ -143,17 +143,27 @@ void Painter::PaintContext(const layout::LayoutBox& box, DisplayList& list) cons
 
 void Painter::PaintUnit(const layout::LayoutBox& box, DisplayList& list) const
 {
+  // A fixed subtree is viewport-pinned: the rasterizer suspends the scroll
+  // shift between these markers (layout placed the box at its scroll-0
+  // document position).
+  const bool fixed = box.style.position == style::Position::kFixed;
+  if (fixed) {
+    list.PushFixed();
+  }
   if (CreatesStackingContext(box)) {
     PaintContext(box, list);
-    return;
+  } else {
+    // z-index:auto positioned box: no context of its own.  Its in-flow
+    // content paints here; its positioned descendants were rolled into the
+    // enclosing tiers by CollectUnits.
+    if (box.style.visibility != style::Visibility::kHidden) {
+      PaintBoxSelf(box, list);
+    }
+    PaintInFlowContent(box, list);
   }
-  // z-index:auto positioned box: no context of its own.  Its in-flow content
-  // paints here; its positioned descendants were rolled into the enclosing
-  // tiers by CollectUnits.
-  if (box.style.visibility != style::Visibility::kHidden) {
-    PaintBoxSelf(box, list);
+  if (fixed) {
+    list.PopFixed();
   }
-  PaintInFlowContent(box, list);
 }
 
 void Painter::PaintInFlowNode(const layout::LayoutBox& box, DisplayList& list) const

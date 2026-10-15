@@ -1491,6 +1491,10 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
     const style::StyleEngine& styles;
     const graphics::FontRegistry* registry; // may be null (monospace fallback)
     const ImageProvider* images;            // may be null (no decoded images)
+    // The initial containing block (the viewport), which position: fixed
+    // boxes anchor to (CSS 2.2 §10.1).
+    float viewport_width = 0;
+    float viewport_height = 0;
 
     // Records on |box| which form control it is and its `checked` / `disabled`
     // state.  BuildFormControl does this for the controls whose geometry it
@@ -4443,6 +4447,17 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       auto box = std::make_unique<LayoutBox>();
       box->element = &element;
       box->style = styles.StyleFor(element);
+      // position: fixed anchors to the initial containing block (the
+      // viewport), not to the positioned ancestor (CSS 2.2 §10.1): insets,
+      // percentage resolutions and the auto-inset pin below all resolve
+      // against it.  Layout still places the box at its scroll-0 document
+      // position; the painter pins the subtree out of the scroll shift.
+      if (box->style.position == style::Position::kFixed) {
+        cb_x = 0;
+        cb_y = 0;
+        cb_w = viewport_width;
+        cb_h = viewport_height;
+      }
       ResolveBoxEdges(*box, cb_w);
 
       const float border_padding_w =
@@ -5010,7 +5025,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
   if (root == nullptr) {
     return nullptr;
   }
-  Builder builder{styles_, registry_, images_};
+  Builder builder{styles_, registry_, images_, viewport_width, viewport_height};
   return builder.BuildBlock(*root,
                             viewport_width,
                             0,

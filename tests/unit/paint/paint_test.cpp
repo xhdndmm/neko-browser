@@ -238,6 +238,63 @@ TEST(RasterizerTest, GroupOpacityMatchesAcrossSerialAndParallel)
   EXPECT_EQ(serial.pixels(), parallel.pixels());
 }
 
+// A fixed subtree is viewport-pinned: between kPushFixed/kPopFixed the scroll
+// shift is suspended, so the content draws at its laid-out screen position
+// while ordinary content scrolls away.
+TEST(RasterizerTest, FixedRangeIgnoresScrollOffset)
+{
+  DisplayList list;
+  list.FillRect(0, 0, 10, 10, css::Color{255, 0, 0, 255}); // normal content
+  list.PushFixed();
+  list.FillRect(0, 20, 10, 10, css::Color{0, 0, 255, 255}); // pinned content
+  list.PopFixed();
+
+  Rasterizer image(10, 50);
+  image.Clear(css::Color{255, 255, 255, 255});
+  image.SetScrollOffset(30);
+  image.Rasterize(list);
+
+  // The normal rect scrolled off the top; the fixed one is still at y=20.
+  EXPECT_EQ(Pixel(image, 5, 20), (css::Color{0, 0, 255, 255}));
+  EXPECT_EQ(Pixel(image, 5, 0), (css::Color{255, 255, 255, 255}));
+}
+
+// Scroll back and the normal content returns while the fixed content stays.
+TEST(RasterizerTest, FixedRangeStaysPinnedAcrossScrollOffsets)
+{
+  DisplayList list;
+  list.PushFixed();
+  list.FillRect(0, 0, 10, 20, css::Color{0, 0, 255, 255});
+  list.PopFixed();
+
+  Rasterizer image(10, 50);
+  for (int scroll : {0, 30, 45}) {
+    image.Clear(css::Color{255, 255, 255, 255});
+    image.SetScrollOffset(static_cast<float>(scroll));
+    image.Rasterize(list);
+    EXPECT_EQ(Pixel(image, 5, 5), (css::Color{0, 0, 255, 255})) << "scroll " << scroll;
+    EXPECT_EQ(Pixel(image, 5, 30), (css::Color{255, 255, 255, 255})) << "scroll " << scroll;
+  }
+}
+
+// Nested: a group inside a fixed range rasterizes with the pinning intact.
+TEST(RasterizerTest, GroupInsideFixedRangeStaysPinned)
+{
+  DisplayList list;
+  list.PushFixed();
+  list.PushGroup(0.5f);
+  list.FillRect(0, 0, 10, 10, css::Color{0, 0, 0, 255});
+  list.PopGroup();
+  list.PopFixed();
+
+  Rasterizer image(10, 30);
+  image.Clear(css::Color{255, 255, 255, 255});
+  image.SetScrollOffset(10);
+  image.Rasterize(list);
+  // 50% black over white at the pinned position: ~127 gray.
+  EXPECT_NEAR(static_cast<float>(Pixel(image, 5, 5).r), 127.0f, 2.0f);
+}
+
 TEST(RasterizerTest, BorderRect)
 {
   Rasterizer image(20, 20);

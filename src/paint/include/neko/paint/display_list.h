@@ -28,7 +28,12 @@ enum class CommandType
   // composited as ONE unit with |alpha|, so overlapping subtree content does
   // not double-blend (per-command alpha would).  Groups nest.
   kPushGroup,
-  kPopGroup
+  kPopGroup,
+  // position: fixed subtree: commands between kPushFixed and the matching
+  // kPopFixed are viewport-pinned — the rasterizer applies no scroll shift
+  // to them (they are laid out at their scroll-0 document position).
+  kPushFixed,
+  kPopFixed
 };
 
 struct DrawCommand
@@ -108,6 +113,11 @@ public:
   // group's output is itself part of its outer group's content.
   void PushGroup(float alpha);
   void PopGroup();
+  // position: fixed subtree: commands between PushFixed and the matching
+  // PopFixed are viewport-pinned (drawn where they are laid out regardless
+  // of the rasterizer's scroll offset).
+  void PushFixed();
+  void PopFixed();
   // Applies a uniform page scale to all geometric commands. Used for legacy
   // CSS zoom after layout has run in unscaled CSS pixels.
   void Scale(float factor);

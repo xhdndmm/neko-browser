@@ -185,19 +185,29 @@ bool FindCaretGeometry(
 // Depth-first hit-test over the layout tree.  Returns the innermost element
 // whose content contains (x, y): block children and inline runs are searched
 // before the box's own border box so deeper content wins.
-const dom::Element* ElementAt(const layout::LayoutBox& box, float x, float y)
+//
+// |scroll_y| is the viewport scroll offset the caller's y was taken at.
+// position: fixed boxes are laid out at their scroll-0 viewport position and
+// pinned out of the scroll shift at paint time, so a fixed subtree is
+// compared in viewport space (y - scroll_y) to match what is on screen.
+const dom::Element*
+ElementAt(const layout::LayoutBox& box, float x, float y, float scroll_y, bool in_fixed)
 {
+  if (!in_fixed && box.style.position == style::Position::kFixed) {
+    y -= scroll_y;
+    in_fixed = true;
+  }
   // Positioned descendants paint on top of the in-flow content (CSS 2.1
   // Appendix E; the painter emits them last), so they are hit-tested first —
   // topmost (last painted) wins.  Without this an expanded dropdown menu was
   // visible but unclickable.
   for (auto it = box.positioned_children.rbegin(); it != box.positioned_children.rend(); ++it) {
-    if (const dom::Element* hit = ElementAt(**it, x, y)) {
+    if (const dom::Element* hit = ElementAt(**it, x, y, scroll_y, in_fixed)) {
       return hit;
     }
   }
   for (const auto& child : box.children) {
-    if (const dom::Element* hit = ElementAt(*child, x, y)) {
+    if (const dom::Element* hit = ElementAt(*child, x, y, scroll_y, in_fixed)) {
       return hit;
     }
   }
@@ -211,7 +221,7 @@ const dom::Element* ElementAt(const layout::LayoutBox& box, float x, float y)
         // border box: a positioned descendant may overflow it (an expanded
         // dropdown menu extends below its trigger, and hovering the menu must
         // keep the ancestor's :hover true so the menu stays open).
-        if (const dom::Element* hit = ElementAt(*ib.block_box, x, y)) {
+        if (const dom::Element* hit = ElementAt(*ib.block_box, x, y, scroll_y, in_fixed)) {
           return hit;
         }
       } else if (ib.image != nullptr) {
@@ -1416,6 +1426,7 @@ Page::Rasterize(int width, int height, float y_offset, base::ThreadPool* pool) c
   }
   const paint::DisplayList& list = EnsureDisplayList();
   image.SetScrollOffset(y_offset);
+  viewport_scroll_y_ = y_offset;
   if (pool != nullptr) {
     image.RasterizeParallel(list, *pool);
   } else {
@@ -1434,6 +1445,7 @@ void Page::RasterizeFull(paint::Rasterizer& raster, float y_offset, base::Thread
   }
   const paint::DisplayList& list = EnsureDisplayList();
   raster.SetScrollOffset(y_offset);
+  viewport_scroll_y_ = y_offset;
   if (pool != nullptr) {
     raster.RasterizeParallel(list, *pool);
   } else {
@@ -1463,6 +1475,7 @@ void Page::RasterizeInto(paint::Rasterizer& raster,
   raster.SetFontRegistry(&fonts_);
   raster.SetVisibleBand(band_y0, band_y1);
   raster.SetScrollOffset(y_offset);
+  viewport_scroll_y_ = y_offset;
   const paint::DisplayList& list = EnsureDisplayList();
   if (pool != nullptr) {
     // Parallel path: RasterizeParallel honours the visible band set above, so
@@ -1541,7 +1554,8 @@ const dom::Element* Page::ElementAt(float x, float y) const
   if (root_ == nullptr) {
     return nullptr;
   }
-  return renderer::ElementAt(*root_, x / frame_scale(), y / frame_scale());
+  return renderer::ElementAt(
+      *root_, x / frame_scale(), y / frame_scale(), viewport_scroll_y_, false);
 }
 
 std::optional<ElementGeometry> Page::ElementBoxGeometry(const dom::Element& element)
@@ -1567,7 +1581,12 @@ std::optional<ElementGeometry> Page::ElementBoxGeometry(const dom::Element& elem
   if (const layout::LayoutBox* box = FindElementBox(*root_, &element)) {
     ElementGeometry g;
     g.x = box->x * frame_scale();
-    g.y = box->y * frame_scale();
+    // A fixed box is laid out at its scroll-0 viewport position; report it in
+    // the document coordinates the rest of this API uses by adding the scroll
+    // offset it is pinned against.
+    const float fixed_scroll =
+        box->style.position == style::Position::kFixed ? viewport_scroll_y_ : 0.0f;
+    g.y = (box->y + fixed_scroll) * frame_scale();
     g.width = box->width * frame_scale();
     g.height = box->height * frame_scale();
     g.border_top = box->border_top * frame_scale();
