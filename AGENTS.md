@@ -1534,6 +1534,12 @@ Record important findings in project documentation when they affect architecture
 
 Keep commits focused.
 
+**One change per commit.** Each commit is exactly one coherent change — one
+fix, one feature, one test-infrastructure addition, one doc update — together
+with the tests and docs that change needs. When the working tree holds several
+changes, split them (staged hunks, temporary reverts) so every single commit
+builds and passes tests on its own.
+
 Recommended prefixes:
 
 ```text
@@ -1547,10 +1553,6 @@ ci:
 perf:
 security:
 ```
-
-Avoid giant unrelated commits.
-
-A commit should ideally represent one coherent engineering change.
 
 ---
 
