@@ -183,8 +183,12 @@ gtest_discover_tests(neko_network_tests DISCOVERY_MODE PRE_TEST)
 # -----------------------------------------------------------------------------
 add_executable(neko_renderer_tests
   renderer/renderer_test.cpp
+  rendering/golden_image_test.cpp
 )
 target_link_libraries(neko_renderer_tests PRIVATE neko::renderer gtest_main)
+target_compile_definitions(neko_renderer_tests PRIVATE
+  NEKO_TEST_GOLDEN_DIR="${CMAKE_SOURCE_DIR}/tests/golden"
+)
 apply_compiler_warnings(neko_renderer_tests)
 gtest_discover_tests(neko_renderer_tests DISCOVERY_MODE PRE_TEST)
 

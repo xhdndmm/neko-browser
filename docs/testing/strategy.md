@@ -16,7 +16,10 @@
 | Web Platform Tests | `tests/web-platform/` | WPT 子集 | Phase 13+ |
 
 > **现状（诚实标注）**：`tests/fuzz/` **已建立**（2026-10，见
-> [fuzzing.md](fuzzing.md)：libFuzzer 目标 + 语料库 + 确定性回归套件）。
+> [fuzzing.md](fuzzing.md)：libFuzzer 目标 + 语料库 + 确定性回归套件）；
+> **像素对比渲染回归已建立**（2026-10）：golden-image 套件
+> `tests/unit/rendering/golden_image_test.cpp` + 固定件/黄金图 `tests/golden/`
+> （HTML+CSS → 布局 → 光栅化 → 与提交的 PPM 逐像素比对，见该文件头注释）。
 > 表中 `tests/integration/`、`tests/network/`、`tests/rendering/`、
 > `tests/web-platform/` **尚未建立**（见 roadmap 后续项）。集成/端到端性质的测试
 > 目前放在 `tests/unit/browser/`、`tests/unit/renderer/`、`tests/unit/ui/` 内，
@@ -69,8 +72,11 @@ HTML + CSS → Browser Engine → Screenshot → Pixel Comparison
 - `tests/pages/`：端到端测试页面与媒体夹具。
 - `tests/fuzz/`：URL/HTTP/HTML/CSS 解析器的 libFuzzer 目标与语料库；
   `tests/unit/fuzz/` 的确定性回归套件每次构建回放语料（见 fuzzing.md）。
+- `tests/golden/` + `tests/unit/rendering/golden_image_test.cpp`：golden-image
+  像素回归（无文本、整数几何的固定件 → 光栅化 → 与提交的 PPM 黄金图逐像素
+  比对；`NEKO_UPDATE_GOLDEN=1` 在有意的渲染变更后重新生成）。
 - 可执行文件冒烟测试（`--version` / `--help`）。
 - 全部 ctest 用例通过（含 ASan/UBSan）。**本文件不写死测试数量**——数量随代码
   增长，以 CI 实际运行为准，避免再次出现文档漂移。
-- 尚未建立：`tests/integration/`、`tests/network/`、`tests/rendering/`（像素对比）、
-  `tests/web-platform/`。
+- 尚未建立：`tests/integration/`、`tests/network/`、`tests/rendering/`（目录
+  拆分；像素对比能力已由 `tests/golden/` 覆盖）、`tests/web-platform/`。
