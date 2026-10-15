@@ -198,6 +198,11 @@ bool QtKeyToDomKey(int qkey, std::string& key, std::string& code)
     key = "Tab";
     code = "Tab";
     return true;
+  case Qt::Key_Backtab:
+    // Shift+Tab arrives as Backtab; the browser walks focus backwards on it.
+    key = "Backtab";
+    code = "Tab";
+    return true;
   case Qt::Key_Delete:
     key = "Delete";
     code = "Delete";

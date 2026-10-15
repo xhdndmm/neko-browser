@@ -227,6 +227,98 @@ void DispatchToggleEvents(javascript::DomBinder* runtime, dom::Element& element)
   }
 }
 
+// Moves keyboard focus to |element| (or clears it when null), firing blur on
+// the old target and focus on the new one (only when the target changes).
+void FocusControl(Tab* tab, dom::Element* element)
+{
+  dom::Element* prev = tab->focused_element;
+  if (prev == element) {
+    return;
+  }
+  tab->focused_element = element;
+  tab->page->SetFocusedElement(element);
+  if (tab->script_runtime != nullptr) {
+    if (prev != nullptr) {
+      tab->script_runtime->DispatchFocusEvent(*prev, "blur");
+    }
+    if (element != nullptr) {
+      tab->script_runtime->DispatchFocusEvent(*element, "focus");
+    }
+  }
+}
+
+// True when |element| participates in sequential (Tab) focus navigation: a
+// form control or a link.  Hidden/disabled controls and href-less anchors
+// are skipped (no tabindex support yet -- the matrix tracks it).
+bool IsFocusable(const dom::Element& element)
+{
+  if (element.HasAttribute("disabled")) {
+    return false;
+  }
+  const std::string_view tag = element.tag_name();
+  if (tag == "a" || tag == "area") {
+    return element.HasAttribute("href");
+  }
+  if (tag == "textarea" || tag == "select" || tag == "button") {
+    return true;
+  }
+  if (tag == "input") {
+    return layout::ClassifyFormControl(element) != layout::FormControlKind::kHidden;
+  }
+  return false;
+}
+
+// The document's focusable controls in document order (pre-order walk).
+std::vector<dom::Element*> Focusables(dom::Element& from)
+{
+  std::vector<dom::Element*> out;
+  const dom::Node* root = &from;
+  while (root->parent() != nullptr) {
+    root = root->parent();
+  }
+  std::vector<dom::Node*> stack{const_cast<dom::Node*>(root)};
+  while (!stack.empty()) {
+    dom::Node* node = stack.back();
+    stack.pop_back();
+    if (node->node_type() == dom::NodeType::kElement &&
+        IsFocusable(static_cast<const dom::Element&>(*node))) {
+      out.push_back(static_cast<dom::Element*>(node));
+    }
+    // Reverse-push so children pop in document order.
+    const std::size_t count = node->child_count();
+    for (std::size_t i = count; i > 0; --i) {
+      stack.push_back(node->child_at(i - 1));
+    }
+  }
+  return out;
+}
+
+// The next focusable control after |tab|'s (walking |backwards| wraps at the
+// ends), or nullptr when the document has none.
+dom::Element* NextFocusable(Tab* tab, bool backwards)
+{
+  if (tab->page == nullptr) {
+    return nullptr;
+  }
+  dom::Document* doc = tab->page->document();
+  if (doc == nullptr || doc->document_element() == nullptr) {
+    return nullptr;
+  }
+  const std::vector<dom::Element*> focusables = Focusables(*doc->document_element());
+  if (focusables.empty()) {
+    return nullptr;
+  }
+  const auto it = std::find(focusables.begin(), focusables.end(), tab->focused_element);
+  const int count = static_cast<int>(focusables.size());
+  int index = it == focusables.end() ? -1 : static_cast<int>(it - focusables.begin());
+  if (backwards) {
+    index = index <= 0 ? count - 1 : index - 1;
+  } else {
+    index = (index + 1) % count;
+  }
+  return focusables[static_cast<std::size_t>(index)];
+}
+
 // Walks from |node| up to find a submit button (<button> or <input
 // type=submit>), then returns the <form> that owns it.
 dom::Element* FindSubmitForm(dom::Node* node)
@@ -1027,23 +1119,10 @@ bool BrowserController::DispatchPointerClick(int tab_id, float doc_x, float doc_
   // the UI's caret painting (read across threads under the page lock).
   // Focus changes fire blur (old) / focus (new) on the elements.
   const std::string clicked_tag = std::string(element->tag_name());
-  dom::Element* prev_focused = tab->focused_element;
   if (clicked_tag == "input" || clicked_tag == "textarea" || clicked_tag == "select") {
-    tab->focused_element = const_cast<dom::Element*>(element);
-    tab->page->SetFocusedElement(element);
-    if (tab->script_runtime != nullptr && prev_focused != tab->focused_element) {
-      if (prev_focused != nullptr) {
-        tab->script_runtime->DispatchFocusEvent(*prev_focused, "blur");
-      }
-      tab->script_runtime->DispatchFocusEvent(*tab->focused_element, "focus");
-    }
+    FocusControl(tab, const_cast<dom::Element*>(element));
   } else if (tab->focused_element != nullptr) {
-    dom::Element* losing = tab->focused_element;
-    tab->focused_element = nullptr;
-    tab->page->SetFocusedElement(nullptr);
-    if (tab->script_runtime != nullptr) {
-      tab->script_runtime->DispatchFocusEvent(*losing, "blur");
-    }
+    FocusControl(tab, nullptr);
   }
   // Run the page's cancelable pointer events (mousedown -> mouseup -> click)
   // when a script runtime exists; a page with no scripts skips straight to the
@@ -1328,11 +1407,16 @@ bool BrowserController::DispatchKeyboard(int tab_id,
   if (!not_canceled || type != "keydown") {
     return not_canceled;
   }
-  // Default actions: Space toggles a focused checkable input (keyboard
-  // activation); otherwise a printable character inserts into a focused text
-  // input, Backspace deletes, Enter submits the enclosing form (implicit
-  // submission).
+  // Default actions: Tab / Backtab (Qt's Shift+Tab) move keyboard focus
+  // through the document's focusable controls; Space toggles a focused
+  // checkable input (keyboard activation); otherwise a printable character
+  // inserts into a focused text input, Backspace deletes, Enter submits the
+  // enclosing form (implicit submission).
   dom::Element* control = tab->focused_element;
+  if (key == "Tab" || key == "Backtab") {
+    FocusControl(tab, NextFocusable(tab, /*backwards=*/key == "Backtab"));
+    return not_canceled;
+  }
   if (control != nullptr && (key == " " || key == "Space" || key == "Spacebar") &&
       ToggleCheckableInput(*control)) {
     DispatchToggleEvents(tab->script_runtime.get(), *control);

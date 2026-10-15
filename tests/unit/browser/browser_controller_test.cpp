@@ -878,6 +878,61 @@ TEST(BrowserControllerTest, SpaceTogglesFocusedCheckbox)
   EXPECT_TRUE(cb->HasAttribute("checked"));
 }
 
+// Tab moves focus through the focusable controls in document order and wraps
+// around; "Backtab" (Qt's Shift+Tab) walks backwards.  Disabled controls,
+// hidden inputs and href-less anchors are skipped, and Tab never edits the
+// focused text input's value.
+TEST(BrowserControllerTest, TabMovesFocusThroughControls)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<input id=\"a\" type=\"text\">"
+                               "<input id=\"dis\" type=\"checkbox\" disabled>"
+                               "<a id=\"nolink\">x</a>"
+                               "<textarea id=\"b\"></textarea>"
+                               "<input id=\"hid\" type=\"hidden\">"
+                               "<a id=\"link\" href=\"http://example.com/\">y</a>"
+                               "<button id=\"c\">go</button>"
+                               "</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  tab->page->Layout(800, 600);
+  auto element = [&tab](const char* id) {
+    return dom::QuerySelector(*tab->page->document(), id);
+  };
+
+  // Document order of the focusables: #a, #b, #link, #c.  Hidden/disabled/
+  // href-less never take focus.
+  EXPECT_EQ(tab->focused_element, nullptr);
+  controller.DispatchKeyboard(tab->id, "keydown", "Tab", "Tab");
+  EXPECT_EQ(tab->focused_element, element("#a"));
+  controller.DispatchKeyboard(tab->id, "keydown", "Tab", "Tab");
+  EXPECT_EQ(tab->focused_element, element("#b"));
+  controller.DispatchKeyboard(tab->id, "keydown", "Tab", "Tab");
+  EXPECT_EQ(tab->focused_element, element("#link"));
+  controller.DispatchKeyboard(tab->id, "keydown", "Tab", "Tab");
+  EXPECT_EQ(tab->focused_element, element("#c"));
+  // Wraps around.
+  controller.DispatchKeyboard(tab->id, "keydown", "Tab", "Tab");
+  EXPECT_EQ(tab->focused_element, element("#a"));
+  // Backwards from #a wraps to the last (#c).
+  controller.DispatchKeyboard(tab->id, "keydown", "Backtab", "Tab");
+  EXPECT_EQ(tab->focused_element, element("#c"));
+
+  // Tab inside a focused text input moves focus instead of editing the value.
+  controller.DispatchKeyboard(tab->id, "keydown", "Tab", "Tab"); // -> #a
+  EXPECT_EQ(tab->focused_element, element("#a"));
+  controller.DispatchKeyboard(tab->id, "keydown", "Tab", "Tab"); // -> #b
+  EXPECT_EQ(tab->focused_element, element("#b"));
+  EXPECT_EQ(element("#a")->GetAttribute("value").value_or(""), "");
+}
+
 TEST(BrowserControllerTest, SubmitButtonSubmitsFormWithEncodedData)
 {
   TempProfile tp;
