@@ -1230,6 +1230,23 @@ std::string ButtonLabel(const dom::Element& element)
   return {};
 }
 
+// <input type="password"> renders its value as U+2022 bullets (WHATWG
+// §15.5.6), one per UTF-8 code point -- a CJK character masks to one bullet,
+// not one per continuation byte.  The placeholder is never masked (browsers
+// show it in the clear).
+std::string MaskPasswordValue(std::string_view value)
+{
+  std::string out;
+  out.reserve(value.size());
+  for (const char raw : value) {
+    const auto byte = static_cast<unsigned char>(raw);
+    if ((byte & 0xC0U) != 0x80U) { // a lead byte starts one code point
+      out += "\xE2\x80\xA2";
+    }
+  }
+  return out;
+}
+
 // Hint text shown while a text control is empty: the standard `placeholder`
 // attribute, then two non-standard attributes that Baidu's home page carries its
 // search-box hint in.  Those two names are site-specific (no other page defines
@@ -1778,6 +1795,11 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         const int characters = FieldSizeAttribute(element, "size").value_or(kDefaultFieldSizeChars);
         content_width = static_cast<float>(characters - 1) * average + widest;
         text = std::string(element.GetAttribute("value").value_or(""));
+        // §15.5.6: a password state shows bullets instead of the value.
+        if (base::AsciiEqualsIgnoreCase(
+                std::string(element.GetAttribute("type").value_or("")), "password")) {
+          text = MaskPasswordValue(text);
+        }
         break;
       }
       case FormControlKind::kTextArea: {

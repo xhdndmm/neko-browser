@@ -3084,6 +3084,35 @@ TEST(LayoutTest, EmptyTextControlShowsPlaceholder)
   EXPECT_EQ(filled->lines.front().runs.front().text, "typing");
 }
 
+// <input type="password"> masks its value (WHATWG §15.5.6): the run text is
+// one U+2022 bullet per CODE POINT (a CJK character masks to one bullet, not
+// three bytes' worth), and the placeholder stays in the clear like browsers
+// show it.
+TEST(LayoutTest, PasswordValueRendersMasked)
+{
+  const std::string bullet = "\xE2\x80\xA2"; // U+2022
+  Page page = Build("<body style=\"margin:0\">"
+                    "<input id=\"pw\" type=\"password\" value=\"abc\">"
+                    "<input id=\"cjk\" type=\"password\" value=\"\u5bc6\u7801x\">"
+                    "<input id=\"hint\" type=\"password\" placeholder=\"Pass\"></body>");
+  const LayoutBox* pw = FindControl(page, "#pw");
+  const LayoutBox* cjk = FindControl(page, "#cjk");
+  const LayoutBox* hint = FindControl(page, "#hint");
+  ASSERT_NE(pw, nullptr);
+  ASSERT_NE(cjk, nullptr);
+  ASSERT_NE(hint, nullptr);
+  ASSERT_FALSE(pw->lines.empty());
+  ASSERT_FALSE(pw->lines.front().runs.empty());
+  EXPECT_EQ(pw->lines.front().runs.front().text, bullet + bullet + bullet);
+  ASSERT_FALSE(cjk->lines.empty());
+  ASSERT_FALSE(cjk->lines.front().runs.empty());
+  // Two CJK code points + one ASCII letter = three bullets.
+  EXPECT_EQ(cjk->lines.front().runs.front().text, bullet + bullet + bullet);
+  ASSERT_FALSE(hint->lines.empty());
+  ASSERT_FALSE(hint->lines.front().runs.empty());
+  EXPECT_EQ(hint->lines.front().runs.front().text, "Pass");
+}
+
 TEST(LayoutTest, AbsoluteReplacedUsesPresentationalSize)
 {
   // Baidu's logo: <img width=270 height=129 style="position:absolute;left:50%">
