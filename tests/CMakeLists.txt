@@ -16,6 +16,14 @@
 add_subdirectory(unit)
 
 # -----------------------------------------------------------------------------
+# libFuzzer harnesses (Clang only, opt-in via NEKO_BUILD_FUZZERS).  The
+# deterministic corpus replay lives in tests/unit/fuzz and always builds.
+# -----------------------------------------------------------------------------
+if(NEKO_BUILD_FUZZERS)
+  add_subdirectory(fuzz)
+endif()
+
+# -----------------------------------------------------------------------------
 # Build-system regression test (no compiled target): the third-party include
 # filter must keep directories that provide the C standard library headers out
 # of the list apply_compiler_warnings() re-declares with -isystem -- doing so

@@ -70,6 +70,7 @@ option(NEKO_WARNINGS_AS_ERRORS "Treat compiler warnings as errors"        OFF)
 option(NEKO_ENABLE_LTO         "Enable link-time optimization"            OFF)
 option(NEKO_ENABLE_COVERAGE    "Enable code coverage instrumentation"     OFF)
 option(NEKO_BUILD_UI           "Build the Qt6 GUI browser"                 ON)
+option(NEKO_BUILD_FUZZERS      "Build libFuzzer harnesses (Clang only)"    OFF)
 
 # Semicolon-separated list of sanitizers, e.g. "address;undefined".
 # Supported values depend on the compiler (GCC/Clang: address, undefined,

@@ -56,6 +56,27 @@ apply_compiler_warnings(neko_url_tests)
 gtest_discover_tests(neko_url_tests DISCOVERY_MODE PRE_TEST)
 
 # -----------------------------------------------------------------------------
+# neko_fuzz_regression_tests
+# -----------------------------------------------------------------------------
+# Deterministic replay of tests/fuzz/corpus/** through the shared fuzz
+# harness bodies (tests/fuzz/fuzz_targets.cpp) plus a fixed adversarial
+# battery.  Always built — this is what keeps the corpus meaningful on
+# toolchains without libFuzzer.  See docs/testing/fuzzing.md.
+add_executable(neko_fuzz_regression_tests
+  fuzz/fuzz_regression_test.cpp
+  ${CMAKE_SOURCE_DIR}/tests/fuzz/fuzz_targets.cpp
+)
+target_include_directories(neko_fuzz_regression_tests PRIVATE
+  ${CMAKE_SOURCE_DIR}/tests/fuzz)
+target_compile_definitions(neko_fuzz_regression_tests PRIVATE
+  NEKO_TEST_FUZZ_DIR="${CMAKE_SOURCE_DIR}/tests/fuzz"
+)
+target_link_libraries(neko_fuzz_regression_tests PRIVATE neko::url neko::html
+  neko::css neko::network ZLIB::ZLIB OpenSSL::SSL OpenSSL::Crypto gtest_main)
+apply_compiler_warnings(neko_fuzz_regression_tests)
+gtest_discover_tests(neko_fuzz_regression_tests DISCOVERY_MODE PRE_TEST)
+
+# -----------------------------------------------------------------------------
 # neko_dom_tests
 # -----------------------------------------------------------------------------
 add_executable(neko_dom_tests
