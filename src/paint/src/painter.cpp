@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
+#include <vector>
 
 namespace neko::paint {
 namespace {
@@ -52,28 +54,27 @@ void FillBackground(const layout::LayoutBox& box, css::Color color, DisplayList&
   }
 }
 
-// Collects every positioned (absolute/fixed) descendant in tree order.  They
-// all paint after the in-flow content (there is no z-index support yet, so
-// they are treated as z-index:auto and keep tree order).
-void CollectPositioned(const layout::LayoutBox& box, std::vector<const layout::LayoutBox*>& out)
+// Out-of-flow painting model (simplified CSS 2.1 Appendix E), see painter.h.
+//
+// True for a box taken out of normal flow (relative stays in flow and paints
+// at its tree position).
+bool IsPositioned(const layout::LayoutBox& box)
 {
-  for (const auto& child : box.positioned_children) {
-    out.push_back(child.get());
-    CollectPositioned(*child, out);
+  return box.style.position == style::Position::kAbsolute ||
+         box.style.position == style::Position::kFixed;
+}
+
+// True when |box| establishes a stacking context (CSS 2.1 §9.9): `opacity`
+// below 1 (CSS Color 4 §3.2), or a positioned box with an explicit z-index.
+// A z-index:auto positioned box establishes NONE — its positioned descendants
+// roll up into the enclosing context's tiers, which is what keeps a deep
+// dropdown sortable against the whole page.
+bool CreatesStackingContext(const layout::LayoutBox& box)
+{
+  if (box.style.opacity < 1.0f) {
+    return true;
   }
-  for (const auto& child : box.children) {
-    CollectPositioned(*child, out);
-  }
-  for (const auto& f : box.floats) {
-    CollectPositioned(*f, out);
-  }
-  for (const auto& line : box.lines) {
-    for (const auto& ib : line.boxes) {
-      if (ib.block_box != nullptr) {
-        CollectPositioned(*ib.block_box, out);
-      }
-    }
-  }
+  return IsPositioned(box) && box.style.z_index.has_value();
 }
 
 } // namespace
@@ -84,48 +85,93 @@ DisplayList Painter::Paint() const
   if (root_ == nullptr) {
     return list;
   }
-  // CSS 2.1 Appendix E painting order (simplified): paint the in-flow content
-  // (block backgrounds, floats, inline content) first, then every positioned
-  // descendant on top.  Painting positioned children inside their own box let
-  // a later in-flow sibling cover them — an absolutely-positioned dropdown
-  // menu was hidden behind the page content below the header.
-  PaintBox(*root_, list);
-  std::vector<const layout::LayoutBox*> positioned;
-  CollectPositioned(*root_, positioned);
-  // z-index order (CSS 2.1 §9.9): auto/0 first, then ascending; stable, so an
-  // equal z-index keeps tree order.  A z-index:100 dropdown menu therefore
-  // paints above an overlaying banner that uses z-index:auto.
-  std::stable_sort(positioned.begin(),
-                   positioned.end(),
-                   [](const layout::LayoutBox* a, const layout::LayoutBox* b) {
-                     return a->style.z_index.value_or(0) < b->style.z_index.value_or(0);
-                   });
-  for (const layout::LayoutBox* box : positioned) {
-    PaintBox(*box, list);
-  }
+  PaintContext(*root_, list);
   return list;
 }
 
-void Painter::PaintBox(const layout::LayoutBox& box, DisplayList& list) const
+void Painter::PaintContext(const layout::LayoutBox& box, DisplayList& list) const
 {
-  // Group opacity (CSS Color 4 §3.2): everything this subtree paints is
-  // composited as ONE unit.  A descendant's own opacity nests a smaller
-  // group inside.  Known limitation until stacking contexts land: positioned
-  // descendants are painted by Paint()'s global pass and escape this group.
+  // Group opacity (CSS Color 4 §3.2): everything this context paints --
+  // including its positioned units -- is composited as ONE unit.  A
+  // descendant's own opacity nests a smaller group inside.
   const bool grouped = box.style.opacity < 1.0f;
   if (grouped) {
     list.PushGroup(box.style.opacity);
   }
 
-  // visibility: hidden suppresses the box's own decorations and content but
-  // keeps its layout space; descendants that declare visibility: visible
-  // again still paint (CSS 2.2 §11.2), so the child recursion below is not
-  // gated here.
-  const bool visible = box.style.visibility != style::Visibility::kHidden;
-  if (visible) {
+  std::vector<const layout::LayoutBox*> neg;
+  std::vector<const layout::LayoutBox*> zero;
+  std::vector<const layout::LayoutBox*> pos;
+  CollectUnits(box, neg, zero, pos);
+
+  // E1: the context root's own decoration paints first (below even its
+  // negative z-index children).  visibility: hidden suppresses it but keeps
+  // the layout space; descendants that declare visibility: visible again
+  // still paint (CSS 2.2 §11.2).
+  if (box.style.visibility != style::Visibility::kHidden) {
     PaintBoxSelf(box, list);
   }
 
+  // E2: negative z-index child contexts, ascending (stable).
+  std::stable_sort(neg.begin(), neg.end(), [](const layout::LayoutBox* a, const layout::LayoutBox* b) {
+    return a->style.z_index.value_or(0) < b->style.z_index.value_or(0);
+  });
+  for (const layout::LayoutBox* unit : neg) {
+    PaintUnit(*unit, list);
+  }
+
+  // E3-E5: the in-flow content of this context.
+  PaintInFlowContent(box, list);
+
+  // E6: z-index 0/auto units in tree order (positioned content sits above
+  // all in-flow content of its context — a dropdown must not be covered by
+  // the page content below its header); E7: positive z-index, ascending.
+  for (const layout::LayoutBox* unit : zero) {
+    PaintUnit(*unit, list);
+  }
+  std::stable_sort(pos.begin(), pos.end(), [](const layout::LayoutBox* a, const layout::LayoutBox* b) {
+    return a->style.z_index.value_or(0) < b->style.z_index.value_or(0);
+  });
+  for (const layout::LayoutBox* unit : pos) {
+    PaintUnit(*unit, list);
+  }
+
+  if (grouped) {
+    list.PopGroup();
+  }
+}
+
+void Painter::PaintUnit(const layout::LayoutBox& box, DisplayList& list) const
+{
+  if (CreatesStackingContext(box)) {
+    PaintContext(box, list);
+    return;
+  }
+  // z-index:auto positioned box: no context of its own.  Its in-flow content
+  // paints here; its positioned descendants were rolled into the enclosing
+  // tiers by CollectUnits.
+  if (box.style.visibility != style::Visibility::kHidden) {
+    PaintBoxSelf(box, list);
+  }
+  PaintInFlowContent(box, list);
+}
+
+void Painter::PaintInFlowNode(const layout::LayoutBox& box, DisplayList& list) const
+{
+  if (CreatesStackingContext(box)) {
+    // An in-flow context root (opacity < 1) paints its context at its tree
+    // position inside the in-flow content.
+    PaintContext(box, list);
+    return;
+  }
+  if (box.style.visibility != style::Visibility::kHidden) {
+    PaintBoxSelf(box, list);
+  }
+  PaintInFlowContent(box, list);
+}
+
+void Painter::PaintInFlowContent(const layout::LayoutBox& box, DisplayList& list) const
+{
   // overflow: hidden/auto/scroll clips the box's content (and its
   // descendants) to the padding box.  The box's own background/border paint
   // above the clip boundary and are NOT clipped.
@@ -134,16 +180,21 @@ void Painter::PaintBox(const layout::LayoutBox& box, DisplayList& list) const
     list.PushClip(box.content_x(), box.content_y(), box.content_width(), box.content_height());
   }
 
-  // Block children (back to front).
+  // Block children (back to front).  Positioned children are painted by the
+  // enclosing stacking context's unit pass instead.
   for (const auto& child : box.children) {
-    PaintBox(*child, list);
+    if (!IsPositioned(*child)) {
+      PaintInFlowNode(*child, list);
+    }
   }
 
   // Floats paint above in-flow block children but below inline content
   // (CSS2.1 Appendix E), so a float's background/text is not covered by a
   // later block-level sibling.
   for (const auto& f : box.floats) {
-    PaintBox(*f, list);
+    if (!IsPositioned(*f)) {
+      PaintInFlowNode(*f, list);
+    }
   }
 
   // Atomic inline boxes within lines.
@@ -152,7 +203,7 @@ void Painter::PaintBox(const layout::LayoutBox& box, DisplayList& list) const
       if (inline_box.block_box != nullptr) {
         // An inline-block: paint its inner block layout (background, border,
         // content and children).  It carries the element's own style.
-        PaintBox(*inline_box.block_box, list);
+        PaintInFlowNode(*inline_box.block_box, list);
       } else if (inline_box.image != nullptr && !inline_box.image->empty() &&
                  inline_box.style.visibility != style::Visibility::kHidden) {
         list.DrawImage(inline_box.x,
@@ -168,8 +219,8 @@ void Painter::PaintBox(const layout::LayoutBox& box, DisplayList& list) const
   // Inline element backgrounds (CSS 2.2 §8.4.1): fill behind each group of
   // consecutive runs that share a source element carrying a background colour
   // (e.g. a padded `background:#222` overlay link).  Runs whose source is the
-  // block itself duplicate the block's own background, which PaintBox already
-  // filled, so they are skipped.
+  // block itself duplicate the block's own background, which PaintBoxSelf
+  // already filled, so they are skipped.
   for (const layout::Line& line : box.lines) {
     for (std::size_t i = 0; i < line.runs.size();) {
       const layout::TextRun& first = line.runs[i];
@@ -217,10 +268,58 @@ void Painter::PaintBox(const layout::LayoutBox& box, DisplayList& list) const
   if (clips) {
     list.PopClip();
   }
+}
 
-  if (grouped) {
-    list.PopGroup();
-  }
+void Painter::CollectUnits(const layout::LayoutBox& box,
+                           std::vector<const layout::LayoutBox*>& neg,
+                           std::vector<const layout::LayoutBox*>& zero,
+                           std::vector<const layout::LayoutBox*>& pos) const
+{
+  const auto classify = [&neg, &zero, &pos](const layout::LayoutBox* unit) {
+    const int z = unit->style.z_index.value_or(0);
+    if (z < 0) {
+      neg.push_back(unit);
+    } else if (z > 0) {
+      pos.push_back(unit);
+    } else {
+      zero.push_back(unit);
+    }
+  };
+
+  // Walks the box tree in tree order.  A positioned box that establishes its
+  // own stacking context is a unit here and its descendants are collected
+  // when it paints; a z-index:auto positioned box is a unit but its own
+  // positioned descendants roll UP into this context (spec behaviour).
+  // In-flow context roots (opacity < 1) collect their own units.
+  std::function<void(const layout::LayoutBox&)> visit = [&](const layout::LayoutBox& node) {
+    const auto visit_subtree = [&](const layout::LayoutBox& child) {
+      if (IsPositioned(child)) {
+        classify(&child);
+        if (!CreatesStackingContext(child)) {
+          visit(child);
+        }
+      } else if (!CreatesStackingContext(child)) {
+        visit(child);
+      }
+    };
+    for (const auto& child : node.positioned_children) {
+      visit_subtree(*child);
+    }
+    for (const auto& child : node.children) {
+      visit_subtree(*child);
+    }
+    for (const auto& f : node.floats) {
+      visit_subtree(*f);
+    }
+    for (const layout::Line& line : node.lines) {
+      for (const layout::InlineBox& inline_box : line.boxes) {
+        if (inline_box.block_box != nullptr) {
+          visit_subtree(*inline_box.block_box);
+        }
+      }
+    }
+  };
+  visit(box);
 }
 
 void Painter::PaintBoxSelf(const layout::LayoutBox& box, DisplayList& list) const

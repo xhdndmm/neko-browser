@@ -490,6 +490,116 @@ TEST(PainterTest, OpacityWrapsSubtreeInGroup)
   EXPECT_FALSE(red_in_group);
 }
 
+// ---------------------------------------------------------------------------
+// Stacking contexts (CSS 2.1 §9.9 / simplified Appendix E).
+// ---------------------------------------------------------------------------
+
+// An opacity element's positioned descendants paint INSIDE its group (they
+// belong to the stacking context it establishes): a .5 box containing an
+// absolute child fades the child too.
+TEST(PainterTest, PositionedExceptionDescendantsJoinTheOpacityGroup)
+{
+  auto doc = html::Parser("<body style=\"margin:0;background:#ffffff\">"
+                          "<div style=\"opacity:0.5;position:relative;width:100px;height:100px;"
+                          "background:#c04040\">"
+                          "<div style=\"position:absolute;left:10px;top:10px;width:50px;"
+                          "height:50px;background:#4040c0\"></div></div></body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine layout(styles);
+  std::unique_ptr<layout::LayoutBox> root = layout.BuildLayoutTree(*doc, 200);
+  Painter painter(root.get());
+  Rasterizer image(200, 200);
+  image.Clear(css::Color{255, 255, 255, 255});
+  image.Rasterize(painter.Paint());
+
+  // The absolute child (opaque blue) sits inside the .5 group: faded blue
+  // over white.  Group alpha is quantised to 128/255 by the integer
+  // fixed-point blending, so the exact result is (159, 159, 223) — notably
+  // NOT (64, 64, 192), which is what painting the child outside the group
+  // at full opacity would produce.
+  const css::Color inside = Pixel(image, 30, 30);
+  EXPECT_EQ(inside, (css::Color{159, 159, 223, 255}));
+}
+
+// z-index sorts within the nearest stacking context, not globally: a
+// z-index:100 box nested under a z-index:5 context root stays BELOW the
+// root context's z-index:10 sibling.
+TEST(PainterTest, ZIndexSortsWithinItsStackingContext)
+{
+  auto doc = html::Parser("<body style=\"margin:0\">"
+                          "<div style=\"position:absolute;z-index:5;left:0;top:0;width:100px;"
+                          "height:100px;background:#ff0000\">"
+                          "<div style=\"position:absolute;z-index:100;left:0;top:0;width:100px;"
+                          "height:100px;background:#00ff00\"></div></div>"
+                          "<div style=\"position:absolute;z-index:10;left:50px;top:50px;"
+                          "width:100px;height:100px;background:#0000ff\"></div></body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine layout(styles);
+  std::unique_ptr<layout::LayoutBox> root = layout.BuildLayoutTree(*doc, 200);
+  Painter painter(root.get());
+  Rasterizer image(200, 200);
+  image.Clear(css::Color{255, 255, 255, 255});
+  image.Rasterize(painter.Paint());
+
+  // All three overlap at (60,60): the z:10 context paints last.
+  EXPECT_EQ(Pixel(image, 60, 60), (css::Color{0, 0, 255, 255}));
+  // The green child covers its own context root's red outside the overlap.
+  EXPECT_EQ(Pixel(image, 20, 20), (css::Color{0, 255, 0, 255}));
+}
+
+// A z-index:auto positioned box establishes no stacking context: its
+// positioned descendants roll up into the enclosing context's tiers and
+// sort there by their own z-index (a deep dropdown above a z:10 sibling).
+TEST(PainterTest, ZIndexAutoDescendantsRollUpToTheEnclosingContext)
+{
+  auto doc = html::Parser("<body style=\"margin:0\">"
+                          "<div style=\"position:absolute;left:0;top:0;width:100px;"
+                          "height:100px;background:#ff0000\">"
+                          "<div style=\"position:absolute;z-index:100;left:0;top:0;width:100px;"
+                          "height:100px;background:#00ff00\"></div></div>"
+                          "<div style=\"position:absolute;z-index:10;left:50px;top:50px;"
+                          "width:100px;height:100px;background:#0000ff\"></div></body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine layout(styles);
+  std::unique_ptr<layout::LayoutBox> root = layout.BuildLayoutTree(*doc, 200);
+  Painter painter(root.get());
+  Rasterizer image(200, 200);
+  image.Clear(css::Color{255, 255, 255, 255});
+  image.Rasterize(painter.Paint());
+
+  // Green (z:100, rolled up to the root context) paints above the z:10 blue.
+  EXPECT_EQ(Pixel(image, 60, 60), (css::Color{0, 255, 0, 255}));
+}
+
+// Negative z-index paints BELOW the in-flow content of its context
+// (Appendix E step 2 before steps 3-5).
+TEST(PainterTest, NegativeZIndexPaintsBelowInFlowContent)
+{
+  auto doc = html::Parser("<body style=\"margin:0\">"
+                          "<div style=\"position:absolute;z-index:-1;left:0;top:0;width:100px;"
+                          "height:100px;background:#ff0000\"></div>"
+                          "<div style=\"width:100px;height:100px;background:#00ff00\"></div>"
+                          "</body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine layout(styles);
+  std::unique_ptr<layout::LayoutBox> root = layout.BuildLayoutTree(*doc, 200);
+  Painter painter(root.get());
+  Rasterizer image(200, 200);
+  image.Clear(css::Color{255, 255, 255, 255});
+  image.Rasterize(painter.Paint());
+
+  // The green in-flow block covers the negative z-index red.
+  EXPECT_EQ(Pixel(image, 50, 50), (css::Color{0, 255, 0, 255}));
+}
+
 TEST(PainterTest, EndToEndRasterization)
 {
   auto doc = html::Parser("<body style=\"background-color: #ffffff\">"
