@@ -132,6 +132,7 @@ constexpr const char* kFixtures[] = {
     "positioning", // absolute placement + z-index paint order
     "float",       // float stacking, wrapping room, clear
     "opacity",     // group opacity: subtree composites as one unit
+    "forms",       // widget innards: checkbox tick, radio dot, disabled ink
 };
 
 class GoldenImageTest : public testing::TestWithParam<const char*>

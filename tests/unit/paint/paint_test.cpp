@@ -548,6 +548,108 @@ TEST(PainterTest, OpacityWrapsSubtreeInGroup)
 }
 
 // ---------------------------------------------------------------------------
+// Native widget innards (WHATWG §15.5 "Wave 2").
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Counts FillRect commands of a specific ink color: the widget marks are the
+// only black/gray 1px-row fills a control emits (chrome uses BorderRect and
+// a white background fill).
+int CountInkRuns(const std::string& html, css::Color ink)
+{
+  auto doc = html::Parser(html).Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine layout(styles);
+  std::unique_ptr<layout::LayoutBox> root = layout.BuildLayoutTree(*doc, 400);
+  Painter painter(root.get());
+  const DisplayList list = painter.Paint();
+  int runs = 0;
+  for (const DrawCommand& command : list.commands()) {
+    if (command.type == CommandType::kFillRect && command.color == ink) {
+      ++runs;
+    }
+  }
+  return runs;
+}
+
+} // namespace
+
+// A checked checkbox paints its tick (6 ink runs of the 9x9 tick bitmap);
+// an unchecked one paints none.
+TEST(PainterTest, CheckboxCheckedPaintsTick)
+{
+  const css::Color black{0, 0, 0, 255};
+  EXPECT_EQ(CountInkRuns("<body><input type=\"checkbox\" checked></body>", black), 6);
+  EXPECT_EQ(CountInkRuns("<body><input type=\"checkbox\"></body>", black), 0);
+}
+
+// A checked radio paints its dot (7 rows); an unchecked one paints none.
+TEST(PainterTest, RadioCheckedPaintsDot)
+{
+  const css::Color black{0, 0, 0, 255};
+  EXPECT_EQ(CountInkRuns("<body><input type=\"radio\" checked></body>", black), 7);
+  EXPECT_EQ(CountInkRuns("<body><input type=\"radio\"></body>", black), 0);
+}
+
+// <select> always paints its drop-down arrow (4 rows).
+TEST(PainterTest, SelectPaintsDropArrow)
+{
+  const css::Color black{0, 0, 0, 255};
+  EXPECT_EQ(CountInkRuns("<body><select></select></body>", black), 4);
+  EXPECT_EQ(CountInkRuns("<body></body>", black), 0);
+}
+
+// The disabled control draws its marks in gray (faded ink), not black.
+TEST(PainterTest, DisabledWidgetDrawsGrayInk)
+{
+  EXPECT_EQ(CountInkRuns("<body><input type=\"checkbox\" checked disabled></body>",
+                         css::Color{0x80, 0x80, 0x80, 255}),
+            6);
+  EXPECT_EQ(
+      CountInkRuns("<body><input type=\"checkbox\" checked disabled></body>", css::Color{0, 0, 0, 255}),
+      0);
+}
+
+// End-to-end: the tick lands on the exact bitmap pixels in the raster.  A
+// display:block control sits at an integer origin (an inline-block is
+// baseline-aligned at a fractional y, which the integer-span rasterizer
+// would dilate).
+TEST(PainterTest, TickPixelsLandExactly)
+{
+  auto doc = html::Parser("<body style=\"margin:0\">"
+                          "<input type=\"checkbox\" checked style=\"display:block\"></body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine layout(styles);
+  std::unique_ptr<layout::LayoutBox> root = layout.BuildLayoutTree(*doc, 100);
+  Painter painter(root.get());
+  Rasterizer image(100, 100);
+  image.Clear(css::Color{255, 255, 255, 255});
+  image.Rasterize(painter.Paint());
+
+  const auto dark = [&image](int x, int y) {
+    const std::size_t p =
+        (static_cast<std::size_t>(y) * static_cast<std::size_t>(image.width()) +
+         static_cast<std::size_t>(x)) *
+        4;
+    return image.pixels()[p] < 128;
+  };
+  // The 13x13 widget is at (0,0) with a 2px border: content at (2,2), the
+  // 9x9 tick bitmap one row/column each -> the top-right tick pixels of
+  // bitmap row 1 (cols 6-8) land at x=8..10, y=3.
+  EXPECT_TRUE(dark(8, 3));
+  EXPECT_TRUE(dark(10, 3));
+  EXPECT_FALSE(dark(11, 3)); // outside the bitmap (and the content box)
+  EXPECT_FALSE(dark(5, 3));  // bitmap row 1 is empty at col 3
+  // The bottom vertex (bitmap row 5, cols 3-4) is lit; row 6 is empty.
+  EXPECT_TRUE(dark(5, 7));
+  EXPECT_FALSE(dark(5, 8));
+}
+
+// ---------------------------------------------------------------------------
 // Stacking contexts (CSS 2.1 §9.9 / simplified Appendix E).
 // ---------------------------------------------------------------------------
 

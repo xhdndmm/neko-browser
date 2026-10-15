@@ -43,6 +43,115 @@ float ResolveBorderRadius(const style::SizeSpec& spec, float box_width)
   return spec.value;
 }
 
+// Native widget innards (WHATWG §15.5, paint layer "Wave 2"): the checkbox
+// tick, the radio dot and the drop-down arrow, drawn over the control's
+// chrome.  The marks are built from axis-aligned fills (plus one rounded
+// fill for the dot) so they are deterministic across fonts and platforms --
+// no glyph or platform widget is involved.  A disabled control draws them in
+// gray.  Still NOT IMPLEMENTED: range slider, colour well contents, file
+// button (the matrix lists them per control).
+void PaintWidget(const layout::LayoutBox& box, DisplayList& list)
+{
+  const css::Color ink = box.form_control_disabled ? css::Color{0x80, 0x80, 0x80, 255}
+                                                   : css::Color{0x00, 0x00, 0x00, 255};
+  // Widget marks snap to whole pixels: an inline-block origin is fractional
+  // (baseline alignment), and the rasterizer fills integer spans -- an
+  // un-snapped 1px row would expand into two rows and blur the mark.
+  const auto snap = [](float v) { return std::round(v); };
+  switch (box.form_control) {
+  case layout::FormControlKind::kCheckbox: {
+    if (!box.form_control_checked) {
+      break;
+    }
+    // The tick as a literal 9x9 bitmap (the classic checkmark), one draw
+    // command per ink run, centred in the content box.  Literal bitmaps stay
+    // exact at any DPR and any content size.
+    static constexpr const char* kTick[9] = {
+        ".........",
+        "......###",
+        ".....###.",
+        ".##..##..",
+        "..####...",
+        "...##....",
+        ".........",
+        ".........",
+        ".........",
+    };
+    const float ox = snap(box.content_x() + (box.content_width() - 9.0f) / 2.0f);
+    const float oy = snap(box.content_y() + (box.content_height() - 9.0f) / 2.0f);
+    for (int row = 0; row < 9; ++row) {
+      for (int col = 0; col < 9;) {
+        if (kTick[row][col] != '#') {
+          ++col;
+          continue;
+        }
+        int run = 1;
+        while (col + run < 9 && kTick[row][col + run] == '#') {
+          ++run;
+        }
+        list.FillRect(ox + static_cast<float>(col),
+                      oy + static_cast<float>(row),
+                      static_cast<float>(run),
+                      1,
+                      ink);
+        col += run;
+      }
+    }
+    break;
+  }
+  case layout::FormControlKind::kRadio: {
+    if (!box.form_control_checked) {
+      break;
+    }
+    // The dot as a literal 7x7 circle bitmap, centred in the content box.
+    static constexpr const char* kDot[7] = {
+        "..###..",
+        ".#####.",
+        "#######",
+        "#######",
+        "#######",
+        ".#####.",
+        "..###..",
+    };
+    const float ox = snap(box.content_x() + (box.content_width() - 7.0f) / 2.0f);
+    const float oy = snap(box.content_y() + (box.content_height() - 7.0f) / 2.0f);
+    for (int row = 0; row < 7; ++row) {
+      for (int col = 0; col < 7;) {
+        if (kDot[row][col] != '#') {
+          ++col;
+          continue;
+        }
+        int run = 1;
+        while (col + run < 7 && kDot[row][col + run] == '#') {
+          ++run;
+        }
+        list.FillRect(ox + static_cast<float>(col),
+                      oy + static_cast<float>(row),
+                      static_cast<float>(run),
+                      1,
+                      ink);
+        col += run;
+      }
+    }
+    break;
+  }
+  case layout::FormControlKind::kSelect: {
+    // A small downward triangle near the trailing edge: stacked shrinking
+    // rows (the classic 7x4 stepped arrow).
+    const float right =
+        snap(box.x + box.width - box.border_right - box.padding_right - 3.0f);
+    const float top = snap(box.y + (box.height - 4.0f) / 2.0f);
+    for (int row = 0; row < 4; ++row) {
+      const float w = 7.0f - 2.0f * static_cast<float>(row);
+      list.FillRect(right - w, top + static_cast<float>(row), w, 1, ink);
+    }
+    break;
+  }
+  default:
+    break;
+  }
+}
+
 // Fills a box's border box with its background color, honouring border-radius.
 void FillBackground(const layout::LayoutBox& box, css::Color color, DisplayList& list)
 {
@@ -465,6 +574,10 @@ void Painter::PaintBoxSelf(const layout::LayoutBox& box, DisplayList& list) cons
                       border_color);
     }
   }
+
+  // Native widget innards (checkbox tick, radio dot, drop-down arrow) sit on
+  // top of the chrome and under the content.
+  PaintWidget(box, list);
 
   // Replaced content: the decoded image drawn into the content box per
   // object-fit.
