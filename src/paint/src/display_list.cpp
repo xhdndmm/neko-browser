@@ -117,6 +117,21 @@ void DisplayList::PopClip()
   commands_.push_back(std::move(command));
 }
 
+void DisplayList::PushGroup(float alpha)
+{
+  DrawCommand command;
+  command.type = CommandType::kPushGroup;
+  command.alpha = alpha;
+  commands_.push_back(std::move(command));
+}
+
+void DisplayList::PopGroup()
+{
+  DrawCommand command;
+  command.type = CommandType::kPopGroup;
+  commands_.push_back(std::move(command));
+}
+
 void DisplayList::Scale(float factor)
 {
   if (factor == 1.0f) {

@@ -123,6 +123,121 @@ TEST(RasterizerTest, AlphaBlend)
   EXPECT_LE(p.b, 160);
 }
 
+// Group opacity composites the group as ONE unit: two overlapping opaque
+// black boxes at opacity .5 fade ONCE.  Per-command alpha would darken the
+// overlap twice (gray ~64 instead of ~127).
+TEST(RasterizerTest, GroupOpacityCompositesAsOneUnit)
+{
+  Rasterizer image(60, 20);
+  image.Clear(css::Color{255, 255, 255, 255});
+  DisplayList list;
+  list.PushGroup(0.5f);
+  list.FillRect(0, 0, 30, 20, css::Color{0, 0, 0, 255});
+  list.FillRect(20, 0, 30, 20, css::Color{0, 0, 0, 255});
+  list.PopGroup();
+  image.Rasterize(list);
+
+  const css::Color single = Pixel(image, 5, 10);  // covered by one box
+  const css::Color overlap = Pixel(image, 25, 10); // covered by both
+  const css::Color outside = Pixel(image, 55, 10); // covered by neither
+  // The overlap is faded exactly as much as the single coverage.
+  EXPECT_EQ(single, overlap);
+  EXPECT_EQ(outside, (css::Color{255, 255, 255, 255}));
+  // 0.5 black over white: ~127 gray (integer fixed-point blending).
+  EXPECT_NEAR(static_cast<float>(single.r), 127.0f, 2.0f);
+}
+
+// Nested groups multiply: opacity .5 containing opacity .5 = .25 overall.
+TEST(RasterizerTest, NestedGroupsMultiplyAlphas)
+{
+  Rasterizer image(10, 10);
+  image.Clear(css::Color{255, 255, 255, 255});
+  DisplayList list;
+  list.PushGroup(0.5f);
+  list.FillRect(0, 0, 5, 10, css::Color{0, 0, 0, 255});
+  list.PushGroup(0.5f);
+  list.FillRect(5, 0, 5, 10, css::Color{0, 0, 0, 255});
+  list.PopGroup();
+  list.PopGroup();
+  image.Rasterize(list);
+
+  const css::Color outer = Pixel(image, 2, 5);  // .5 black over white
+  const css::Color inner = Pixel(image, 7, 5);  // .25 black over white
+  EXPECT_NEAR(static_cast<float>(outer.r), 127.0f, 2.0f);
+  EXPECT_NEAR(static_cast<float>(inner.r), 191.0f, 2.0f);
+  EXPECT_GT(inner.r, outer.r);
+}
+
+// A group alpha of 1 draws normally, 0 draws nothing.
+TEST(RasterizerTest, GroupOpacityEdgeAlphas)
+{
+  Rasterizer image(10, 10);
+  image.Clear(css::Color{255, 255, 255, 255});
+  DisplayList list;
+  list.PushGroup(1.0f);
+  list.FillRect(0, 0, 5, 10, css::Color{0, 0, 0, 255});
+  list.PopGroup();
+  list.PushGroup(0.0f);
+  list.FillRect(5, 0, 5, 10, css::Color{0, 0, 0, 255});
+  list.PopGroup();
+  image.Rasterize(list);
+  EXPECT_EQ(Pixel(image, 2, 5), (css::Color{0, 0, 0, 255}));
+  EXPECT_EQ(Pixel(image, 7, 5), (css::Color{255, 255, 255, 255}));
+}
+
+// Clipping established outside the group still constrains its content, and a
+// clip pushed inside the group is released with the group.
+TEST(RasterizerTest, GroupRespectsEnclosingClip)
+{
+  Rasterizer image(20, 20);
+  image.Clear(css::Color{255, 255, 255, 255});
+  DisplayList list;
+  list.PushClip(0, 0, 10, 20);
+  list.PushGroup(0.5f);
+  list.FillRect(0, 0, 20, 20, css::Color{0, 0, 0, 255});
+  list.PushClip(0, 0, 20, 5);
+  list.FillRect(0, 0, 20, 20, css::Color{255, 0, 0, 255});
+  list.PopClip();
+  list.PopGroup();
+  list.PopClip();
+  list.FillRect(15, 15, 5, 5, css::Color{0, 0, 255, 255});
+  image.Rasterize(list);
+
+  EXPECT_EQ(Pixel(image, 15, 15), (css::Color{0, 0, 255, 255})); // after the group
+  EXPECT_EQ(Pixel(image, 12, 12), (css::Color{255, 255, 255, 255})); // outside clip
+  // Red at .5 over white is (255, 127, 127): the R channel stays 255, so the
+  // fade shows in G/B.
+  const css::Color faded = Pixel(image, 5, 2);
+  EXPECT_EQ(faded.r, 255);
+  EXPECT_NEAR(static_cast<float>(faded.g), 127.0f, 2.0f);
+  EXPECT_NEAR(static_cast<float>(faded.b), 127.0f, 2.0f);
+}
+
+// The parallel/banded path must rasterize groups identically to the serial
+// path (the group offscreen mirrors the band geometry byte for byte).
+TEST(RasterizerTest, GroupOpacityMatchesAcrossSerialAndParallel)
+{
+  DisplayList list;
+  list.PushGroup(0.5f);
+  list.FillRect(0, 0, 120, 90, css::Color{0, 0, 0, 255});
+  list.FillRect(30, 20, 60, 40, css::Color{200, 40, 40, 255});
+  list.PushGroup(0.5f);
+  list.FillRect(10, 10, 40, 40, css::Color{0, 0, 255, 255});
+  list.PopGroup();
+  list.PopGroup();
+
+  Rasterizer serial(120, 90);
+  serial.Clear(css::Color{255, 255, 255, 255});
+  serial.Rasterize(list);
+
+  Rasterizer parallel(120, 90);
+  parallel.Clear(css::Color{255, 255, 255, 255});
+  base::ThreadPool pool(4);
+  parallel.RasterizeParallel(list, pool, /*min_band_height=*/16);
+
+  EXPECT_EQ(serial.pixels(), parallel.pixels());
+}
+
 TEST(RasterizerTest, BorderRect)
 {
   Rasterizer image(20, 20);
@@ -330,6 +445,49 @@ TEST(PainterTest, DisplayListFromPage)
   }
   EXPECT_TRUE(found_fill);
   EXPECT_TRUE(found_text);
+}
+
+// opacity (CSS Color 4 §3.2): the element's subtree paints inside a
+// PushGroup/PopGroup pair carrying the clamped alpha; siblings outside the
+// element are not grouped.  (Positioned descendants currently escape the
+// group -- see the matrix; they are painted by Paint()'s global pass.)
+TEST(PainterTest, OpacityWrapsSubtreeInGroup)
+{
+  auto doc = html::Parser("<div style=\"opacity: 0.5\">"
+                          "<p style=\"background-color:#00ff00\">x</p></div>"
+                          "<p style=\"background-color:#ff0000\">y</p>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine layout(styles);
+  std::unique_ptr<layout::LayoutBox> root = layout.BuildLayoutTree(*doc, 800);
+
+  Painter painter(root.get());
+  const DisplayList list = painter.Paint();
+
+  int group_depth = 0;
+  int pushes = 0;
+  bool green_in_group = false;
+  bool red_in_group = false;
+  for (const DrawCommand& command : list.commands()) {
+    if (command.type == CommandType::kPushGroup) {
+      ++group_depth;
+      ++pushes;
+      EXPECT_FLOAT_EQ(command.alpha, 0.5f);
+    } else if (command.type == CommandType::kPopGroup) {
+      --group_depth;
+    } else if (command.type == CommandType::kFillRect &&
+               command.color == (css::Color{0, 255, 0, 255})) {
+      green_in_group = group_depth > 0;
+    } else if (command.type == CommandType::kFillRect &&
+               command.color == (css::Color{255, 0, 0, 255})) {
+      red_in_group = group_depth > 0;
+    }
+  }
+  EXPECT_EQ(pushes, 1);
+  EXPECT_EQ(group_depth, 0); // balanced
+  EXPECT_TRUE(green_in_group);
+  EXPECT_FALSE(red_in_group);
 }
 
 TEST(PainterTest, EndToEndRasterization)

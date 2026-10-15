@@ -143,6 +143,20 @@ private:
   void DrawText8x8(const DrawCommand& command);
   void DrawTextFreetype(const DrawCommand& command);
   void DrawImage(const DrawCommand& command);
+  // Executes commands[begin, end) into this rasterizer.  Shared by Rasterize()
+  // and the kPushGroup recursion.
+  void ExecuteCommands(const std::vector<DrawCommand>& commands,
+                       std::size_t begin,
+                       std::size_t end);
+  // Rasterizes a group range into a transparent offscreen mirror of this
+  // rasterizer and composites it back as ONE unit with |alpha| (group
+  // opacity).  The mirror copies every geometry field (band origin, visible
+  // band, scroll offset, clips), so draws land at the same byte index as they
+  // would here and the composite is index-aligned.
+  void RenderGroup(const std::vector<DrawCommand>& commands,
+                   std::size_t begin,
+                   std::size_t end,
+                   float alpha);
   void BlendGlyph(int x, int y, const graphics::GlyphBitmap& glyph, css::Color color);
   // Returns true when the rect (document coordinates) is inside the active
   // clip after intersection; updates the rect in place.

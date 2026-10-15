@@ -1,0 +1,10 @@
+<!-- neko-golden: 320x240 -->
+<!-- Group opacity (CSS Color 4 §3.2): the .5 group's inner blue box overlaps
+     its parent's red background and must fade ONCE (per-command alpha would
+     darken the overlap twice). -->
+<body style="margin:0;background:#ffffff">
+  <div style="opacity:0.5;width:200px;height:100px;background:#c04040;margin:10px">
+    <div style="width:120px;height:60px;background:#4040c0;margin-left:60px"></div>
+  </div>
+  <div style="opacity:0.25;width:200px;height:80px;background:#40a040;margin:10px"></div>
+</body>

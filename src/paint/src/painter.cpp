@@ -108,6 +108,15 @@ DisplayList Painter::Paint() const
 
 void Painter::PaintBox(const layout::LayoutBox& box, DisplayList& list) const
 {
+  // Group opacity (CSS Color 4 §3.2): everything this subtree paints is
+  // composited as ONE unit.  A descendant's own opacity nests a smaller
+  // group inside.  Known limitation until stacking contexts land: positioned
+  // descendants are painted by Paint()'s global pass and escape this group.
+  const bool grouped = box.style.opacity < 1.0f;
+  if (grouped) {
+    list.PushGroup(box.style.opacity);
+  }
+
   // visibility: hidden suppresses the box's own decorations and content but
   // keeps its layout space; descendants that declare visibility: visible
   // again still paint (CSS 2.2 §11.2), so the child recursion below is not
@@ -207,6 +216,10 @@ void Painter::PaintBox(const layout::LayoutBox& box, DisplayList& list) const
 
   if (clips) {
     list.PopClip();
+  }
+
+  if (grouped) {
+    list.PopGroup();
   }
 }
 

@@ -241,8 +241,36 @@ float Rasterizer::TextWidth(std::string_view text, float font_size)
 
 void Rasterizer::Rasterize(const DisplayList& list)
 {
-  for (const DrawCommand& command : list.commands()) {
+  ExecuteCommands(list.commands(), 0, list.commands().size());
+}
+
+void Rasterizer::ExecuteCommands(const std::vector<DrawCommand>& commands,
+                                 std::size_t begin,
+                                 std::size_t end)
+{
+  for (std::size_t i = begin; i < end; ++i) {
+    const DrawCommand& command = commands[i];
     switch (command.type) {
+    case CommandType::kPushGroup: {
+      // Find the matching kPopGroup at the same nesting depth and hand the
+      // enclosed range to the group renderer; an unmatched push treats the
+      // rest of the range as the group.
+      int depth = 1;
+      std::size_t j = i + 1;
+      for (; j < end; ++j) {
+        if (commands[j].type == CommandType::kPushGroup) {
+          ++depth;
+        } else if (commands[j].type == CommandType::kPopGroup && --depth == 0) {
+          break;
+        }
+      }
+      const std::size_t pop = std::min(j, end);
+      RenderGroup(commands, i + 1, pop, command.alpha);
+      i = pop; // resume after the kPopGroup (or end)
+      break;
+    }
+    case CommandType::kPopGroup:
+      break; // stray pop with no push: ignore
     case CommandType::kPushClip: {
       ClipRect clip{command.x, command.y, command.x + command.width, command.y + command.height};
       // Clips nest: the new clip is the intersection with the enclosing one.
@@ -278,6 +306,60 @@ void Rasterizer::Rasterize(const DisplayList& list)
       DrawImage(command);
       break;
     }
+  }
+}
+
+void Rasterizer::RenderGroup(const std::vector<DrawCommand>& commands,
+                             std::size_t begin,
+                             std::size_t end,
+                             float alpha)
+{
+  if (alpha <= 0.0f || width_ <= 0 || end <= begin) {
+    return;
+  }
+  if (alpha >= 1.0f) {
+    ExecuteCommands(commands, begin, end);
+    return;
+  }
+
+  // Transparent offscreen mirror.  It must cover exactly the rows this
+  // rasterizer may write ([band_origin_y_, band_y1_)) so draw commands land
+  // at the same byte index they would here.
+  Rasterizer off(0, 0);
+  off.width_ = width_;
+  off.height_ = height_;
+  off.band_y0_ = band_y0_;
+  off.band_y1_ = band_y1_;
+  off.band_origin_y_ = band_origin_y_;
+  off.scroll_offset_ = scroll_offset_;
+  off.registry_ = registry_;
+  off.clips_ = clips_;
+  off.pixels_.assign(
+      static_cast<std::size_t>(std::max(0, band_y1_ - band_origin_y_)) *
+          static_cast<std::size_t>(width_) * 4,
+      0);
+  off.pixels_data_ = off.pixels_.data();
+
+  off.ExecuteCommands(commands, begin, end);
+
+  // Group compositing (CSS Color 4 §3.2): source-over of the group's already
+  // composited pixels with alpha multiplied by the group's opacity.  Overlap
+  // INSIDE the group was blended in |off| and therefore fades once, not per
+  // command -- the whole point of group opacity.
+  const unsigned group_alpha = static_cast<unsigned>(alpha * 255.0f + 0.5f);
+  for (std::size_t i = 0; i + 3 < off.pixels_.size(); i += 4) {
+    const unsigned sa = (static_cast<unsigned>(off.pixels_data_[i + 3]) * group_alpha) / 255;
+    if (sa == 0) {
+      continue;
+    }
+    BlendPixel(pixels_data_[i],
+               pixels_data_[i + 1],
+               pixels_data_[i + 2],
+               pixels_data_[i + 3],
+               css::Color{off.pixels_data_[i],
+                          off.pixels_data_[i + 1],
+                          off.pixels_data_[i + 2],
+                          static_cast<std::uint8_t>(sa)});
   }
 }
 

@@ -2699,6 +2699,21 @@ void StyleEngine::ComputeElement(dom::Element& element,
       out.zoom = v.number;
     }
   }
+  // opacity (CSS Color 4 §3.2): a number or a percentage, clamped to [0, 1].
+  // NOT inherited; paint composites the element's subtree as one group (see
+  // the painter's group commands).
+  if (const css::Declaration* d = find("opacity")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    std::optional<float> alpha;
+    if (v.type == css::CssValue::Type::kNumber) {
+      alpha = v.number;
+    } else if (v.type == css::CssValue::Type::kLength && v.is_percent) {
+      alpha = v.value / 100.0f;
+    }
+    if (alpha.has_value()) {
+      out.opacity = std::min(1.0f, std::max(0.0f, *alpha));
+    }
+  }
   if (const css::Declaration* d = find("width")) {
     out.width = ParseSize(d->value, size_ctx);
   }

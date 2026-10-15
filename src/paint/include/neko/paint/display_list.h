@@ -22,7 +22,13 @@ enum class CommandType
   kDrawText,
   kDrawImage,
   kPushClip, // clip subsequent commands to the rect until kPopClip
-  kPopClip
+  kPopClip,
+  // Group opacity (CSS Color 4 §3.2): every command between kPushGroup and
+  // the matching kPopGroup is rasterized into an offscreen buffer and
+  // composited as ONE unit with |alpha|, so overlapping subtree content does
+  // not double-blend (per-command alpha would).  Groups nest.
+  kPushGroup,
+  kPopGroup
 };
 
 struct DrawCommand
@@ -38,6 +44,9 @@ struct DrawCommand
 
   // Corner radius (px) for kFillRoundRect.
   float radius = 0;
+
+  // Group alpha in [0, 1] for kPushGroup.
+  float alpha = 1.0f;
 
   // Border widths (top, right, bottom, left) for kBorderRect.
   float border_top = 0;
@@ -94,6 +103,11 @@ public:
   // with the enclosing clip.
   void PushClip(float x, float y, float width, float height);
   void PopClip();
+  // Group opacity: commands between PushGroup and the matching PopGroup are
+  // composited as one unit with |alpha| in [0, 1].  Groups nest; an inner
+  // group's output is itself part of its outer group's content.
+  void PushGroup(float alpha);
+  void PopGroup();
   // Applies a uniform page scale to all geometric commands. Used for legacy
   // CSS zoom after layout has run in unscaled CSS pixels.
   void Scale(float factor);

@@ -23,6 +23,30 @@ const ComputedStyle& Style(StyleEngine& engine, dom::Document& doc, std::string_
   return engine.StyleFor(*element);
 }
 
+// opacity (CSS Color 4 §3.2): number or percentage, clamped to [0, 1];
+// invalid values are ignored (the initial 1 survives).  NOT inherited.
+TEST(StyleTest, OpacityParsesClampsAndDoesNotInherit)
+{
+  auto doc = MakeDoc("<body style=\"opacity: 0.5\">"
+                     "<div id=\"half\" style=\"opacity: 0.5\">a</div>"
+                     "<div id=\"over\" style=\"opacity: 12\">b</div>"
+                     "<div id=\"under\" style=\"opacity: -3\">c</div>"
+                     "<div id=\"pct\" style=\"opacity: 25%\">d</div>"
+                     "<div id=\"bad\" style=\"opacity: banana\">e</div>"
+                     "<div id=\"child\">f</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  EXPECT_FLOAT_EQ(Style(engine, *doc, "#half").opacity, 0.5f);
+  EXPECT_FLOAT_EQ(Style(engine, *doc, "#over").opacity, 1.0f);
+  EXPECT_FLOAT_EQ(Style(engine, *doc, "#under").opacity, 0.0f);
+  EXPECT_FLOAT_EQ(Style(engine, *doc, "#pct").opacity, 0.25f);
+  EXPECT_FLOAT_EQ(Style(engine, *doc, "#bad").opacity, 1.0f);
+  // Non-inherited: the child of a 0.5 body starts back at 1.
+  EXPECT_FLOAT_EQ(Style(engine, *doc, "#child").opacity, 1.0f);
+  EXPECT_FLOAT_EQ(Style(engine, *doc, "body").opacity, 0.5f);
+}
+
 TEST(StyleTest, UaDefaults)
 {
   auto doc = MakeDoc("<html><head><style>p{}</style></head><body><div>x</div><span>y</span><p>z</"

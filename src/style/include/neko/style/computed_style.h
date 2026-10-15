@@ -317,6 +317,10 @@ struct ComputedStyle
   // layout and paint time; 1 is the initial value.
   float zoom = 1.0f;
 
+  // opacity (CSS Color 4 §3.2), clamped to [0, 1].  NOT inherited: it
+  // composites the element's whole subtree as one group at paint time.
+  float opacity = 1.0f;
+
   // Box insets (percentages resolve against the containing block width).
   // Each margin carries an *auto flag: margin: auto (CSS 2.2 §10.3.4) leaves
   // the resolved value at 0 in normal flow but lets flex layout distribute
