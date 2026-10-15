@@ -2238,6 +2238,67 @@ TEST(GridLayoutTest, MinmaxMinContentBeatsMax)
   EXPECT_FLOAT_EQ(grid->children[0]->width, 416.0f);
 }
 
+// Default align-items is stretch (CSS Grid 1 §8.3.1 / CSS Box Alignment 3):
+// an item with an auto block size fills its grid area's row span.  Without it
+// an empty item has zero height and paints nothing at all — the grid golden
+// fixture rendered as a bare container background.  Placement is explicit:
+// auto-placement does not yet skip explicitly occupied cells.
+TEST(GridLayoutTest, ItemsStretchToFillRowTracks)
+{
+  Page page = Build("<body><div style=\"display:grid; grid-template-columns:100px 100px; "
+                    "grid-template-rows:50px 70px; gap:10px\">"
+                    "<div style=\"grid-row: 1; grid-column: 1\"></div>"
+                    "<div style=\"grid-row: 2; grid-column: 1\"></div>"
+                    "<div style=\"grid-column: 2; grid-row: 1 / 3\"></div></div></body>");
+  const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_EQ(grid->children.size(), 3u);
+  EXPECT_FLOAT_EQ(grid->children[0]->height, 50.0f);
+  EXPECT_FLOAT_EQ(grid->children[1]->height, 70.0f);
+  // The row span (lines 1-3) covers both tracks plus the gap between them.
+  EXPECT_FLOAT_EQ(grid->children[2]->height, 50.0f + 10.0f + 70.0f);
+}
+
+// An explicit block size disables stretch; the item keeps its own height.
+TEST(GridLayoutTest, StretchRespectsExplicitHeight)
+{
+  Page page = Build("<body><div style=\"display:grid; grid-template-columns:100px; "
+                    "grid-template-rows:50px\">"
+                    "<div style=\"height:20px\"></div></div></body>");
+  const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_EQ(grid->children.size(), 1u);
+  EXPECT_FLOAT_EQ(grid->children[0]->height, 20.0f);
+}
+
+// Auto block margins absorb the free space instead of stretching (CSS Box
+// Alignment 3 §5.3 / the flex rule the engine already follows).
+TEST(GridLayoutTest, StretchDisabledByAutoBlockMargins)
+{
+  Page page = Build("<body><div style=\"display:grid; grid-template-columns:100px; "
+                    "grid-template-rows:50px\">"
+                    "<div style=\"margin-top:auto; height:20px\"></div></div></body>");
+  const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_EQ(grid->children.size(), 1u);
+  EXPECT_FLOAT_EQ(grid->children[0]->height, 20.0f);
+}
+
+// Stretched height is the border box: margins, borders and padding are
+// subtracted from the area (mirror of the flex cross stretch).
+TEST(GridLayoutTest, StretchAccountsForMarginsAndBorderPadding)
+{
+  Page page = Build("<body><div style=\"display:grid; grid-template-columns:100px; "
+                    "grid-template-rows:50px\">"
+                    "<div style=\"margin:5px; border:2px solid black; padding:3px\"></div>"
+                    "</div></body>");
+  const LayoutBox* grid = FindBox(*page.root, "div", *page.doc);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_EQ(grid->children.size(), 1u);
+  EXPECT_FLOAT_EQ(grid->children[0]->height, 50.0f - 10.0f);
+  EXPECT_FLOAT_EQ(grid->children[0]->content_height(), 50.0f - 10.0f - 4.0f - 6.0f);
+}
+
 TEST(GridLayoutTest, NamedLinesPlaceItems)
 {
   Page page = Build("<body><div style=\"display:grid; "

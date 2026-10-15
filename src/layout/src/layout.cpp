@@ -4392,6 +4392,24 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       for (GridItem& item : items) {
         const float cell_x = col_offsets[static_cast<std::size_t>(item.col_start)];
         const float cell_y = row_offsets[static_cast<std::size_t>(item.row_start)];
+        // Default align-items is stretch (CSS Grid 1 §8.3.1 / Box Alignment 3):
+        // an item with an auto block size fills its grid area's row span.  The
+        // stretched border-box size REPLACES the natural size (the flex cross
+        // stretch rule this engine already follows); content taller than the
+        // area overflows, which is spec behaviour.  An explicit block size or
+        // auto block margins disable stretch (auto margins absorb the space).
+        if (!item.style->height.has_value() && !item.style->margin_top_auto &&
+            !item.style->margin_bottom_auto) {
+          float area_height = 0;
+          for (int r = item.row_start; r < item.row_start + item.row_span; ++r) {
+            if (r > item.row_start) {
+              area_height += row_gap;
+            }
+            area_height += row_sizes[static_cast<std::size_t>(r)];
+          }
+          item.layout->height =
+              std::max(0.0f, area_height - item.layout->margin_top - item.layout->margin_bottom);
+        }
         TranslateBox(*item.layout, box.content_x() + cell_x, box.content_y() + cell_y);
         box.children.push_back(std::move(item.layout));
       }
