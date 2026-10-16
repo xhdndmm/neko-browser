@@ -3,6 +3,7 @@
 #include "neko/browser/perf_report.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace neko::browser {
 namespace {
@@ -51,10 +52,8 @@ LatencySummary Summarize(const LatencyTracker& tracker)
   const std::size_t last = sorted.size() - 1;
   // Nearest-rank: rank = ceil(p * n) (1-based), clamped into the series.
   const auto nearest_rank = [&sorted](double percentile) {
-    const double rank = percentile * static_cast<double>(sorted.size());
-    const std::size_t index = static_cast<std::size_t>(rank) == rank
-                                  ? static_cast<std::size_t>(rank) - 1
-                                  : static_cast<std::size_t>(rank);
+    const std::size_t index =
+        static_cast<std::size_t>(std::ceil(percentile * static_cast<double>(sorted.size()))) - 1;
     return sorted[std::min(index, sorted.size() - 1)];
   };
   summary.p50 = nearest_rank(0.50);

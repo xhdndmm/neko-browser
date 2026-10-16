@@ -370,7 +370,8 @@ TEST(UiSmokeTest, ImeCommitEditsTheFocusedTextInput)
   ASSERT_NE(input, nullptr);
   const auto geometry = probe.ElementBoxGeometry(*input);
   ASSERT_TRUE(geometry.has_value());
-  const QPointF point(geometry->x + geometry->width / 2.0F, geometry->y + geometry->height / 2.0F);
+  const QPointF point(static_cast<qreal>(geometry->x + geometry->width / 2.0F),
+                      static_cast<qreal>(geometry->y + geometry->height / 2.0F));
   QMouseEvent press(QEvent::MouseButtonPress,
                     point,
                     view->viewport()->mapToGlobal(point.toPoint()),

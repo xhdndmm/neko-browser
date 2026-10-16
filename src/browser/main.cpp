@@ -245,7 +245,7 @@ neko::base::Result<void> LoadTarget(
       // Script phase breakdown: blocked on the network vs running script.
       neko::browser::ScriptTimings script_timings;
       auto phase_start = std::chrono::steady_clock::now();
-      const auto phase = [&phase_start, &phases](long long* slot) {
+      const auto phase = [&phase_start](long long* slot) {
         const auto now = std::chrono::steady_clock::now();
         *slot = std::chrono::duration_cast<std::chrono::milliseconds>(now - phase_start).count();
         phase_start = now;
