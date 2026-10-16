@@ -194,6 +194,26 @@ bool IsExecutableScriptType(const dom::Element& script)
   return false;
 }
 
+// True when any element carries an event handler content attribute (onclick,
+// oninput, ...).  These compile on dispatch without any <script> element, so
+// their presence (not just <script> presence) requires the script runtime.
+bool HasEventHandlerContentAttributes(const dom::Node& root)
+{
+  for (const dom::Node* child : root.ChildNodes()) {
+    if (child->node_type() == dom::NodeType::kElement) {
+      for (const auto& attribute : static_cast<const dom::Element&>(*child).attributes()) {
+        if (attribute.name.size() > 2 && attribute.name.rfind("on", 0) == 0) {
+          return true;
+        }
+      }
+    }
+    if (HasEventHandlerContentAttributes(*child)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 } // namespace
 
 std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
@@ -218,7 +238,12 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
                      scripts.end(),
                      [](dom::Element* script) { return !IsExecutableScriptType(*script); }),
       scripts.end());
-  if (scripts.empty()) {
+  // Event handler content attributes (onclick, oninput, ...) compile and run
+  // without any <script> element (HTML §8.1.5): a page of pure on*
+  // attributes still needs the script runtime, or every handler silently
+  // does nothing (kaom.net triage: oninput was dead on a script-less test
+  // page).
+  if (scripts.empty() && !HasEventHandlerContentAttributes(*document)) {
     return nullptr;
   }
 

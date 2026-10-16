@@ -933,6 +933,135 @@ TEST(BrowserControllerTest, TabMovesFocusThroughControls)
   EXPECT_EQ(element("#a")->GetAttribute("value").value_or(""), "");
 }
 
+// kaom.net min_z_sinotibetan.php triage: a checkbox in a table cell with an
+// inline height style must toggle when clicked (the page's option list is
+// hundreds of these).
+TEST(BrowserControllerTest, TableCellCheckboxTogglesOnClick)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body><table><tr><td>"
+                               "<input type='checkbox' class='class' name='yuzhis[]' value='x'"
+                               " style='height: 12px' checked>"
+                               "</td></tr></table></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  tab->page->Layout(800, 600);
+  dom::Element* box = dom::QuerySelector(*tab->page->document(), "input");
+  ASSERT_NE(box, nullptr);
+  const auto geometry = tab->page->ElementBoxGeometry(*box);
+  ASSERT_TRUE(geometry.has_value());
+
+  EXPECT_TRUE(box->HasAttribute("checked"));
+  controller.DispatchPointerClick(tab->id,
+                                  geometry->x + geometry->width / 2.0f,
+                                  geometry->y + geometry->height / 2.0f);
+  EXPECT_FALSE(box->HasAttribute("checked")) << "click must toggle the checkbox";
+}
+
+// kaom.net min_z_sinotibetan.php triage: typing into the focused text input
+// must extend its value (the page's word box starts at value="水").
+TEST(BrowserControllerTest, TextInputAcceptsTypedCharacters)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><meta charset=\"utf-8\"></head><body>"
+                               "<form action='min_yusu8_new.php' method='post'>"
+                               "<input type=\"text\" name=\"word\" value=\"水\""
+                               " class=\"form_1\" style=\"width: 280px\">"
+                               "</form></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  tab->page->Layout(800, 600);
+  dom::Element* input = dom::QuerySelector(*tab->page->document(), "input");
+  ASSERT_NE(input, nullptr);
+  const auto geometry = tab->page->ElementBoxGeometry(*input);
+  ASSERT_TRUE(geometry.has_value());
+
+  controller.DispatchPointerClick(tab->id,
+                                  geometry->x + geometry->width / 2.0f,
+                                  geometry->y + geometry->height / 2.0f);
+  controller.DispatchKeyboard(tab->id, "keydown", "a", "KeyA");
+  EXPECT_EQ(input->GetAttribute("value").value_or(""), "水a")
+      << "typing must extend the input value";
+}
+
+// kaom.net min_z_sinotibetan.php triage: clicking the submit button of a
+// method=post form must submit it (the page's 「碰 碰 運 氣」 button).
+TEST(BrowserControllerTest, SubmitButtonPostsTheForm)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body><form action='min_yusu8_new.php' method='post'>"
+                               "<input type='text' name='word' value='水'>"
+                               "<input type='submit' value='碰 碰 運 氣'>"
+                               "</form></body></html>"});
+  fetch.Add("http://example.com/min_yusu8_new.php",
+            FakeFetcher::Route{200, {{"content-type", "text/html"}}, "<html><body>ok</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  tab->page->Layout(800, 600);
+  dom::Element* submit = dom::QuerySelector(*tab->page->document(), "input[type=submit]");
+  ASSERT_NE(submit, nullptr);
+  const auto geometry = tab->page->ElementBoxGeometry(*submit);
+  ASSERT_TRUE(geometry.has_value());
+
+  controller.DispatchPointerClick(tab->id,
+                                  geometry->x + geometry->width / 2.0f,
+                                  geometry->y + geometry->height / 2.0f);
+  const std::vector<std::string> requests = fetch.Requests();
+  const bool submitted = std::any_of(requests.begin(), requests.end(), [](const std::string& url) {
+    return url.find("min_yusu8_new.php") != std::string::npos;
+  });
+  EXPECT_TRUE(submitted) << "clicking the submit button must request the form action";
+}
+
+// The oninput handler runs after a value edit and document.title writes land
+// in the tab title (kaom.net triage: an IME commit must produce the same
+// visible result as typing).
+TEST(BrowserControllerTest, InputEventRunsOninputAndTitleFollows)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html; charset=utf-8"}},
+                               "<html><head><meta charset=\"utf-8\"></head><body>"
+                               "<input id=\"w\" value=\"水\" oninput=\"document.title=this.value\">"
+                               "</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  tab->page->Layout(800, 600);
+  dom::Element* input = dom::QuerySelector(*tab->page->document(), "#w");
+  ASSERT_NE(input, nullptr);
+  const auto geometry = tab->page->ElementBoxGeometry(*input);
+  ASSERT_TRUE(geometry.has_value());
+  controller.DispatchPointerClick(tab->id,
+                                  geometry->x + geometry->width / 2.0f,
+                                  geometry->y + geometry->height / 2.0f);
+  controller.DispatchKeyboard(tab->id, "keydown", "a", "KeyA");
+  EXPECT_EQ(input->GetAttribute("value").value_or(""), "水a");
+  EXPECT_EQ(tab->page->document()->Title(), "水a")
+      << "the oninput content-attribute handler must run (no <script> on this page)";
+}
+
 TEST(BrowserControllerTest, SubmitButtonSubmitsFormWithEncodedData)
 {
   TempProfile tp;
