@@ -1,10 +1,13 @@
 <!-- neko-golden: 320x240 -->
-<!-- Native widget innards (text-free): the checked checkbox tick, the radio
-     dot, and the empty controls that must draw no ink. -->
+<!-- Native widget innards: the checked checkbox tick, the radio dot, and the
+     empty controls that must draw no ink.  Every control is display:block --
+     inline widgets baseline-align in a line box whose height follows the
+     PLATFORM DEFAULT FONT, which made this golden fail on macOS (the marks
+     are font-independent; their position in an inline flow is not). -->
 <body style="margin:0;background:#ffffff;padding:12px">
-  <input type="checkbox" checked>
-  <input type="checkbox">
-  <input type="radio" checked>
-  <input type="radio">
-  <input type="checkbox" checked disabled>
+  <input style="display:block" type="checkbox" checked>
+  <input style="display:block" type="checkbox">
+  <input style="display:block" type="radio" checked>
+  <input style="display:block" type="radio">
+  <input style="display:block" type="checkbox" checked disabled>
 </body>

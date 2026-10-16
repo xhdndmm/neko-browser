@@ -8,7 +8,10 @@
 // either an approved golden update or a failing test.
 //
 // Determinism rules for fixtures in tests/golden/:
-//   * no text (fonts differ per machine) and no external resources;
+//   * no text and no external resources (fonts differ per machine);
+//   * no FONT-DEPENDENT FLOW either: inline content baseline-aligns in line
+//     boxes sized by the platform's default font, so widgets in a fixture
+//     must be display:block (the forms fixture failed on macOS until this);
 //   * integer-friendly geometry (fixed px sizes; avoid fractional layouts
 //     whose rounding could differ between toolchains).
 // Goldens are written through paint::WritePpm (RGB888, alpha composited over
