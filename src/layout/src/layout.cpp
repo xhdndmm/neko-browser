@@ -352,11 +352,15 @@ void CollectText(std::string_view text,
 // Computes the content-box size of a replaced <img> (CSS Images 3 §4.3):
 // explicit CSS width/height, else the presentational width/height attributes,
 // else intrinsic, preserving the aspect ratio when only one axis is given.
+// Percentages resolve against |containing_width| / |containing_height|; a
+// percentage height with an indefinite base (|containing_height| <= 0) is
+// treated as auto (CSS 2.2 §10.5), and the intrinsic ratio then carries it.
 // Defined after ParseNonNegativeInt; declared here for CollectInline.
 void ComputeReplacedSize(const style::ComputedStyle& style,
                          const dom::Element& element,
                          const image::Image* img,
                          float containing_width,
+                         float containing_height,
                          float& out_w,
                          float& out_h);
 
@@ -1268,6 +1272,7 @@ void ComputeReplacedSize(const style::ComputedStyle& style,
                          const dom::Element& element,
                          const image::Image* img,
                          float containing_width,
+                         float containing_height,
                          float& out_w,
                          float& out_h)
 {
@@ -1283,23 +1288,25 @@ void ComputeReplacedSize(const style::ComputedStyle& style,
   }
 
   // Specified size: CSS width/height win over the width/height attributes
-  // (presentational hints, HTML spec).  PERCENTAGE widths/heights are not
-  // resolved here: the used percentage needs the definite containing block
-  // this function does not receive (a percentage height resolved against the
-  // containing WIDTH made every `width:100%;height:100%` image square --
-  // bilibili's video covers were laid out 240x240 instead of 240x135 and the
-  // square boxes painted over the title area below them).  A percentage falls
-  // through to the attributes/intrinsic size; the aspect ratio then carries
-  // whichever axis the caller resolves.
+  // (presentational hints, HTML spec).  Percentages resolve against the
+  // containing block here, so the ratio transfer below sees the USED size:
+  // `width: 100%` on a 2:1 image in a 400px container is 400x200, not its
+  // intrinsic 100x50 (the height used to stay at the intrinsic value and the
+  // rendered picture stretched).  A percentage HEIGHT against an INDEFINITE
+  // containing block height (|containing_height| <= 0) is auto per CSS 2.2
+  // §10.5 -- it falls through and the ratio carries it.
   std::optional<float> spec_w;
   std::optional<float> spec_h;
-  if (style.width.has_value() && !style.width.value().percent) {
+  if (style.width.has_value()) {
     spec_w = ResolveSize(style.width.value(), containing_width);
   } else if (const std::optional<std::int64_t> attr = ParseNonNegativeInt(element, "width")) {
     spec_w = static_cast<float>(attr.value());
   }
-  if (style.height.has_value() && !style.height.value().percent) {
-    spec_h = ResolveSize(style.height.value(), containing_width);
+  if (style.height.has_value()) {
+    const style::SizeSpec& height = style.height.value();
+    if (!height.percent || containing_height > 0) {
+      spec_h = ResolveSize(height, height.percent ? containing_height : containing_width);
+    }
   } else if (const std::optional<std::int64_t> attr = ParseNonNegativeInt(element, "height")) {
     spec_h = static_cast<float>(attr.value());
   }
@@ -1951,8 +1958,13 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       float replaced_h = 0;
       if (replaced_media) {
         replaced_image = images != nullptr ? images->Find(element) : nullptr;
-        ComputeReplacedSize(
-            box->style, element, replaced_image, containing_width, replaced_w, replaced_h);
+        ComputeReplacedSize(box->style,
+                             element,
+                             replaced_image,
+                             containing_width,
+                             /*containing_height=*/0,
+                             replaced_w,
+                             replaced_h);
       }
 
       const float border_padding_w =
@@ -2122,7 +2134,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         const image::Image* img = images != nullptr ? images->Find(child_element) : nullptr;
         float w = 0;
         float h = 0;
-        ComputeReplacedSize(child_style, child_element, img, containing_width, w, h);
+        ComputeReplacedSize(
+            child_style, child_element, img, containing_width, /*containing_height=*/0, w, h);
         // A replaced image/media/canvas/svg element's baseline is its bottom
         // edge.
         items.push_back(InlineItem{{},
@@ -2609,8 +2622,13 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       float replaced_h = 0;
       if (replaced_media) {
         replaced_image = images != nullptr ? images->Find(element) : nullptr;
-        ComputeReplacedSize(
-            box->style, element, replaced_image, containing_width, replaced_w, replaced_h);
+        ComputeReplacedSize(box->style,
+                           element,
+                           replaced_image,
+                           containing_width,
+                           percent_base_h,
+                           replaced_w,
+                           replaced_h);
       }
 
       // Width: explicit (px or %) or fill the containing block.
@@ -2817,8 +2835,13 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       float replaced_h = 0;
       if (replaced_media) {
         replaced_image = images != nullptr ? images->Find(element) : nullptr;
-        ComputeReplacedSize(
-            box->style, element, replaced_image, containing_width, replaced_w, replaced_h);
+        ComputeReplacedSize(box->style,
+                           element,
+                           replaced_image,
+                           containing_width,
+                           cb_h,
+                           replaced_w,
+                           replaced_h);
       }
 
       const float border_padding_w =
@@ -3212,7 +3235,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
           const image::Image* replaced_image = images != nullptr ? images->Find(child_el) : nullptr;
           float replaced_w = 0;
           float replaced_h = 0;
-          ComputeReplacedSize(s, child_el, replaced_image, avail_width, replaced_w, replaced_h);
+          ComputeReplacedSize(
+              s, child_el, replaced_image, avail_width, /*containing_height=*/0, replaced_w, replaced_h);
           item.base_main = row ? replaced_w : replaced_h;
         } else if (row) {
           item.base_main = MeasureContent(child_el, styles, registry).max;
@@ -4512,7 +4536,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         const image::Image* img = images != nullptr ? images->Find(element) : nullptr;
         float replaced_w = 0;
         float replaced_h = 0;
-        ComputeReplacedSize(box->style, element, img, cb_w, replaced_w, replaced_h);
+        ComputeReplacedSize(box->style, element, img, cb_w, cb_h, replaced_w, replaced_h);
         content_width = replaced_w;
         box->image = img;
       } else if (!box->style.left_auto && !box->style.right_auto) {
@@ -4538,7 +4562,7 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         const image::Image* img = images != nullptr ? images->Find(element) : nullptr;
         float replaced_w = 0;
         float replaced_h = 0;
-        ComputeReplacedSize(box->style, element, img, cb_w, replaced_w, replaced_h);
+        ComputeReplacedSize(box->style, element, img, cb_w, cb_h, replaced_w, replaced_h);
         content_height = replaced_h;
         box->image = img;
       } else {

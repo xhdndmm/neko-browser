@@ -932,6 +932,77 @@ TEST(LayoutTest, AbsoluteUsesNearestPositionedAncestor)
   EXPECT_FLOAT_EQ(abs->y, rel->content_y() + 5.0f);
 }
 
+// kaom.net min_z_sinotibetan.php: the hero <img style="width: 100%;
+// display: block"> is laid out with a percentage width and must derive its
+// height from the intrinsic ratio (the rendered page stretched it vertically).
+TEST(LayoutTest, PercentWidthImageKeepsAspectRatio)
+{
+  struct FakeProvider : public layout::ImageProvider
+  {
+    image::Image img;
+    FakeProvider()
+    {
+      img.width = 100;
+      img.height = 50;
+    }
+    const image::Image* Find(const dom::Element&) const override
+    {
+      return &img;
+    }
+  };
+  FakeProvider provider;
+  auto doc = html::Parser("<body style=\"margin:0\"><div style=\"width: 400px\">"
+                          "<img style=\"width: 100%; display: block\"></div></body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles, nullptr, &provider);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+
+  const LayoutBox* div = FindBox(*root, "div", *doc);
+  ASSERT_NE(div, nullptr);
+  ASSERT_EQ(div->children.size(), 1u);
+  const LayoutBox* img = div->children[0].get();
+  EXPECT_FLOAT_EQ(img->width, 400.0f);
+  // 2:1 intrinsic ratio -> height 200, not the intrinsic 50 and not a square.
+  EXPECT_FLOAT_EQ(img->height, 200.0f);
+}
+
+// kaom.net min_z_sinotibetan.php: <img style="height: 48px"> with an auto
+// width must derive the width from the intrinsic ratio (523x119 -> ~211 px).
+TEST(LayoutTest, FixedHeightImageKeepsAspectRatio)
+{
+  struct FakeProvider : public layout::ImageProvider
+  {
+    image::Image img;
+    FakeProvider()
+    {
+      img.width = 523;
+      img.height = 119;
+    }
+    const image::Image* Find(const dom::Element&) const override
+    {
+      return &img;
+    }
+  };
+  FakeProvider provider;
+  auto doc = html::Parser("<body style=\"margin:0\">"
+                          "<img style=\"height: 48px\"></body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles, nullptr, &provider);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+
+  const LayoutBox* body = FindBox(*root, "body", *doc);
+  ASSERT_NE(body, nullptr);
+  ASSERT_FALSE(body->lines.empty());
+  ASSERT_FALSE(body->lines[0].boxes.empty());
+  const InlineBox& img = body->lines[0].boxes[0];
+  EXPECT_FLOAT_EQ(img.height, 48.0f);
+  EXPECT_NEAR(img.width, 48.0f * 523.0f / 119.0f, 0.5f);
+}
+
 TEST(LayoutTest, LeadingWhitespaceDoesNotShiftInlineImage)
 {
   // HTML source indentation (newline + spaces) before an <img> must collapse
