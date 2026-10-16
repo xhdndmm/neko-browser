@@ -44,6 +44,13 @@ public:
     return tab_id_;
   }
 
+  // IME composition (Chinese/Japanese/Korean input).  Qt delivers committed
+  // text here instead of keyPressEvent; without these overrides every IME
+  // input was lost and text fields could only take ASCII keystrokes.
+  // Public so tests can assert the ImEnabled gate.
+  void inputMethodEvent(QInputMethodEvent* event) override;
+  QVariant inputMethodQuery(Qt::InputMethodQuery query) const override;
+
 protected:
   void paintEvent(QPaintEvent* event) override;
   void resizeEvent(QResizeEvent* event) override;

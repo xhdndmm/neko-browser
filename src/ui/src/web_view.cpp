@@ -30,6 +30,9 @@ WebView::WebView(BrowserWorker* worker, int tab_id, QWidget* parent)
   viewport()->setAutoFillBackground(true);
   viewport()->setMouseTracking(true); // receive MouseMove without a pressed button
   setFocusPolicy(Qt::StrongFocus);    // receive keystrokes after a click
+  // IME composition events (inputMethodEvent) reach the page only with this
+  // attribute set; ImEnabled in inputMethodQuery gates the actual engagement.
+  setAttribute(Qt::WA_InputMethodEnabled, true);
   setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
   // Comfortable line step for the scroll-bar arrows / arrow keys. Wheel
@@ -269,6 +272,42 @@ void WebView::keyPressEvent(QKeyEvent* event)
                               QString::fromStdString(code));
   }
   QAbstractScrollArea::keyPressEvent(event);
+}
+
+void WebView::inputMethodEvent(QInputMethodEvent* event)
+{
+  // IME composition: committed text goes down the same path as typed keys so
+  // the focused control's value grows by the commit string (Chinese,
+  // Japanese, Korean input was impossible before -- Qt delivers it here, not
+  // through keyPressEvent).  The preedit (composition) overlay is NOT
+  // IMPLEMENTED: candidates show at the OS default position and the
+  // composition only appears in the field once committed.
+  const QString commit = event->commitString();
+  if (!commit.isEmpty() && snapshot_.content_type == browser::ContentType::kHtml) {
+    worker_->DispatchKeyboard(tab_id_, QStringLiteral("keydown"), commit, QStringLiteral("Unidentified"));
+  }
+  event->accept();
+}
+
+QVariant WebView::inputMethodQuery(Qt::InputMethodQuery query) const
+{
+  switch (query) {
+  case Qt::ImEnabled:
+    // The IME engages only while a text control has focus (the caret is the
+    // worker's signal for it), so keystrokes elsewhere keep their shortcuts.
+    return snapshot_.content_type == browser::ContentType::kHtml && snapshot_.has_caret;
+  case Qt::ImCursorRectangle: {
+    // Place the candidate window at the page caret (frame pixels -> logical).
+    const qreal scale = DeviceScale();
+    const QRectF caret(snapshot_.caret_x / scale,
+                       snapshot_.caret_y / scale - ScrollY() / scale,
+                       1.0,
+                       snapshot_.caret_height / scale);
+    return caret.toRect();
+  }
+  default:
+    return QAbstractScrollArea::inputMethodQuery(query);
+  }
 }
 
 bool WebView::viewportEvent(QEvent* event)

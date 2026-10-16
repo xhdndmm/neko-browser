@@ -327,6 +327,69 @@ TEST(UiSmokeTest, DevToolsConsoleEvaluatesJavaScript)
       WaitFor([&] { return window.ConsoleView()->toPlainText().contains("Error: ui boom"); }));
 }
 
+// IME composition (Chinese/Japanese/Korean input): Qt delivers committed
+// text through QInputMethodEvent, not keyPressEvent.  The full stack must
+// carry it into the focused text control -- without it a Chinese user could
+// not change a text field at all.
+TEST(UiSmokeTest, ImeCommitEditsTheFocusedTextInput)
+{
+  TempProfile tp;
+  const std::string html_file = tp.path() + "/ime.html";
+  // The page mirrors the field's value into the title so the test can observe
+  // the edit through the worker's tab snapshot (the DevTools console is a
+  // standalone engine and cannot see the page DOM).
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(
+                  html_file,
+                  "<html><head><meta charset=\"utf-8\"><title>ime</title></head><body>"
+                  "<input id=\"w\" type=\"text\" value=\"水\" style=\"width: 200px\""
+                  " oninput=\"document.title=this.value\">"
+                  "</body></html>")
+                  .has_value());
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.show();
+  worker.NavigateActive(QString::fromStdString(html_file));
+  ASSERT_TRUE(WaitFor([&] { return worker.SnapshotActiveTab().title == "ime"; }));
+
+  neko::ui::WebView* view = window.ActiveView();
+  ASSERT_NE(view, nullptr);
+  const int viewport_width = view->viewport()->width();
+  ASSERT_TRUE(WaitFor([&] {
+    const neko::browser::TabSnapshot snapshot = worker.SnapshotActiveTab();
+    return snapshot.frame != nullptr && snapshot.frame->width == viewport_width;
+  }));
+  const neko::browser::TabSnapshot framed = worker.SnapshotActiveTab();
+
+  // Click the input at its viewport position (the platform path: viewport
+  // mouse press -> focus the control -> caret up).
+  neko::renderer::Page probe;
+  ASSERT_TRUE(probe.LoadHtml(neko::storage::ReadFile(html_file).value()).has_value());
+  probe.Layout(static_cast<float>(framed.frame->width), static_cast<float>(framed.frame->height));
+  neko::dom::Element* input = neko::dom::QuerySelector(*probe.document(), "#w");
+  ASSERT_NE(input, nullptr);
+  const auto geometry = probe.ElementBoxGeometry(*input);
+  ASSERT_TRUE(geometry.has_value());
+  const QPointF point(geometry->x + geometry->width / 2.0F, geometry->y + geometry->height / 2.0F);
+  QMouseEvent press(QEvent::MouseButtonPress,
+                    point,
+                    view->viewport()->mapToGlobal(point.toPoint()),
+                    Qt::LeftButton,
+                    Qt::LeftButton,
+                    Qt::NoModifier);
+  QApplication::sendEvent(view->viewport(), &press);
+
+  // The IME engages only while a text control has focus.
+  ASSERT_TRUE(WaitFor([&] { return view->inputMethodQuery(Qt::ImEnabled).toBool(); }));
+
+  // Committed composition text reaches the field (and the page's oninput
+  // mirrors it into the title).
+  QInputMethodEvent commit;
+  commit.setCommitString(QString::fromUtf8("語"));
+  QApplication::sendEvent(view, &commit);
+  ASSERT_TRUE(WaitFor([&] { return worker.SnapshotActiveTab().title == "水語"; }));
+}
+
 TEST(UiSmokeTest, AddressBarBackspaceDeletesCharacter)
 {
   TempProfile tp;
