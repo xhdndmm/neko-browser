@@ -303,6 +303,15 @@ struct GridPlacement
   bool operator==(const GridPlacement&) const = default;
 };
 
+// pointer-events (CSS UI 4 §6.6): whether the element is a hit-testing
+// target.  none makes the element -- and its subtree unless a descendant
+// re-enables -- transparent to clicks/hover.
+enum class PointerEvents
+{
+  kAuto,
+  kNone,
+};
+
 // Fully resolved style for one element (px values unless noted).
 struct ComputedStyle
 {
@@ -401,6 +410,8 @@ struct ComputedStyle
 
   // visibility (CSS 2.2 §11.2).  Inherited.  Initial value: visible.
   Visibility visibility = Visibility::kVisible;
+  // pointer-events (CSS UI 4 §6.6).  Inherited; initial auto.
+  PointerEvents pointer_events = PointerEvents::kAuto;
 
   // Replaced content fitting (img).
   ObjectFit object_fit = ObjectFit::kFill;

@@ -191,8 +191,24 @@ bool FindCaretGeometry(
 // pinned out of the scroll shift at paint time, so a fixed subtree is
 // compared in viewport space (y - scroll_y) to match what is on screen.
 const dom::Element*
-ElementAt(const layout::LayoutBox& box, float x, float y, float scroll_y, bool in_fixed)
+ElementAt(const layout::LayoutBox& box,
+          float x,
+          float y,
+          float scroll_y,
+          bool in_fixed,
+          const style::StyleEngine& styles)
 {
+  // pointer-events: none (CSS UI 4 §6.6) makes the element transparent to
+  // hit testing: decorative overlays (baidu.com's chat-input wrapper layers)
+  // cover real controls and rely on clicks passing through.  The property is
+  // inherited, so checking each candidate's computed value also honours a
+  // descendant's pointer-events:auto re-enable.
+  const auto hittable = [&styles](const dom::Element* element) -> bool {
+    if (element == nullptr) {
+      return false;
+    }
+    return styles.StyleFor(*element).pointer_events != style::PointerEvents::kNone;
+  };
   if (!in_fixed && box.style.position == style::Position::kFixed) {
     y -= scroll_y;
     in_fixed = true;
@@ -202,12 +218,12 @@ ElementAt(const layout::LayoutBox& box, float x, float y, float scroll_y, bool i
   // topmost (last painted) wins.  Without this an expanded dropdown menu was
   // visible but unclickable.
   for (auto it = box.positioned_children.rbegin(); it != box.positioned_children.rend(); ++it) {
-    if (const dom::Element* hit = ElementAt(**it, x, y, scroll_y, in_fixed)) {
+    if (const dom::Element* hit = ElementAt(**it, x, y, scroll_y, in_fixed, styles)) {
       return hit;
     }
   }
   for (const auto& child : box.children) {
-    if (const dom::Element* hit = ElementAt(*child, x, y, scroll_y, in_fixed)) {
+    if (const dom::Element* hit = ElementAt(*child, x, y, scroll_y, in_fixed, styles)) {
       return hit;
     }
   }
@@ -221,11 +237,12 @@ ElementAt(const layout::LayoutBox& box, float x, float y, float scroll_y, bool i
         // border box: a positioned descendant may overflow it (an expanded
         // dropdown menu extends below its trigger, and hovering the menu must
         // keep the ancestor's :hover true so the menu stays open).
-        if (const dom::Element* hit = ElementAt(*ib.block_box, x, y, scroll_y, in_fixed)) {
+        if (const dom::Element* hit = ElementAt(*ib.block_box, x, y, scroll_y, in_fixed, styles)) {
           return hit;
         }
       } else if (ib.image != nullptr) {
-        if (x >= ib.x && x < ib.x + ib.width && y >= ib.y && y < ib.y + ib.height) {
+        if (x >= ib.x && x < ib.x + ib.width && y >= ib.y && y < ib.y + ib.height &&
+            hittable(ib.element)) {
           return ib.element;
         }
       }
@@ -235,14 +252,16 @@ ElementAt(const layout::LayoutBox& box, float x, float y, float scroll_y, bool i
       // built without a font (width stays 0 only in that case).
       const float width =
           run.width > 0 ? run.width : static_cast<float>(run.text.size()) * run.font_size;
-      if (x >= run.x && x < run.x + width && y >= run.y && y < run.y + run.font_size) {
+      if (x >= run.x && x < run.x + width && y >= run.y && y < run.y + run.font_size &&
+          hittable(run.element)) {
         return run.element;
       }
     }
   }
   // A click on the box's own border box (padding/background, or an empty
   // block-level element) resolves to the box itself.
-  if (x >= box.x && x < box.x + box.width && y >= box.y && y < box.y + box.height) {
+  if (x >= box.x && x < box.x + box.width && y >= box.y && y < box.y + box.height &&
+      hittable(box.element)) {
     return box.element;
   }
   return nullptr;
@@ -1575,7 +1594,7 @@ const dom::Element* Page::ElementAt(float x, float y) const
     return nullptr;
   }
   return renderer::ElementAt(
-      *root_, x / frame_scale(), y / frame_scale(), viewport_scroll_y_, false);
+      *root_, x / frame_scale(), y / frame_scale(), viewport_scroll_y_, false, styles_);
 }
 
 std::optional<ElementGeometry> Page::ElementBoxGeometry(const dom::Element& element)

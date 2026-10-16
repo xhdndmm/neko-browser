@@ -431,6 +431,68 @@ TEST(PageTest, ReapplyStylesForSkipsLayoutWhenNothingChanged)
   EXPECT_GT(page.layout_version(), before);
 }
 
+// pointer-events: none (CSS UI 4 §6.6): decorative overlays must be
+// transparent to hit testing so clicks reach the real control underneath.
+// baidu.com's chat-input wrapper layers (box-shadow/border/anime) cover the
+// search <textarea> full-bleed with pointer-events:none -- without it every
+// click on the search box landed on the decoration and the box could never
+// be focused (kaom/baidu triage).
+TEST(PageTest, PointerEventsNoneIsTransparentToHitTesting)
+{
+  const std::string html =
+      "<body style=\"margin:0\">"
+      "<div style=\"position:relative;width:200px;height:100px\">"
+      "<textarea id=\"box\" style=\"width:200px;height:100px\"></textarea>"
+      "<div id=\"veil\" style=\"position:absolute;top:0;right:0;bottom:0;left:0;"
+      "pointer-events:none\"></div>"
+      "</div></body>";
+  Page page;
+  ASSERT_TRUE(page.LoadHtml(html).has_value());
+  page.Layout(200, 100);
+  const dom::Element* hit = page.ElementAt(100, 50);
+  ASSERT_NE(hit, nullptr);
+  EXPECT_EQ(hit->GetAttribute("id").value_or(""), "box")
+      << "the click must pass through the pointer-events:none veil";
+
+  // Counter-case: without the property the veil eats the click (it paints on
+  // top), which is the engine behaviour the property overrides.
+  const std::string plain =
+      "<body style=\"margin:0\">"
+      "<div style=\"position:relative;width:200px;height:100px\">"
+      "<textarea id=\"box\" style=\"width:200px;height:100px\"></textarea>"
+      "<div id=\"veil\" style=\"position:absolute;top:0;right:0;bottom:0;left:0\"></div>"
+      "</div></body>";
+  Page page2;
+  ASSERT_TRUE(page2.LoadHtml(plain).has_value());
+  page2.Layout(200, 100);
+  const dom::Element* hit2 = page2.ElementAt(100, 50);
+  ASSERT_NE(hit2, nullptr);
+  EXPECT_EQ(hit2->GetAttribute("id").value_or(""), "veil");
+}
+
+// A descendant can re-enable hit testing inside a pointer-events:none
+// subtree (the property is inherited; pointer-events:auto opts back in).
+TEST(PageTest, PointerEventsAutoChildIsHittableInsideNoneSubtree)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml(
+                  "<body style=\"margin:0\">"
+                  "<div id=\"veil\" style=\"position:relative;width:200px;height:100px;"
+                  "pointer-events:none\">"
+                  "<div id=\"inner\" style=\"position:absolute;left:0;top:0;width:50px;"
+                  "height:50px;pointer-events:auto\"></div>"
+                  "</div></body>")
+                  .has_value());
+  page.Layout(200, 100);
+  const dom::Element* inner = page.ElementAt(25, 25);
+  ASSERT_NE(inner, nullptr);
+  EXPECT_EQ(inner->GetAttribute("id").value_or(""), "inner");
+  // Outside the re-enabled child the subtree stays transparent: the body
+  // (background) is the target, not the veil.
+  const dom::Element* outside = page.ElementAt(150, 80);
+  EXPECT_NE(outside != nullptr ? outside->GetAttribute("id").value_or("") : "", "veil");
+}
+
 // position: fixed content draws at its viewport position regardless of the
 // scroll offset the raster runs at, while ordinary content scrolls away.
 TEST(PageTest, FixedContentStaysPinnedWhenScrolled)

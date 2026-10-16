@@ -1996,6 +1996,9 @@ void StyleEngine::ComputeElement(dom::Element& element,
           (action == 3 || action == 4) ? ListStyleType::kDisc : inherited.list_style_type;
     } else if (property == "white-space") {
       out.white_space = (action == 3 || action == 4) ? WhiteSpace::kNormal : inherited.white_space;
+    } else if (property == "pointer-events") {
+      out.pointer_events =
+          (action == 3 || action == 4) ? PointerEvents::kAuto : inherited.pointer_events;
     } else if (property == "visibility") {
       out.visibility = (action == 3 || action == 4) ? Visibility::kVisible : inherited.visibility;
     } else {
@@ -2023,6 +2026,7 @@ void StyleEngine::ComputeElement(dom::Element& element,
   out.list_style_type = inherited.list_style_type;
   out.white_space = inherited.white_space;
   out.visibility = inherited.visibility;
+  out.pointer_events = inherited.pointer_events;
   out.custom_properties = inherited.custom_properties;
 
   // Apply the CSS-wide keywords resolved above and drop them from |winners|
@@ -2334,6 +2338,19 @@ void StyleEngine::ComputeElement(dom::Element& element,
         out.visibility = Visibility::kHidden;
       } else if (v.text == "visible") {
         out.visibility = Visibility::kVisible;
+      }
+    }
+  }
+
+  // pointer-events (CSS UI 4 §6.6): only auto/none; the SVG paint-server
+  // keywords (fill/stroke/...) fall back to the inherited value here.
+  if (const css::Declaration* d = find("pointer-events")) {
+    const css::CssValue v = css::ParseCssValue(d->value);
+    if (v.type == css::CssValue::Type::kKeyword) {
+      if (v.text == "none") {
+        out.pointer_events = PointerEvents::kNone;
+      } else if (v.text == "auto") {
+        out.pointer_events = PointerEvents::kAuto;
       }
     }
   }

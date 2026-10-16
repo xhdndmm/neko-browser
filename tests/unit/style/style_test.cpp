@@ -140,6 +140,28 @@ TEST(StyleTest, RestyleAffectedReportsNoChangeForNoOpMutations)
   EXPECT_NE(engine.StyleFor(*a).color, (css::Color{255, 0, 0, 255}));
 }
 
+// pointer-events (CSS UI 4 §6.6): parses auto/none, inherits, and a
+// descendant's auto re-enables hit testing inside a none subtree.
+TEST(StyleTest, PointerEventsParsesAndInherits)
+{
+  auto doc = MakeDoc("<body style=\"pointer-events:none\">"
+                     "<div id=\"a\">x</div>"
+                     "<div id=\"b\" style=\"pointer-events:auto\">y</div>"
+                     "<div id=\"c\" style=\"pointer-events:fill\">z</div>"
+                     "</body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  EXPECT_EQ(Style(engine, *doc, "body").pointer_events, PointerEvents::kNone);
+  // Inherited by default...
+  EXPECT_EQ(Style(engine, *doc, "#a").pointer_events, PointerEvents::kNone);
+  // ...opted back in explicitly...
+  EXPECT_EQ(Style(engine, *doc, "#b").pointer_events, PointerEvents::kAuto);
+  // ...and an SVG paint keyword is not a hit-testing value: keep the inherited
+  // state.
+  EXPECT_EQ(Style(engine, *doc, "#c").pointer_events, PointerEvents::kNone);
+}
+
 TEST(StyleTest, UaDefaults)
 {
   auto doc = MakeDoc("<html><head><style>p{}</style></head><body><div>x</div><span>y</span><p>z</"
