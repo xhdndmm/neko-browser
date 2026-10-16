@@ -1,0 +1,13 @@
+# Binary test fixtures must survive checkout byte for byte.
+#
+# Windows runners default to core.autocrlf=true: anything git considers TEXT
+# gets its line endings converted on checkout.  A golden .ppm has no NUL
+# bytes in its early pixel data, so git heuristics called it text and the
+# conversion shifted every raster by one byte -- the windows CI golden tests
+# compared corrupted rasters.  Fuzz corpus inputs are raw bytes with
+# meaningful CR/LF sequences and must not be rewritten either.
+*.ppm binary
+*.webm binary
+*.mp4 binary
+*.avif binary
+tests/fuzz/corpus/** binary
