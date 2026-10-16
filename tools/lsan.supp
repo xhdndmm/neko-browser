@@ -41,8 +41,11 @@ leak:libLLVM
 # unsymbolizable driver frames and is never freed by eglTerminate; the test
 # (GpuBackendTest.CompositionMatchesSoftwarePixelForPixel) holds only stack
 # locals across that call, so this is driver residue, not an engine leak.
-# Matched with the qualified name to keep the suppression narrow.
-leak:EglGpuContext::EndFrame
+# Matched as the bare name: symbolizers report this frame as "EndFrame" when
+# only local symbols resolve (the CI runner's stripped libstdc++/driver
+# frames), and the suppression is a SUBSTRING match -- the qualified
+# "EglGpuContext::EndFrame" pattern missed those stacks and leaked through.
+leak:EndFrame
 
 # Mesa's loader registers a session-bus connection on some hosts (DRI_PRIME /
 # device selection): the connection and its queued messages stay cached for

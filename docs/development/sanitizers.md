@@ -91,10 +91,13 @@ ctest --preset asan
   使这些全局指针直接失效。这些路径上 neko 只持有栈上局部量，分配全部发生在驱动
   内部（Mesa/Chromium 对同样对象有相同抑制）。
 - 驱动指纹随机器而异（CI 是 Mesa llvmpipe；本机 Arch 是 NVIDIA，表现为
-  `libdbus` 侧残留）。本地验证抑制机制/驱动残留的正确姿势：在
-  `LSAN_OPTIONS` 里追加一个**不入库**的临时抑制文件（如 `leak:libdbus`），
-  跑 `neko_compositor_tests` 应全绿且无未抑制报告；仓库内条目在本机零匹配即为
-  无误伤。
+  `libdbus` 侧残留，`libdbus-1.so.3` 条目已在文件中覆盖）。
+- **抑制模式是子串匹配，且符号化可能只给短名**：`EglGpuContext::EndFrame`
+  这类全限定模式在符号化退化为 `EndFrame`（仅局部符号可解析）的机器上**匹配不
+  中**——CI 曾因此漏抑制。写驱动残留条目时用最短稳定名字（`leak:EndFrame`）。
+- 本地验证抑制机制的正确姿势：`LSAN_OPTIONS=suppressions=tools/lsan.supp
+  ASAN_OPTIONS=detect_leaks=1 ./build/asan/bin/neko_compositor_tests` 应全绿
+  且无未抑制报告；零匹配的条目不等于无误伤，改动抑制文件后按此跑一遍。
 
 ## 实现说明
 
