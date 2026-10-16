@@ -402,7 +402,7 @@ public:
   // connection instead of closing after one; the default (false) preserves the
   // one-request-per-connection behaviour the other TLS tests rely on.
   explicit TestTlsServer(bool keep_alive = false)
-      : keep_alive_(keep_alive), cert_(GenerateLocalhostCert())
+      : cert_(GenerateLocalhostCert()), keep_alive_(keep_alive)
   {
     listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd_ < 0) {
