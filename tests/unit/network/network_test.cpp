@@ -8,6 +8,7 @@
 #include "system_trust_store.h"
 
 #include <atomic>
+#include <csignal>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>

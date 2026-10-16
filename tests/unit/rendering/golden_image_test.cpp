@@ -120,7 +120,11 @@ std::optional<GoldenSpec> ParseSpec(const std::string& html)
 std::string ReadFile(const std::filesystem::path& path)
 {
   std::ifstream in(path, std::ios::binary);
-  return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  // rdbuf(), not istreambuf_iterator: GCC 13 reports a false-positive
+  // -Wnull-dereference in libstdc++ under -O2 + -Werror (CI tsan job).
+  std::ostringstream buffer;
+  buffer << in.rdbuf();
+  return buffer.str();
 }
 
 // Every fixture below must stay text-free and self-contained; see the
