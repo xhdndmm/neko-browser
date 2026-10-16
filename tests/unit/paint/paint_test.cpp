@@ -137,7 +137,7 @@ TEST(RasterizerTest, GroupOpacityCompositesAsOneUnit)
   list.PopGroup();
   image.Rasterize(list);
 
-  const css::Color single = Pixel(image, 5, 10);  // covered by one box
+  const css::Color single = Pixel(image, 5, 10);   // covered by one box
   const css::Color overlap = Pixel(image, 25, 10); // covered by both
   const css::Color outside = Pixel(image, 55, 10); // covered by neither
   // The overlap is faded exactly as much as the single coverage.
@@ -161,8 +161,8 @@ TEST(RasterizerTest, NestedGroupsMultiplyAlphas)
   list.PopGroup();
   image.Rasterize(list);
 
-  const css::Color outer = Pixel(image, 2, 5);  // .5 black over white
-  const css::Color inner = Pixel(image, 7, 5);  // .25 black over white
+  const css::Color outer = Pixel(image, 2, 5); // .5 black over white
+  const css::Color inner = Pixel(image, 7, 5); // .25 black over white
   EXPECT_NEAR(static_cast<float>(outer.r), 127.0f, 2.0f);
   EXPECT_NEAR(static_cast<float>(inner.r), 191.0f, 2.0f);
   EXPECT_GT(inner.r, outer.r);
@@ -203,7 +203,7 @@ TEST(RasterizerTest, GroupRespectsEnclosingClip)
   list.FillRect(15, 15, 5, 5, css::Color{0, 0, 255, 255});
   image.Rasterize(list);
 
-  EXPECT_EQ(Pixel(image, 15, 15), (css::Color{0, 0, 255, 255})); // after the group
+  EXPECT_EQ(Pixel(image, 15, 15), (css::Color{0, 0, 255, 255}));     // after the group
   EXPECT_EQ(Pixel(image, 12, 12), (css::Color{255, 255, 255, 255})); // outside clip
   // Red at .5 over white is (255, 127, 127): the R channel stays 255, so the
   // fade shows in G/B.
@@ -607,9 +607,9 @@ TEST(PainterTest, DisabledWidgetDrawsGrayInk)
   EXPECT_EQ(CountInkRuns("<body><input type=\"checkbox\" checked disabled></body>",
                          css::Color{0x80, 0x80, 0x80, 255}),
             6);
-  EXPECT_EQ(
-      CountInkRuns("<body><input type=\"checkbox\" checked disabled></body>", css::Color{0, 0, 0, 255}),
-      0);
+  EXPECT_EQ(CountInkRuns("<body><input type=\"checkbox\" checked disabled></body>",
+                         css::Color{0, 0, 0, 255}),
+            0);
 }
 
 // End-to-end: the tick lands on the exact bitmap pixels in the raster.  A
@@ -631,10 +631,9 @@ TEST(PainterTest, TickPixelsLandExactly)
   image.Rasterize(painter.Paint());
 
   const auto dark = [&image](int x, int y) {
-    const std::size_t p =
-        (static_cast<std::size_t>(y) * static_cast<std::size_t>(image.width()) +
-         static_cast<std::size_t>(x)) *
-        4;
+    const std::size_t p = (static_cast<std::size_t>(y) * static_cast<std::size_t>(image.width()) +
+                           static_cast<std::size_t>(x)) *
+                          4;
     return image.pixels()[p] < 128;
   };
   // The 13x13 widget is at (0,0) with a 2px border: content at (2,2), the

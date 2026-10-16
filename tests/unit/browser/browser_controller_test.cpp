@@ -868,9 +868,8 @@ TEST(BrowserControllerTest, SpaceTogglesFocusedCheckbox)
   const auto geometry = tab->page->ElementBoxGeometry(*cb);
   ASSERT_TRUE(geometry.has_value());
   // Click first (focus + toggle on), then Space (toggle off).
-  controller.DispatchPointerClick(tab->id,
-                                  geometry->x + geometry->width / 2.0f,
-                                  geometry->y + geometry->height / 2.0f);
+  controller.DispatchPointerClick(
+      tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f);
   EXPECT_TRUE(cb->HasAttribute("checked"));
   controller.DispatchKeyboard(tab->id, "keydown", " ", "Space");
   EXPECT_FALSE(cb->HasAttribute("checked"));
@@ -903,9 +902,7 @@ TEST(BrowserControllerTest, TabMovesFocusThroughControls)
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
   Tab* tab = controller.ActiveTab();
   tab->page->Layout(800, 600);
-  auto element = [&tab](const char* id) {
-    return dom::QuerySelector(*tab->page->document(), id);
-  };
+  auto element = [&tab](const char* id) { return dom::QuerySelector(*tab->page->document(), id); };
 
   // Document order of the focusables: #a, #b, #link, #c.  Hidden/disabled/
   // href-less never take focus.
@@ -958,9 +955,8 @@ TEST(BrowserControllerTest, TableCellCheckboxTogglesOnClick)
   ASSERT_TRUE(geometry.has_value());
 
   EXPECT_TRUE(box->HasAttribute("checked"));
-  controller.DispatchPointerClick(tab->id,
-                                  geometry->x + geometry->width / 2.0f,
-                                  geometry->y + geometry->height / 2.0f);
+  controller.DispatchPointerClick(
+      tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f);
   EXPECT_FALSE(box->HasAttribute("checked")) << "click must toggle the checkbox";
 }
 
@@ -988,9 +984,8 @@ TEST(BrowserControllerTest, TextInputAcceptsTypedCharacters)
   const auto geometry = tab->page->ElementBoxGeometry(*input);
   ASSERT_TRUE(geometry.has_value());
 
-  controller.DispatchPointerClick(tab->id,
-                                  geometry->x + geometry->width / 2.0f,
-                                  geometry->y + geometry->height / 2.0f);
+  controller.DispatchPointerClick(
+      tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f);
   controller.DispatchKeyboard(tab->id, "keydown", "a", "KeyA");
   EXPECT_EQ(input->GetAttribute("value").value_or(""), "水a")
       << "typing must extend the input value";
@@ -1009,8 +1004,9 @@ TEST(BrowserControllerTest, SubmitButtonPostsTheForm)
                                "<input type='text' name='word' value='水'>"
                                "<input type='submit' value='碰 碰 運 氣'>"
                                "</form></body></html>"});
-  fetch.Add("http://example.com/min_yusu8_new.php",
-            FakeFetcher::Route{200, {{"content-type", "text/html"}}, "<html><body>ok</body></html>"});
+  fetch.Add(
+      "http://example.com/min_yusu8_new.php",
+      FakeFetcher::Route{200, {{"content-type", "text/html"}}, "<html><body>ok</body></html>"});
   BrowserController controller(tp.path(), std::ref(fetch));
   controller.NewTab();
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
@@ -1021,9 +1017,8 @@ TEST(BrowserControllerTest, SubmitButtonPostsTheForm)
   const auto geometry = tab->page->ElementBoxGeometry(*submit);
   ASSERT_TRUE(geometry.has_value());
 
-  controller.DispatchPointerClick(tab->id,
-                                  geometry->x + geometry->width / 2.0f,
-                                  geometry->y + geometry->height / 2.0f);
+  controller.DispatchPointerClick(
+      tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f);
   const std::vector<std::string> requests = fetch.Requests();
   const bool submitted = std::any_of(requests.begin(), requests.end(), [](const std::string& url) {
     return url.find("min_yusu8_new.php") != std::string::npos;
@@ -1053,9 +1048,8 @@ TEST(BrowserControllerTest, InputEventRunsOninputAndTitleFollows)
   ASSERT_NE(input, nullptr);
   const auto geometry = tab->page->ElementBoxGeometry(*input);
   ASSERT_TRUE(geometry.has_value());
-  controller.DispatchPointerClick(tab->id,
-                                  geometry->x + geometry->width / 2.0f,
-                                  geometry->y + geometry->height / 2.0f);
+  controller.DispatchPointerClick(
+      tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f);
   controller.DispatchKeyboard(tab->id, "keydown", "a", "KeyA");
   EXPECT_EQ(input->GetAttribute("value").value_or(""), "水a");
   EXPECT_EQ(tab->page->document()->Title(), "水a")

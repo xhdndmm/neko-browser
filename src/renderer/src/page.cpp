@@ -190,13 +190,12 @@ bool FindCaretGeometry(
 // position: fixed boxes are laid out at their scroll-0 viewport position and
 // pinned out of the scroll shift at paint time, so a fixed subtree is
 // compared in viewport space (y - scroll_y) to match what is on screen.
-const dom::Element*
-ElementAt(const layout::LayoutBox& box,
-          float x,
-          float y,
-          float scroll_y,
-          bool in_fixed,
-          const style::StyleEngine& styles)
+const dom::Element* ElementAt(const layout::LayoutBox& box,
+                              float x,
+                              float y,
+                              float scroll_y,
+                              bool in_fixed,
+                              const style::StyleEngine& styles)
 {
   // pointer-events: none (CSS UI 4 §6.6) makes the element transparent to
   // hit testing: decorative overlays (baidu.com's chat-input wrapper layers)

@@ -3160,8 +3160,9 @@ TEST(LayoutTest, EmptyTextControlShowsPlaceholder)
 // hardcoded black, drawing black-on-navy).
 TEST(LayoutTest, FormControlTextUsesComputedColor)
 {
-  Page page = Build("<body><button id=\"b\" style=\"color:#ffffff;background:#2a3c54\">go</button>"
-                    "<input id=\"s\" type=\"submit\" value=\"send\" style=\"color:#ff0000\"></body>");
+  Page page =
+      Build("<body><button id=\"b\" style=\"color:#ffffff;background:#2a3c54\">go</button>"
+            "<input id=\"s\" type=\"submit\" value=\"send\" style=\"color:#ff0000\"></body>");
   const auto control_box = [&page](const char* selector) -> const LayoutBox* {
     const dom::Element* element = dom::QuerySelector(*page.doc, selector);
     if (element == nullptr) {

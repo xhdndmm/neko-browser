@@ -347,10 +347,9 @@ void Rasterizer::RenderGroup(const std::vector<DrawCommand>& commands,
   off.scroll_offset_ = scroll_offset_;
   off.registry_ = registry_;
   off.clips_ = clips_;
-  off.pixels_.assign(
-      static_cast<std::size_t>(std::max(0, band_y1_ - band_origin_y_)) *
-          static_cast<std::size_t>(width_) * 4,
-      0);
+  off.pixels_.assign(static_cast<std::size_t>(std::max(0, band_y1_ - band_origin_y_)) *
+                         static_cast<std::size_t>(width_) * 4,
+                     0);
   off.pixels_data_ = off.pixels_.data();
 
   off.ExecuteCommands(commands, begin, end);

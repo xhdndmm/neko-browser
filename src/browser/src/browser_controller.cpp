@@ -1837,8 +1837,7 @@ bool BrowserController::ReflectScriptStyleMutations(Tab& tab)
   if (tab.script_runtime == nullptr || tab.page == nullptr) {
     return false;
   }
-  const javascript::DomBinder::StyleDirtyScope scope =
-      tab.script_runtime->TakeStyleDirtyScope();
+  const javascript::DomBinder::StyleDirtyScope scope = tab.script_runtime->TakeStyleDirtyScope();
   if (!scope.dirty) {
     return false;
   }
@@ -1854,7 +1853,6 @@ bool BrowserController::ReflectScriptStyleMutations(Tab& tab)
   }
   return true;
 }
-
 
 int BrowserController::PumpScriptTimersUntilQuiet(int max_iterations)
 {

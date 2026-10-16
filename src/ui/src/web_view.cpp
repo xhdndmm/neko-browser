@@ -284,7 +284,8 @@ void WebView::inputMethodEvent(QInputMethodEvent* event)
   // composition only appears in the field once committed.
   const QString commit = event->commitString();
   if (!commit.isEmpty() && snapshot_.content_type == browser::ContentType::kHtml) {
-    worker_->DispatchKeyboard(tab_id_, QStringLiteral("keydown"), commit, QStringLiteral("Unidentified"));
+    worker_->DispatchKeyboard(
+        tab_id_, QStringLiteral("keydown"), commit, QStringLiteral("Unidentified"));
   }
   event->accept();
 }

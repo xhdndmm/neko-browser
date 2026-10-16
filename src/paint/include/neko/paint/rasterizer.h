@@ -145,9 +145,8 @@ private:
   void DrawImage(const DrawCommand& command);
   // Executes commands[begin, end) into this rasterizer.  Shared by Rasterize()
   // and the kPushGroup recursion.
-  void ExecuteCommands(const std::vector<DrawCommand>& commands,
-                       std::size_t begin,
-                       std::size_t end);
+  void
+  ExecuteCommands(const std::vector<DrawCommand>& commands, std::size_t begin, std::size_t end);
   // Rasterizes a group range into a transparent offscreen mirror of this
   // rasterizer and composites it back as ONE unit with |alpha| (group
   // opacity).  The mirror copies every geometry field (band origin, visible

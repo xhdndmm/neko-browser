@@ -138,8 +138,7 @@ void PaintWidget(const layout::LayoutBox& box, DisplayList& list)
   case layout::FormControlKind::kSelect: {
     // A small downward triangle near the trailing edge: stacked shrinking
     // rows (the classic 7x4 stepped arrow).
-    const float right =
-        snap(box.x + box.width - box.border_right - box.padding_right - 3.0f);
+    const float right = snap(box.x + box.width - box.border_right - box.padding_right - 3.0f);
     const float top = snap(box.y + (box.height - 4.0f) / 2.0f);
     for (int row = 0; row < 4; ++row) {
       const float w = 7.0f - 2.0f * static_cast<float>(row);
@@ -222,9 +221,10 @@ void Painter::PaintContext(const layout::LayoutBox& box, DisplayList& list) cons
   }
 
   // E2: negative z-index child contexts, ascending (stable).
-  std::stable_sort(neg.begin(), neg.end(), [](const layout::LayoutBox* a, const layout::LayoutBox* b) {
-    return a->style.z_index.value_or(0) < b->style.z_index.value_or(0);
-  });
+  std::stable_sort(
+      neg.begin(), neg.end(), [](const layout::LayoutBox* a, const layout::LayoutBox* b) {
+        return a->style.z_index.value_or(0) < b->style.z_index.value_or(0);
+      });
   for (const layout::LayoutBox* unit : neg) {
     PaintUnit(*unit, list);
   }
@@ -238,9 +238,10 @@ void Painter::PaintContext(const layout::LayoutBox& box, DisplayList& list) cons
   for (const layout::LayoutBox* unit : zero) {
     PaintUnit(*unit, list);
   }
-  std::stable_sort(pos.begin(), pos.end(), [](const layout::LayoutBox* a, const layout::LayoutBox* b) {
-    return a->style.z_index.value_or(0) < b->style.z_index.value_or(0);
-  });
+  std::stable_sort(
+      pos.begin(), pos.end(), [](const layout::LayoutBox* a, const layout::LayoutBox* b) {
+        return a->style.z_index.value_or(0) < b->style.z_index.value_or(0);
+      });
   for (const layout::LayoutBox* unit : pos) {
     PaintUnit(*unit, list);
   }

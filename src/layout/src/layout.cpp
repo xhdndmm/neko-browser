@@ -1803,8 +1803,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         content_width = static_cast<float>(characters - 1) * average + widest;
         text = std::string(element.GetAttribute("value").value_or(""));
         // §15.5.6: a password state shows bullets instead of the value.
-        if (base::AsciiEqualsIgnoreCase(
-                std::string(element.GetAttribute("type").value_or("")), "password")) {
+        if (base::AsciiEqualsIgnoreCase(std::string(element.GetAttribute("type").value_or("")),
+                                        "password")) {
           text = MaskPasswordValue(text);
         }
         break;
@@ -1960,12 +1960,12 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       if (replaced_media) {
         replaced_image = images != nullptr ? images->Find(element) : nullptr;
         ComputeReplacedSize(box->style,
-                             element,
-                             replaced_image,
-                             containing_width,
-                             /*containing_height=*/0,
-                             replaced_w,
-                             replaced_h);
+                            element,
+                            replaced_image,
+                            containing_width,
+                            /*containing_height=*/0,
+                            replaced_w,
+                            replaced_h);
       }
 
       const float border_padding_w =
@@ -2624,12 +2624,12 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       if (replaced_media) {
         replaced_image = images != nullptr ? images->Find(element) : nullptr;
         ComputeReplacedSize(box->style,
-                           element,
-                           replaced_image,
-                           containing_width,
-                           percent_base_h,
-                           replaced_w,
-                           replaced_h);
+                            element,
+                            replaced_image,
+                            containing_width,
+                            percent_base_h,
+                            replaced_w,
+                            replaced_h);
       }
 
       // Width: explicit (px or %) or fill the containing block.
@@ -2836,13 +2836,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       float replaced_h = 0;
       if (replaced_media) {
         replaced_image = images != nullptr ? images->Find(element) : nullptr;
-        ComputeReplacedSize(box->style,
-                           element,
-                           replaced_image,
-                           containing_width,
-                           cb_h,
-                           replaced_w,
-                           replaced_h);
+        ComputeReplacedSize(
+            box->style, element, replaced_image, containing_width, cb_h, replaced_w, replaced_h);
       }
 
       const float border_padding_w =
@@ -3236,8 +3231,13 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
           const image::Image* replaced_image = images != nullptr ? images->Find(child_el) : nullptr;
           float replaced_w = 0;
           float replaced_h = 0;
-          ComputeReplacedSize(
-              s, child_el, replaced_image, avail_width, /*containing_height=*/0, replaced_w, replaced_h);
+          ComputeReplacedSize(s,
+                              child_el,
+                              replaced_image,
+                              avail_width,
+                              /*containing_height=*/0,
+                              replaced_w,
+                              replaced_h);
           item.base_main = row ? replaced_w : replaced_h;
         } else if (row) {
           item.base_main = MeasureContent(child_el, styles, registry).max;

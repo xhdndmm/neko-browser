@@ -475,13 +475,12 @@ TEST(PageTest, PointerEventsNoneIsTransparentToHitTesting)
 TEST(PageTest, PointerEventsAutoChildIsHittableInsideNoneSubtree)
 {
   Page page;
-  ASSERT_TRUE(page.LoadHtml(
-                  "<body style=\"margin:0\">"
-                  "<div id=\"veil\" style=\"position:relative;width:200px;height:100px;"
-                  "pointer-events:none\">"
-                  "<div id=\"inner\" style=\"position:absolute;left:0;top:0;width:50px;"
-                  "height:50px;pointer-events:auto\"></div>"
-                  "</div></body>")
+  ASSERT_TRUE(page.LoadHtml("<body style=\"margin:0\">"
+                            "<div id=\"veil\" style=\"position:relative;width:200px;height:100px;"
+                            "pointer-events:none\">"
+                            "<div id=\"inner\" style=\"position:absolute;left:0;top:0;width:50px;"
+                            "height:50px;pointer-events:auto\"></div>"
+                            "</div></body>")
                   .has_value());
   page.Layout(200, 100);
   const dom::Element* inner = page.ElementAt(25, 25);
