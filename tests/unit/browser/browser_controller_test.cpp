@@ -1060,6 +1060,7 @@ TEST(BrowserControllerTest, InputEventRunsOninputAndTitleFollows)
   EXPECT_EQ(input->GetAttribute("value").value_or(""), "水a");
   EXPECT_EQ(tab->page->document()->Title(), "水a")
       << "the oninput content-attribute handler must run (no <script> on this page)";
+  EXPECT_EQ(tab->title, "水a") << "the handler's document.title write must reach the tab";
 }
 
 TEST(BrowserControllerTest, SubmitButtonSubmitsFormWithEncodedData)

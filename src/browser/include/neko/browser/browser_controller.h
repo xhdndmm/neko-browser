@@ -591,6 +591,13 @@ public:
   // cached field.
   void RefreshTabTitle(Tab& tab);
 
+  // Reflects a script's DOM mutations at an interaction gate: the scoped
+  // restyle for attribute-only batches (layout follows only when a computed
+  // style actually changed), the full ApplyStyles path for conservative ones,
+  // plus the document.title re-read (handlers change titles too).  Returns
+  // whether any style-relevant mutation was pending.
+  bool ReflectScriptStyleMutations(Tab& tab);
+
   // Worker-thread scroll bridging.  |SetTabScrollOffset| records the page's
   // current vertical scroll offset (the GUI reports it from its scroll bar);
   // |SetTabScrollRequest| records a script-requested scroll (window.scrollTo /

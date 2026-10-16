@@ -227,29 +227,6 @@ void DispatchToggleEvents(javascript::DomBinder* runtime, dom::Element& element)
   }
 }
 
-// Reflects a script's style-relevant DOM mutations: the scoped restyle for
-// attribute-only batches (layout follows only when a computed style actually
-// changed), the full ApplyStyles path for conservative ones.  Returns whether
-// any style-relevant mutation was pending (callers OR it with the DOM flag
-// for the late-fetch pass).
-bool ReflectScriptStyleMutations(Tab& tab)
-{
-  if (tab.script_runtime == nullptr || tab.page == nullptr) {
-    return false;
-  }
-  const javascript::DomBinder::StyleDirtyScope scope =
-      tab.script_runtime->TakeStyleDirtyScope();
-  if (!scope.dirty) {
-    return false;
-  }
-  if (scope.full_restyle || scope.roots.empty()) {
-    tab.page->ReapplyStyles();
-  } else {
-    tab.page->ReapplyStylesFor(scope.roots);
-  }
-  return true;
-}
-
 // Moves keyboard focus to |element| (or clears it when null), firing blur on
 // the old target and focus on the new one (only when the target changes).
 void FocusControl(Tab* tab, dom::Element* element)
@@ -1497,8 +1474,10 @@ bool BrowserController::DispatchKeyboard(int tab_id,
   }
   if (value_changed) {
     // The value edit is geometry the layout reads outside the cascade: it
-    // always rebuilds (the scoped path cannot see it).
+    // always rebuilds (the scoped path cannot see it).  The key handlers ran
+    // too and may have changed document.title.
     tab->page->ReapplyStyles();
+    RefreshTabTitle(*tab);
   }
   if (key_style_changed || key_dom_changed) {
     SchedulePendingImageFetch(*tab);
@@ -1847,6 +1826,35 @@ void BrowserController::RefreshTabTitle(Tab& tab)
     tab.title = title;
   }
 }
+
+// Reflects a script's style-relevant DOM mutations: the scoped restyle for
+// attribute-only batches (layout follows only when a computed style actually
+// changed), the full ApplyStyles path for conservative ones.  Returns whether
+// any style-relevant mutation was pending (callers OR it with the DOM flag
+// for the late-fetch pass).
+bool BrowserController::ReflectScriptStyleMutations(Tab& tab)
+{
+  if (tab.script_runtime == nullptr || tab.page == nullptr) {
+    return false;
+  }
+  const javascript::DomBinder::StyleDirtyScope scope =
+      tab.script_runtime->TakeStyleDirtyScope();
+  if (!scope.dirty) {
+    return false;
+  }
+  // Handlers change document.title too (an oninput mirroring a field into the
+  // title, SPA route titles): a title write is a DOM mutation and therefore
+  // always part of a dirty batch.  The pump only re-reads the title when its
+  // own timers ran scripts, so event dispatches must do it here.
+  RefreshTabTitle(tab);
+  if (scope.full_restyle || scope.roots.empty()) {
+    tab.page->ReapplyStyles();
+  } else {
+    tab.page->ReapplyStylesFor(scope.roots);
+  }
+  return true;
+}
+
 
 int BrowserController::PumpScriptTimersUntilQuiet(int max_iterations)
 {
