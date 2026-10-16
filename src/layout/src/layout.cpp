@@ -1920,7 +1920,8 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         // offset is included), matching how the painter draws runs.
         run.x = box->x + box->border_left + box->padding_left;
         run.y = box->y + box->border_top + box->padding_top;
-        run.color = is_placeholder ? css::Color{160, 160, 160, 255} : css::Color{0, 0, 0, 255};
+        run.color = is_placeholder ? css::Color{160, 160, 160, 255}
+                                   : box->style.color.value_or(css::Color{0, 0, 0, 255});
         run.visible = box->style.visibility != style::Visibility::kHidden;
         run.width = MeasureTextWidth(
             registry, run.font_family, run.font_weight, run.font_italic, run.text, run.font_size);

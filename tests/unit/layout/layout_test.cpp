@@ -3155,6 +3155,33 @@ TEST(LayoutTest, EmptyTextControlShowsPlaceholder)
   EXPECT_EQ(filled->lines.front().runs.front().text, "typing");
 }
 
+// The control's value/label text run takes the computed `color` (kaom.net's
+// submit button is .form_2 { color:#fff } on a dark face: the run used to be
+// hardcoded black, drawing black-on-navy).
+TEST(LayoutTest, FormControlTextUsesComputedColor)
+{
+  Page page = Build("<body><button id=\"b\" style=\"color:#ffffff;background:#2a3c54\">go</button>"
+                    "<input id=\"s\" type=\"submit\" value=\"send\" style=\"color:#ff0000\"></body>");
+  const auto control_box = [&page](const char* selector) -> const LayoutBox* {
+    const dom::Element* element = dom::QuerySelector(*page.doc, selector);
+    if (element == nullptr) {
+      return nullptr;
+    }
+    const InlineBox* holder = nullptr;
+    return FindInlineBlock(*page.root, element, holder);
+  };
+  const LayoutBox* button = control_box("#b");
+  ASSERT_NE(button, nullptr);
+  ASSERT_FALSE(button->lines.empty());
+  ASSERT_FALSE(button->lines.front().runs.empty());
+  EXPECT_EQ(button->lines.front().runs.front().color, (css::Color{255, 255, 255, 255}));
+  const LayoutBox* submit = control_box("#s");
+  ASSERT_NE(submit, nullptr);
+  ASSERT_FALSE(submit->lines.empty());
+  ASSERT_FALSE(submit->lines.front().runs.empty());
+  EXPECT_EQ(submit->lines.front().runs.front().color, (css::Color{255, 0, 0, 255}));
+}
+
 // <input type="password"> masks its value (WHATWG §15.5.6): the run text is
 // one U+2022 bullet per CODE POINT (a CJK character masks to one bullet, not
 // three bytes' worth), and the placeholder stays in the clear like browsers
