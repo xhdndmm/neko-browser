@@ -300,10 +300,11 @@ QVariant WebView::inputMethodQuery(Qt::InputMethodQuery query) const
   case Qt::ImCursorRectangle: {
     // Place the candidate window at the page caret (frame pixels -> logical).
     const qreal scale = DeviceScale();
-    const QRectF caret(snapshot_.caret_x / scale,
-                       snapshot_.caret_y / scale - ScrollY() / scale,
+    const QRectF caret(static_cast<qreal>(snapshot_.caret_x) / scale,
+                       static_cast<qreal>(snapshot_.caret_y) / scale -
+                           static_cast<qreal>(ScrollY()) / scale,
                        1.0,
-                       snapshot_.caret_height / scale);
+                       static_cast<qreal>(snapshot_.caret_height) / scale);
     return caret.toRect();
   }
   default:
@@ -483,7 +484,8 @@ void WebView::UpdateScrollRange()
   // walks the layout tree.
   // frame_content_height is in frame pixels; the scroll bar is logical.
   const qreal scale = DeviceScale();
-  const int content_height = static_cast<int>(std::lround(snapshot_.frame_content_height / scale));
+  const int content_height =
+      static_cast<int>(std::lround(static_cast<qreal>(snapshot_.frame_content_height) / scale));
   const int viewport_height = std::max(1, viewport()->height());
   verticalScrollBar()->setRange(0, std::max(0, content_height - viewport_height));
 }
@@ -623,9 +625,10 @@ void WebView::PaintHtml(QPainter& painter)
   // draws the blinking bar itself (blinking never touches the DOM).
   if (snapshot_.has_caret && caret_visible_ && snapshot_.caret_height > 0) {
     const qreal scale = DeviceScale();
-    const int y =
-        static_cast<int>(std::lround(snapshot_.caret_y / scale)) - verticalScrollBar()->value();
-    const int height = static_cast<int>(std::lround(snapshot_.caret_height / scale));
+    const int y = static_cast<int>(std::lround(static_cast<qreal>(snapshot_.caret_y) / scale)) -
+                  verticalScrollBar()->value();
+    const int height =
+        static_cast<int>(std::lround(static_cast<qreal>(snapshot_.caret_height) / scale));
     if (y + height > 0 && y < viewport()->height()) {
       painter.fillRect(QRect(static_cast<int>(snapshot_.caret_x), y, 1, height), Qt::black);
     }
