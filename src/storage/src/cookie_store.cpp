@@ -520,6 +520,14 @@ bool CookieStore::SetCookieFromHeader(const url::Url& origin, std::string_view h
     has_domain = false;
   }
 
+  // RFC 6265bis storage model: SameSite=None means "send cross-site", so it
+  // is only honored on a Secure cookie -- otherwise the cookie could ride
+  // plaintext cross-site requests, which is exactly what the attribute is
+  // meant to gate.  A None cookie without Secure is ignored entirely.
+  if (same_site == "none" && !secure) {
+    return false;
+  }
+
   const std::string cookie_domain = has_domain ? domain : origin_host;
   const bool host_only = !has_domain;
   const std::string cookie_path = has_path ? path : DefaultPath(origin);

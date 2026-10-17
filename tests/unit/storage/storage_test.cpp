@@ -202,6 +202,27 @@ TEST(CookieStoreTest, RejectsPublicSuffixDomainAttribute)
   EXPECT_TRUE(store.CookiesFor(MakeUrl("http://x.com/"), now).empty());
 }
 
+// RFC 6265bis: SameSite=None opts a cookie into cross-site sending, so it
+// is only honored on Secure cookies; None without Secure is ignored.
+TEST(CookieStoreTest, RejectsSameSiteNoneWithoutSecure)
+{
+  TempProfile tp;
+  CookieStore store(tp.path());
+  ASSERT_TRUE(store.Load().has_value());
+  const int64_t now = 1'700'000'000;
+
+  EXPECT_FALSE(
+      store.SetCookieFromHeader(MakeUrl("http://www.example.com/"), "a=1; SameSite=None", now));
+  EXPECT_FALSE(
+      store.SetCookieFromHeader(MakeUrl("https://www.example.com/"), "b=1; SameSite=None", now));
+  EXPECT_TRUE(store.empty());
+  // With Secure it is a normal cookie (still not sent over http).
+  EXPECT_TRUE(store.SetCookieFromHeader(
+      MakeUrl("https://www.example.com/"), "c=1; SameSite=None; Secure", now));
+  EXPECT_EQ(store.CookiesFor(MakeUrl("https://www.example.com/"), now).size(), 1u);
+  EXPECT_TRUE(store.CookiesFor(MakeUrl("http://www.example.com/"), now).empty());
+}
+
 TEST(CookieStoreTest, RejectsNameWithSeparators)
 {
   TempProfile tp;
