@@ -223,6 +223,35 @@ TEST(CookieStoreTest, RejectsSameSiteNoneWithoutSecure)
   EXPECT_TRUE(store.CookiesFor(MakeUrl("http://www.example.com/"), now).empty());
 }
 
+// RFC 6265 §6.1 capacity: cookies bigger than 4096 bytes (name + value)
+// are ignored, and the jar stays bounded (evicting the oldest).
+TEST(CookieStoreTest, EnforcesCapacityLimits)
+{
+  TempProfile tp;
+  CookieStore store(tp.path());
+  ASSERT_TRUE(store.Load().has_value());
+  const int64_t now = 1'700'000'000;
+
+  // 4096 bytes total is the guaranteed capacity: accepted.
+  const std::string at_limit(4096 - 1, 'a'); // name "k" + value = 4096
+  EXPECT_TRUE(store.SetCookieFromHeader(MakeUrl("http://www.example.com/"), "k=" + at_limit, now));
+  // One byte more is ignored.
+  const std::string over_limit(4096, 'a');
+  EXPECT_FALSE(
+      store.SetCookieFromHeader(MakeUrl("http://www.example.com/"), "k=" + over_limit, now));
+
+  // The count bound evicts the oldest cookie once exceeded.
+  CookieStore small(tp.path());
+  ASSERT_TRUE(small.Load().has_value());
+  for (int i = 0; i < 3100; ++i) {
+    ASSERT_TRUE(small.SetCookieFromHeader(
+        MakeUrl("http://www.example.com/"), "c" + std::to_string(i) + "=v", now + i));
+  }
+  const std::string header = small.CookieHeaderFor(MakeUrl("http://www.example.com/"), now + 4000);
+  EXPECT_EQ(header.find("c0=v"), std::string::npos); // oldest evicted
+  EXPECT_NE(header.find("c3099=v"), std::string::npos);
+}
+
 TEST(CookieStoreTest, RejectsNameWithSeparators)
 {
   TempProfile tp;

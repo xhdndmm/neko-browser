@@ -117,6 +117,9 @@ private:
   bool
   DeleteCookieLocked(const std::string& name, const std::string& domain, const std::string& path);
   std::vector<const Cookie*> CookiesForLocked(const url::Url& url, int64_t now) const;
+  // Drops expired cookies, then the oldest by creation time, until the jar is
+  // within the RFC 6265 §6.1 capacity bound.
+  void EvictOverflowLocked(int64_t now);
 
   mutable std::mutex mutex_;
   std::string profile_dir_;

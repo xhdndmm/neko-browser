@@ -145,6 +145,12 @@ int64_t ParseCookieDate(std::string_view input)
 // Matching (RFC 6265 section 5.1.3 / 5.1.4)
 // ---------------------------------------------------------------------------
 
+// RFC 6265 §6.1 capacity: a user agent must accept cookies up to 4096 bytes
+// (name + value here, as browsers measure it) and keep a bounded jar.  A
+// page that streams Set-Cookie must not grow memory/disk without limit.
+constexpr std::size_t kMaxCookieBytes = 4096;
+constexpr std::size_t kMaxCookies = 3000;
+
 bool DomainMatch(std::string_view host, const Cookie& c)
 {
   if (c.host_only)
@@ -443,6 +449,10 @@ bool CookieStore::SetCookieFromHeader(const url::Url& origin, std::string_view h
   }
   const std::string name(raw_name);
   const std::string value(raw_value);
+  // RFC 6265 §6.1: a cookie larger than the guaranteed capacity is ignored.
+  if (name.size() + value.size() > kMaxCookieBytes) {
+    return false;
+  }
 
   // Attributes.
   std::string domain;
@@ -577,7 +587,26 @@ bool CookieStore::SetCookieFromHeader(const url::Url& origin, std::string_view h
                             secure,
                             http_only,
                             same_site});
+  EvictOverflowLocked(now);
   return true;
+}
+
+// Keeps the jar within kMaxCookies (RFC 6265 §6.1).  Expired entries are
+// dropped first, then the oldest by creation time -- a documented policy the
+// spec leaves to the user agent.
+void CookieStore::EvictOverflowLocked(int64_t now)
+{
+  if (cookies_.size() <= kMaxCookies) {
+    return;
+  }
+  std::erase_if(cookies_, [now](const Cookie& c) { return c.expiry > 0 && now > c.expiry; });
+  while (cookies_.size() > kMaxCookies) {
+    auto oldest =
+        std::min_element(cookies_.begin(), cookies_.end(), [](const Cookie& a, const Cookie& b) {
+          return a.created < b.created;
+        });
+    cookies_.erase(oldest);
+  }
 }
 
 std::vector<const Cookie*> CookieStore::CookiesFor(const url::Url& url, int64_t now) const
