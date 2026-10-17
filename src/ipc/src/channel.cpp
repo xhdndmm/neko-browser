@@ -1,84 +1,9 @@
 #include "neko/ipc/channel.h"
 
-#include <cerrno>
 #include <cstdint>
-#include <cstring>
 #include <utility>
 
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#else
-#include <unistd.h>
-#endif
-
 namespace neko::ipc {
-
-namespace {
-
-Channel::Handle InvalidHandle()
-{
-#ifdef _WIN32
-  return INVALID_HANDLE_VALUE;
-#else
-  return -1;
-#endif
-}
-
-void CloseRaw(Channel::Handle h)
-{
-#ifdef _WIN32
-  CloseHandle(h);
-#else
-  ::close(h);
-#endif
-}
-
-// Reads exactly |n| bytes into |buf|.  Returns false on EOF/error.  On a
-// clean EOF before the first byte, sets |clean_eof| so the caller can
-// distinguish "peer closed between frames" from "truncated frame".
-bool ReadExactly(Channel::Handle h, uint8_t* buf, std::size_t n, bool* clean_eof)
-{
-  *clean_eof = false;
-  std::size_t done = 0;
-  while (done < n) {
-#ifdef _WIN32
-    DWORD got = 0;
-    const BOOL ok = ReadFile(h, buf + done, static_cast<DWORD>(n - done), &got, nullptr);
-    if (!ok) {
-      if (GetLastError() == ERROR_BROKEN_PIPE && done == 0) {
-        *clean_eof = true;
-      }
-      return false;
-    }
-    if (got == 0) {
-      if (done == 0) {
-        *clean_eof = true;
-      }
-      return false;
-    }
-    done += got;
-#else
-    const ssize_t got = ::read(h, buf + done, n - done);
-    if (got == 0) {
-      if (done == 0) {
-        *clean_eof = true;
-      }
-      return false;
-    }
-    if (got < 0) {
-      if (errno == EINTR) {
-        continue;
-      }
-      return false;
-    }
-    done += static_cast<std::size_t>(got);
-#endif
-  }
-  return true;
-}
-
-} // namespace
 
 base::Result<std::string> EncodeFrame(std::string_view payload)
 {
@@ -116,20 +41,18 @@ base::Result<std::string> DecodeFrame(std::string_view frame)
 
 bool Channel::HandleValid(Handle h)
 {
-#ifdef _WIN32
-  return h != nullptr && h != INVALID_HANDLE_VALUE;
-#else
-  return h >= 0;
-#endif
+  return platform::PipeHandleValid(h);
 }
 
-Channel::Channel() : read_handle_(InvalidHandle()), write_handle_(InvalidHandle()) {}
+Channel::Channel()
+    : read_handle_(platform::InvalidPipeHandle()), write_handle_(platform::InvalidPipeHandle())
+{}
 
 Channel::Channel(Channel&& other) noexcept
     : read_handle_(other.read_handle_), write_handle_(other.write_handle_)
 {
-  other.read_handle_ = InvalidHandle();
-  other.write_handle_ = InvalidHandle();
+  other.read_handle_ = platform::InvalidPipeHandle();
+  other.write_handle_ = platform::InvalidPipeHandle();
 }
 
 Channel& Channel::operator=(Channel&& other) noexcept
@@ -138,8 +61,8 @@ Channel& Channel::operator=(Channel&& other) noexcept
     Close();
     read_handle_ = other.read_handle_;
     write_handle_ = other.write_handle_;
-    other.read_handle_ = InvalidHandle();
-    other.write_handle_ = InvalidHandle();
+    other.read_handle_ = platform::InvalidPipeHandle();
+    other.write_handle_ = platform::InvalidPipeHandle();
   }
   return *this;
 }
@@ -159,15 +82,8 @@ Channel Channel::FromHandles(Handle read_handle, Handle write_handle)
 
 Channel Channel::FromStdio()
 {
-#ifdef _WIN32
-  // The parent (ipc::Subprocess) redirected the child's stdio to the pipe
-  // ends, so the standard handles are this end of the channel.  The handles
-  // are used raw (ReadFile/WriteFile): no CRLF translation or text-mode
-  // buffering can corrupt a binary frame.
-  return FromHandles(GetStdHandle(STD_INPUT_HANDLE), GetStdHandle(STD_OUTPUT_HANDLE));
-#else
-  return FromHandles(STDIN_FILENO, STDOUT_FILENO);
-#endif
+  const platform::PipePair pipes = platform::StandardIoPipes();
+  return FromHandles(pipes.read, pipes.write);
 }
 
 bool Channel::open() const
@@ -177,14 +93,10 @@ bool Channel::open() const
 
 void Channel::Close()
 {
-  if (HandleValid(read_handle_)) {
-    CloseRaw(read_handle_);
-    read_handle_ = InvalidHandle();
-  }
-  if (HandleValid(write_handle_)) {
-    CloseRaw(write_handle_);
-    write_handle_ = InvalidHandle();
-  }
+  platform::ClosePipe(read_handle_);
+  platform::ClosePipe(write_handle_);
+  read_handle_ = platform::InvalidPipeHandle();
+  write_handle_ = platform::InvalidPipeHandle();
 }
 
 bool Channel::Send(const std::string& payload)
@@ -197,37 +109,8 @@ bool Channel::Send(const std::string& payload)
     return false;
   }
   const std::string& frame = encoded.value();
-  std::size_t done = 0;
-  while (done < frame.size()) {
-#ifdef _WIN32
-    DWORD wrote = 0;
-    const BOOL ok = WriteFile(write_handle_,
-                              frame.data() + done,
-                              static_cast<DWORD>(frame.size() - done),
-                              &wrote,
-                              nullptr);
-    if (!ok) {
-      return false;
-    }
-    if (wrote == 0) {
-      return false;
-    }
-    done += wrote;
-#else
-    const ssize_t wrote = ::write(write_handle_, frame.data() + done, frame.size() - done);
-    if (wrote < 0) {
-      if (errno == EINTR) {
-        continue;
-      }
-      return false;
-    }
-    if (wrote == 0) {
-      return false;
-    }
-    done += static_cast<std::size_t>(wrote);
-#endif
-  }
-  return true;
+  return platform::PipeWriteAll(
+      write_handle_, reinterpret_cast<const std::uint8_t*>(frame.data()), frame.size());
 }
 
 base::Result<std::string> Channel::Receive()
@@ -237,7 +120,7 @@ base::Result<std::string> Channel::Receive()
   }
   std::uint8_t header[4];
   bool clean_eof = false;
-  if (!ReadExactly(read_handle_, header, 4, &clean_eof)) {
+  if (!platform::PipeReadExactly(read_handle_, header, 4, &clean_eof)) {
     if (clean_eof) {
       return base::Err(base::Error::Io("peer closed"));
     }
@@ -251,7 +134,7 @@ base::Result<std::string> Channel::Receive()
   }
   std::string payload(static_cast<std::size_t>(length), '\0');
   if (length > 0 &&
-      !ReadExactly(
+      !platform::PipeReadExactly(
           read_handle_, reinterpret_cast<uint8_t*>(payload.data()), payload.size(), &clean_eof)) {
     return base::Err(base::Error::InvalidArgument("frame body is truncated"));
   }

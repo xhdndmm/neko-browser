@@ -7,9 +7,15 @@
 # =============================================================================
 
 if(WIN32)
-  set(_neko_platform_sources src/windows/fs.cpp)
+  set(_neko_platform_sources
+    src/windows/fs.cpp
+    src/windows/pipe.cpp
+    src/windows/process.cpp)
 else()
-  set(_neko_platform_sources src/posix/fs.cpp)
+  set(_neko_platform_sources
+    src/posix/fs.cpp
+    src/posix/pipe.cpp
+    src/posix/process.cpp)
 endif()
 
 add_library(neko_platform ${_neko_platform_sources})

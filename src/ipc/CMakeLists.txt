@@ -18,5 +18,5 @@ target_compile_features(neko_ipc PUBLIC cxx_std_20)
 target_include_directories(neko_ipc PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
-target_link_libraries(neko_ipc PUBLIC neko::base)
+target_link_libraries(neko_ipc PUBLIC neko::base neko::platform)
 apply_compiler_warnings(neko_ipc)

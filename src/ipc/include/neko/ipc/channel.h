@@ -1,6 +1,7 @@
 #pragma once
 
 #include "neko/base/status.h"
+#include "neko/platform/pipe.h"
 
 #include <cstddef>
 #include <string>
@@ -57,11 +58,7 @@ public:
   // Wraps raw platform handles.  The channel takes ownership and closes
   // them in Close()/destructor; the child side passes its own stdio
   // descriptors, which are reclaimed by the OS at process exit.
-#ifdef _WIN32
-  using Handle = void*;
-#else
-  using Handle = int;
-#endif
+  using Handle = platform::PipeHandle;
   static bool HandleValid(Handle h);
   static Channel FromHandles(Handle read_handle, Handle write_handle);
 

@@ -2,6 +2,7 @@
 
 #include "neko/base/status.h"
 #include "neko/ipc/channel.h"
+#include "neko/platform/process.h"
 
 #include <cstdint>
 #include <string>
@@ -15,6 +16,7 @@ namespace neko::ipc {
 //
 // Platform: POSIX fork+exec with pipe()/dup2; Windows CreateProcess with
 // anonymous pipes (SetHandleInformation inheritance + quoted command line).
+// The OS halves live in neko/platform/process.h.
 class Subprocess
 {
 public:
@@ -47,14 +49,8 @@ public:
   void Terminate();
 
 private:
-  void CloseProcessHandle();
-
   Channel channel_;
-#ifdef _WIN32
-  void* process_handle_ = nullptr;
-#else
-  int pid_ = -1;
-#endif
+  platform::ChildProcess process_;
 };
 
 } // namespace neko::ipc
