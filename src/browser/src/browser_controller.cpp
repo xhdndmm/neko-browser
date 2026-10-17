@@ -681,13 +681,18 @@ BrowserController::BrowserController(std::string profile_dir,
   // With network-process mode the whole fetch runs in a child; the child asks
   // back for each hop's cookies, so the jar (and HttpOnly values) stay here.
   if (!fetch_) {
-    fetch_ = [this](const url::Url& u, std::string_view) {
+    fetch_ = [this](const url::Url& u, std::string_view, const RequestHeaders& extra_headers) {
       if (network_.enabled) {
         NetworkSession* session = EnsureNetworkSession();
         if (session != nullptr) {
           NetworkSession::CookieLookupFn lookup = [this](const url::Url& target) {
             return CookieHeader(target, NowUnix());
           };
+          // NOTE: extra_headers do not cross the network-process protocol yet
+          // (the request serializer carries only url + cookie); the CORS
+          // Origin header is therefore absent there.  That fails CLOSED (an
+          // Origin-varying server grants no ACAO -> the response is refused),
+          // so it is a compatibility gap, not a security hole.
           auto fetched = session->Fetch(u, /*cookie_header=*/{}, lookup);
           if (fetched.has_value()) {
             return fetched;
@@ -697,12 +702,17 @@ BrowserController::BrowserController(std::string profile_dir,
         }
       }
       network::HeaderProvider provider;
-      provider = [this](const url::Url& target) {
-        const std::string cookie = CookieHeader(target, NowUnix());
-        if (cookie.empty()) {
-          return std::vector<network::HttpHeader>{};
+      provider = [this, extra_headers](const url::Url& target) {
+        std::vector<network::HttpHeader> headers;
+        headers.reserve(extra_headers.size() + 1);
+        for (const auto& [name, value] : extra_headers) {
+          headers.push_back({name, value});
         }
-        return std::vector<network::HttpHeader>{{"cookie", cookie}};
+        const std::string cookie = CookieHeader(target, NowUnix());
+        if (!cookie.empty()) {
+          headers.push_back({"cookie", cookie});
+        }
+        return headers;
       };
       return network::HttpGet(u, 5, provider);
     };
@@ -1654,9 +1664,10 @@ void BrowserController::SchedulePendingImageFetch(Tab& tab)
   // Same fetcher the load-time subresource pass uses (cookies follow the
   // resource URL).  [this] is bounded by the pool draining on destruction;
   // the state/page handles outlive the tab if it is navigated away.
-  const auto fetch = [this](const url::Url& resource_url, std::string_view) {
-    return fetch_(resource_url, CookieHeader(resource_url, NowUnix()));
-  };
+  const auto fetch =
+      [this](const url::Url& resource_url, std::string_view, const RequestHeaders& extra_headers) {
+        return fetch_(resource_url, CookieHeader(resource_url, NowUnix()), extra_headers);
+      };
   pool_->Post([state, page, base_url, fetch, pool = pool_.get()]() {
     do {
       FetchPageImages(*page, base_url, fetch, *pool);
@@ -2609,7 +2620,7 @@ void BrowserController::FetchAndLoad(Tab& tab, const url::Url& url)
   const auto start = std::chrono::steady_clock::now();
   const int64_t now = NowUnix();
   const std::string cookie = CookieHeader(url, now);
-  auto response = fetch_(url, cookie);
+  auto response = fetch_(url, cookie, /*extra_headers=*/{});
   const auto end = std::chrono::steady_clock::now();
   const double elapsed_ms = std::chrono::duration<double, std::milli>(end - start).count();
 
@@ -2748,8 +2759,10 @@ void BrowserController::LoadBytes(Tab& tab,
     // apply to its scroll bar.  [this] and &tab are worker-thread only.
     services.scroll_offset_y = &tab.scroll_offset_y;
     services.set_scroll_request = [this, &tab](int, float y) { SetTabScrollRequest(tab.id, y); };
-    const auto fetch_subresource = [this](const url::Url& resource_url, std::string_view) {
-      return fetch_(resource_url, CookieHeader(resource_url, NowUnix()));
+    const auto fetch_subresource = [this](const url::Url& resource_url,
+                                          std::string_view,
+                                          const RequestHeaders& extra_headers) {
+      return fetch_(resource_url, CookieHeader(resource_url, NowUnix()), extra_headers);
     };
     // Fetch and apply the page's external <link rel=stylesheet> sheets before
     // scripts run, so scripts see the fully styled cascade.
@@ -2760,8 +2773,8 @@ void BrowserController::LoadBytes(Tab& tab,
     tab.script_runtime = RunPageScripts(
         *new_page,
         final_url,
-        [this](const url::Url& script_url) {
-          return fetch_(script_url, CookieHeader(script_url, NowUnix()));
+        [this](const url::Url& script_url, const RequestHeaders& extra_headers) {
+          return fetch_(script_url, CookieHeader(script_url, NowUnix()), extra_headers);
         },
         [this](std::string_view level, std::string_view text) { LogConsole(level, text); },
         pool(),
@@ -3444,7 +3457,7 @@ void FetchExternalStylesheets(renderer::Page& page,
     if (!parsed.has_value()) {
       return base::Err(base::Error::InvalidArgument("invalid stylesheet URL"));
     }
-    const auto response = fetch(parsed.value(), {});
+    const auto response = fetch(parsed.value(), /*cookie_header=*/{}, /*extra_headers=*/{});
     if (!response) {
       return base::Err(response.error());
     }
@@ -3552,7 +3565,7 @@ void FetchWebFonts(renderer::Page& page,
     if (!parsed.has_value()) {
       return base::Err(base::Error::InvalidArgument("invalid font URL"));
     }
-    const auto response = fetch(parsed.value(), {});
+    const auto response = fetch(parsed.value(), /*cookie_header=*/{}, /*extra_headers=*/{});
     if (!response.has_value()) {
       return base::Err(response.error());
     }
@@ -3710,7 +3723,7 @@ void FetchPageImages(renderer::Page& page,
     const base::Result<network::HttpResponse> response =
         parsed.value().scheme() == "data"
             ? network::DecodeDataUrl(parsed.value().Serialize(/*include_fragment=*/false))
-            : fetch(parsed.value(), {});
+            : fetch(parsed.value(), /*cookie_header=*/{}, /*extra_headers=*/{});
     if (!response) {
       return base::Err(response.error());
     }
@@ -3792,7 +3805,7 @@ void FetchPageVideos(renderer::Page& page,
     if (!parsed.has_value()) {
       return base::Err(base::Error::InvalidArgument("invalid video URL"));
     }
-    const auto response = fetch(parsed.value(), {});
+    const auto response = fetch(parsed.value(), /*cookie_header=*/{}, /*extra_headers=*/{});
     if (!response) {
       NEKO_LOG_WARNING("video: fetch failed for " + url + ": " + response.error().message());
       return base::Err(response.error());

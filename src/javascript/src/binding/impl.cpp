@@ -326,6 +326,23 @@ std::unique_ptr<dom::Node> CloneNodeImpl(const dom::Node& source, bool deep)
 // Throws a DOMException with the given WebIDL exception name (DOM spec §4.4,
 // WebIDL §3.5).  DOM tree operations report NotFoundError, HierarchyRequestError,
 // InvalidNodeTypeError, etc. rather than a plain TypeError.
+std::vector<std::pair<std::string, std::string>> CorsRequestHeaders(const std::string& page_url,
+                                                                    const std::string& request_url)
+{
+  std::vector<std::pair<std::string, std::string>> headers;
+  const base::Result<url::Url> page = url::Url::Parse(page_url);
+  const base::Result<url::Url> request = url::Url::Parse(request_url);
+  if (!page.has_value() || !request.has_value()) {
+    return headers;
+  }
+  const security::Origin page_origin = security::Origin::FromUrl(page.value());
+  const security::Origin request_origin = security::Origin::FromUrl(request.value());
+  if (!page_origin.IsSameOrigin(request_origin)) {
+    headers.emplace_back("origin", page_origin.Serialize());
+  }
+  return headers;
+}
+
 base::Result<void> CheckCorsAccess(const std::string& page_url,
                                    const std::string& request_url,
                                    const FetchResponse& response)
@@ -456,7 +473,9 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   // the network once.
   if (apis.fetch) {
     engine.SetModuleFetcher([this](const std::string& url) -> base::Result<std::string> {
-      const base::Result<FetchResponse> response = this->apis.fetch(url);
+      // Cross-origin module requests carry Origin (Fetch §2.2.3).
+      const base::Result<FetchResponse> response =
+          this->apis.fetch(url, CorsRequestHeaders(document_url, url));
       if (!response.has_value()) {
         return base::Err(response.error());
       }

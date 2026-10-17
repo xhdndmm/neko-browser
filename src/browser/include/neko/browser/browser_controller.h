@@ -409,11 +409,15 @@ float NextZoomFactor(float current, int direction);
 class BrowserController
 {
 public:
+  // Extra request headers ("Origin" and friends) a caller wants on the wire.
+  using RequestHeaders = std::vector<std::pair<std::string, std::string>>;
+
   // Injectable fetch function (tests use a fake; production defaults to
   // network::HttpGet).  |cookie_header| is the computed "Cookie: ..."
-  // value (may be empty) for the request host.
+  // value (may be empty) for the request host; |extra_headers| is sent
+  // verbatim (used for the CORS Origin header).
   using FetchFn = std::function<base::Result<network::HttpResponse>(
-      const url::Url&, std::string_view cookie_header)>;
+      const url::Url&, std::string_view cookie_header, const RequestHeaders& extra_headers)>;
 
   // Renderer-process mode (ADR 0016 M2): see RendererOptions.  Network-process
   // mode (ADR 0016 M3a): see NetworkOptions.

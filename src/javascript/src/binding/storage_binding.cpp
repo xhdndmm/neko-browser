@@ -424,7 +424,10 @@ JSValue JsFetch(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* a
   if (url.empty()) {
     return RejectPromise(ctx, "Failed to parse URL: " + raw_url);
   }
-  const base::Result<FetchResponse> response = impl->apis.fetch(url);
+  // Cross-origin fetches carry Origin (Fetch §2.2.3) -- it is what servers
+  // gate their Access-Control-Allow-Origin grants on.
+  const base::Result<FetchResponse> response =
+      impl->apis.fetch(url, CorsRequestHeaders(impl->document_url, url));
   if (!response.has_value()) {
     return RejectPromise(ctx, "Network error: " + response.error().message());
   }

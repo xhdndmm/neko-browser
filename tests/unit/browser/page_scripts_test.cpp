@@ -142,7 +142,9 @@ std::shared_ptr<javascript::DomBinder> RunScripts(renderer::Page& page,
   return RunPageScripts(
       page,
       "https://example.test/",
-      [&recorder](const url::Url& url) { return recorder.Fetch(url); },
+      [&recorder](const url::Url& url, const std::vector<std::pair<std::string, std::string>>&) {
+        return recorder.Fetch(url);
+      },
       std::move(sink),
       pool,
       {},

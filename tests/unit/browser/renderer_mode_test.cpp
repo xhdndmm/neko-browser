@@ -99,7 +99,8 @@ public:
     routes_[std::move(url)] = std::move(route);
   }
 
-  base::Result<network::HttpResponse> operator()(const url::Url& url, std::string_view)
+  base::Result<network::HttpResponse>
+  operator()(const url::Url& url, std::string_view, const BrowserController::RequestHeaders& = {})
   {
     const std::string key = url.Serialize();
     std::lock_guard<std::mutex> lock(mutex_);

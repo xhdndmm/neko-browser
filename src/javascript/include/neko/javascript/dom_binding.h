@@ -84,8 +84,11 @@ struct PageApis
   std::function<std::vector<std::string>()> session_storage_keys;
 
   // window.fetch: performs the request for the (absolute) URL string; an Err
-  // result rejects the returned promise (network error).
-  std::function<base::Result<FetchResponse>(const std::string&)> fetch;
+  // result rejects the returned promise (network error).  |extra_headers|
+  // is sent verbatim (the binder injects the CORS Origin header here).
+  std::function<base::Result<FetchResponse>(
+      const std::string&, const std::vector<std::pair<std::string, std::string>>&)>
+      fetch;
 
   // XMLHttpRequest transport: performs |method| against the absolute |url|
   // sending |request_headers| and |body|.  Network failures return Err;

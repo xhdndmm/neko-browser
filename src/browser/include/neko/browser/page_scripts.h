@@ -22,7 +22,9 @@ namespace neko::browser {
 
 // Fetches an external script by URL.  Production uses the network stack with
 // the page's cookies; tests inject a fake.  Called on the worker thread.
-using ScriptFetcher = std::function<base::Result<network::HttpResponse>(const url::Url& url)>;
+using RequestHeaders = std::vector<std::pair<std::string, std::string>>;
+using ScriptFetcher = std::function<base::Result<network::HttpResponse>(
+    const url::Url& url, const RequestHeaders& extra_headers)>;
 
 // Optional browser services exposed to the page's scripts (Phase 8 M3):
 // per-origin localStorage, window.indexedDB and the JS fetch() API.

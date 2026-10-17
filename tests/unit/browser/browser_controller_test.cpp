@@ -201,8 +201,10 @@ public:
     return {};
   }
 
-  base::Result<network::HttpResponse> operator()(const url::Url& url,
-                                                 std::string_view cookie_header)
+  base::Result<network::HttpResponse>
+  operator()(const url::Url& url,
+             std::string_view cookie_header,
+             const BrowserController::RequestHeaders& /*extra_headers*/ = {})
   {
     const std::string key = url.Serialize();
     network::HttpResponse response;
@@ -2256,14 +2258,16 @@ TEST(BrowserControllerTest, WebFontDoesNotBlockPagePublication)
   std::atomic<bool> font_requested = false;
   std::atomic<bool> release_font = false;
   BrowserController controller(tp.path(),
-                               [&](const url::Url& request_url, std::string_view cookie) {
+                               [&](const url::Url& request_url,
+                                   std::string_view cookie,
+                                   const BrowserController::RequestHeaders&) {
                                  if (request_url.Serialize() == "http://example.com/slow.ttf") {
                                    font_requested.store(true);
                                    while (!release_font.load()) {
                                      std::this_thread::sleep_for(std::chrono::milliseconds(1));
                                    }
                                  }
-                                 return fetch(request_url, cookie);
+                                 return fetch(request_url, cookie, /*extra_headers=*/{});
                                });
   struct ReleaseFontOnExit
   {
@@ -2564,7 +2568,10 @@ TEST(BrowserControllerTest, PageScriptLocationReloadRefetches)
   struct CountingFetcher
   {
     int* served;
-    base::Result<network::HttpResponse> operator()(const url::Url& url, std::string_view cookie)
+    base::Result<network::HttpResponse>
+    operator()(const url::Url& url,
+               std::string_view cookie,
+               const BrowserController::RequestHeaders& /*extra_headers*/ = {})
     {
       (void)url;
       (void)cookie;

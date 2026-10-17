@@ -176,6 +176,13 @@ JSValue ThrowDomException(JSContext* ctx, std::string_view name, std::string_vie
 // (a network error in fetch terms) when the response may not be read.
 // Preflight (§4.2) and Access-Control-Expose-Headers filtering are NOT
 // IMPLEMENTED -- documented in the compatibility matrix.
+// Fetch §2.2.3: the Origin header rides on cross-origin requests (POSTs and
+// cross-origin alike).  Returns the request headers a call to |request_url|
+// from page |page_url| must send -- currently just the Origin header, and
+// empty for same-origin requests.
+std::vector<std::pair<std::string, std::string>> CorsRequestHeaders(const std::string& page_url,
+                                                                    const std::string& request_url);
+
 base::Result<void> CheckCorsAccess(const std::string& page_url,
                                    const std::string& request_url,
                                    const FetchResponse& response);

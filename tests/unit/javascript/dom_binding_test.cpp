@@ -2707,6 +2707,38 @@ TEST_F(DomBinderTest, FormDataProvidesEntriesAndStringValues)
 // Same-origin reads need no grant.
 // The Origin request header (Fetch §2.2.3) rides on XHR for POSTs and
 // cross-origin requests -- it is what servers gate CORS grants on.
+// The Origin request header also rides on window.fetch for cross-origin
+// requests (Fetch §2.2.3) through the transport's header channel.
+TEST_F(DomBinderTest, FetchSendsOriginHeaderForCrossOriginRequests)
+{
+  PageApis apis;
+  apis.location_href = []() { return "https://www.example.com/"; };
+  apis.resolve_url = [](const std::string& raw) { return raw; };
+  std::vector<std::pair<std::string, std::string>> seen;
+  apis.fetch = [&seen](const std::string&,
+                       const std::vector<std::pair<std::string, std::string>>& headers)
+      -> base::Result<FetchResponse> {
+    seen = headers;
+    FetchResponse out;
+    out.status = 200;
+    return base::Ok(std::move(out));
+  };
+  DomBinder binder(*document_, apis);
+  const auto origin_header = [&seen]() {
+    for (const auto& [name, value] : seen) {
+      if (name == "origin") {
+        return value;
+      }
+    }
+    return std::string();
+  };
+
+  (void)binder.Evaluate("fetch('https://other.test/data')");
+  EXPECT_EQ(origin_header(), "https://www.example.com");
+  (void)binder.Evaluate("fetch('https://www.example.com/local')");
+  EXPECT_EQ(origin_header(), "");
+}
+
 TEST_F(DomBinderTest, XhrSendsOriginHeaderForCrossOriginRequests)
 {
   PageApis apis;
@@ -2752,7 +2784,10 @@ TEST_F(DomBinderTest, FetchEnforcesCorsOnCrossOriginResponses)
   apis.location_href = []() { return "https://www.example.com/"; };
   apis.resolve_url = [](const std::string& raw) { return raw; };
   std::vector<std::pair<std::string, std::string>> headers;
-  apis.fetch = [&headers](const std::string& url) -> base::Result<FetchResponse> {
+  apis.fetch =
+      [&headers](
+          const std::string& url,
+          const std::vector<std::pair<std::string, std::string>>&) -> base::Result<FetchResponse> {
     FetchResponse response;
     response.status = 200;
     response.final_url = url;
@@ -2796,7 +2831,9 @@ TEST_F(DomBinderTest, FetchResolvesResponseAndBody)
 {
   PageApis apis;
   apis.resolve_url = [](const std::string& raw) { return raw; };
-  apis.fetch = [](const std::string& url) -> base::Result<FetchResponse> {
+  apis.fetch =
+      [](const std::string& url,
+         const std::vector<std::pair<std::string, std::string>>&) -> base::Result<FetchResponse> {
     FetchResponse response;
     response.status = 200;
     response.status_text = "OK";
@@ -2839,7 +2876,9 @@ TEST_F(DomBinderTest, ResponseUsesSharedPrototype)
 {
   PageApis apis;
   apis.resolve_url = [](const std::string& raw) { return raw; };
-  apis.fetch = [](const std::string&) -> base::Result<FetchResponse> {
+  apis.fetch =
+      [](const std::string&,
+         const std::vector<std::pair<std::string, std::string>>&) -> base::Result<FetchResponse> {
     FetchResponse response;
     response.body = "hello";
     return base::Ok(std::move(response));
@@ -2859,7 +2898,9 @@ TEST_F(DomBinderTest, FetchRejectsOnNetworkError)
 {
   PageApis apis;
   apis.resolve_url = [](const std::string& raw) { return raw; };
-  apis.fetch = [](const std::string&) -> base::Result<FetchResponse> {
+  apis.fetch =
+      [](const std::string&,
+         const std::vector<std::pair<std::string, std::string>>&) -> base::Result<FetchResponse> {
     return base::Err(base::Error::Network("connection refused"));
   };
   DomBinder binder(*document_, apis);

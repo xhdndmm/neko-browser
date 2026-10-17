@@ -438,7 +438,6 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
                 const std::string& method,
                 const std::vector<std::pair<std::string, std::string>>& request_headers,
                 const std::string& body) -> base::Result<javascript::FetchResponse> {
-      (void)request_headers; // forwarded once the transport grows method/body support
       if (method != "GET" || !body.empty()) {
         return base::Err(base::Error::InvalidArgument(
             "XMLHttpRequest: only GET is supported by the current transport"));
@@ -447,7 +446,8 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
       if (!parsed.has_value()) {
         return base::Err(base::Error::InvalidArgument("invalid URL"));
       }
-      const base::Result<network::HttpResponse> response = fetch(parsed.value());
+      // Request headers (the binder's Origin among them) now reach the wire.
+      const base::Result<network::HttpResponse> response = fetch(parsed.value(), request_headers);
       if (!response.has_value()) {
         return base::Err(response.error());
       }
@@ -470,7 +470,9 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     // inside EvaluateModule -- so this timer is what separates "waiting for
     // module sources" from "compiling and running them" (see ScriptTimings).
     apis.fetch = [fetch, &elapsed_ns, acc_owner](
-                     const std::string& url) -> base::Result<javascript::FetchResponse> {
+                     const std::string& url,
+                     const std::vector<std::pair<std::string, std::string>>& extra_headers)
+        -> base::Result<javascript::FetchResponse> {
       const base::Result<url::Url> parsed = url::Url::Parse(url);
       if (!parsed.has_value()) {
         return base::Err(base::Error::InvalidArgument("invalid URL"));
@@ -479,7 +481,7 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
       // page's own fetch() calls -- and each blocks the JS thread on the network.
       ++acc_owner->sync_fetch_calls;
       const auto fetch_start = std::chrono::steady_clock::now();
-      const base::Result<network::HttpResponse> response = fetch(parsed.value());
+      const base::Result<network::HttpResponse> response = fetch(parsed.value(), extra_headers);
       acc_owner->sync_fetch_ns += elapsed_ns(fetch_start);
       if (!response.has_value()) {
         return base::Err(response.error());
@@ -859,7 +861,7 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
                 if (!target.has_value()) {
                   return base::Err(target.error());
                 }
-                return fetch(target.value());
+                return fetch(target.value(), /*extra_headers=*/{});
               })
               .share();
     }
@@ -886,7 +888,8 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
           prefetched_entry != prefetched.end() && prefetched_entry->second.valid();
       const auto fetch_start = std::chrono::steady_clock::now();
       const base::Result<network::HttpResponse> response =
-          prefetched_ready ? prefetched_entry->second.get() : fetch(target.value());
+          prefetched_ready ? prefetched_entry->second.get()
+                           : fetch(target.value(), /*extra_headers=*/{});
       ++acc.fetches;
       acc.fetch_ns += elapsed_ns(fetch_start);
       if (!response) {
@@ -951,7 +954,7 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
       // synchronous fetches; |fetches| counts classic script bodies only.
       ++acc.sync_fetch_calls;
       const auto module_fetch_start = std::chrono::steady_clock::now();
-      const auto response = fetch(target.value());
+      const auto response = fetch(target.value(), /*extra_headers=*/{});
       const long long entry_fetch_ns = elapsed_ns(module_fetch_start);
       acc.modules_ns += entry_fetch_ns;
       acc.sync_fetch_ns += entry_fetch_ns;

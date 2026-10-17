@@ -55,8 +55,10 @@ namespace {
 
 // Fetches http(s) URLs over the network and file:// URLs from disk, so local
 // pages resolve their relative subresources the same way a served page does.
-neko::base::Result<neko::network::HttpResponse> FetchAny(const neko::url::Url& url,
-                                                         std::string_view)
+neko::base::Result<neko::network::HttpResponse>
+FetchAny(const neko::url::Url& url,
+         std::string_view,
+         const neko::browser::BrowserController::RequestHeaders& /*extra_headers*/)
 {
   if (url.scheme() == "file") {
     auto bytes = neko::storage::ReadFile(url.path());
@@ -158,7 +160,9 @@ neko::base::Result<void> LoadLocalTarget(
     *script_runtime = neko::browser::RunPageScripts(
         page,
         "",
-        [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
+        [](const neko::url::Url& u, const std::vector<std::pair<std::string, std::string>>&) {
+          return neko::network::HttpGet(u);
+        },
         [](std::string_view level, std::string_view text) {
           std::cout << "[" << level << "] " << text << "\n";
         },
@@ -169,7 +173,9 @@ neko::base::Result<void> LoadLocalTarget(
     neko::browser::RunPageScripts(
         page,
         "",
-        [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
+        [](const neko::url::Url& u, const std::vector<std::pair<std::string, std::string>>&) {
+          return neko::network::HttpGet(u);
+        },
         [](std::string_view level, std::string_view text) {
           std::cout << "[" << level << "] " << text << "\n";
         },
@@ -274,7 +280,11 @@ neko::base::Result<void> LoadTarget(
       neko::browser::FetchExternalStylesheets(
           page,
           url.Serialize(),
-          [](const neko::url::Url& u, std::string_view) { return neko::network::HttpGet(u); },
+          [](const neko::url::Url& u,
+             std::string_view,
+             const neko::browser::BrowserController::RequestHeaders&) {
+            return neko::network::HttpGet(u);
+          },
           pool);
       phase(&phases.stylesheets1);
       // Fetch and register @font-face web fonts so layout/paint see them.
@@ -292,7 +302,9 @@ neko::base::Result<void> LoadTarget(
         *script_runtime = neko::browser::RunPageScripts(
             page,
             url.Serialize(),
-            [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
+            [](const neko::url::Url& u, const std::vector<std::pair<std::string, std::string>>&) {
+              return neko::network::HttpGet(u);
+            },
             [](std::string_view level, std::string_view text) {
               std::cout << "[" << level << "] " << text << "\n";
             },
@@ -304,7 +316,9 @@ neko::base::Result<void> LoadTarget(
         neko::browser::RunPageScripts(
             page,
             url.Serialize(),
-            [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
+            [](const neko::url::Url& u, const std::vector<std::pair<std::string, std::string>>&) {
+              return neko::network::HttpGet(u);
+            },
             [](std::string_view level, std::string_view text) {
               std::cout << "[" << level << "] " << text << "\n";
             },
@@ -346,7 +360,11 @@ neko::base::Result<void> LoadTarget(
       neko::browser::FetchExternalStylesheets(
           page,
           url.Serialize(),
-          [](const neko::url::Url& u, std::string_view) { return neko::network::HttpGet(u); },
+          [](const neko::url::Url& u,
+             std::string_view,
+             const neko::browser::BrowserController::RequestHeaders&) {
+            return neko::network::HttpGet(u);
+          },
           pool);
       phase(&phases.stylesheets2);
       // Fonts declared by script-injected sheets load here too.
@@ -356,13 +374,21 @@ neko::base::Result<void> LoadTarget(
       neko::browser::FetchPageImages(
           page,
           url.Serialize(),
-          [](const neko::url::Url& u, std::string_view) { return neko::network::HttpGet(u); },
+          [](const neko::url::Url& u,
+             std::string_view,
+             const neko::browser::BrowserController::RequestHeaders&) {
+            return neko::network::HttpGet(u);
+          },
           pool);
       phase(&phases.images);
       neko::browser::FetchPageVideos(
           page,
           url.Serialize(),
-          [](const neko::url::Url& u, std::string_view) { return neko::network::HttpGet(u); },
+          [](const neko::url::Url& u,
+             std::string_view,
+             const neko::browser::BrowserController::RequestHeaders&) {
+            return neko::network::HttpGet(u);
+          },
           pool);
       // Deliver the queued image load/error events: page onload="..."
       // attributes and listeners flip placeholder/fallback state off them.
@@ -393,7 +419,9 @@ neko::base::Result<void> LoadTarget(
         *script_runtime = neko::browser::RunPageScripts(
             page,
             "",
-            [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
+            [](const neko::url::Url& u, const std::vector<std::pair<std::string, std::string>>&) {
+              return neko::network::HttpGet(u);
+            },
             [](std::string_view level, std::string_view text) {
               std::cout << "[" << level << "] " << text << "\n";
             },
@@ -404,7 +432,9 @@ neko::base::Result<void> LoadTarget(
         neko::browser::RunPageScripts(
             page,
             "",
-            [](const neko::url::Url& u) { return neko::network::HttpGet(u); },
+            [](const neko::url::Url& u, const std::vector<std::pair<std::string, std::string>>&) {
+              return neko::network::HttpGet(u);
+            },
             [](std::string_view level, std::string_view text) {
               std::cout << "[" << level << "] " << text << "\n";
             },
@@ -469,7 +499,10 @@ neko::base::Result<void> WriteImagePpm(std::string_view path, const neko::image:
 int RunStorageCommands(const neko::browser::BrowserOptions& options, const std::string& profile_dir)
 {
   neko::browser::BrowserController controller(
-      profile_dir, [](const neko::url::Url&, std::string_view) {
+      profile_dir,
+      [](const neko::url::Url&,
+         std::string_view,
+         const neko::browser::BrowserController::RequestHeaders&) {
         return neko::base::Err(
             neko::base::Error::NotImplemented("network disabled in storage mode"));
       });
