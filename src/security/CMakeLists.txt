@@ -9,6 +9,7 @@
 
 add_library(neko_security
   src/origin.cpp
+  src/public_suffix.cpp
   src/random.cpp
 )
 add_library(neko::security ALIAS neko_security)
