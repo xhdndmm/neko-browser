@@ -29,5 +29,6 @@ target_compile_features(neko_storage PUBLIC cxx_std_20)
 target_include_directories(neko_storage PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
-target_link_libraries(neko_storage PUBLIC neko::url neko::base PRIVATE OpenSSL::Crypto)
+target_link_libraries(neko_storage PUBLIC neko::url neko::base neko::platform
+  PRIVATE OpenSSL::Crypto)
 apply_compiler_warnings(neko_storage)

@@ -1,83 +1,35 @@
 #include "neko/paint/ppm_writer.h"
 
 #include "neko/base/status.h"
+#include "neko/platform/fs.h"
 
+#include <atomic>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <utility>
 
-#if defined(_WIN32)
-#include <fcntl.h>
-#include <io.h>
-#include <share.h>
-#include <sys/stat.h>
-#include <windows.h>
-#else
-#include <fcntl.h>
-#include <unistd.h>
-#endif
-
 namespace neko::paint {
 namespace {
 
-// Opens |path| read/write, creating it exclusively so a pre-existing file --
+// Opens |path| write-only, creating it exclusively so a pre-existing file --
 // or a symlink an attacker placed there -- can neither be followed nor
 // clobbered (the same discipline storage::WriteFileAtomic uses for its
-// temporary files).  Returns nullptr on failure.
+// temporary files).  The OS half lives in neko/platform/fs.h.
 std::FILE* OpenExclusive(const std::string& path)
 {
-#if defined(_WIN32)
-  int fd = -1;
-  if (_sopen_s(&fd,
-               path.c_str(),
-               _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY,
-               _SH_DENYNO,
-               _S_IREAD | _S_IWRITE) != 0) {
-    return nullptr;
-  }
-  std::FILE* file = _fdopen(fd, "wb");
-  if (file == nullptr) {
-    _close(fd);
-  }
-  return file;
-#else
-  const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
-  if (fd < 0) {
-    return nullptr;
-  }
-  std::FILE* file = ::fdopen(fd, "wb");
-  if (file == nullptr) {
-    ::close(fd);
-  }
-  return file;
-#endif
-}
-
-// Renames |from| over |to|.  POSIX rename() replaces atomically; on Windows
-// std::rename() refuses an existing destination, so MoveFileEx() is used with
-// MOVEFILE_REPLACE_EXISTING (same approach as storage::WriteFileAtomic).
-bool ReplaceFile(const std::string& from, const std::string& to)
-{
-#if defined(_WIN32)
-  return MoveFileExA(
-             from.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
-#else
-  return std::rename(from.c_str(), to.c_str()) == 0;
-#endif
+  return platform::OpenExclusiveBinary(path);
 }
 
 // A temporary path next to the destination, unique per process and call.
+// Atomic counter: writers for different files run on different threads and
+// a shared plain counter++ is a data race that can collide two temp names.
 std::string MakeTempPath(const std::string& path)
 {
-  static unsigned int counter = 0;
-#if defined(_WIN32)
-  const unsigned long pid = GetCurrentProcessId();
-#else
-  const unsigned long pid = static_cast<unsigned long>(::getpid());
-#endif
-  return path + ".tmp." + std::to_string(pid) + "." + std::to_string(counter++);
+  static std::atomic<unsigned int> counter{0};
+  return path + ".tmp." + std::to_string(platform::ProcessId()) + "." +
+         std::to_string(counter.fetch_add(1, std::memory_order_relaxed));
 }
 
 } // namespace
@@ -214,7 +166,7 @@ base::Result<void> PpmWriter::Finish()
     std::remove(temp_path_.c_str());
     return base::Err(base::Error::Io("write failed: " + temp_path_));
   }
-  if (!ReplaceFile(temp_path_, final_path_)) {
+  if (!platform::ReplaceFileOverwrite(temp_path_, final_path_)) {
     std::remove(temp_path_.c_str());
     return base::Err(base::Error::Io("rename failed for '" + final_path_ + "'"));
   }
