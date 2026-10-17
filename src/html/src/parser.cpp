@@ -156,11 +156,11 @@ std::unique_ptr<dom::Document> Parser::Parse()
           mode_ = Mode::kBeforeHtml;
           break;
         case Mode::kBeforeHtml:
-          InsertElement(new dom::Element("html"));
+          InsertElement(std::make_unique<dom::Element>("html"));
           mode_ = Mode::kBeforeHead;
           break;
         case Mode::kBeforeHead:
-          InsertElement(new dom::Element("head"));
+          InsertElement(std::make_unique<dom::Element>("head"));
           mode_ = Mode::kInHead;
           break;
         case Mode::kInHead:
@@ -168,7 +168,7 @@ std::unique_ptr<dom::Document> Parser::Parse()
           mode_ = Mode::kAfterHead;
           break;
         case Mode::kAfterHead:
-          InsertElement(new dom::Element("body"));
+          InsertElement(std::make_unique<dom::Element>("body"));
           mode_ = Mode::kInBody;
           break;
         case Mode::kText:
@@ -230,19 +230,21 @@ void Parser::AppendNode(std::unique_ptr<dom::Node> node)
   InsertNodeAt(parent, before, std::move(node));
 }
 
-void Parser::InsertElement(dom::Element* element)
+dom::Element* Parser::InsertElement(std::unique_ptr<dom::Element> element)
 {
   // Depth guard: drop over-deep subtrees instead of building a DOM so deep
-  // that the recursive style/layout walks overflow the stack.
+  // that the recursive style/layout walks overflow the stack.  The dropped
+  // element is simply destroyed with |element|.
   if (stack_.size() >= kMaxDepth) {
-    delete element;
     skip_depth_ = 1;
-    return;
+    return nullptr;
   }
+  dom::Element* raw = element.get();
   auto [parent, before] = AdjustedInsertionLocation();
   std::tie(parent, before) = RerouteTemplateInsertion(parent, before);
-  InsertNodeAt(parent, before, std::unique_ptr<dom::Node>(element));
-  stack_.push_back(element);
+  InsertNodeAt(parent, before, std::move(element));
+  stack_.push_back(raw);
+  return raw;
 }
 
 void Parser::PopElement()
@@ -727,7 +729,7 @@ void Parser::ReconstructActiveFormatting()
       continue;
     }
     dom::Element* fresh = CloneElement(*old);
-    InsertElement(fresh);
+    InsertElement(std::unique_ptr<dom::Element>(fresh));
     active_formatting_[i] = fresh;
   }
 }
@@ -1027,7 +1029,7 @@ void Parser::ProcessCharacter(Token token)
     if (IsAllWhitespace(token.data)) {
       return;
     }
-    InsertElement(new dom::Element("html"));
+    InsertElement(std::make_unique<dom::Element>("html"));
     mode_ = Mode::kBeforeHead;
     Reprocess(std::move(token));
     return;
@@ -1036,7 +1038,7 @@ void Parser::ProcessCharacter(Token token)
     if (IsAllWhitespace(token.data)) {
       return;
     }
-    InsertElement(new dom::Element("head"));
+    InsertElement(std::make_unique<dom::Element>("head"));
     mode_ = Mode::kInHead;
     Reprocess(std::move(token));
     return;
@@ -1056,7 +1058,7 @@ void Parser::ProcessCharacter(Token token)
       AppendText(token.data);
       return;
     }
-    InsertElement(new dom::Element("body"));
+    InsertElement(std::make_unique<dom::Element>("body"));
     mode_ = Mode::kInBody;
     Reprocess(std::move(token));
     return;
@@ -1169,12 +1171,11 @@ void Parser::ProcessStartTag(Token token)
 
   case Mode::kBeforeHtml:
     if (token.name == "html") {
-      dom::Element* element = CreateElement(token).release();
-      InsertElement(element);
+      InsertElement(CreateElement(token));
       mode_ = Mode::kBeforeHead;
       return;
     }
-    InsertElement(new dom::Element("html"));
+    InsertElement(std::make_unique<dom::Element>("html"));
     mode_ = Mode::kBeforeHead;
     Reprocess(std::move(token));
     return;
@@ -1186,12 +1187,12 @@ void Parser::ProcessStartTag(Token token)
       return;
     }
     if (token.name == "head") {
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       head_element_ = stack_.back();
       mode_ = Mode::kInHead;
       return;
     }
-    InsertElement(new dom::Element("head"));
+    InsertElement(std::make_unique<dom::Element>("head"));
     head_element_ = stack_.back();
     mode_ = Mode::kInHead;
     Reprocess(std::move(token));
@@ -1204,12 +1205,12 @@ void Parser::ProcessStartTag(Token token)
     if (IsVoidElement(token.name) &&
         (token.name == "base" || token.name == "basefont" || token.name == "bgsound" ||
          token.name == "link" || token.name == "meta")) {
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       PopElement();
       return;
     }
     if (token.name == "title" || token.name == "style" || token.name == "script") {
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       mode_before_text_ = Mode::kInHead;
       tokenizer_.StartRawText(token.name);
       mode_ = Mode::kText;
@@ -1233,7 +1234,7 @@ void Parser::ProcessStartTag(Token token)
       // inserted as a child of <head>, and every element after it became a
       // direct child of <html>.  `document.body` was consequently null for
       // the whole document.  <noframes> is RAWTEXT per spec unconditionally.
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       mode_before_text_ = Mode::kInHead;
       tokenizer_.StartRawText(token.name);
       mode_ = Mode::kText;
@@ -1247,7 +1248,7 @@ void Parser::ProcessStartTag(Token token)
       // strictly better than the previous behaviour, which left <template> on
       // the stack in kInHead and desynchronised the parser exactly like
       // <noscript> did -- see the comment above.
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       mode_before_text_ = Mode::kInHead;
       tokenizer_.StartRawText(token.name);
       mode_ = Mode::kText;
@@ -1268,7 +1269,7 @@ void Parser::ProcessStartTag(Token token)
       return;
     }
     if (token.name == "body") {
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       mode_ = Mode::kInBody;
       return;
     }
@@ -1291,7 +1292,7 @@ void Parser::ProcessStartTag(Token token)
         return;
       }
     }
-    InsertElement(new dom::Element("body"));
+    InsertElement(std::make_unique<dom::Element>("body"));
     mode_ = Mode::kInBody;
     Reprocess(std::move(token));
     return;
@@ -1329,13 +1330,13 @@ void Parser::ProcessStartTag(Token token)
       if (tag == "hr") {
         ClosePElement();
       }
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       PopElement();
       return;
     }
     if (tag == "title" || tag == "style" || tag == "script" || tag == "textarea" ||
         IsRawTextElement(tag)) {
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       mode_before_text_ = Mode::kInBody;
       tokenizer_.StartRawText(tag);
       mode_ = Mode::kText;
@@ -1343,13 +1344,13 @@ void Parser::ProcessStartTag(Token token)
     }
     if (tag == "plaintext") {
       ClosePElement();
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       tokenizer_.StartPlaintext();
       return;
     }
     if (tag == "p") {
       ClosePElement();
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       return;
     }
     if (tag == "li") {
@@ -1373,7 +1374,7 @@ void Parser::ProcessStartTag(Token token)
       }
       (void)done;
       ClosePElement();
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       return;
     }
     if (tag == "dd" || tag == "dt") {
@@ -1387,7 +1388,7 @@ void Parser::ProcessStartTag(Token token)
         PopThrough("dt");
       }
       ClosePElement();
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       return;
     }
     if (IsHeadingTag(tag)) {
@@ -1406,18 +1407,18 @@ void Parser::ProcessStartTag(Token token)
         }
       }
       ClosePElement();
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       return;
     }
     if (tag == "table") {
       ClosePElement();
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       mode_ = Mode::kInTable;
       return;
     }
     if (IsBlockElement(tag) || tag == "center") {
       ClosePElement();
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       return;
     }
     if (tag == "button") {
@@ -1426,7 +1427,7 @@ void Parser::ProcessStartTag(Token token)
         PopThrough("button");
       }
       ReconstructActiveFormatting();
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       return;
     }
     if (tag == "a") {
@@ -1434,7 +1435,7 @@ void Parser::ProcessStartTag(Token token)
       if (FindInStack("a") != nullptr) {
         PopThrough("a");
       }
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       PushActiveFormatting(stack_.back());
       return;
     }
@@ -1444,7 +1445,7 @@ void Parser::ProcessStartTag(Token token)
         PopElement();
       }
       ReconstructActiveFormatting();
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       return;
     }
     if (tag == "optgroup") {
@@ -1455,12 +1456,12 @@ void Parser::ProcessStartTag(Token token)
         PopElement();
       }
       ReconstructActiveFormatting();
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       return;
     }
     if (tag == "select") {
       ReconstructActiveFormatting();
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       // The surrounding context selects the select insertion mode
       // (13.2.6.4.7): inside a table section or cell the table-aware variant
       // applies, so table tags can still break out of the select.  The
@@ -1484,7 +1485,7 @@ void Parser::ProcessStartTag(Token token)
     if (IsFormattingElement(tag)) {
       ReconstructActiveFormatting();
     }
-    InsertElement(CreateElement(token).release());
+    InsertElement(CreateElement(token));
     if (IsFormattingElement(tag)) {
       PushActiveFormatting(stack_.back());
     }
@@ -1543,7 +1544,7 @@ void Parser::ProcessStartTag(Token token)
       return;
     }
     if (token.name == "col") {
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       PopElement();
       return;
     }
@@ -1564,13 +1565,13 @@ void Parser::ProcessStartTag(Token token)
   case Mode::kInTableBody:
     if (token.name == "tr") {
       ClearStackBackToTableBodyContext();
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       mode_ = Mode::kInRow;
       return;
     }
     if (token.name == "th" || token.name == "td") {
       ClearStackBackToTableBodyContext();
-      InsertElement(new dom::Element("tr"));
+      InsertElement(std::make_unique<dom::Element>("tr"));
       mode_ = Mode::kInRow;
       Reprocess(std::move(token));
       return;
@@ -1594,7 +1595,7 @@ void Parser::ProcessStartTag(Token token)
   case Mode::kInRow:
     if (token.name == "th" || token.name == "td") {
       ClearStackBackToTableRowContext();
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       mode_ = Mode::kInCell;
       PushFormattingMarker();
       return;
@@ -1972,32 +1973,32 @@ void Parser::ProcessStartTagInTable(Token token)
   if (tag == "caption") {
     ClearStackBackToTableContext();
     PushFormattingMarker();
-    InsertElement(CreateElement(token).release());
+    InsertElement(CreateElement(token));
     mode_ = Mode::kInCaption;
     return;
   }
   if (tag == "colgroup") {
     ClearStackBackToTableContext();
-    InsertElement(CreateElement(token).release());
+    InsertElement(CreateElement(token));
     mode_ = Mode::kInColumnGroup;
     return;
   }
   if (tag == "col") {
     ClearStackBackToTableContext();
-    InsertElement(new dom::Element("colgroup"));
+    InsertElement(std::make_unique<dom::Element>("colgroup"));
     mode_ = Mode::kInColumnGroup;
     Reprocess(std::move(token));
     return;
   }
   if (tag == "tbody" || tag == "tfoot" || tag == "thead") {
     ClearStackBackToTableContext();
-    InsertElement(CreateElement(token).release());
+    InsertElement(CreateElement(token));
     mode_ = Mode::kInTableBody;
     return;
   }
   if (tag == "td" || tag == "th" || tag == "tr") {
     ClearStackBackToTableContext();
-    InsertElement(new dom::Element("tbody"));
+    InsertElement(std::make_unique<dom::Element>("tbody"));
     mode_ = Mode::kInTableBody;
     Reprocess(std::move(token));
     return;
@@ -2021,7 +2022,7 @@ void Parser::ProcessStartTagInTable(Token token)
     // handled by foster parenting (below).
     for (const Attribute& attr : token.attributes) {
       if (attr.name == "type" && ToLowerAscii(attr.value) == "hidden") {
-        InsertElement(CreateElement(token).release());
+        InsertElement(CreateElement(token));
         PopElement();
         return;
       }
@@ -2132,7 +2133,7 @@ void Parser::ProcessInSelect(Token token)
       if (CurrentNode() != nullptr && CurrentNode()->tag_name() == "option") {
         PopElement();
       }
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       return;
     }
     if (tag == "optgroup") {
@@ -2142,7 +2143,7 @@ void Parser::ProcessInSelect(Token token)
       if (CurrentNode() != nullptr && CurrentNode()->tag_name() == "optgroup") {
         PopElement();
       }
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       return;
     }
     if (tag == "hr") {
@@ -2152,7 +2153,7 @@ void Parser::ProcessInSelect(Token token)
       if (CurrentNode() != nullptr && CurrentNode()->tag_name() == "optgroup") {
         PopElement();
       }
-      InsertElement(CreateElement(token).release());
+      InsertElement(CreateElement(token));
       PopElement(); // hr is void
       return;
     }

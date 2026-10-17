@@ -66,7 +66,10 @@ private:
   // restoring the mode unless the rules changed it themselves.
   void ProcessWithInBodyRules(Token token);
 
-  void InsertElement(dom::Element* element);
+  // Inserts |element| into the document and returns it as a non-owning
+  // pointer (nullptr when the depth guard drops it): the tree takes
+  // ownership on insertion, so callers hand over the unique_ptr.
+  dom::Element* InsertElement(std::unique_ptr<dom::Element> element);
   void AppendNode(std::unique_ptr<dom::Node> node);
   void AppendText(std::string_view text);
   void PopElement();
