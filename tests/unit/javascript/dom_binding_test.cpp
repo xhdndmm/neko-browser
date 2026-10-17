@@ -2006,6 +2006,28 @@ TEST_F(DomBinderTest, DocumentDomainReflectsHostAndAllowsOnlyRelaxing)
             "www.example.com");
 }
 
+// document.domain may never relax onto a PUBLIC SUFFIX (HTML §7.7.1): the
+// target must share the current host's registrable domain (PSL).  Without
+// the guard, assigning "com" from www.example.com would claim to relax the
+// origin over every .com site.
+TEST_F(DomBinderTest, DocumentDomainRejectsPublicSuffixTargets)
+{
+  // The fixture host is www.example.com (registrable domain example.com).
+  EXPECT_TRUE(EvalBool("(function(){ try { document.domain = 'com'; }"
+                       " catch (e) { return e.name === 'SecurityError'; } return false; })()"));
+  // Refusal leaves the value at the real host.
+  EXPECT_EQ(EvalString("document.domain"), "www.example.com");
+  // The legitimate relaxation to the registrable domain still works...
+  EXPECT_EQ(EvalString("(function(){ document.domain = 'example.com';"
+                       " return document.domain; })()"),
+            "example.com");
+  // ...and even afterwards "com" stays refused (the guard is on the target,
+  // not on the current value).
+  EXPECT_TRUE(EvalBool("(function(){ try { document.domain = 'com'; }"
+                       " catch (e) { return e.name === 'SecurityError'; } return false; })()"));
+  EXPECT_EQ(EvalString("document.domain"), "example.com");
+}
+
 TEST_F(DomBinderTest, DocumentElementCollections)
 {
   EXPECT_TRUE(EvalBool("(function(){ var d = document; "

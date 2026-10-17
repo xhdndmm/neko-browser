@@ -10,6 +10,7 @@
 #include "neko/dom/node.h"
 #include "neko/dom/query.h"
 #include "neko/html/parser.h"
+#include "neko/security/public_suffix.h"
 #include "neko/url/url.h"
 
 #include "binding_internal.h"
@@ -790,10 +791,10 @@ std::string DocumentHost(const Impl& impl)
 // otherwise, as browsers do), which is what scripts use to talk to a parent
 // domain.  The engine does not yet enforce the relaxation in its own origin
 // checks — the value is reported faithfully, but Same-Origin decisions keep
-// using the document's real origin.  There is no public-suffix check yet, so
-// shortening to a TLD such as "com" is accepted; because the relaxation is not
-// consumed anywhere it cannot grant access, and wiring it up will require a
-// public-suffix guard first.
+// using the document's real origin.  The setter DOES enforce the safety
+// conditions (HTML §7.7.1): the target must be a suffix of the current host
+// and must share its REGISTRABLE DOMAIN (Public Suffix List), so the value
+// can never be shortened to a public suffix such as "com".
 JSValue DocGetDomain(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
@@ -833,6 +834,23 @@ JSValue DocSetDomain(JSContext* ctx, JSValueConst this_val, JSValueConst value)
           error,
           "message",
           JS_NewString(ctx, "document.domain may only be relaxed to a parent domain"));
+      return JS_Throw(ctx, error);
+    }
+    // HTML §7.7.1: the target must share the current host's REGISTRABLE
+    // DOMAIN (Public Suffix List).  Without this the value could be
+    // shortened to a public suffix ("com"), which would claim to relax the
+    // origin across every site under it.
+    const std::string current_registrable = security::RegistrableDomain(current);
+    const std::string requested_registrable = security::RegistrableDomain(requested);
+    if (current_registrable.empty() || requested_registrable != current_registrable) {
+      JSValue error = JS_NewError(ctx);
+      JS_SetPropertyStr(ctx, error, "name", JS_NewString(ctx, "SecurityError"));
+      JS_SetPropertyStr(ctx,
+                        error,
+                        "message",
+                        JS_NewString(ctx,
+                                     "document.domain must stay within the "
+                                     "registrable domain (public suffix)"));
       return JS_Throw(ctx, error);
     }
   }
