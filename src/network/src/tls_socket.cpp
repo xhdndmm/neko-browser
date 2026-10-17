@@ -3,9 +3,9 @@
 #include "neko/network/tls_socket.h"
 
 #include "neko/network/socket.h"
+#include "neko/platform/socket_platform.h"
 
 #include "openssl_error.h"
-#include "socket_platform.h"
 #include "system_trust_store.h"
 
 #include <cstring>

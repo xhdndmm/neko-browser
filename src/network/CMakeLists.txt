@@ -11,7 +11,6 @@ find_package(OpenSSL REQUIRED)
 
 add_library(neko_network
   src/socket.cpp
-  src/socket_platform.cpp
   src/compression.cpp
   src/system_trust_store.cpp
   src/tls_socket.cpp
@@ -25,10 +24,6 @@ target_compile_features(neko_network PUBLIC cxx_std_20)
 target_include_directories(neko_network PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
-target_link_libraries(neko_network PUBLIC neko::url neko::base ZLIB::ZLIB
-  OpenSSL::SSL OpenSSL::Crypto)
-# Windows socket functions (closesocket/send/recv) live in Winsock2.
-if(WIN32)
-  target_link_libraries(neko_network PUBLIC ws2_32)
-endif()
+target_link_libraries(neko_network PUBLIC neko::url neko::base neko::platform
+  ZLIB::ZLIB OpenSSL::SSL OpenSSL::Crypto)
 apply_compiler_warnings(neko_network)

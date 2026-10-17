@@ -30,6 +30,7 @@
 #include "neko/paint/ppm_writer.h"
 #include "neko/paint/rasterizer.h"
 #include "neko/pdf/pdf.h"
+#include "neko/platform/executable_path.h"
 #include "neko/renderer/page.h"
 #include "neko/security/origin.h"
 #include "neko/storage/file_util.h"
@@ -862,7 +863,7 @@ int main(int argc, char** argv)
       NEKO_LOG_WARNING("--network-process does not apply to --renderer-process yet (the "
                        "renderer child fetches with its own stack); ignoring it");
     }
-    neko::browser::RendererHost host(neko::browser::SelfExecutablePath());
+    neko::browser::RendererHost host(neko::platform::SelfExecutablePath());
     auto loaded = host.Load(parsed.options.url.value(), /*width=*/800, /*height=*/600);
     if (!loaded.has_value()) {
       std::cerr << "error: " << loaded.error().message() << "\n";
@@ -878,7 +879,7 @@ int main(int argc, char** argv)
     std::function<neko::base::Result<neko::network::HttpResponse>(const neko::url::Url&)>
         document_fetch;
     if (parsed.options.network_process) {
-      auto spawned = neko::browser::NetworkSession::Spawn(neko::browser::SelfExecutablePath());
+      auto spawned = neko::browser::NetworkSession::Spawn(neko::platform::SelfExecutablePath());
       if (!spawned.has_value()) {
         std::cerr << "error: cannot start network process: " << spawned.error().message() << "\n";
         return 1;

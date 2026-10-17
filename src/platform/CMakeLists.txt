@@ -6,13 +6,19 @@
 # src/windows (no #ifdef'd OS calls outside this directory).
 # =============================================================================
 
+# Both OSes in one TU behind #ifdef -- allowed here: this IS the platform
+# layer (AGENTS.md §11).
+set(_neko_platform_sources
+  src/executable_path.cpp
+  src/socket_platform.cpp)
+
 if(WIN32)
-  set(_neko_platform_sources
+  list(APPEND _neko_platform_sources
     src/windows/fs.cpp
     src/windows/pipe.cpp
     src/windows/process.cpp)
 else()
-  set(_neko_platform_sources
+  list(APPEND _neko_platform_sources
     src/posix/fs.cpp
     src/posix/pipe.cpp
     src/posix/process.cpp)
@@ -26,4 +32,7 @@ target_include_directories(neko_platform PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 target_link_libraries(neko_platform PUBLIC neko::base)
+if(WIN32)
+  target_link_libraries(neko_platform PUBLIC ws2_32)
+endif()
 apply_compiler_warnings(neko_platform)

@@ -9,8 +9,7 @@
 #include "neko/network/dns.h"
 
 #include "neko/base/logging.h"
-
-#include "socket_platform.h"
+#include "neko/platform/socket_platform.h"
 
 #include <algorithm>
 #include <array>

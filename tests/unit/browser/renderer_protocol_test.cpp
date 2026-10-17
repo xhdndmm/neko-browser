@@ -4,6 +4,7 @@
 
 #include "neko/browser/renderer_host.h"
 #include "neko/browser/renderer_protocol.h"
+#include "neko/platform/executable_path.h"
 
 #include <cstdint>
 #include <gmock/gmock.h>
@@ -115,7 +116,7 @@ TEST(RendererProtocolTest, RejectsOversizedBitmapClaim)
 
 TEST(RendererProtocolTest, SelfExecutablePathIsNonEmpty)
 {
-  EXPECT_FALSE(SelfExecutablePath().empty());
+  EXPECT_FALSE(platform::SelfExecutablePath().empty());
 }
 
 // End-to-end: spawn the real browser binary as a renderer child and load a

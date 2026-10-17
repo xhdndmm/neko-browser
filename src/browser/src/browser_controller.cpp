@@ -16,6 +16,7 @@
 #include "neko/layout/form_control.h"
 #include "neko/network/http.h"
 #include "neko/paint/rasterizer.h"
+#include "neko/platform/executable_path.h"
 #include "neko/security/origin.h"
 #include "neko/storage/file_util.h"
 #include "neko/url/url.h"
@@ -407,7 +408,7 @@ bool IsRemoteTab(const Tab& tab)
 // executable in the build/install layout.
 std::string DefaultRendererExecutable()
 {
-  const std::string self = SelfExecutablePath();
+  const std::string self = platform::SelfExecutablePath();
   const std::size_t slash = self.find_last_of("/\\");
   if (self.empty() || slash == std::string::npos) {
     return {};

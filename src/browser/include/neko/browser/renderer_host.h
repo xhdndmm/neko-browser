@@ -7,11 +7,6 @@
 
 namespace neko::browser {
 
-// Returns the absolute path of the currently running executable (the
-// renderer child is the same binary in `--renderer-child` mode; a dedicated
-// renderer executable is a later milestone).
-std::string SelfExecutablePath();
-
 // The browser-process side of the renderer IPC (ADR 0016 M1).  Each Load()
 // spawns a fresh renderer child (no session reuse yet), sends a
 // LoadRequest and blocks for the rendered frame + DOM text.  The child runs

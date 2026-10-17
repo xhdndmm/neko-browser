@@ -1,8 +1,7 @@
 #include "neko/network/socket.h"
 
 #include "neko/network/dns.h"
-
-#include "socket_platform.h"
+#include "neko/platform/socket_platform.h"
 
 #include <algorithm>
 #include <cstring>

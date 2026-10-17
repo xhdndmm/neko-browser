@@ -12,7 +12,7 @@ namespace neko::network {
 //
 // POSIX (Linux/macOS) and Windows (Winsock) are both supported: everything
 // that differs between the two lives in the module's internal platform shim
-// (src/socket_platform.h), not in this interface.  Socket is move-only;
+// (neko/platform/socket_platform.h), not in this interface.  Socket is move-only;
 // closing happens on destruction.
 class Socket
 {
