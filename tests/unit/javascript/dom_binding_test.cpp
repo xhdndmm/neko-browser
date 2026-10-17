@@ -2705,6 +2705,47 @@ TEST_F(DomBinderTest, FormDataProvidesEntriesAndStringValues)
 // CORS (Fetch §4.1): a cross-origin response may only be read when it grants
 // access via Access-Control-Allow-Origin ("*" or the page's own origin).
 // Same-origin reads need no grant.
+// The Origin request header (Fetch §2.2.3) rides on XHR for POSTs and
+// cross-origin requests -- it is what servers gate CORS grants on.
+TEST_F(DomBinderTest, XhrSendsOriginHeaderForCrossOriginRequests)
+{
+  PageApis apis;
+  apis.location_href = []() { return "https://www.example.com/"; };
+  apis.resolve_url = [](const std::string& raw) { return raw; };
+  std::vector<std::pair<std::string, std::string>> seen;
+  apis.xhr_request = [&seen](const std::string&,
+                             const std::string&,
+                             const std::vector<std::pair<std::string, std::string>>& headers,
+                             const std::string&) -> base::Result<FetchResponse> {
+    seen = headers;
+    FetchResponse out;
+    out.status = 200;
+    return base::Ok(std::move(out));
+  };
+  DomBinder binder(*document_, apis);
+  const auto origin_header = [&seen]() {
+    for (const auto& [name, value] : seen) {
+      if (name == "origin") {
+        return value;
+      }
+    }
+    return std::string();
+  };
+
+  // Cross-origin GET: carries the page origin.
+  (void)binder.Evaluate("var x = new XMLHttpRequest();"
+                        "x.open('GET', 'https://other.test/a'); x.send();");
+  EXPECT_EQ(origin_header(), "https://www.example.com");
+  // Same-origin GET: no Origin header (browsers omit it).
+  (void)binder.Evaluate("var y = new XMLHttpRequest();"
+                        "y.open('GET', 'https://www.example.com/b'); y.send();");
+  EXPECT_EQ(origin_header(), "");
+  // Same-origin POST still carries it.
+  (void)binder.Evaluate("var z = new XMLHttpRequest();"
+                        "z.open('POST', 'https://www.example.com/c'); z.send('k=v');");
+  EXPECT_EQ(origin_header(), "https://www.example.com");
+}
+
 TEST_F(DomBinderTest, FetchEnforcesCorsOnCrossOriginResponses)
 {
   PageApis apis;

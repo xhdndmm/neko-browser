@@ -20,6 +20,9 @@
 //   * withCredentials/timeout are accepted but inert; cookies always follow
 //     the browser layer's subresource policy.  No CORS yet (Phase 10).
 
+#include "neko/security/origin.h"
+#include "neko/url/url.h"
+
 #include "binding_internal.h"
 
 #include <algorithm>
@@ -243,6 +246,27 @@ JSValue XhrSend(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* a
     body = ArgString(ctx, argv[0], &ok);
     if (!ok) {
       return JS_EXCEPTION;
+    }
+  }
+  // Origin (Fetch §2.2.3): POSTs and cross-origin requests carry it -- it is
+  // what servers gate CORS grants on.  Injected here where the transport
+  // seam accepts headers; window.fetch's seam has no header channel yet
+  // (matrix).  A header the caller set explicitly wins.
+  if (!w->impl->document_url.empty()) {
+    bool send_origin = w->method == "POST";
+    const base::Result<url::Url> page = url::Url::Parse(w->impl->document_url);
+    const base::Result<url::Url> target = url::Url::Parse(w->url);
+    if (page.has_value() && target.has_value()) {
+      const security::Origin page_origin = security::Origin::FromUrl(page.value());
+      const security::Origin target_origin = security::Origin::FromUrl(target.value());
+      send_origin = send_origin || !page_origin.IsSameOrigin(target_origin);
+    }
+    const bool caller_set = std::any_of(w->request_headers.begin(),
+                                        w->request_headers.end(),
+                                        [](const auto& h) { return h.first == "origin"; });
+    if (send_origin && !caller_set && page.has_value()) {
+      w->request_headers.emplace_back("origin",
+                                      security::Origin::FromUrl(page.value()).Serialize());
     }
   }
   base::Result<FetchResponse> response =
