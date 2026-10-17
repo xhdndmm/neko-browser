@@ -691,6 +691,15 @@ BrowserController::BrowserController(std::string profile_dir,
     }
   }
   pool_ = std::make_unique<base::ThreadPool>();
+  // The raster pool: up to four workers (HardwareConcurrency() - 1), and one
+  // worker means RasterizeParallel falls back to the serial path -- which is
+  // exactly what a two-core machine wants, and never waits on the shared
+  // pool's capacity.
+  {
+    const std::size_t hardware = base::ThreadPool::HardwareConcurrency();
+    const std::size_t raster_threads = hardware <= 2 ? 1 : std::min<std::size_t>(4, hardware - 1);
+    raster_pool_ = std::make_unique<base::ThreadPool>(raster_threads);
+  }
   // Default fetch: compute cookies for each redirect hop from the controller's
   // cookie jar.  HttpGet invokes HeaderProvider with the current hop URL.
   // With network-process mode the whole fetch runs in a child; the child asks
@@ -1835,7 +1844,7 @@ void BrowserController::ProduceFrameBody(Tab& tab)
   // the first band on this thread and keeps the submitted task count below the
   // worker count, so a pool task can still be waiting on the DOM lock this
   // call holds without deadlocking (threading-model §3.3).
-  tab.page->RasterizeFull(raster, tab.scroll_offset_y, pool_.get());
+  tab.page->RasterizeFull(raster, tab.scroll_offset_y, raster_pool_.get());
   auto frame = std::make_shared<RemoteFrame>();
   frame->width = width;
   frame->height = height;

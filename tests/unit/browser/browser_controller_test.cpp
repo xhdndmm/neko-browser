@@ -2760,6 +2760,81 @@ TEST(BrowserControllerTest, FetchesImageAssignedAfterTheInitialPass)
   std::fprintf(stderr, "[DEBUG-img] body end\n");
 }
 
+// Regression: frame production used to rasterize its bands on the SHARED
+// pool while the pump held the page's DOM lock.  Workers blocked on that lock
+// (a subresource task waking at the wrong moment) starved the bands queued
+// behind them, and the pump deadlocked -- intermittently, and only where the
+// timing lined up (the ASan CI leg, where this test timed out for weeks while
+// passing locally and on every other leg).  Frame production now uses its own
+// pool: this test holds the DOM lock, saturates the shared pool with tasks
+// that want the same lock, and requires the frame to be produced anyway.
+TEST(BrowserControllerTest, FrameProductionIsImmuneToSharedPoolStarvation)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{
+                200, {{"content-type", "text/html"}}, "<html><body><p>Frame</p></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  ASSERT_NE(tab->page, nullptr);
+  // Make the frame stale so the pump below produces one.
+  controller.SetTabScrollOffset(tab->id, 1.0F);
+
+  const std::shared_ptr<renderer::Page> page = tab->page;
+  const std::size_t workers = controller.pool().thread_count();
+  std::atomic<int> trying{0};
+  std::atomic<bool> release{false};
+
+  // Hold the DOM lock on this thread (the pump re-enters it recursively)...
+  std::unique_lock<std::recursive_mutex> dom_lock = page->AcquireDomLock();
+  // ...and saturate the shared pool with tasks that block on that same lock,
+  // exactly like a subresource task that wakes while the pump is running.
+  for (std::size_t i = 0; i < workers * 2; ++i) {
+    controller.pool().Post([&trying, &release, page]() {
+      ++trying;
+      const std::unique_lock<std::recursive_mutex> lock = page->AcquireDomLock();
+      while (!release.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+    });
+  }
+  // Every worker is now occupied by a task that cannot proceed until this
+  // thread drops the lock: the shared pool has no capacity left.
+  // Wait until the pool can no longer start work: every thread is taken by a
+  // task blocked on the lock this thread holds, and tasks are still queued.
+  // (Other navigation-time tasks may already occupy a few threads, so a fixed
+  // count would be wrong.)
+  {
+    int previous = -1;
+    for (;;) {
+      const int now = trying.load();
+      if (now == previous && controller.pool().PendingCount() > 0) {
+        break;
+      }
+      previous = now;
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  }
+
+  // Frame production must not need the shared pool: with the bands there this
+  // call never returned (its own thread holds the lock every worker wants).
+  // Returning at all is the assertion -- the frame itself is published under
+  // the controller mutex for the GUI's snapshot.
+  controller.PumpScriptTimers();
+
+  release.store(true);
+  dom_lock.unlock();
+  // Drain before the pool is destroyed (the tasks finish once released).
+  while (controller.pool().PendingCount() > 0) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+}
+
 // RFC 6265bis §5.4.2: a cross-site subresource request carries no Lax or
 // Strict cookies -- only a Secure SameSite=None cookie rides, because the
 // image's host is a different site from the page that embeds it.

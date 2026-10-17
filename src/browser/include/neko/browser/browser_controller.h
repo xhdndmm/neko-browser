@@ -731,8 +731,8 @@ public:
   }
 
   // The controller's shared worker pool: parallel subresource fetching
-  // (stylesheets/images) and, when rendering, parallel band rasterization.
-  // Thread-safe; outlives the controller.
+  // (stylesheets, scripts, images, web fonts).  Thread-safe; outlives the
+  // controller.  Frame productions do NOT use it (see raster_pool_).
   base::ThreadPool& pool()
   {
     return *pool_;
@@ -868,6 +868,15 @@ private:
   // while every store/registry above is still alive (background subresource
   // tasks capture |this|-bound fetch hooks).
   std::unique_ptr<base::ThreadPool> pool_;
+  // Frame production rasterizes in parallel bands, and it runs while this
+  // thread holds the page's DOM lock.  On the shared pool the bands queued
+  // behind subresource tasks that were themselves blocked on that lock --
+  // every worker busy waiting for a lock the frame producer held -- so the
+  // bands never ran and the pump deadlocked (the ASan CI leg reproduced it:
+  // the producer woke with the DOM lock, ran its phases, and stopped inside
+  // ProduceFrame).  Raster bands never take the DOM lock, so giving them a
+  // private pool removes the starvation by construction.
+  std::unique_ptr<base::ThreadPool> raster_pool_;
 };
 
 // Fetches and decodes the images referenced by <img> elements in |page| and
