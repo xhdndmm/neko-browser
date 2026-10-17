@@ -14,6 +14,7 @@
 #include "neko/base/string_util.h"
 #include "neko/css/stylesheet.h"
 #include "neko/javascript/import_map.h"
+#include "neko/security/site.h"
 #include "neko/style/computed_style.h"
 #include "neko/url/url.h"
 
@@ -229,6 +230,14 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
   if (document == nullptr) {
     return nullptr;
   }
+  // The document's own site: every request this page's scripts initiate
+  // (fetch, XHR, module loads, subresource passes) has this document as its
+  // initiator, which the SameSite cookie filter is defined on (RFC 6265bis
+  // §5.4.2).
+  std::string page_site;
+  if (const base::Result<url::Url> page_url = url::Url::Parse(base_url); page_url.has_value()) {
+    page_site = security::SiteForCookies(page_url.value());
+  }
   std::vector<dom::Element*> scripts;
   CollectScripts(*document, scripts);
   // Data blocks (<script type="application/json"> and friends) are
@@ -434,10 +443,10 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
   // rejected until the transport grows method/body support.
   if (fetch != nullptr) {
     apis.xhr_request =
-        [fetch](const std::string& url,
-                const std::string& method,
-                const std::vector<std::pair<std::string, std::string>>& request_headers,
-                const std::string& body) -> base::Result<javascript::FetchResponse> {
+        [fetch, page_site](const std::string& url,
+                           const std::string& method,
+                           const std::vector<std::pair<std::string, std::string>>& request_headers,
+                           const std::string& body) -> base::Result<javascript::FetchResponse> {
       if (method != "GET" || !body.empty()) {
         return base::Err(base::Error::InvalidArgument(
             "XMLHttpRequest: only GET is supported by the current transport"));
@@ -447,7 +456,10 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
         return base::Err(base::Error::InvalidArgument("invalid URL"));
       }
       // Request headers (the binder's Origin among them) now reach the wire.
-      const base::Result<network::HttpResponse> response = fetch(parsed.value(), request_headers);
+      RequestContext context;
+      context.extra_headers = request_headers;
+      context.initiator_site = page_site;
+      const base::Result<network::HttpResponse> response = fetch(parsed.value(), context);
       if (!response.has_value()) {
         return base::Err(response.error());
       }
@@ -469,7 +481,7 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     // ScriptEngine::SetModuleFetcher), and QuickJS calls it *synchronously* from
     // inside EvaluateModule -- so this timer is what separates "waiting for
     // module sources" from "compiling and running them" (see ScriptTimings).
-    apis.fetch = [fetch, &elapsed_ns, acc_owner](
+    apis.fetch = [fetch, page_site, &elapsed_ns, acc_owner](
                      const std::string& url,
                      const std::vector<std::pair<std::string, std::string>>& extra_headers)
         -> base::Result<javascript::FetchResponse> {
@@ -481,7 +493,10 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
       // page's own fetch() calls -- and each blocks the JS thread on the network.
       ++acc_owner->sync_fetch_calls;
       const auto fetch_start = std::chrono::steady_clock::now();
-      const base::Result<network::HttpResponse> response = fetch(parsed.value(), extra_headers);
+      RequestContext context;
+      context.extra_headers = extra_headers;
+      context.initiator_site = page_site;
+      const base::Result<network::HttpResponse> response = fetch(parsed.value(), context);
       acc_owner->sync_fetch_ns += elapsed_ns(fetch_start);
       if (!response.has_value()) {
         return base::Err(response.error());
@@ -856,12 +871,14 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
       // The parser resolves relative specifiers against the same base at
       // execution time, so the absolute URL is a stable key.
       prefetched[absolute] =
-          pool.Submit([&fetch, absolute]() -> base::Result<network::HttpResponse> {
+          pool.Submit([&fetch, absolute, page_site]() -> base::Result<network::HttpResponse> {
                 const base::Result<url::Url> target = url::Url::Parse(absolute);
                 if (!target.has_value()) {
                   return base::Err(target.error());
                 }
-                return fetch(target.value(), /*extra_headers=*/{});
+                RequestContext internal_context;
+                internal_context.initiator_site = page_site;
+                return fetch(target.value(), internal_context);
               })
               .share();
     }
@@ -954,7 +971,9 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
       // synchronous fetches; |fetches| counts classic script bodies only.
       ++acc.sync_fetch_calls;
       const auto module_fetch_start = std::chrono::steady_clock::now();
-      const auto response = fetch(target.value(), /*extra_headers=*/{});
+      RequestContext internal_context;
+      internal_context.initiator_site = page_site;
+      const auto response = fetch(target.value(), internal_context);
       const long long entry_fetch_ns = elapsed_ns(module_fetch_start);
       acc.modules_ns += entry_fetch_ns;
       acc.sync_fetch_ns += entry_fetch_ns;

@@ -202,10 +202,9 @@ public:
     return {};
   }
 
-  base::Result<network::HttpResponse>
-  operator()(const url::Url& url,
-             std::string_view cookie_header,
-             const BrowserController::RequestHeaders& /*extra_headers*/ = {})
+  base::Result<network::HttpResponse> operator()(const url::Url& url,
+                                                 std::string_view cookie_header,
+                                                 const RequestContext& /*extra_headers*/ = {})
   {
     const std::string key = url.Serialize();
     network::HttpResponse response;
@@ -2258,18 +2257,16 @@ TEST(BrowserControllerTest, WebFontDoesNotBlockPagePublication)
 
   std::atomic<bool> font_requested = false;
   std::atomic<bool> release_font = false;
-  BrowserController controller(tp.path(),
-                               [&](const url::Url& request_url,
-                                   std::string_view cookie,
-                                   const BrowserController::RequestHeaders&) {
-                                 if (request_url.Serialize() == "http://example.com/slow.ttf") {
-                                   font_requested.store(true);
-                                   while (!release_font.load()) {
-                                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                                   }
-                                 }
-                                 return fetch(request_url, cookie, /*extra_headers=*/{});
-                               });
+  BrowserController controller(
+      tp.path(), [&](const url::Url& request_url, std::string_view cookie, const RequestContext&) {
+        if (request_url.Serialize() == "http://example.com/slow.ttf") {
+          font_requested.store(true);
+          while (!release_font.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          }
+        }
+        return fetch(request_url, cookie, /*extra_headers=*/{});
+      });
   struct ReleaseFontOnExit
   {
     std::atomic<bool>& release;
@@ -2569,10 +2566,9 @@ TEST(BrowserControllerTest, PageScriptLocationReloadRefetches)
   struct CountingFetcher
   {
     int* served;
-    base::Result<network::HttpResponse>
-    operator()(const url::Url& url,
-               std::string_view cookie,
-               const BrowserController::RequestHeaders& /*extra_headers*/ = {})
+    base::Result<network::HttpResponse> operator()(const url::Url& url,
+                                                   std::string_view cookie,
+                                                   const RequestContext& /*extra_headers*/ = {})
     {
       (void)url;
       (void)cookie;
@@ -2762,6 +2758,44 @@ TEST(BrowserControllerTest, FetchesImageAssignedAfterTheInitialPass)
   EXPECT_TRUE(ready) << "late-assigned image never fetched/attached/load-dispatched";
   EXPECT_GE(fetch.RequestCount(), 2u); // document + late.png
   std::fprintf(stderr, "[DEBUG-img] body end\n");
+}
+
+// RFC 6265bis §5.4.2: a cross-site subresource request carries no Lax or
+// Strict cookies -- only a Secure SameSite=None cookie rides, because the
+// image's host is a different site from the page that embeds it.
+TEST(BrowserControllerTest, CrossSiteSubresourceOmitsSameSiteCookies)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  const std::string png = MakePng();
+  fetch.Add("https://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body><img src=\"https://cdn.test/x.png\"></body></html>"});
+  fetch.Add("https://cdn.test/x.png",
+            FakeFetcher::Route{200, {{"content-type", "image/png"}}, png});
+
+  BrowserController controller(tp.path(), std::ref(fetch));
+  const auto cdn = url::Url::Parse("https://cdn.test/");
+  ASSERT_TRUE(cdn.has_value());
+  // Session cookies (no Expires): valid whenever the fetch runs.
+  ASSERT_TRUE(controller.cookies().SetCookieFromHeader(cdn.value(), "lax=1; SameSite=Lax", 1));
+  ASSERT_TRUE(
+      controller.cookies().SetCookieFromHeader(cdn.value(), "strict=1; SameSite=Strict", 1));
+  ASSERT_TRUE(
+      controller.cookies().SetCookieFromHeader(cdn.value(), "none=1; SameSite=None; Secure", 1));
+
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("https://example.com/").has_value());
+  for (int i = 0; i < 400 && fetch.RequestCount() < 2; ++i) {
+    controller.PumpScriptTimers();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  ASSERT_GE(fetch.RequestCount(), 2u);
+  const std::string cookie = fetch.LastCookieFor("https://cdn.test/x.png");
+  EXPECT_NE(cookie.find("none=1"), std::string::npos);
+  EXPECT_EQ(cookie.find("lax=1"), std::string::npos);
+  EXPECT_EQ(cookie.find("strict=1"), std::string::npos);
 }
 
 // The GUI lazy-loading loop end to end: an IntersectionObserver observes an

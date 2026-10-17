@@ -6,6 +6,7 @@
 #include "neko/browser/page_scripts.h"
 #include "neko/browser/perf_report.h"
 #include "neko/browser/renderer_session.h"
+#include "neko/browser/request_context.h"
 #include "neko/image/image.h"
 #include "neko/javascript/dom_binding.h"
 #include "neko/media/audio.h"
@@ -409,15 +410,13 @@ float NextZoomFactor(float current, int direction);
 class BrowserController
 {
 public:
-  // Extra request headers ("Origin" and friends) a caller wants on the wire.
-  using RequestHeaders = std::vector<std::pair<std::string, std::string>>;
-
   // Injectable fetch function (tests use a fake; production defaults to
-  // network::HttpGet).  |cookie_header| is the computed "Cookie: ..."
-  // value (may be empty) for the request host; |extra_headers| is sent
-  // verbatim (used for the CORS Origin header).
+  // network::HttpGet).  |cookie_header| is the computed "Cookie: ..." value
+  // (may be empty) for the request host; |context| carries the extra headers
+  // (the CORS Origin) and the initiator provenance the SameSite cookie filter
+  // needs (see request_context.h).
   using FetchFn = std::function<base::Result<network::HttpResponse>(
-      const url::Url&, std::string_view cookie_header, const RequestHeaders& extra_headers)>;
+      const url::Url&, std::string_view cookie_header, const RequestContext& context)>;
 
   // Renderer-process mode (ADR 0016 M2): see RendererOptions.  Network-process
   // mode (ADR 0016 M3a): see NetworkOptions.
@@ -692,7 +691,9 @@ public:
   void RemoveHistoryEntry(const std::string& url);
   void ClearHistory();
   void ClearAllStorage();
-  std::string CookieHeader(const url::Url& url, int64_t now) const;
+  std::string CookieHeader(const url::Url& url,
+                           int64_t now,
+                           const storage::CookieSameSiteContext& same_site = {}) const;
 
   // Spawns (or respawns after a crash) the network child.  Returns nullptr
   // when network-process mode is off or the process cannot be started; the
@@ -738,7 +739,7 @@ public:
   }
 
 private:
-  void FetchAndLoad(Tab& tab, const url::Url& url);
+  void FetchAndLoad(Tab& tab, const url::Url& url, const std::string& initiator_site);
   // The search URL for |query|: the custom search_engine_template preference
   // when set, otherwise the configured built-in engine's template.
   std::string SearchUrlFor(std::string_view query) const;

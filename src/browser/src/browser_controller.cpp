@@ -18,6 +18,7 @@
 #include "neko/paint/rasterizer.h"
 #include "neko/platform/executable_path.h"
 #include "neko/security/origin.h"
+#include "neko/security/site.h"
 #include "neko/storage/file_util.h"
 #include "neko/url/url.h"
 
@@ -695,12 +696,21 @@ BrowserController::BrowserController(std::string profile_dir,
   // With network-process mode the whole fetch runs in a child; the child asks
   // back for each hop's cookies, so the jar (and HttpOnly values) stay here.
   if (!fetch_) {
-    fetch_ = [this](const url::Url& u, std::string_view, const RequestHeaders& extra_headers) {
+    fetch_ = [this](const url::Url& u, std::string_view, const RequestContext& context) {
+      // SameSite is decided per hop against the initiator's site (a redirect
+      // target may differ from the original target).
+      const auto same_site_for = [&context](const url::Url& target) {
+        storage::CookieSameSiteContext same_site;
+        same_site.top_level_navigation = context.top_level_navigation;
+        same_site.cross_site = !context.initiator_site.empty() &&
+                               security::SiteForCookies(target) != context.initiator_site;
+        return same_site;
+      };
       if (network_.enabled) {
         NetworkSession* session = EnsureNetworkSession();
         if (session != nullptr) {
-          NetworkSession::CookieLookupFn lookup = [this](const url::Url& target) {
-            return CookieHeader(target, NowUnix());
+          NetworkSession::CookieLookupFn lookup = [this, &same_site_for](const url::Url& target) {
+            return CookieHeader(target, NowUnix(), same_site_for(target));
           };
           // NOTE: extra_headers do not cross the network-process protocol yet
           // (the request serializer carries only url + cookie); the CORS
@@ -716,13 +726,13 @@ BrowserController::BrowserController(std::string profile_dir,
         }
       }
       network::HeaderProvider provider;
-      provider = [this, extra_headers](const url::Url& target) {
+      provider = [this, &context, &same_site_for](const url::Url& target) {
         std::vector<network::HttpHeader> headers;
-        headers.reserve(extra_headers.size() + 1);
-        for (const auto& [name, value] : extra_headers) {
+        headers.reserve(context.extra_headers.size() + 1);
+        for (const auto& [name, value] : context.extra_headers) {
           headers.push_back({name, value});
         }
-        const std::string cookie = CookieHeader(target, NowUnix());
+        const std::string cookie = CookieHeader(target, NowUnix(), same_site_for(target));
         if (!cookie.empty()) {
           headers.push_back({"cookie", cookie});
         }
@@ -990,8 +1000,15 @@ void BrowserController::NavigateToUrl(Tab& tab, const std::string& url_string)
   // (a page script assigning window.location) runs synchronously through this
   // function again; tracking the URL here — instead of in the callers — keeps
   // the final address bar correct no matter how deep the chain goes.
+  // The document that initiated this navigation is the current one: its site
+  // decides the SameSite filter for the navigation request (RFC 6265bis
+  // §5.4.2).  Captured before |tab.url| moves to the new document below.
+  std::string navigation_initiator_site;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (const base::Result<url::Url> previous = url::Url::Parse(tab.url); previous.has_value()) {
+      navigation_initiator_site = security::SiteForCookies(previous.value());
+    }
     tab.url = url_string;
   }
   // A fresh document replaces the old one; any focused element is stale.
@@ -1030,7 +1047,7 @@ void BrowserController::NavigateToUrl(Tab& tab, const std::string& url_string)
     std::lock_guard<std::mutex> lock(mutex_);
     tab.loading = true;
   }
-  FetchAndLoad(tab, parsed.value());
+  FetchAndLoad(tab, parsed.value(), navigation_initiator_site);
   {
     std::lock_guard<std::mutex> lock(mutex_);
     tab.loading = false;
@@ -1678,10 +1695,20 @@ void BrowserController::SchedulePendingImageFetch(Tab& tab)
   // Same fetcher the load-time subresource pass uses (cookies follow the
   // resource URL).  [this] is bounded by the pool draining on destruction;
   // the state/page handles outlive the tab if it is navigated away.
-  const auto fetch =
-      [this](const url::Url& resource_url, std::string_view, const RequestHeaders& extra_headers) {
-        return fetch_(resource_url, CookieHeader(resource_url, NowUnix()), extra_headers);
-      };
+  // The pass runs on the pool while the tab belongs to the worker: capture the
+  // request context now (the page's site is the initiator for its subresources).
+  RequestContext context;
+  if (const base::Result<url::Url> page_url = url::Url::Parse(base_url); page_url.has_value()) {
+    context.initiator_site = security::SiteForCookies(page_url.value());
+  }
+  const auto fetch = [this, context](
+                         const url::Url& resource_url, std::string_view, const RequestContext&) {
+    const storage::CookieSameSiteContext same_site{/*cross_site=*/!context.initiator_site.empty() &&
+                                                       security::SiteForCookies(resource_url) !=
+                                                           context.initiator_site,
+                                                   /*top_level_navigation=*/false};
+    return fetch_(resource_url, CookieHeader(resource_url, NowUnix(), same_site), context);
+  };
   if (PumpTraceEnabled()) {
     std::fprintf(stderr, "[DEBUG-pump] pool: task posted\n");
   }
@@ -2654,7 +2681,9 @@ void BrowserController::MarkSessionFailed(Tab& tab, std::string_view message)
 // Fetch + content routing
 // ---------------------------------------------------------------------------
 
-void BrowserController::FetchAndLoad(Tab& tab, const url::Url& url)
+void BrowserController::FetchAndLoad(Tab& tab,
+                                     const url::Url& url,
+                                     const std::string& initiator_site)
 {
   NavigationDepthGuard guard(20);
   if (guard.Exceeded()) {
@@ -2669,8 +2698,16 @@ void BrowserController::FetchAndLoad(Tab& tab, const url::Url& url)
   }
   const auto start = std::chrono::steady_clock::now();
   const int64_t now = NowUnix();
-  const std::string cookie = CookieHeader(url, now);
-  auto response = fetch_(url, cookie, /*extra_headers=*/{});
+  // A top-level navigation: Lax cookies ride it, Strict ones do not when the
+  // initiator is cross-site.
+  RequestContext context;
+  context.initiator_site = initiator_site;
+  context.top_level_navigation = true;
+  const storage::CookieSameSiteContext same_site{
+      /*cross_site=*/!initiator_site.empty() && security::SiteForCookies(url) != initiator_site,
+      /*top_level_navigation=*/true};
+  const std::string cookie = CookieHeader(url, now, same_site);
+  auto response = fetch_(url, cookie, context);
   const auto end = std::chrono::steady_clock::now();
   const double elapsed_ms = std::chrono::duration<double, std::milli>(end - start).count();
 
@@ -2809,10 +2846,20 @@ void BrowserController::LoadBytes(Tab& tab,
     // apply to its scroll bar.  [this] and &tab are worker-thread only.
     services.scroll_offset_y = &tab.scroll_offset_y;
     services.set_scroll_request = [this, &tab](int, float y) { SetTabScrollRequest(tab.id, y); };
-    const auto fetch_subresource = [this](const url::Url& resource_url,
-                                          std::string_view,
-                                          const RequestHeaders& extra_headers) {
-      return fetch_(resource_url, CookieHeader(resource_url, NowUnix()), extra_headers);
+    // The page's own site: these are subresource requests initiated by it.
+    RequestContext subresource_context;
+    if (const base::Result<url::Url> page_url = url::Url::Parse(final_url); page_url.has_value()) {
+      subresource_context.initiator_site = security::SiteForCookies(page_url.value());
+    }
+    const auto fetch_subresource = [this, subresource_context](const url::Url& resource_url,
+                                                               std::string_view,
+                                                               const RequestContext&) {
+      const storage::CookieSameSiteContext same_site{
+          /*cross_site=*/!subresource_context.initiator_site.empty() &&
+              security::SiteForCookies(resource_url) != subresource_context.initiator_site,
+          /*top_level_navigation=*/false};
+      return fetch_(
+          resource_url, CookieHeader(resource_url, NowUnix(), same_site), subresource_context);
     };
     // Fetch and apply the page's external <link rel=stylesheet> sheets before
     // scripts run, so scripts see the fully styled cascade.
@@ -2823,8 +2870,13 @@ void BrowserController::LoadBytes(Tab& tab,
     tab.script_runtime = RunPageScripts(
         *new_page,
         final_url,
-        [this](const url::Url& script_url, const RequestHeaders& extra_headers) {
-          return fetch_(script_url, CookieHeader(script_url, NowUnix()), extra_headers);
+        [this, subresource_context](const url::Url& script_url, const RequestContext&) {
+          const storage::CookieSameSiteContext same_site{
+              /*cross_site=*/!subresource_context.initiator_site.empty() &&
+                  security::SiteForCookies(script_url) != subresource_context.initiator_site,
+              /*top_level_navigation=*/false};
+          return fetch_(
+              script_url, CookieHeader(script_url, NowUnix(), same_site), subresource_context);
         },
         [this](std::string_view level, std::string_view text) { LogConsole(level, text); },
         pool(),
@@ -3369,9 +3421,11 @@ void BrowserController::ClearAllStorage()
   (void)Save();
 }
 
-std::string BrowserController::CookieHeader(const url::Url& url, int64_t now) const
+std::string BrowserController::CookieHeader(const url::Url& url,
+                                            int64_t now,
+                                            const storage::CookieSameSiteContext& same_site) const
 {
-  return cookies_.CookieHeaderFor(url, now);
+  return cookies_.CookieHeaderFor(url, now, same_site);
 }
 
 // ---------------------------------------------------------------------------

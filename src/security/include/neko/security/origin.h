@@ -12,9 +12,10 @@ namespace neko::security {
 // their scheme, host and (effective) port all match; this is the basis for
 // the Same-Origin Policy.
 //
-// Phase 10 milestone 1: the origin model itself.  SOP enforcement on network
-// reads (fetch/XHR), CORS, CSP and the cookie/secure-context rules are
-// documented as future work — see docs/security/security-model.md.
+// SOP enforcement on network reads (the CORS checks in the bindings), the
+// cookie site model (site.h) and the Public Suffix List rules are implemented;
+// CSP and secure-context enforcement remain future work — see
+// docs/security/security-model.md.
 struct Origin
 {
   std::string scheme;

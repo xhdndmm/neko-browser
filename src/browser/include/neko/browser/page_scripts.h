@@ -2,6 +2,7 @@
 
 #include "neko/base/thread_pool.h"
 #include "neko/browser/perf_report.h"
+#include "neko/browser/request_context.h"
 #include "neko/javascript/dom_binding.h"
 #include "neko/javascript/script_engine.h"
 #include "neko/network/http.h"
@@ -22,9 +23,8 @@ namespace neko::browser {
 
 // Fetches an external script by URL.  Production uses the network stack with
 // the page's cookies; tests inject a fake.  Called on the worker thread.
-using RequestHeaders = std::vector<std::pair<std::string, std::string>>;
 using ScriptFetcher = std::function<base::Result<network::HttpResponse>(
-    const url::Url& url, const RequestHeaders& extra_headers)>;
+    const url::Url& url, const RequestContext& context)>;
 
 // Optional browser services exposed to the page's scripts (Phase 8 M3):
 // per-origin localStorage, window.indexedDB and the JS fetch() API.

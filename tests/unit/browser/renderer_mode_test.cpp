@@ -100,7 +100,7 @@ public:
   }
 
   base::Result<network::HttpResponse>
-  operator()(const url::Url& url, std::string_view, const BrowserController::RequestHeaders& = {})
+  operator()(const url::Url& url, std::string_view, const RequestContext& = {})
   {
     const std::string key = url.Serialize();
     std::lock_guard<std::mutex> lock(mutex_);
