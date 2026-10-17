@@ -674,13 +674,16 @@ void CookieStore::EvictOverflowLocked(int64_t now)
   }
 }
 
-std::vector<const Cookie*> CookieStore::CookiesFor(const url::Url& url, int64_t now) const
+std::vector<const Cookie*> CookieStore::CookiesFor(const url::Url& url,
+                                                   int64_t now,
+                                                   const CookieSameSiteContext& same_site) const
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  return CookiesForLocked(url, now);
+  return CookiesForLocked(url, now, same_site);
 }
 
-std::vector<const Cookie*> CookieStore::CookiesForLocked(const url::Url& url, int64_t now) const
+std::vector<const Cookie*> CookieStore::CookiesForLocked(
+    const url::Url& url, int64_t now, const CookieSameSiteContext& same_site) const
 {
   const std::string& host = url.host();
   const std::string& path = url.path();
@@ -691,6 +694,18 @@ std::vector<const Cookie*> CookieStore::CookiesForLocked(const url::Url& url, in
       continue;
     if (c.secure && !is_secure)
       continue;
+    // SameSite (RFC 6265bis §5.4.2).  An unspecified attribute behaves as
+    // Lax, the modern default: it rides top-level cross-site navigations but
+    // not cross-site subresources.  Strict never rides cross-site requests;
+    // None was already constrained to Secure at set time.
+    if (same_site.cross_site) {
+      if (c.same_site == "strict") {
+        continue;
+      }
+      if (c.same_site != "none" && !same_site.top_level_navigation) {
+        continue; // "" (Lax default) or "lax"
+      }
+    }
     if (!DomainMatch(host, c))
       continue;
     if (!PathMatch(path, c))
@@ -706,10 +721,12 @@ std::vector<const Cookie*> CookieStore::CookiesForLocked(const url::Url& url, in
   return out;
 }
 
-std::string CookieStore::CookieHeaderFor(const url::Url& url, int64_t now) const
+std::string CookieStore::CookieHeaderFor(const url::Url& url,
+                                         int64_t now,
+                                         const CookieSameSiteContext& same_site) const
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  const auto cookies = CookiesForLocked(url, now);
+  const auto cookies = CookiesForLocked(url, now, same_site);
   std::string header;
   for (const Cookie* c : cookies) {
     if (!header.empty())
@@ -721,10 +738,12 @@ std::string CookieStore::CookieHeaderFor(const url::Url& url, int64_t now) const
   return header;
 }
 
-std::string CookieStore::DocumentCookieFor(const url::Url& url, int64_t now) const
+std::string CookieStore::DocumentCookieFor(const url::Url& url,
+                                           int64_t now,
+                                           const CookieSameSiteContext& same_site) const
 {
   std::lock_guard<std::mutex> lock(mutex_);
-  const auto cookies = CookiesForLocked(url, now);
+  const auto cookies = CookiesForLocked(url, now, same_site);
   std::string value;
   for (const Cookie* cookie : cookies) {
     if (cookie->http_only) {

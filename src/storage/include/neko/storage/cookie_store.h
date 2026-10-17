@@ -26,6 +26,18 @@ struct Cookie
   std::string same_site; // "", "None", "Lax" or "Strict"
 };
 
+// The request's relationship to the cookie's site (RFC 6265bis §5.4.2), which
+// gates the SameSite attributes: a cross-site request carries only Lax
+// cookies on top-level navigations and never Strict ones.  The caller owns
+// the site comparison (see security::IsSameSiteForCookies).
+struct CookieSameSiteContext
+{
+  // The request target's site differs from the request's initiator site.
+  bool cross_site = false;
+  // The request is a top-level navigation (address bar or link click).
+  bool top_level_navigation = false;
+};
+
 // A persistent cookie jar.
 //
 // Responsibilities (RFC 6265 subset):
@@ -69,14 +81,19 @@ public:
   bool SetCookieFromHeader(const url::Url& origin, std::string_view header, int64_t now);
 
   // RFC 6265 section 5.4: cookies to include in a request to |url| at |now|.
-  std::vector<const Cookie*> CookiesFor(const url::Url& url, int64_t now) const;
+  std::vector<const Cookie*>
+  CookiesFor(const url::Url& url, int64_t now, const CookieSameSiteContext& same_site = {}) const;
 
   // "name=value; name2=value2" request header value for |url|, or empty.
-  std::string CookieHeaderFor(const url::Url& url, int64_t now) const;
+  std::string CookieHeaderFor(const url::Url& url,
+                              int64_t now,
+                              const CookieSameSiteContext& same_site = {}) const;
 
   // The document.cookie view. HttpOnly cookies are excluded because page
   // scripts must not be able to read them.
-  std::string DocumentCookieFor(const url::Url& url, int64_t now) const;
+  std::string DocumentCookieFor(const url::Url& url,
+                                int64_t now,
+                                const CookieSameSiteContext& same_site = {}) const;
 
   // Removes expired cookies.
   void PurgeExpired(int64_t now);
@@ -116,7 +133,8 @@ private:
   // logic without re-entering the non-recursive lock).
   bool
   DeleteCookieLocked(const std::string& name, const std::string& domain, const std::string& path);
-  std::vector<const Cookie*> CookiesForLocked(const url::Url& url, int64_t now) const;
+  std::vector<const Cookie*>
+  CookiesForLocked(const url::Url& url, int64_t now, const CookieSameSiteContext& same_site) const;
   // Drops expired cookies, then the oldest by creation time, until the jar is
   // within the RFC 6265 §6.1 capacity bound.
   void EvictOverflowLocked(int64_t now);

@@ -263,6 +263,43 @@ TEST(CookieStoreTest, InsecureCookieCannotOverlayASecureOne)
               ::testing::HasSubstr("sid=good"));
 }
 
+// RFC 6265bis §5.4.2: the SameSite attribute gates sending.  An unspecified
+// attribute behaves as Lax (the modern default).
+TEST(CookieStoreTest, SameSiteGatesCrossSiteSending)
+{
+  TempProfile tp;
+  CookieStore store(tp.path());
+  ASSERT_TRUE(store.Load().has_value());
+  const int64_t now = 1'700'000'000;
+  const auto target = MakeUrl("https://shop.example.com/cart");
+
+  ASSERT_TRUE(store.SetCookieFromHeader(target, "lax=1; SameSite=Lax", now));
+  ASSERT_TRUE(store.SetCookieFromHeader(target, "strict=1; SameSite=Strict", now));
+  ASSERT_TRUE(store.SetCookieFromHeader(target, "none=1; SameSite=None; Secure", now));
+  ASSERT_TRUE(store.SetCookieFromHeader(target, "bare=1", now));
+
+  // Same-site request: everything rides.
+  const CookieSameSiteContext same_site;
+  EXPECT_THAT(store.CookieHeaderFor(target, now, same_site), ::testing::HasSubstr("strict=1"));
+
+  // Cross-site top-level navigation: Lax (and the Lax default) ride, Strict
+  // and nothing else.
+  const CookieSameSiteContext nav{/*cross_site=*/true, /*top_level_navigation=*/true};
+  const std::string nav_header = store.CookieHeaderFor(target, now, nav);
+  EXPECT_THAT(nav_header, ::testing::HasSubstr("lax=1"));
+  EXPECT_THAT(nav_header, ::testing::HasSubstr("bare=1"));
+  EXPECT_THAT(nav_header, ::testing::HasSubstr("none=1"));
+  EXPECT_THAT(nav_header, ::testing::Not(::testing::HasSubstr("strict=1")));
+
+  // Cross-site subresource: only None.
+  const CookieSameSiteContext subresource{/*cross_site=*/true, /*top_level_navigation=*/false};
+  const std::string sub_header = store.CookieHeaderFor(target, now, subresource);
+  EXPECT_THAT(sub_header, ::testing::HasSubstr("none=1"));
+  EXPECT_THAT(sub_header, ::testing::Not(::testing::HasSubstr("lax=1")));
+  EXPECT_THAT(sub_header, ::testing::Not(::testing::HasSubstr("bare=1")));
+  EXPECT_THAT(sub_header, ::testing::Not(::testing::HasSubstr("strict=1")));
+}
+
 TEST(CookieStoreTest, RejectsSameSiteNoneWithoutSecure)
 {
   TempProfile tp;
