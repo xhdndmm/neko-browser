@@ -2744,7 +2744,7 @@ TEST(BrowserControllerTest, FetchesImageAssignedAfterTheInitialPass)
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
   }
-  std::fprintf(stderr, "[DEBUG-img] loop done ready=%d\n", (int)ready);
+  std::fprintf(stderr, "[DEBUG-img] loop done ready=%d\n", static_cast<int>(ready));
   EXPECT_TRUE(ready) << "late-assigned image never fetched/attached/load-dispatched";
   EXPECT_GE(fetch.RequestCount(), 2u); // document + late.png
   std::fprintf(stderr, "[DEBUG-img] body end\n");
