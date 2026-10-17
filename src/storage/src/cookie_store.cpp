@@ -145,6 +145,37 @@ int64_t ParseCookieDate(std::string_view input)
 // Matching (RFC 6265 section 5.1.3 / 5.1.4)
 // ---------------------------------------------------------------------------
 
+// A "secure" connection for cookie purposes (RFC 6265bis §5.6): https/wss,
+// or a potentially trustworthy localhost origin, as browsers treat it.
+bool IsSecureCookieOrigin(const url::Url& url)
+{
+  const std::string& scheme = url.scheme();
+  if (scheme == "https" || scheme == "wss") {
+    return true;
+  }
+  const std::string& host = url.host();
+  return host == "localhost" || host == "127.0.0.1" || host == "[::1]" || host == "::1";
+}
+
+// Case-insensitive ASCII prefix test for the cookie-name prefixes (§4.1.3).
+bool HasNamePrefix(const std::string& name, std::string_view prefix)
+{
+  if (name.size() < prefix.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < prefix.size(); ++i) {
+    const char a = name[i];
+    const char b = prefix[i];
+    const auto lower = [](char c) {
+      return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+    };
+    if (lower(a) != lower(b)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // RFC 6265 §6.1 capacity: a user agent must accept cookies up to 4096 bytes
 // (name + value here, as browsers measure it) and keep a bounded jar.  A
 // page that streams Set-Cookie must not grow memory/disk without limit.
@@ -530,6 +561,13 @@ bool CookieStore::SetCookieFromHeader(const url::Url& origin, std::string_view h
     has_domain = false;
   }
 
+  // RFC 6265bis §5.6: a Secure cookie may only be created over a secure
+  // connection -- otherwise a plaintext attacker could plant a cookie that
+  // then rides the site's HTTPS traffic.
+  if (secure && !IsSecureCookieOrigin(origin)) {
+    return false;
+  }
+
   // RFC 6265bis storage model: SameSite=None means "send cross-site", so it
   // is only honored on a Secure cookie -- otherwise the cookie could ride
   // plaintext cross-site requests, which is exactly what the attribute is
@@ -541,6 +579,33 @@ bool CookieStore::SetCookieFromHeader(const url::Url& origin, std::string_view h
   const std::string cookie_domain = has_domain ? domain : origin_host;
   const bool host_only = !has_domain;
   const std::string cookie_path = has_path ? path : DefaultPath(origin);
+
+  // Cookie-name prefixes (RFC 6265bis §4.1.3): __Secure- demands a Secure
+  // cookie; __Host- additionally demands host-only scope and Path=/.
+  if (HasNamePrefix(name, "__secure-") && !secure) {
+    return false;
+  }
+  if (HasNamePrefix(name, "__host-") &&
+      (!secure || !host_only || !(has_path && cookie_path == "/"))) {
+    return false;
+  }
+
+  // RFC 6265bis §5.6: a non-Secure cookie must not overlay an existing
+  // Secure one -- otherwise a plaintext attacker could shadow the site's
+  // Secure cookie (cookie fixation).  The path comparison is deliberately
+  // asymmetric: the NEW cookie's path must path-match the existing one.
+  if (!secure && !IsSecureCookieOrigin(origin)) {
+    for (const Cookie& existing : cookies_) {
+      if (!existing.secure || existing.name != name) {
+        continue;
+      }
+      const bool domain_overlap = HostMatchesDomain(cookie_domain, existing.domain) ||
+                                  HostMatchesDomain(existing.domain, cookie_domain);
+      if (domain_overlap && PathMatch(cookie_path, existing)) {
+        return false;
+      }
+    }
+  }
 
   // Expiry (section 5.2.2 / 5.3).
   int64_t expiry = 0; // session by default

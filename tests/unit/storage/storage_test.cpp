@@ -123,7 +123,9 @@ TEST(CookieStoreTest, ParsesSetCookieAttributes)
   ASSERT_TRUE(store.Load().has_value());
 
   const int64_t now = 1'700'000'000;
-  const auto url = MakeUrl("http://example.com/path/page.html");
+  // https: a Secure cookie may only be created over a secure connection
+  // (RFC 6265bis §5.6), and this test's subject is attribute parsing.
+  const auto url = MakeUrl("https://example.com/path/page.html");
   ASSERT_TRUE(
       store.SetCookieFromHeader(url,
                                 "sid=abc123; Path=/path; Expires=Sun, 06 Nov 2033 08:49:37 GMT; "
@@ -204,6 +206,63 @@ TEST(CookieStoreTest, RejectsPublicSuffixDomainAttribute)
 
 // RFC 6265bis: SameSite=None opts a cookie into cross-site sending, so it
 // is only honored on Secure cookies; None without Secure is ignored.
+// RFC 6265bis §5.6 storage model: a Secure cookie may only be created over
+// a secure connection; localhost counts as secure, plain http does not.
+TEST(CookieStoreTest, SecureCookiesRequireASecureOrigin)
+{
+  TempProfile tp;
+  CookieStore store(tp.path());
+  ASSERT_TRUE(store.Load().has_value());
+  const int64_t now = 1'700'000'000;
+
+  EXPECT_FALSE(store.SetCookieFromHeader(MakeUrl("http://example.com/"), "a=1; Secure", now));
+  EXPECT_TRUE(store.SetCookieFromHeader(MakeUrl("https://example.com/"), "a=1; Secure", now));
+  // Potentially trustworthy localhost origins are secure.
+  EXPECT_TRUE(store.SetCookieFromHeader(MakeUrl("http://localhost:8000/"), "b=1; Secure", now));
+}
+
+// RFC 6265bis §4.1.3 cookie-name prefixes.
+TEST(CookieStoreTest, CookieNamePrefixes)
+{
+  TempProfile tp;
+  CookieStore store(tp.path());
+  ASSERT_TRUE(store.Load().has_value());
+  const int64_t now = 1'700'000'000;
+  const auto https = MakeUrl("https://www.example.com/");
+
+  // __Secure- requires Secure.
+  EXPECT_FALSE(store.SetCookieFromHeader(https, "__Secure-a=1", now));
+  EXPECT_TRUE(store.SetCookieFromHeader(https, "__Secure-a=1; Secure", now));
+
+  // __Host- requires Secure + host-only + Path=/.
+  EXPECT_FALSE(store.SetCookieFromHeader(https, "__Host-b=1; Secure", now));
+  EXPECT_FALSE(store.SetCookieFromHeader(https, "__Host-b=1; Secure; Path=/x", now));
+  EXPECT_FALSE(
+      store.SetCookieFromHeader(https, "__Host-b=1; Secure; Path=/; Domain=example.com", now));
+  EXPECT_TRUE(store.SetCookieFromHeader(https, "__Host-b=1; Secure; Path=/", now));
+}
+
+// RFC 6265bis §5.6: a non-Secure cookie must not overlay an existing Secure
+// one (cookie fixation); a Secure cookie over https may still be replaced.
+TEST(CookieStoreTest, InsecureCookieCannotOverlayASecureOne)
+{
+  TempProfile tp;
+  CookieStore store(tp.path());
+  ASSERT_TRUE(store.Load().has_value());
+  const int64_t now = 1'700'000'000;
+
+  ASSERT_TRUE(store.SetCookieFromHeader(
+      MakeUrl("https://example.com/"), "sid=good; Secure; Path=/login", now));
+  // A plaintext setter cannot shadow it for the same path...
+  EXPECT_FALSE(
+      store.SetCookieFromHeader(MakeUrl("http://example.com/"), "sid=evil; Path=/login", now));
+  // ...but an unrelated path is a different cookie.
+  EXPECT_TRUE(
+      store.SetCookieFromHeader(MakeUrl("http://example.com/"), "sid=other; Path=/other", now));
+  EXPECT_THAT(store.CookieHeaderFor(MakeUrl("https://example.com/login"), now),
+              ::testing::HasSubstr("sid=good"));
+}
+
 TEST(CookieStoreTest, RejectsSameSiteNoneWithoutSecure)
 {
   TempProfile tp;
@@ -420,7 +479,8 @@ TEST(CookieStoreTest, SecureCookiesNotSentOverHttp)
   ASSERT_TRUE(store.Load().has_value());
   const int64_t now = 1'700'000'000;
 
-  ASSERT_TRUE(store.SetCookieFromHeader(MakeUrl("http://example.com/"), "s=1; Secure", now));
+  // Created over https (a Secure cookie cannot be set over http at all).
+  ASSERT_TRUE(store.SetCookieFromHeader(MakeUrl("https://example.com/"), "s=1; Secure", now));
   EXPECT_THAT(store.CookieHeaderFor(MakeUrl("http://example.com/"), now), Eq(""));
 }
 
