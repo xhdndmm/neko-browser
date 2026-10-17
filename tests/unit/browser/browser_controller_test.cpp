@@ -15,8 +15,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
-#include <cstdio>
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <gmock/gmock.h>
@@ -2711,12 +2709,9 @@ TEST(BrowserControllerTest, FetchesImageAssignedAfterTheInitialPass)
   fetch.Add("http://example.com/late.png",
             FakeFetcher::Route{200, {{"content-type", "image/png"}}, png});
 
-  std::fprintf(stderr, "[DEBUG-img] before controller\n");
   BrowserController controller(tp.path(), std::ref(fetch));
-  std::fprintf(stderr, "[DEBUG-img] controller built\n");
   controller.NewTab();
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
-  std::fprintf(stderr, "[DEBUG-img] navigated\n");
 
   Tab* tab = controller.ActiveTab();
   ASSERT_NE(tab, nullptr);
@@ -2725,14 +2720,9 @@ TEST(BrowserControllerTest, FetchesImageAssignedAfterTheInitialPass)
   // Drive the timer; the pump schedules the late fetch pass (the GUI does the
   // same from its 50ms timer).
   controller.PumpScriptTimersUntilQuiet();
-  std::fprintf(stderr, "[DEBUG-img] until-quiet done\n");
-  // [DEBUG-pump] TEMPORARY: phase markers from the controller's pump/pool so
-  // the ASan timeout names the phase it hung in.
-  ::setenv("NEKO_PUMP_TRACE", "1", 1);
   bool ready = false;
   for (int i = 0; i < 400 && !ready; ++i) {
     if (i % 50 == 0) {
-      std::fprintf(stderr, "[DEBUG-img] loop %d\n", i);
     }
     // The pass runs on the pool; pumps deliver the image events it queues.
     controller.PumpScriptTimers();
@@ -2743,9 +2733,7 @@ TEST(BrowserControllerTest, FetchesImageAssignedAfterTheInitialPass)
     // must take the DOM lock like the controller does.
     bool attached = false;
     {
-      std::fprintf(stderr, "[DEBUG-img] poll: waiting for dom lock\n");
       const std::unique_lock<std::recursive_mutex> dom_lock = tab->page->AcquireDomLock();
-      std::fprintf(stderr, "[DEBUG-img] poll: lock acquired\n");
       attached = !images.empty() && tab->page->Find(*images[0]) != nullptr;
     }
     ready = body != nullptr && attached && body->GetAttribute("data-late").value_or("") == "loaded";
@@ -2753,11 +2741,8 @@ TEST(BrowserControllerTest, FetchesImageAssignedAfterTheInitialPass)
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
   }
-  ::unsetenv("NEKO_PUMP_TRACE"); // [DEBUG-pump] keep later tests' logs clean
-  std::fprintf(stderr, "[DEBUG-img] loop done ready=%d\n", static_cast<int>(ready));
   EXPECT_TRUE(ready) << "late-assigned image never fetched/attached/load-dispatched";
   EXPECT_GE(fetch.RequestCount(), 2u); // document + late.png
-  std::fprintf(stderr, "[DEBUG-img] body end\n");
 }
 
 // Regression: frame production used to rasterize its bands on the SHARED
