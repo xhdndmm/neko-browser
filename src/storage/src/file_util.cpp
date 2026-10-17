@@ -10,6 +10,7 @@
 #include <direct.h>
 #include <windows.h>
 #else
+#include <atomic>
 #include <cerrno>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -113,9 +114,12 @@ base::Result<void> WriteFileAtomic(std::string_view path, std::string_view conte
   // attacker-placed symlink cannot be followed), fsync the data and then the
   // parent directory, and rename into place.  fsync before rename makes the
   // replace durable across power loss.
-  static unsigned int counter = 0;
-  const std::string tmp =
-      path_str + ".tmp." + std::to_string(::getpid()) + "." + std::to_string(counter++);
+  // Atomic: this runs on whichever thread persists state (browser worker,
+  // script callbacks), and a shared non-atomic counter++ is a data race
+  // (AGENTS.md §10) that can also collide two temp names.
+  static std::atomic<unsigned int> counter{0};
+  const std::string tmp = path_str + ".tmp." + std::to_string(::getpid()) + "." +
+                          std::to_string(counter.fetch_add(1, std::memory_order_relaxed));
   const int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
   if (fd < 0) {
     return base::Error::Io("cannot open '" + tmp + "' for writing: " + std::strerror(errno));
