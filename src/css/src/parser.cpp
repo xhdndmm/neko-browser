@@ -3,6 +3,7 @@
 #include "neko/css/tokenizer.h"
 
 #include <cctype>
+#include <cstdlib>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -356,11 +357,13 @@ bool ParseFontFaceBlock(std::string_view block, FontFaceRule* out)
       } else if (d.value == "normal") {
         out->weight = 400;
       } else {
-        try {
-          out->weight = std::stoi(d.value);
-        } catch (...) {
-          out->weight = 400;
-        }
+        // No exceptions in parsers (docs/development/coding-style.md):
+        // strtol + end pointer degrades to the normal weight without
+        // try/catch, keeping std::stoi's "leading integer wins" semantics.
+        const char* begin = d.value.c_str();
+        char* end = nullptr;
+        const long weight = std::strtol(begin, &end, 10);
+        out->weight = end != begin ? static_cast<int>(weight) : 400;
       }
     } else if (d.property == "font-style") {
       out->italic = d.value.find("italic") != std::string::npos ||
