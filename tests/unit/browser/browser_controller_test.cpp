@@ -2707,9 +2707,12 @@ TEST(BrowserControllerTest, FetchesImageAssignedAfterTheInitialPass)
   fetch.Add("http://example.com/late.png",
             FakeFetcher::Route{200, {{"content-type", "image/png"}}, png});
 
+  std::fprintf(stderr, "[DEBUG-img] before controller\n");
   BrowserController controller(tp.path(), std::ref(fetch));
+  std::fprintf(stderr, "[DEBUG-img] controller built\n");
   controller.NewTab();
   ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  std::fprintf(stderr, "[DEBUG-img] navigated\n");
 
   Tab* tab = controller.ActiveTab();
   ASSERT_NE(tab, nullptr);
@@ -2718,8 +2721,12 @@ TEST(BrowserControllerTest, FetchesImageAssignedAfterTheInitialPass)
   // Drive the timer; the pump schedules the late fetch pass (the GUI does the
   // same from its 50ms timer).
   controller.PumpScriptTimersUntilQuiet();
+  std::fprintf(stderr, "[DEBUG-img] until-quiet done\n");
   bool ready = false;
   for (int i = 0; i < 400 && !ready; ++i) {
+    if (i % 50 == 0) {
+      std::fprintf(stderr, "[DEBUG-img] loop %d\n", i);
+    }
     // The pass runs on the pool; pumps deliver the image events it queues.
     controller.PumpScriptTimers();
     dom::Element* body = dom::QuerySelector(*tab->page->document(), "body");
@@ -2737,8 +2744,10 @@ TEST(BrowserControllerTest, FetchesImageAssignedAfterTheInitialPass)
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
   }
+  std::fprintf(stderr, "[DEBUG-img] loop done ready=%d\n", (int)ready);
   EXPECT_TRUE(ready) << "late-assigned image never fetched/attached/load-dispatched";
   EXPECT_GE(fetch.RequestCount(), 2u); // document + late.png
+  std::fprintf(stderr, "[DEBUG-img] body end\n");
 }
 
 // The GUI lazy-loading loop end to end: an IntersectionObserver observes an
