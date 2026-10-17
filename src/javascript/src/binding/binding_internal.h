@@ -170,6 +170,16 @@ std::unique_ptr<dom::Node> CloneNodeImpl(const dom::Node& source, bool deep);
 // InvalidNodeTypeError, etc. rather than a plain TypeError.
 JSValue ThrowDomException(JSContext* ctx, std::string_view name, std::string_view message);
 
+// CORS (Fetch §4.1): a cross-origin response may only be exposed when it
+// grants access via Access-Control-Allow-Origin ("*" or the page's own
+// origin).  Same-origin responses pass unconditionally.  Returns an error
+// (a network error in fetch terms) when the response may not be read.
+// Preflight (§4.2) and Access-Control-Expose-Headers filtering are NOT
+// IMPLEMENTED -- documented in the compatibility matrix.
+base::Result<void> CheckCorsAccess(const std::string& page_url,
+                                   const std::string& request_url,
+                                   const FetchResponse& response);
+
 // ---------------------------------------------------------------------------
 // Inline style attribute helpers (backing CSSStyleDeclaration); defined in
 // style_binding.cpp.

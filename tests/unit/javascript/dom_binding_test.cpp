@@ -2702,6 +2702,55 @@ TEST_F(DomBinderTest, FormDataProvidesEntriesAndStringValues)
             "function|updated|true|tag=updated,mode=test||false");
 }
 
+// CORS (Fetch §4.1): a cross-origin response may only be read when it grants
+// access via Access-Control-Allow-Origin ("*" or the page's own origin).
+// Same-origin reads need no grant.
+TEST_F(DomBinderTest, FetchEnforcesCorsOnCrossOriginResponses)
+{
+  PageApis apis;
+  apis.location_href = []() { return "https://www.example.com/"; };
+  apis.resolve_url = [](const std::string& raw) { return raw; };
+  std::vector<std::pair<std::string, std::string>> headers;
+  apis.fetch = [&headers](const std::string& url) -> base::Result<FetchResponse> {
+    FetchResponse response;
+    response.status = 200;
+    response.final_url = url;
+    response.headers = headers;
+    response.body = "secret";
+    return base::Ok(std::move(response));
+  };
+  DomBinder binder(*document_, apis);
+
+  const auto fetch_resolves = [&](const std::string& url) {
+    (void)binder.Evaluate("window._done = false; window._ok = false;"
+                          "fetch('" +
+                          url +
+                          "').then(function(r){ window._ok = true; window._done = true; },"
+                          "function(){ window._ok = false; window._done = true; });");
+    auto done = binder.Evaluate("window._done");
+    if (!done.has_value() || !done.value().ToBoolean().value_or(false)) {
+      return false;
+    }
+    auto ok = binder.Evaluate("window._ok");
+    return ok.has_value() && ok.value().ToBoolean().value_or(false);
+  };
+
+  // Same-origin: no grant required.
+  headers.clear();
+  EXPECT_TRUE(fetch_resolves("https://www.example.com/data"));
+  // Cross-origin without a grant: network error.
+  EXPECT_FALSE(fetch_resolves("https://other.test/data"));
+  // "*": any origin may read.
+  headers = {{"access-control-allow-origin", "*"}};
+  EXPECT_TRUE(fetch_resolves("https://other.test/data"));
+  // Exactly the page's origin.
+  headers = {{"access-control-allow-origin", "https://www.example.com"}};
+  EXPECT_TRUE(fetch_resolves("https://other.test/data"));
+  // A grant to someone else is not a grant to us.
+  headers = {{"access-control-allow-origin", "https://evil.test"}};
+  EXPECT_FALSE(fetch_resolves("https://other.test/data"));
+}
+
 TEST_F(DomBinderTest, FetchResolvesResponseAndBody)
 {
   PageApis apis;

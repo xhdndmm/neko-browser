@@ -428,6 +428,13 @@ JSValue JsFetch(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* a
   if (!response.has_value()) {
     return RejectPromise(ctx, "Network error: " + response.error().message());
   }
+  // CORS (Fetch §4.1): a cross-origin response must grant access before the
+  // page may read it; a failed check rejects the promise with a network
+  // error, exactly like a browser.
+  const base::Result<void> cors = CheckCorsAccess(impl->document_url, url, response.value());
+  if (!cors.has_value()) {
+    return RejectPromise(ctx, "Network error: " + cors.error().message());
+  }
   const FetchResponse& r = response.value();
 
   return ResolvePromise(ctx, MakeResponse(ctx, r, url));

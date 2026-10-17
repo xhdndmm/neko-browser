@@ -245,8 +245,17 @@ JSValue XhrSend(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* a
       return JS_EXCEPTION;
     }
   }
-  const base::Result<FetchResponse> response =
+  base::Result<FetchResponse> response =
       w->impl->apis.xhr_request(w->url, w->method, w->request_headers, body);
+  // CORS (Fetch §4.1): a cross-origin response must grant access before XHR
+  // may read it; a failed check is a network error.
+  if (response.has_value()) {
+    const base::Result<void> cors =
+        CheckCorsAccess(w->impl->document_url, w->url, response.value());
+    if (!cors.has_value()) {
+      response = base::Err(cors.error());
+    }
+  }
   if (w->async_requested) {
     // Async mode (the default): send() starts the request and returns;
     // the DONE transition and the readystatechange/load|error events are

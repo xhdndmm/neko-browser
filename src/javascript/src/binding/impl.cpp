@@ -11,6 +11,7 @@
 #include "neko/dom/element.h"
 #include "neko/dom/node.h"
 #include "neko/javascript/script_engine_internal.h"
+#include "neko/security/origin.h"
 
 #include "binding_internal.h"
 
@@ -325,6 +326,37 @@ std::unique_ptr<dom::Node> CloneNodeImpl(const dom::Node& source, bool deep)
 // Throws a DOMException with the given WebIDL exception name (DOM spec §4.4,
 // WebIDL §3.5).  DOM tree operations report NotFoundError, HierarchyRequestError,
 // InvalidNodeTypeError, etc. rather than a plain TypeError.
+base::Result<void> CheckCorsAccess(const std::string& page_url,
+                                   const std::string& request_url,
+                                   const FetchResponse& response)
+{
+  const base::Result<url::Url> page = url::Url::Parse(page_url);
+  const base::Result<url::Url> request = url::Url::Parse(request_url);
+  if (!page.has_value() || !request.has_value()) {
+    return base::Ok(); // unparseable: nothing meaningful to compare
+  }
+  const security::Origin page_origin = security::Origin::FromUrl(page.value());
+  const security::Origin request_origin = security::Origin::FromUrl(request.value());
+  if (page_origin.IsSameOrigin(request_origin)) {
+    return base::Ok(); // same-origin reads need no CORS grant
+  }
+  // Cross-origin: the response must grant access (Fetch §4.1 "CORS check").
+  // With credentials modeled as always-on in this engine, "*" is treated as
+  // granting (Access-Control-Allow-Credentials is NOT IMPLEMENTED; the
+  // matrix discloses it).
+  std::string allow;
+  for (const auto& [name, value] : response.headers) {
+    if (ToLower(name) == "access-control-allow-origin") {
+      allow = value;
+    }
+  }
+  if (allow == "*" || allow == page_origin.Serialize()) {
+    return base::Ok();
+  }
+  return base::Err(
+      base::Error::Io("CORS: response has no Access-Control-Allow-Origin for this origin"));
+}
+
 JSValue ThrowDomException(JSContext* ctx, std::string_view name, std::string_view message)
 {
   JSValue err = JS_NewError(ctx);
@@ -427,6 +459,12 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
       const base::Result<FetchResponse> response = this->apis.fetch(url);
       if (!response.has_value()) {
         return base::Err(response.error());
+      }
+      // Module scripts are fetched with CORS semantics (Fetch §4.1): a
+      // cross-origin module must grant access before it may be evaluated.
+      const base::Result<void> cors = CheckCorsAccess(document_url, url, response.value());
+      if (!cors.has_value()) {
+        return base::Err(cors.error());
       }
       if (response.value().status >= 400) {
         return base::Err(base::Error::Javascript("HTTP " + std::to_string(response.value().status) +
