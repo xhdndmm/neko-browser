@@ -2,6 +2,7 @@
 
 #include "neko/security/origin.h"
 #include "neko/security/public_suffix.h"
+#include "neko/security/site.h"
 #include "neko/url/url.h"
 
 #include <gtest/gtest.h>
@@ -134,6 +135,66 @@ TEST(PublicSuffixTest, Normalization)
   // ASCII case folding and one trailing dot.
   EXPECT_EQ(RegistrableDomain("WWW.EXAMPLE.COM."), "example.com");
   EXPECT_TRUE(IsPublicSuffix("CO.UK."));
+}
+
+// ---------------------------------------------------------------------------
+// Site for cookies (RFC 6265bis §5.2).
+// ---------------------------------------------------------------------------
+
+namespace {
+
+base::Result<url::Url> ParseUrl(const char* text)
+{
+  return url::Url::Parse(text);
+}
+
+} // namespace
+
+TEST(SiteForCookiesTest, RegistrableDomainAndSubdomainsShareASite)
+{
+  const url::Url page = ParseUrl("https://www.example.com/a").value();
+  const url::Url api = ParseUrl("https://api.example.com/b").value();
+  EXPECT_EQ(SiteForCookies(page), "https://example.com");
+  EXPECT_TRUE(IsSameSiteForCookies(page, api));
+  EXPECT_FALSE(IsSameSiteForCookies(page, ParseUrl("https://example.co.uk/").value()));
+  EXPECT_FALSE(IsSameSiteForCookies(page, ParseUrl("https://other.com/").value()));
+}
+
+TEST(SiteForCookiesTest, HttpAndHttpsAreDifferentSites)
+{
+  // Unlike the schemelessly-same-site notion, the cookie site keeps http and
+  // https apart.
+  EXPECT_FALSE(IsSameSiteForCookies(ParseUrl("http://example.com/").value(),
+                                    ParseUrl("https://example.com/").value()));
+}
+
+TEST(SiteForCookiesTest, LocalhostIsPotentiallyTrustworthy)
+{
+  EXPECT_EQ(SiteForCookies(ParseUrl("http://localhost:8000/").value()), "https://localhost");
+  EXPECT_TRUE(IsSameSiteForCookies(ParseUrl("http://localhost:8000/").value(),
+                                   ParseUrl("https://localhost/").value()));
+  // ...but an ordinary http origin is not.
+  EXPECT_EQ(SiteForCookies(ParseUrl("http://example.com/").value()), "http://example.com");
+}
+
+TEST(SiteForCookiesTest, IpAddressesAndPublicSuffixes)
+{
+  EXPECT_EQ(SiteForCookies(ParseUrl("https://192.0.2.10/").value()), "https://192.0.2.10");
+  EXPECT_FALSE(IsSameSiteForCookies(ParseUrl("https://192.0.2.10/").value(),
+                                    ParseUrl("https://192.0.2.11/").value()));
+  // Two different sites under the same public suffix are not the same site.
+  EXPECT_FALSE(IsSameSiteForCookies(ParseUrl("https://a.co.uk/").value(),
+                                    ParseUrl("https://b.co.uk/").value()));
+  // Private-section suffixes scope sites too.
+  EXPECT_FALSE(IsSameSiteForCookies(ParseUrl("https://x.blogspot.com/").value(),
+                                    ParseUrl("https://y.blogspot.com/").value()));
+}
+
+TEST(SiteForCookiesTest, OpaqueSchemesHaveNoSite)
+{
+  EXPECT_EQ(SiteForCookies(ParseUrl("data:text/plain,hi").value()), "");
+  EXPECT_FALSE(IsSameSiteForCookies(ParseUrl("data:text/plain,hi").value(),
+                                    ParseUrl("data:text/plain,hi").value()));
 }
 
 } // namespace
