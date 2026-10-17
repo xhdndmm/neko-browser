@@ -19,7 +19,8 @@ enum class NodeType
   kElement,
   kText,
   kComment,
-  kDocumentFragment
+  kDocumentFragment,
+  kDocumentType
 };
 
 // Lightweight view over a node's children, exposing raw Node* pointers.

@@ -214,6 +214,26 @@ std::string Comment::ToString() const
   return "<!--" + data_ + "-->";
 }
 
+DocumentType::DocumentType(std::string name, std::string public_id, std::string system_id)
+    : Node(NodeType::kDocumentType), name_(std::move(name)), public_id_(std::move(public_id)),
+      system_id_(std::move(system_id))
+{}
+
+std::string DocumentType::ToString() const
+{
+  std::string out = "<!DOCTYPE " + name_;
+  if (!public_id_.empty()) {
+    out += " PUBLIC \"" + public_id_ + "\"";
+    if (!system_id_.empty()) {
+      out += " \"" + system_id_ + "\"";
+    }
+  } else if (!system_id_.empty()) {
+    out += " SYSTEM \"" + system_id_ + "\"";
+  }
+  out += ">";
+  return out;
+}
+
 DocumentFragment::DocumentFragment() : Node(NodeType::kDocumentFragment) {}
 
 Document::Document() : Node(NodeType::kDocument) {}

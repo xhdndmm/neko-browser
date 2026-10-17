@@ -583,9 +583,14 @@ TEST_F(DomBinderTest, SvgElementUsesDatasetAccessor)
 
 TEST_F(DomBinderTest, DocumentDoctypeUsesReadonlyAccessor)
 {
+  // The fixture document starts with <!doctype html>, so doctype is a real
+  // DocumentType node (it used to be a permanent null stub).
   EXPECT_TRUE(EvalBool(
       "(function(){ var descriptor = Object.getOwnPropertyDescriptor("
-      "Document.prototype, 'doctype'); return document.doctype === null "
+      "Document.prototype, 'doctype'); return document.doctype !== null "
+      "    && document.doctype.nodeType === 10 "
+      "    && document.doctype.name === 'html' "
+      "    && document.doctype.nodeName === 'html' "
       "    && typeof descriptor.get === 'function' && descriptor.set === undefined; })()"));
 }
 

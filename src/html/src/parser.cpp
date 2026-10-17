@@ -960,8 +960,11 @@ void Parser::ProcessToken(Token token)
   switch (token.type) {
   case TokenType::kDoctype:
     // A DOCTYPE token is only processed in the "initial" insertion mode;
-    // anywhere else it is a parse error and is ignored (13.2.6.4).
+    // anywhere else it is a parse error and is ignored (13.2.6.4).  In
+    // "initial" it inserts a DocumentType node (13.2.6.4.1), which
+    // document.doctype exposes.
     if (mode_ == Mode::kInitial) {
+      AppendNode(std::make_unique<dom::DocumentType>(token.name, token.public_id, token.system_id));
       mode_ = Mode::kBeforeHtml;
     }
     return;

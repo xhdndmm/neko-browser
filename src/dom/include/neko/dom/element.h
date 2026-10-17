@@ -144,6 +144,39 @@ private:
   std::string data_;
 };
 
+// A DOCTYPE node (WHATWG DOM §4.3.1 DocumentType): name/publicId/systemId.
+// The parser inserts one before the document element; it never has children.
+// Per spec its nodeName is its name (e.g. "html") and its textContent is
+// the empty string.
+class DocumentType : public Node
+{
+public:
+  DocumentType(std::string name, std::string public_id, std::string system_id);
+
+  const std::string& name() const
+  {
+    return name_;
+  }
+  const std::string& public_id() const
+  {
+    return public_id_;
+  }
+  const std::string& system_id() const
+  {
+    return system_id_;
+  }
+  std::string_view node_name() const override
+  {
+    return name_;
+  }
+  std::string ToString() const override;
+
+private:
+  std::string name_;
+  std::string public_id_;
+  std::string system_id_;
+};
+
 // Container without document semantics (used by the HTML parser).
 class DocumentFragment : public Node
 {

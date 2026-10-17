@@ -312,6 +312,9 @@ JSValue SecurityPolicyViolationEventConstructor(JSContext* ctx,
 
 // node_binding.cpp
 JSValue CharacterDataGetData(JSContext* ctx, JSValueConst this_val);
+JSValue DocumentTypeGetName(JSContext* ctx, JSValueConst this_val);
+JSValue DocumentTypeGetPublicId(JSContext* ctx, JSValueConst this_val);
+JSValue DocumentTypeGetSystemId(JSContext* ctx, JSValueConst this_val);
 JSValue CharacterDataSetData(JSContext* ctx, JSValueConst this_val, JSValueConst value);
 JSValue NodeListItem(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue NodeListLength(JSContext* ctx, JSValueConst this_val);

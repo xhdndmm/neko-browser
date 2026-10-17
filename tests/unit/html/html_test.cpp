@@ -44,6 +44,29 @@ TEST(HtmlTest, FullDocumentStructure)
   EXPECT_EQ(p->TextContent(), "Hello");
 }
 
+// 13.2.6.4.1: a DOCTYPE in the initial insertion mode inserts a DocumentType
+// node before the document element (document.doctype in the DOM).
+TEST(HtmlTest, DoctypeInsertsDocumentTypeNode)
+{
+  auto doc = ParseDoc("<!DOCTYPE html><html><head></head><body></body></html>");
+  ASSERT_NE(doc->first_child(), nullptr);
+  ASSERT_EQ(doc->first_child()->node_type(), dom::NodeType::kDocumentType);
+  const auto* doctype = static_cast<const dom::DocumentType*>(doc->first_child());
+  EXPECT_EQ(doctype->name(), "html");
+  EXPECT_EQ(doctype->public_id(), "");
+  EXPECT_EQ(doctype->system_id(), "");
+  EXPECT_EQ(doctype->node_name(), "html");
+  EXPECT_EQ(doctype->ToString(), "<!DOCTYPE html>");
+  // The document element follows it in the document's child list.
+  std::vector<dom::NodeType> kinds;
+  for (const dom::Node* child : doc->ChildNodes()) {
+    kinds.push_back(child->node_type());
+  }
+  ASSERT_EQ(kinds.size(), 2u);
+  EXPECT_EQ(kinds[0], dom::NodeType::kDocumentType);
+  EXPECT_EQ(kinds[1], dom::NodeType::kElement);
+}
+
 TEST(HtmlTest, ImpliedHtmlHeadBody)
 {
   auto doc = ParseDoc("hello");

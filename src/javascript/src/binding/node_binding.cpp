@@ -691,6 +691,38 @@ JSValue CharacterDataSetData(JSContext* ctx, JSValueConst this_val, JSValueConst
   return JS_UNDEFINED;
 }
 
+// DocumentType.name / .publicId / .systemId (DOM §4.3.1): the three
+// identifiers the HTML parser captured from the DOCTYPE.
+JSValue DocumentTypeGetName(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Node* node = UnwrapNode(ctx, this_val);
+  if (node == nullptr || node->node_type() != dom::NodeType::kDocumentType) {
+    return JS_ThrowTypeError(ctx, "not a DocumentType node");
+  }
+  const auto* doctype = static_cast<const dom::DocumentType*>(node);
+  return JS_NewStringLen(ctx, doctype->name().data(), doctype->name().size());
+}
+
+JSValue DocumentTypeGetPublicId(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Node* node = UnwrapNode(ctx, this_val);
+  if (node == nullptr || node->node_type() != dom::NodeType::kDocumentType) {
+    return JS_ThrowTypeError(ctx, "not a DocumentType node");
+  }
+  const auto* doctype = static_cast<const dom::DocumentType*>(node);
+  return JS_NewStringLen(ctx, doctype->public_id().data(), doctype->public_id().size());
+}
+
+JSValue DocumentTypeGetSystemId(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Node* node = UnwrapNode(ctx, this_val);
+  if (node == nullptr || node->node_type() != dom::NodeType::kDocumentType) {
+    return JS_ThrowTypeError(ctx, "not a DocumentType node");
+  }
+  const auto* doctype = static_cast<const dom::DocumentType*>(node);
+  return JS_NewStringLen(ctx, doctype->system_id().data(), doctype->system_id().size());
+}
+
 JSValue NodeGetParentNode(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);

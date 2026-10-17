@@ -101,9 +101,17 @@ JSValue DocGetDocumentElement(JSContext* ctx, JSValueConst this_val)
 
 JSValue DocGetDoctype(JSContext* ctx, JSValueConst this_val)
 {
+  Impl* impl = ImplFor(ctx, this_val);
   dom::Node* node = UnwrapNode(ctx, this_val);
-  if (node == nullptr || node->node_type() != dom::NodeType::kDocument) {
+  if (impl == nullptr || node == nullptr || node->node_type() != dom::NodeType::kDocument) {
     return JS_ThrowTypeError(ctx, "not a document");
+  }
+  // DOM §4.2: the DocumentType child, or null when the parser never saw a
+  // DOCTYPE (this used to be a null stub -- the DOM had no DocumentType).
+  for (dom::Node* child : node->ChildNodes()) {
+    if (child->node_type() == dom::NodeType::kDocumentType) {
+      return impl->WrapNode(child);
+    }
   }
   return JS_NULL;
 }
@@ -430,6 +438,8 @@ uint32_t NodeShowMask(dom::NodeType type)
     return 0x100;
   case dom::NodeType::kDocumentFragment:
     return 0x400;
+  case dom::NodeType::kDocumentType:
+    return 0x10; // DOCUMENT_TYPE_NODE in the whatToShow bitmask (DOM §2.8)
   }
   return 0;
 }

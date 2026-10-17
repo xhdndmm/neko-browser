@@ -190,6 +190,8 @@ int32_t NodeTypeNumber(dom::NodeType type)
     return 8;
   case dom::NodeType::kDocumentFragment:
     return 11;
+  case dom::NodeType::kDocumentType:
+    return 10;
   }
   return 0;
 }
@@ -214,6 +216,9 @@ std::string NodeNameOf(const dom::Node& node)
     return "#comment";
   case dom::NodeType::kDocumentFragment:
     return "#document-fragment";
+  case dom::NodeType::kDocumentType:
+    // DOM §4.3.1: nodeName of a DocumentType is its name.
+    return static_cast<const dom::DocumentType&>(node).name();
   }
   return "";
 }
@@ -298,6 +303,10 @@ std::unique_ptr<dom::Node> CloneNodeImpl(const dom::Node& source, bool deep)
     return std::make_unique<dom::Text>(static_cast<const dom::Text&>(source).data());
   case dom::NodeType::kComment:
     return std::make_unique<dom::Comment>(static_cast<const dom::Comment&>(source).data());
+  case dom::NodeType::kDocumentType: {
+    const auto& dt = static_cast<const dom::DocumentType&>(source);
+    return std::make_unique<dom::DocumentType>(dt.name(), dt.public_id(), dt.system_id());
+  }
   case dom::NodeType::kDocumentFragment: {
     auto clone = std::make_unique<dom::DocumentFragment>();
     if (deep) {
@@ -678,6 +687,12 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
                     fragment_proto,
                     "querySelectorAll",
                     JS_NewCFunction(ctx, ElementQuerySelectorAll, "querySelectorAll", 1));
+  // DocumentType.name/publicId/systemId (DOM §4.3.1).
+  DefineGetter(ctx, document_type_proto, "name", MakeGetter(ctx, "name", DocumentTypeGetName));
+  DefineGetter(
+      ctx, document_type_proto, "publicId", MakeGetter(ctx, "publicId", DocumentTypeGetPublicId));
+  DefineGetter(
+      ctx, document_type_proto, "systemId", MakeGetter(ctx, "systemId", DocumentTypeGetSystemId));
   DefineInterface(ctx, global, "CharacterData", character_data_proto);
   DefineInterface(ctx, global, "DocumentType", document_type_proto);
   DefineInterface(ctx, global, "Text", text_proto);
@@ -1718,6 +1733,8 @@ JSValue Impl::PrototypeFor(const dom::Node* node) const
     return comment_proto;
   case dom::NodeType::kDocumentFragment:
     return fragment_proto;
+  case dom::NodeType::kDocumentType:
+    return document_type_proto;
   }
   return node_proto;
 }
