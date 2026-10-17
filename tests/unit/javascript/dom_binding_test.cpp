@@ -1367,6 +1367,34 @@ TEST_F(DomBinderTest, ScriptCannotCreateOverdeepTree)
                        "catch (e) { return e.name === 'HierarchyRequestError'; } })()"));
 }
 
+// WHATWG pre-insert adopts the child: inserting a node that already has a
+// parent MOVES it (removes it from the old parent first).  The C++ DOM API
+// is unique_ptr-based and rejects parented nodes by design; the binding
+// performs the adoption, which is what JS observes.
+TEST_F(DomBinderTest, AppendChildMovesAParentedNode)
+{
+  EXPECT_TRUE(EvalBool("(function(){"
+                       "  var a = document.createElement('div');"
+                       "  var b = document.createElement('div');"
+                       "  var n = document.createElement('span');"
+                       "  a.appendChild(n);"
+                       "  b.appendChild(n);"
+                       "  return a.childNodes.length === 0 &&"
+                       "         b.childNodes.length === 1 &&"
+                       "         n.parentNode === b;"
+                       "})()"));
+  // Moving within the same parent reorders (appendChild to the end).
+  EXPECT_TRUE(EvalBool("(function(){"
+                       "  var p = document.createElement('div');"
+                       "  var x = document.createElement('span');"
+                       "  var y = document.createElement('span');"
+                       "  p.appendChild(x); p.appendChild(y);"
+                       "  p.appendChild(x);"
+                       "  return p.childNodes.length === 2 &&"
+                       "         p.childNodes[0] === y && p.childNodes[1] === x;"
+                       "})()"));
+}
+
 TEST_F(DomBinderTest, CreateElementAppendAndInsert)
 {
   EXPECT_TRUE(EvalBool("(function(){ var d = document; "
