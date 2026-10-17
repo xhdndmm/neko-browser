@@ -39,18 +39,15 @@ struct Origin
     return opaque;
   }
 
-  // The same-origin test (HTML standard, "same origin").
+  // The same-origin test (HTML standard, "same origin").  This is also the
+  // equality relation of the type: there is deliberately no operator==/!=,
+  // because an == that returned true for two opaque origins would contradict
+  // the model above (every opaque origin is unique).  Compare with this.
   [[nodiscard]] bool IsSameOrigin(const Origin& other) const;
 
   // Serialized origin, e.g. "https://example.com" or "https://example.com:8443".
   // Opaque origins serialize as "null" (matching the HTML standard).
   [[nodiscard]] std::string Serialize() const;
-
-  bool operator==(const Origin& other) const;
-  bool operator!=(const Origin& other) const
-  {
-    return !(*this == other);
-  }
 };
 
 } // namespace neko::security

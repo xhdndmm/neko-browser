@@ -52,10 +52,4 @@ std::string Origin::Serialize() const
   return out;
 }
 
-bool Origin::operator==(const Origin& other) const
-{
-  return opaque == other.opaque && scheme == other.scheme && host == other.host &&
-         port == other.port;
-}
-
 } // namespace neko::security
