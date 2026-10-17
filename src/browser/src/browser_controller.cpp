@@ -26,6 +26,8 @@
 #include <cctype>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <future>
@@ -37,6 +39,18 @@
 #include <vector>
 
 namespace neko::browser {
+
+// [DEBUG-pump] TEMPORARY hang localization (see the ASan CI leg): phase
+// markers to stderr, enabled only when NEKO_PUMP_TRACE is set in the
+// environment so ordinary runs and CI logs stay clean.  Removed once the
+// FetchesImageAssignedAfterTheInitialPass timeout is understood.
+bool PumpTraceEnabled()
+{
+  // Read every call: the test unsets the variable after the loop, and a
+  // process-wide cache would keep tracing every later test in the binary.
+  return std::getenv("NEKO_PUMP_TRACE") != nullptr;
+}
+
 namespace {
 
 std::string_view Trim(std::string_view s)
@@ -1668,11 +1682,26 @@ void BrowserController::SchedulePendingImageFetch(Tab& tab)
       [this](const url::Url& resource_url, std::string_view, const RequestHeaders& extra_headers) {
         return fetch_(resource_url, CookieHeader(resource_url, NowUnix()), extra_headers);
       };
+  if (PumpTraceEnabled()) {
+    std::fprintf(stderr, "[DEBUG-pump] pool: task posted\n");
+  }
   pool_->Post([state, page, base_url, fetch, pool = pool_.get()]() {
     do {
+      if (PumpTraceEnabled()) {
+        std::fprintf(stderr, "[DEBUG-pump] pool: pass start\n");
+      }
       FetchPageImages(*page, base_url, fetch, *pool);
+      if (PumpTraceEnabled()) {
+        std::fprintf(stderr, "[DEBUG-pump] pool: pass end\n");
+      }
     } while (state->again.exchange(false));
     state->in_flight.store(false);
+    if (PumpTraceEnabled()) {
+      std::fprintf(stderr,
+                   "[DEBUG-pump] pool: task done (again=%d reschedule=%d)\n",
+                   static_cast<int>(state->again.load()),
+                   static_cast<int>(state->reschedule.load()));
+    }
     // This pass ran on a pool thread while the Tab belongs to the worker
     // thread, so nothing here may touch Tab state.  The results are published
     // as atomics and applied by the worker's next pump
@@ -1960,13 +1989,22 @@ void BrowserController::PumpScriptTimers()
   // refresh included: all of it runs page scripts and mutates the document,
   // and the pool's subresource tasks take the same lock (ADR 0020).
   const std::shared_ptr<renderer::Page> page_lock_keepalive = tab->page;
+  if (PumpTraceEnabled()) {
+    std::fprintf(stderr, "[DEBUG-pump] pump: enter (waiting for dom lock)\n");
+  }
   std::unique_lock<std::recursive_mutex> dom_lock;
   if (page_lock_keepalive != nullptr) {
     dom_lock = page_lock_keepalive->AcquireDomLock();
   }
+  if (PumpTraceEnabled()) {
+    std::fprintf(stderr, "[DEBUG-pump] pump: dom lock acquired\n");
+  }
   // Pick up what a finished pool-side late-image pass signalled (it must not
   // touch the Tab): repaint mark and follow-up pass.
   ApplyDeferredImageFetchSignals(*tab);
+  if (PumpTraceEnabled()) {
+    std::fprintf(stderr, "[DEBUG-pump] pump: deferred signals applied\n");
+  }
   // Images attached by the pool since the last pump fire their load/error
   // events first: page scripts often hang state (placeholder removal,
   // fallback swaps) off them, and any DOM they touch must land before the
@@ -1976,9 +2014,15 @@ void BrowserController::PumpScriptTimers()
   // no-op (the leftover DOM-dirty flag from an earlier operation must not be
   // turned into a version bump by this ambient check).
   const std::size_t image_events = FirePendingImageEvents(*tab);
+  if (PumpTraceEnabled()) {
+    std::fprintf(stderr, "[DEBUG-pump] pump: image events fired (%zu)\n", image_events);
+  }
   bool io_active = false;
   if (tab->script_runtime != nullptr && tab->page != nullptr) {
     io_active = tab->script_runtime->RefreshIntersectionObservers();
+    if (PumpTraceEnabled()) {
+      std::fprintf(stderr, "[DEBUG-pump] pump: io refreshed\n");
+    }
   }
   if ((image_events > 0 || io_active) && tab->script_runtime != nullptr && tab->page != nullptr) {
     const bool style_changed = ReflectScriptStyleMutations(*tab);
@@ -2017,7 +2061,13 @@ void BrowserController::PumpScriptTimers()
     }
     javascript::DomBinder::TurnBreakdown turn;
     const auto turn_start = std::chrono::steady_clock::now();
+    if (PumpTraceEnabled()) {
+      std::fprintf(stderr, "[DEBUG-pump] pump: running timers\n");
+    }
     const int pumped = tab->script_runtime->RunPendingTimers(&turn);
+    if (PumpTraceEnabled()) {
+      std::fprintf(stderr, "[DEBUG-pump] pump: timers done (%d)\n", pumped);
+    }
     {
       PumpStats turn_stats;
       AddPumpTurn(turn_stats,

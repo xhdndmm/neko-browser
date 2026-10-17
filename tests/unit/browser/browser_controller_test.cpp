@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <gmock/gmock.h>
@@ -2729,6 +2730,9 @@ TEST(BrowserControllerTest, FetchesImageAssignedAfterTheInitialPass)
   // same from its 50ms timer).
   controller.PumpScriptTimersUntilQuiet();
   std::fprintf(stderr, "[DEBUG-img] until-quiet done\n");
+  // [DEBUG-pump] TEMPORARY: phase markers from the controller's pump/pool so
+  // the ASan timeout names the phase it hung in.
+  ::setenv("NEKO_PUMP_TRACE", "1", 1);
   bool ready = false;
   for (int i = 0; i < 400 && !ready; ++i) {
     if (i % 50 == 0) {
@@ -2743,7 +2747,9 @@ TEST(BrowserControllerTest, FetchesImageAssignedAfterTheInitialPass)
     // must take the DOM lock like the controller does.
     bool attached = false;
     {
+      std::fprintf(stderr, "[DEBUG-img] poll: waiting for dom lock\n");
       const std::unique_lock<std::recursive_mutex> dom_lock = tab->page->AcquireDomLock();
+      std::fprintf(stderr, "[DEBUG-img] poll: lock acquired\n");
       attached = !images.empty() && tab->page->Find(*images[0]) != nullptr;
     }
     ready = body != nullptr && attached && body->GetAttribute("data-late").value_or("") == "loaded";
@@ -2751,6 +2757,7 @@ TEST(BrowserControllerTest, FetchesImageAssignedAfterTheInitialPass)
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
   }
+  ::unsetenv("NEKO_PUMP_TRACE"); // [DEBUG-pump] keep later tests' logs clean
   std::fprintf(stderr, "[DEBUG-img] loop done ready=%d\n", static_cast<int>(ready));
   EXPECT_TRUE(ready) << "late-assigned image never fetched/attached/load-dispatched";
   EXPECT_GE(fetch.RequestCount(), 2u); // document + late.png
