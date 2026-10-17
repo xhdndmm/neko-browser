@@ -292,31 +292,42 @@ Create abstractions when they become useful.
 
 # 7. Source Tree
 
-The preferred source organization is:
+The source organization is:
 
 ```text
 src/
-├── base/
-├── core/
+├── base/           # logging, Result/Status, strings, threads, encodings
+├── platform/       # OS primitives (fs/pipe/process/socket); the ONLY place
+│                   # Win32/POSIX calls live (see §11); per-OS sources in
+│                   # src/platform/src/{posix,windows}
 ├── url/
-├── network/
-├── html/
+├── network/        # DNS, TCP/TLS, HTTP/1.1, WebSocket
 ├── dom/
+├── html/
 ├── css/
 ├── style/
+├── graphics/       # font stack (FreeType + fallbacks)
 ├── layout/
 ├── paint/
-├── rendering/
-├── graphics/
-├── javascript/
-├── webapi/
-├── storage/
-├── security/
+├── compositor/     # software + GPU composition seams
+├── renderer/       # the Page: document -> DOM -> style -> layout -> frame
+├── image/          # PNG/JPEG/GIF/WebP/AVIF/SVG decoders
+├── media/          # audio/video decode (FFmpeg-backed)
+├── pdf/            # PDF parsing and page rendering
+├── javascript/     # QuickJS bridge + DOM bindings + the Web API bindings
+│                   # (the §6 "Web APIs" layer lives here; there is no
+                   # separate webapi/ module and no core/ module)
+├── storage/        # profile stores, cookies, IndexedDB
+├── security/       # Origin, PSL, CSP/CORS groundwork
 ├── ipc/
 ├── browser/
-├── ui/
-└── platform/
+└── ui/
 ```
+
+Earlier revisions of this tree listed `core/`, `webapi/` and `rendering/`;
+those directories never existed (Web APIs are part of `javascript/`, and the
+renderer module is spelled `renderer/`).  The tree above is the ground
+truth; keep it in sync when adding modules.
 
 Tests:
 

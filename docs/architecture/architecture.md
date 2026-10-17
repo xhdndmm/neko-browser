@@ -66,7 +66,7 @@ graph LR
 
 ## 4. 模块职责与边界
 
-### core / base（Phase 0 已落地）
+### base（Phase 0 已落地；早期文档称 core/，该目录从未存在）
 
 - 职责：日志、Error/Result 模型、字符串工具、版本、断言、后续的 Task/Event/Time/URI。
 - 不负责：任何与浏览器语义相关的逻辑。
@@ -115,7 +115,17 @@ graph LR
 - 图形抽象层：`Graphics Abstraction → {Software, OpenGL, Vulkan, Metal, Direct3D}`。
 - 核心渲染器不得直接绑定平台 API。
 
-### javascript / webapi（Phase 8–9）
+### platform（已落地）
+
+- 职责：OS 原语——`fs`（原子写/独占建/目录创建）、`pipe`（管道字节操作）、
+  `process`（子进程派生/等待/终止）、`socket`（Winsock/POSIX 套接字）、
+  `executable_path`（进程镜像路径）。每 OS 一个翻译单元（`src/{posix,windows}`）。
+- 职责边界：**Win32/POSIX 调用只允许出现在本模块**（AGENTS.md §11）；
+  引擎代码依赖 `neko::platform` 接口，不 include 任何平台头。
+- 现状：**Implemented**（fs/pipe/process/socket/executable_path 五组原语，
+  由 2026-10 §11 清理迁入；网络模块的 socket_platform 并入本模块）。
+
+### javascript（Phase 8–9；Web API 绑定层同居此模块，无独立 webapi/）
 
 - 架构预留：`JS Engine → {Parser, AST, Bytecode, VM, GC}` + Web IDL 绑定层。
 - 若早期接入第三方 JS 引擎（QuickJS/V8/JavaScriptCore），它只能充当 JS runtime，
