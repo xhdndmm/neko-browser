@@ -143,6 +143,22 @@ TEST(CssSelectorTest, TypeAndClassAndId)
   EXPECT_FALSE(MatchesSelector(*main, s4[0]));
 }
 
+// An escaped class selector (.con\\74 ent == .content; 0x74 is 't') matches
+// the decoded name -- the same escape decoding the tokenizer applies.
+TEST(CssSelectorTest, EscapedClassSelectorMatchesDecodedName)
+{
+  auto doc = MakeTree();
+  dom::Element* main = ById(*doc, "main");
+  ASSERT_NE(main, nullptr);
+
+  const std::vector<ComplexSelector> escaped = ParseSelectorList(".con\\74 ent");
+  ASSERT_EQ(escaped.size(), 1u);
+  EXPECT_TRUE(MatchesSelector(*main, escaped[0]));
+  const std::vector<ComplexSelector> wrong = ParseSelectorList(".con\\74 entx");
+  ASSERT_EQ(wrong.size(), 1u);
+  EXPECT_FALSE(MatchesSelector(*main, wrong[0]));
+}
+
 TEST(CssSelectorTest, AttributeSelectors)
 {
   auto doc = MakeTree();
@@ -553,6 +569,34 @@ TEST(CssTokenizerTest, BasicTokens)
   Tokenizer tokenizer("div.class { color: red; margin: 10px; }");
   const std::vector<CssToken> tokens = tokenizer.Tokenize();
   EXPECT_GE(tokens.size(), 12u);
+}
+
+// CSS Syntax §4.3.3/§4.3.4: escaped code points -- \ + 1-6 hex digits
+// (optional trailing whitespace) decodes to that code point, \ + any other
+// character is the character itself, in both identifiers and strings.
+TEST(CssTokenizerTest, EscapeSequencesInNamesAndStrings)
+{
+  // Hex escape in a name: 0x6f is 'o'; the trailing space belongs to the
+  // escape, so "f\\6f o" is the ident "foo".
+  Tokenizer ident("f\\6f o");
+  const std::vector<CssToken> ident_tokens = ident.Tokenize();
+  ASSERT_EQ(ident_tokens.size(), 2u); // ident + the EOF token
+  EXPECT_EQ(ident_tokens[0].type, CssTokenType::kIdent);
+  EXPECT_EQ(ident_tokens[0].text, "foo");
+
+  // Plain escape: \\* is a literal '*' in the name.
+  Tokenizer plain("a\\*b");
+  const std::vector<CssToken> plain_tokens = plain.Tokenize();
+  ASSERT_EQ(plain_tokens.size(), 2u);
+  EXPECT_EQ(plain_tokens[0].text, "a*b");
+
+  // Unicode escape in a string: 0x26 is '&'; the escape consumes its
+  // trailing whitespace, and an escaped quote is a literal quote.
+  Tokenizer str("\"a\\26 \\\"b\"");
+  const std::vector<CssToken> str_tokens = str.Tokenize();
+  ASSERT_EQ(str_tokens.size(), 2u);
+  EXPECT_EQ(str_tokens[0].type, CssTokenType::kString);
+  EXPECT_EQ(str_tokens[0].text, "a&\"b");
 }
 
 TEST(CssSerializeTest, StyleRuleRoundTrips)

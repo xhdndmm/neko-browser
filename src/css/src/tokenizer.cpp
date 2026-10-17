@@ -1,10 +1,17 @@
 #include "neko/css/tokenizer.h"
 
+#include "neko/base/utf8.h"
+
 #include <cstdlib>
 #include <string>
 
 namespace neko::css {
 namespace {
+
+bool IsHexDigit(char c)
+{
+  return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
 
 bool IsDigit(char c)
 {
@@ -74,12 +81,52 @@ CssToken Tokenizer::NextToken()
     return token;
   }
 
+  // CSS Syntax §4.3.3 "consume an escaped code point": entered with pos_
+  // just past the backslash.  \ + 1-6 hex digits (plus one optional
+  // trailing whitespace) is that code point; \ + anything else is the
+  // character itself; a trailing backslash is U+FFFD.
+  auto consume_escape = [&]() -> std::string {
+    if (pos_ >= input_.size()) {
+      return base::EncodeUtf8(0xFFFD);
+    }
+    if (IsHexDigit(input_[pos_])) {
+      std::string hex;
+      while (pos_ < input_.size() && hex.size() < 6 && IsHexDigit(input_[pos_])) {
+        hex.push_back(input_[pos_++]);
+      }
+      if (pos_ < input_.size() && IsWhitespace(input_[pos_])) {
+        ++pos_; // the whitespace is part of the escape, not the name
+      }
+      const char32_t code_point =
+          hex.empty() ? 0 : static_cast<char32_t>(std::strtoul(hex.c_str(), nullptr, 16));
+      // Code point 0 and invalid values decode to U+FFFD (§4.3.3).
+      return base::EncodeUtf8(code_point == 0 ? 0xFFFD : code_point);
+    }
+    return std::string(1, input_[pos_++]);
+  };
+
   auto consume_name = [&]() {
-    const std::size_t start = pos_;
-    while (pos_ < input_.size() && IsNameChar(input_[pos_])) {
+    // Ident sequences include escapes (§4.3.4): a valid escape contributes
+    // its decoded characters; a backslash before a newline (or at EOF) is an
+    // invalid escape and ends the name.
+    std::string out;
+    while (pos_ < input_.size()) {
+      const char ch = input_[pos_];
+      if (ch == '\\') {
+        if (pos_ + 1 >= input_.size() || input_[pos_ + 1] == '\n') {
+          break;
+        }
+        ++pos_; // step past the backslash
+        out += consume_escape();
+        continue;
+      }
+      if (!IsNameChar(ch)) {
+        break;
+      }
+      out.push_back(ch);
       ++pos_;
     }
-    return std::string(input_.substr(start, pos_ - start));
+    return out;
   };
 
   auto consume_number = [&]() -> CssToken {
@@ -152,11 +199,12 @@ CssToken Tokenizer::NextToken()
       if (ch == quote) {
         return token;
       }
-      if (ch == '\\' && pos_ < input_.size()) {
-        const char next = input_[pos_++];
-        if (next != '\n') {
-          token.text.push_back(next);
+      if (ch == '\\') {
+        if (pos_ < input_.size() && input_[pos_] == '\n') {
+          ++pos_; // line continuation produces nothing
+          continue;
         }
+        token.text += consume_escape();
         continue;
       }
       token.text.push_back(ch);

@@ -1,7 +1,9 @@
 #include "neko/css/selector.h"
 
+#include "neko/base/utf8.h"
 #include "neko/dom/query.h"
 
+#include <cstdlib>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -58,6 +60,59 @@ std::vector<std::string_view> SplitOnCommas(std::string_view text)
   return parts;
 }
 
+// CSS Syntax §4.3.3 "consume an escaped code point": |i| sits just past the
+// backslash.  \ + 1-6 hex digits (plus one optional trailing whitespace) is
+// that code point; \ + anything else is the character itself.
+bool IsHexDigit(char c)
+{
+  return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+
+std::string ConsumeEscape(std::string_view text, std::size_t& i)
+{
+  if (i >= text.size()) {
+    return base::EncodeUtf8(0xFFFD);
+  }
+  if (IsHexDigit(text[i])) {
+    std::string hex;
+    while (i < text.size() && hex.size() < 6 && IsHexDigit(text[i])) {
+      hex.push_back(text[i++]);
+    }
+    if (i < text.size() && IsWhitespace(text[i])) {
+      ++i;
+    }
+    const char32_t code_point =
+        hex.empty() ? 0 : static_cast<char32_t>(std::strtoul(hex.c_str(), nullptr, 16));
+    return base::EncodeUtf8(code_point == 0 ? 0xFFFD : code_point);
+  }
+  return std::string(1, text[i++]);
+}
+
+// An ident sequence (§4.3.4) starting at |i|: name characters and escapes,
+// decoded.  A backslash before a newline (or at EOF) is invalid and ends the
+// name.
+std::string ConsumeName(std::string_view text, std::size_t& i)
+{
+  std::string out;
+  while (i < text.size()) {
+    const char c = text[i];
+    if (c == '\\') {
+      if (i + 1 >= text.size() || text[i + 1] == '\n') {
+        break;
+      }
+      ++i;
+      out += ConsumeEscape(text, i);
+      continue;
+    }
+    if (!IsNameChar(c)) {
+      break;
+    }
+    out.push_back(c);
+    ++i;
+  }
+  return out;
+}
+
 bool ParseCompound(std::string_view text, CompoundSelector& out);
 bool CompoundMatches(const dom::Element& element,
                      const CompoundSelector& compound,
@@ -82,23 +137,19 @@ bool ParseCompound(std::string_view text, CompoundSelector& out)
       ++i;
     } else if (c == '#') {
       std::size_t j = i + 1;
-      while (j < text.size() && IsNameChar(text[j])) {
-        ++j;
-      }
-      if (j == i + 1 || out.id.has_value()) {
+      std::string name = ConsumeName(text, j);
+      if (name.empty() || out.id.has_value()) {
         return false;
       }
-      out.id = std::string(text.substr(i + 1, j - i - 1));
+      out.id = std::move(name);
       i = j;
     } else if (c == '.') {
       std::size_t j = i + 1;
-      while (j < text.size() && IsNameChar(text[j])) {
-        ++j;
-      }
-      if (j == i + 1) {
+      std::string name = ConsumeName(text, j);
+      if (name.empty()) {
         return false;
       }
-      out.classes.emplace_back(text.substr(i + 1, j - i - 1));
+      out.classes.push_back(std::move(name));
       i = j;
     } else if (c == '[') {
       // attribute selector: [name], [name op "value"]
@@ -164,13 +215,11 @@ bool ParseCompound(std::string_view text, CompoundSelector& out)
       i = j + 1;
     } else if (c == ':') {
       std::size_t j = i + 1;
-      while (j < text.size() && IsNameChar(text[j])) {
-        ++j;
-      }
-      if (j == i + 1) {
+      std::string pseudo_name = ConsumeName(text, j);
+      if (pseudo_name.empty()) {
         return false;
       }
-      std::string pseudo(text.substr(i + 1, j - i - 1));
+      std::string pseudo = pseudo_name;
       if (j < text.size() && text[j] == '(') {
         std::size_t k = j + 1;
         while (k < text.size() && text[k] != ')') {
@@ -185,15 +234,13 @@ bool ParseCompound(std::string_view text, CompoundSelector& out)
         i = j;
       }
       out.pseudo_classes.push_back(std::move(pseudo));
-    } else if (IsNameStart(c)) {
+    } else if (IsNameStart(c) || c == '\\') {
       std::size_t j = i;
-      while (j < text.size() && IsNameChar(text[j])) {
-        ++j;
-      }
+      std::string name = ConsumeName(text, j);
       if (out.tag.has_value()) {
         return false;
       }
-      out.tag = ToLower(text.substr(i, j - i));
+      out.tag = ToLower(name);
       i = j;
     } else {
       return false;
@@ -225,6 +272,23 @@ bool ParseComplex(std::string_view text, ComplexSelector& out)
         ++depth;
       } else if (ch == ')' && depth > 0) {
         --depth;
+      }
+      if (ch == '\\') {
+        // An escape belongs to the compound being scanned: step over the
+        // backslash and the escaped code point.  Its optional trailing
+        // whitespace is part of the escape, not a descendant combinator.
+        ++i;
+        if (i < text.size() && IsHexDigit(text[i])) {
+          while (i < text.size() && IsHexDigit(text[i])) {
+            ++i;
+          }
+          if (i < text.size() && IsWhitespace(text[i])) {
+            ++i;
+          }
+        } else if (i < text.size()) {
+          ++i;
+        }
+        continue;
       }
       // Combinator characters only act as combinators outside brackets and
       // parentheses (e.g. the '+' inside :nth-child(2n+1)).
