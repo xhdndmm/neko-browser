@@ -147,28 +147,28 @@
       "name": "debug",
       "configurePreset": "debug",
       "output": { "outputOnFailure": true },
-      "execution": { "noTestsAction": "error" },
+      "execution": { "noTestsAction": "error", "timeout": 300 },
       "configuration": "Debug"
     },
     {
       "name": "release",
       "configurePreset": "release",
       "output": { "outputOnFailure": true },
-      "execution": { "noTestsAction": "error" },
+      "execution": { "noTestsAction": "error", "timeout": 300 },
       "configuration": "Release"
     },
     {
       "name": "relwithdebinfo",
       "configurePreset": "relwithdebinfo",
       "output": { "outputOnFailure": true },
-      "execution": { "noTestsAction": "error" },
+      "execution": { "noTestsAction": "error", "timeout": 300 },
       "configuration": "RelWithDebInfo"
     },
     {
       "name": "asan",
       "configurePreset": "asan",
       "output": { "outputOnFailure": true },
-      "execution": { "noTestsAction": "error" },
+      "execution": { "noTestsAction": "error", "timeout": 300 },
       "environment": {
         "LSAN_OPTIONS": "suppressions=${sourceDir}/tools/lsan.supp"
       },
@@ -178,14 +178,14 @@
       "name": "ubsan",
       "configurePreset": "ubsan",
       "output": { "outputOnFailure": true },
-      "execution": { "noTestsAction": "error" },
+      "execution": { "noTestsAction": "error", "timeout": 300 },
       "configuration": "RelWithDebInfo"
     },
     {
       "name": "tsan",
       "configurePreset": "tsan",
       "output": { "outputOnFailure": true },
-      "execution": { "noTestsAction": "error" },
+      "execution": { "noTestsAction": "error", "timeout": 300 },
       "environment": {
         "TSAN_OPTIONS": "suppressions=${sourceDir}/tools/tsan.supp report_thread_leaks=0"
       },
@@ -195,7 +195,7 @@
       "name": "coverage",
       "configurePreset": "coverage",
       "output": { "outputOnFailure": true },
-      "execution": { "noTestsAction": "error" },
+      "execution": { "noTestsAction": "error", "timeout": 300 },
       "configuration": "Debug"
     }
   ],
