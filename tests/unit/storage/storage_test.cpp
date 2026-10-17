@@ -175,6 +175,33 @@ TEST(CookieStoreTest, RejectsForeignDomainAttribute)
   EXPECT_TRUE(store.empty());
 }
 
+// RFC 6265 5.3 step 6: a Domain= naming a public suffix is ignored -- it
+// would scope the cookie to more sites than its setter controls (Domain=com
+// would ride on every .com response).  Public suffixes include the
+// PSL PRIVATE section (blogspot.com).
+TEST(CookieStoreTest, RejectsPublicSuffixDomainAttribute)
+{
+  TempProfile tp;
+  CookieStore store(tp.path());
+  ASSERT_TRUE(store.Load().has_value());
+  const int64_t now = 1'700'000'000;
+
+  EXPECT_FALSE(
+      store.SetCookieFromHeader(MakeUrl("http://www.example.com/"), "a=1; Domain=com", now));
+  EXPECT_FALSE(
+      store.SetCookieFromHeader(MakeUrl("http://www.example.co.uk/"), "b=1; Domain=co.uk", now));
+  EXPECT_FALSE(store.SetCookieFromHeader(
+      MakeUrl("http://foo.blogspot.com/"), "c=1; Domain=blogspot.com", now));
+  EXPECT_TRUE(store.empty());
+
+  // The identical-host case degrades to a host-only cookie instead of
+  // rejecting (the spec's compatibility allowance).
+  EXPECT_TRUE(store.SetCookieFromHeader(MakeUrl("http://com/"), "d=1; Domain=com", now));
+  EXPECT_EQ(store.CookiesFor(MakeUrl("http://com/"), now).size(), 1u);
+  // Host-only: it must not ride on other .com sites.
+  EXPECT_TRUE(store.CookiesFor(MakeUrl("http://x.com/"), now).empty());
+}
+
 TEST(CookieStoreTest, RejectsNameWithSeparators)
 {
   TempProfile tp;
