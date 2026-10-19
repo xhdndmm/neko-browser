@@ -3438,5 +3438,26 @@ TEST(LayoutTest, AutoHeightColumnItemWithExplicitHeightKeepsIt)
   EXPECT_FLOAT_EQ(t->height, 120.0f) << "a definite height pins the item (the codeberg logo)";
 }
 
+// CSS Flexbox 1 §9.9.1: a row flex container's max-content width is the sum
+// of its items' outer max-content sizes.  A nested flex item must use that sum
+// as its flex base size; measuring only the widest child made baidu.com's
+// top nav collapse to its min-content width and wrap into three rows.
+TEST(LayoutTest, FlexRowIntrinsicWidthSumsItsItems)
+{
+  Page page = Build(R"(
+<style>
+  body { margin: 0; }
+  .outer { display: flex; align-items: flex-start; }
+  .inner { display: flex; flex-wrap: wrap; flex: 0 1 auto; min-width: 0; }
+  .inner a { display: inline-block; width: 60px; height: 10px; flex-shrink: 0; }
+  .tail { width: 20px; height: 10px; flex-shrink: 0; }
+</style>
+<div class="outer"><div class="inner"><a></a><a></a><a></a></div><div class="tail"></div></div>)");
+  const LayoutBox* inner = FindBox(*page.root, ".inner", *page.doc);
+  ASSERT_NE(inner, nullptr);
+  EXPECT_FLOAT_EQ(inner->width, 180.0f) << "all three 60px items fit on one line";
+  EXPECT_FLOAT_EQ(inner->height, 10.0f) << "a narrower base width would wrap them";
+}
+
 } // namespace
 } // namespace neko::layout

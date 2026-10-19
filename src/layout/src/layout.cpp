@@ -982,6 +982,104 @@ IntrinsicWidths MeasureContent(const dom::Element& element,
     return gw;
   }
 
+  // A flex container's intrinsic width (CSS Flexbox 1 §9.9.1): max-content is
+  // the sum of the items' outer max-content sizes on one line (flex-wrap does
+  // not force a break for intrinsic sizing), min-content is the widest item.
+  // A column stacks its items, so both are the widest item.  Without this the
+  // generic block path below took the widest child instead of the row sum: a
+  // nested flex row (`flex: 0 1 auto; min-width: 0`) then reported its own
+  // min-content width, shrank, and wrapped its items (baidu.com's top nav
+  // collapsed into three rows).
+  if (style.display == style::Display::kFlex || style.display == style::Display::kInlineFlex) {
+    const bool row = style.flex_direction == style::FlexDirection::kRow ||
+                     style.flex_direction == style::FlexDirection::kRowReverse;
+    IntrinsicWidths fw;
+    double sum_max = 0;
+    bool first = true;
+    for (const dom::Node* child : element.ChildNodes()) {
+      if (child->node_type() == dom::NodeType::kText) {
+        const std::string& text = static_cast<const dom::Text&>(*child).data();
+        const std::string collapsed = MeasuredText(text, style.white_space);
+        if (collapsed.empty()) {
+          continue;
+        }
+        const float text_max = MeasureTextWidth(registry,
+                                                style.font_family,
+                                                style.font_weight,
+                                                style.font_italic,
+                                                collapsed,
+                                                style.font_size);
+        const float text_min = WidestWordWidth(registry,
+                                               style.font_family,
+                                               style.font_weight,
+                                               style.font_italic,
+                                               collapsed,
+                                               style.font_size);
+        if (!first) {
+          sum_max += static_cast<double>(row ? style.column_gap : 0.0f);
+        }
+        sum_max += static_cast<double>(text_max);
+        fw.min = std::max(fw.min, text_min);
+        fw.max = std::max(fw.max, text_max);
+        first = false;
+        continue;
+      }
+      if (child->node_type() != dom::NodeType::kElement) {
+        continue;
+      }
+      const dom::Element& child_el = static_cast<const dom::Element&>(*child);
+      const style::ComputedStyle& child_style = styles.StyleFor(child_el);
+      if (child_style.display == style::Display::kNone) {
+        continue;
+      }
+      if (child_style.position == style::Position::kAbsolute ||
+          child_style.position == style::Position::kFixed) {
+        continue;
+      }
+      const IntrinsicWidths cw = MeasureContent(child_el, styles, registry);
+      float child_max = cw.max;
+      // A definite main size (the item's width, or its flex-basis in a row) is
+      // the flex base size, so it also bounds the container's max-content
+      // contribution.  Without this an empty `width:60px` flex item measured 0
+      // and its row collapsed to zero width.  The min-content contribution
+      // stays content-based: a flex item may shrink below its specified size
+      // (the shrink floor below re-derives that bound).
+      const style::SizeSpec* main_spec = nullptr;
+      if (row) {
+        if (child_style.flex_basis.has_value()) {
+          main_spec = &child_style.flex_basis.value();
+        } else if (child_style.width.has_value()) {
+          main_spec = &child_style.width.value();
+        }
+      } else if (child_style.width.has_value()) {
+        main_spec = &child_style.width.value();
+      }
+      if (main_spec != nullptr && !main_spec->percent && !main_spec->is_calc &&
+          !main_spec->is_extremum) {
+        child_max = SpecToContent(
+            *main_spec,
+            0.0f,
+            ResolveSize(child_style.padding_left, 0) + ResolveSize(child_style.padding_right, 0) +
+                ResolveSize(child_style.border_left, 0) + ResolveSize(child_style.border_right, 0),
+            child_style.box_sizing);
+      }
+      const float outer_extra = HorizontalBoxExtras(child_style) +
+                                ResolveSize(child_style.margin_left, 0) +
+                                ResolveSize(child_style.margin_right, 0);
+      if (!first) {
+        sum_max += static_cast<double>(row ? style.column_gap : 0.0f);
+      }
+      sum_max += static_cast<double>(child_max + outer_extra);
+      fw.min = std::max(fw.min, cw.min + outer_extra);
+      fw.max = std::max(fw.max, child_max + outer_extra);
+      first = false;
+    }
+    if (row) {
+      fw.max = static_cast<float>(sum_max);
+    }
+    return fw;
+  }
+
   IntrinsicWidths out;
   float line_min = 0;
   float line_max = 0;
