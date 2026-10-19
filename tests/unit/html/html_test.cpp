@@ -1213,5 +1213,120 @@ TEST(HtmlTest, SelectInTableBreaksOutOnTableEndTag)
   EXPECT_EQ(select->TextContent().find("after"), std::string::npos);
 }
 
+// ---------------------------------------------------------------------------
+// Fragment parsing (WHATWG HTML 13.4 "Parsing HTML fragments"): the context
+// element selects the tokenizer state, the insertion mode (13.2.6.1) and the
+// tree-construction rules.  These prove the difference from the previous
+// behaviour, which parsed every fragment as a full document and extracted the
+// <body> children.
+// ---------------------------------------------------------------------------
+
+std::unique_ptr<dom::DocumentFragment> ParseFragment(std::string_view html,
+                                                     const std::string& context_tag)
+{
+  dom::Element context(context_tag);
+  return Parser(html, context).ParseFragment();
+}
+
+TEST(HtmlTest, FragmentTableContextBuildsRowAndCell)
+{
+  // <table> context -> "in table": the <tr> is wrapped in an implicit <tbody>
+  // and the cell carries the text.  The full-document path produced nothing
+  // table-shaped for this fragment.
+  auto frag = ParseFragment("<tr><td>x", "table");
+  dom::Element* td = dom::QuerySelector(*frag, "td");
+  ASSERT_NE(td, nullptr);
+  EXPECT_EQ(td->TextContent(), "x");
+  dom::Element* tbody = dom::QuerySelector(*frag, "tbody");
+  ASSERT_NE(tbody, nullptr);
+  EXPECT_EQ(tbody->parent(), frag.get());
+}
+
+TEST(HtmlTest, FragmentTbodyContextBuildsRowAndCells)
+{
+  auto frag = ParseFragment("<tr><td>a<td>b", "tbody");
+  EXPECT_EQ(dom::QuerySelectorAll(*frag, "tr").size(), 1u);
+  EXPECT_EQ(dom::QuerySelectorAll(*frag, "td").size(), 2u);
+  EXPECT_EQ(frag->TextContent(), "ab");
+}
+
+TEST(HtmlTest, FragmentDivContextIgnoresStrayTableCell)
+{
+  // <div> context -> "in body": a stray <td> is a parse error and is ignored
+  // (13.2.6.4.7), leaving only the text.
+  auto frag = ParseFragment("<td>x", "div");
+  EXPECT_EQ(dom::QuerySelectorAll(*frag, "td").size(), 0u);
+  ASSERT_NE(frag->first_child(), nullptr);
+  EXPECT_EQ(frag->first_child()->node_type(), dom::NodeType::kText);
+  EXPECT_EQ(frag->TextContent(), "x");
+}
+
+TEST(HtmlTest, FragmentSelectContextProducesSiblingOptions)
+{
+  auto frag = ParseFragment("<option>a<option>b", "select");
+  const auto options = dom::QuerySelectorAll(*frag, "option");
+  ASSERT_EQ(options.size(), 2u);
+  EXPECT_EQ(options[0]->TextContent(), "a");
+  EXPECT_EQ(options[1]->TextContent(), "b");
+  EXPECT_EQ(options[0]->parent(), frag.get());
+  EXPECT_EQ(options[1]->parent(), frag.get());
+}
+
+TEST(HtmlTest, FragmentRcdataContextYieldsText)
+{
+  // <title> context -> RCDATA: markup is text, so no <b> element is created.
+  auto frag = ParseFragment("<b>x</b>", "title");
+  EXPECT_EQ(dom::QuerySelectorAll(*frag, "b").size(), 0u);
+  ASSERT_NE(frag->first_child(), nullptr);
+  EXPECT_EQ(frag->first_child()->node_type(), dom::NodeType::kText);
+  EXPECT_EQ(frag->TextContent(), "<b>x</b>");
+}
+
+TEST(HtmlTest, FragmentRawtextContextYieldsText)
+{
+  // <style> context -> RAWTEXT: likewise markup stays text.
+  auto frag = ParseFragment("<b>x</b>", "style");
+  EXPECT_EQ(dom::QuerySelectorAll(*frag, "b").size(), 0u);
+  EXPECT_EQ(frag->TextContent(), "<b>x</b>");
+}
+
+TEST(HtmlTest, FragmentPlaintextContextConsumesRestAsText)
+{
+  auto frag = ParseFragment("<b>x", "plaintext");
+  EXPECT_EQ(dom::QuerySelectorAll(*frag, "b").size(), 0u);
+  EXPECT_EQ(frag->TextContent(), "<b>x");
+}
+
+TEST(HtmlTest, FragmentDoesNotIncludeTheContextElement)
+{
+  // The context element is not part of the returned fragment; only its parsed
+  // children are.
+  auto frag = ParseFragment("<span>a</span>", "div");
+  EXPECT_EQ(dom::QuerySelectorAll(*frag, "div").size(), 0u);
+  ASSERT_NE(dom::QuerySelector(*frag, "span"), nullptr);
+  EXPECT_EQ(frag->child_count(), 1u);
+}
+
+TEST(HtmlTest, FragmentTemplateContextParsesItsChildren)
+{
+  auto frag = ParseFragment("<div>x</div>", "template");
+  dom::Element* div = dom::QuerySelector(*frag, "div");
+  ASSERT_NE(div, nullptr);
+  EXPECT_EQ(div->TextContent(), "x");
+}
+
+TEST(HtmlTest, FragmentIgnoresStrayHtmlEndTagAndKeepsTrailingContent)
+{
+  // A </html> with no body element in scope is ignored (13.2.6.4.7), so the
+  // trailing comment stays inside the fragment instead of being appended to
+  // the synthetic root html element.
+  auto frag = ParseFragment("x</html><!--c-->", "div");
+  ASSERT_EQ(frag->child_count(), 2u);
+  EXPECT_EQ(frag->first_child()->node_type(), dom::NodeType::kText);
+  EXPECT_EQ(frag->first_child()->TextContent(), "x");
+  EXPECT_EQ(frag->last_child()->node_type(), dom::NodeType::kComment);
+  EXPECT_EQ(static_cast<dom::Comment*>(frag->last_child())->data(), "c");
+}
+
 } // namespace
 } // namespace neko::html

@@ -121,6 +121,17 @@ bool IsTableCaptionColumn(std::string_view tag)
          tag == "tfoot" || tag == "th" || tag == "thead" || tag == "tr";
 }
 
+// Start tags the "in body" insertion mode ignores (WHATWG HTML 13.2.6.4.7):
+// table structure elements and frame/head outside their proper context.  This
+// matters for fragment parsing: div.innerHTML = "<td>x" must ignore the stray
+// <td> rather than create a table cell.
+bool IsIgnoredInBodyStartTag(std::string_view tag)
+{
+  return tag == "caption" || tag == "col" || tag == "colgroup" || tag == "frame" || tag == "head" ||
+         tag == "tbody" || tag == "td" || tag == "tfoot" || tag == "th" || tag == "thead" ||
+         tag == "tr";
+}
+
 } // namespace
 
 // WHATWG HTML 13.2.5.3 ("appropriate place for inserting a node"): the step
@@ -140,7 +151,37 @@ std::pair<dom::Node*, dom::Node*> Parser::RerouteTemplateInsertion(dom::Node* pa
   return {parent, before};
 }
 
+dom::Node* Parser::FragmentInsertionTarget(dom::Node* parent) const
+{
+  // WHATWG HTML 13.4 step 9: set the insertion target redirection map's entry
+  // for the root html element to the fragment.  Every insertion whose adjusted
+  // insertion location is root therefore lands in the fragment instead.
+  if (fragment_ != nullptr && parent == fragment_root_) {
+    return fragment_.get();
+  }
+  return parent;
+}
+
 Parser::Parser(std::string_view html) : html_(html), tokenizer_(html) {}
+
+Parser::Parser(std::string_view html, const dom::Element& context)
+    : html_(html), tokenizer_(html), fragment_context_(&context)
+{
+  // WHATWG HTML 13.4: "set the state of the HTML parser's tokenization stage
+  // as follows, switching on context".  StartRawText records the appropriate
+  // end tag (the context element's tag name) so an embedded matching end tag
+  // is tokenized, and selects RCDATA for title/textarea, script data for
+  // script, and RAWTEXT for style/xmp/iframe/noembed/noframes/noscript (this
+  // engine treats <noscript> as scripting-enabled, so RAWTEXT applies).
+  const std::string_view tag = context.tag_name();
+  if (tag == "title" || tag == "textarea" || tag == "script" || tag == "style" || tag == "xmp" ||
+      tag == "iframe" || tag == "noembed" || tag == "noframes" || tag == "noscript") {
+    tokenizer_.StartRawText(tag);
+  } else if (tag == "plaintext") {
+    tokenizer_.StartPlaintext();
+  }
+  // Any other element: leave the tokenizer in the data state.
+}
 
 std::unique_ptr<dom::Document> Parser::Parse()
 {
@@ -203,6 +244,41 @@ std::unique_ptr<dom::Document> Parser::Parse()
   return std::move(document_);
 }
 
+std::unique_ptr<dom::DocumentFragment> Parser::ParseFragment()
+{
+  // WHATWG HTML 13.4 "Parsing HTML fragments".  Steps 5-9:
+  //   * Let root be a new html element; append it to the document.
+  //   * Set the stack of open elements to contain just root.
+  //   * Redirect insertions addressed at root into the fragment (modelled here
+  //     by FragmentInsertionTarget rather than an explicit redirection map).
+  document_ = std::make_unique<dom::Document>();
+  fragment_ = std::make_unique<dom::DocumentFragment>();
+  auto root = std::make_unique<dom::Element>("html");
+  fragment_root_ = root.get();
+  document_->AppendChild(std::move(root));
+  stack_.clear();
+  stack_.push_back(fragment_root_);
+
+  // Step 11: "Reset the parser's insertion mode appropriately."  In the
+  // fragment case this reads the fragment context element (13.2.6.1).
+  ResetInsertionMode();
+
+  for (;;) {
+    Token token = NextToken();
+    if (token.type == TokenType::kEOF) {
+      // "In table text" buffers character tokens until a non-character token;
+      // let the EOF token flush the buffer before stopping.
+      if (mode_ == Mode::kInTableText && !pending_table_chars_.empty()) {
+        ProcessToken(std::move(token));
+        continue;
+      }
+      break;
+    }
+    ProcessToken(std::move(token));
+  }
+  return std::move(fragment_);
+}
+
 Token Parser::NextToken()
 {
   if (pending_.has_value()) {
@@ -226,6 +302,7 @@ dom::Element* Parser::CurrentNode()
 void Parser::AppendNode(std::unique_ptr<dom::Node> node)
 {
   auto [parent, before] = AdjustedInsertionLocation();
+  parent = FragmentInsertionTarget(parent);
   std::tie(parent, before) = RerouteTemplateInsertion(parent, before);
   InsertNodeAt(parent, before, std::move(node));
 }
@@ -241,6 +318,7 @@ dom::Element* Parser::InsertElement(std::unique_ptr<dom::Element> element)
   }
   dom::Element* raw = element.get();
   auto [parent, before] = AdjustedInsertionLocation();
+  parent = FragmentInsertionTarget(parent);
   std::tie(parent, before) = RerouteTemplateInsertion(parent, before);
   InsertNodeAt(parent, before, std::move(element));
   stack_.push_back(raw);
@@ -270,6 +348,7 @@ void Parser::PopThrough(std::string_view tag)
 void Parser::AppendText(std::string_view text)
 {
   auto [parent, before] = AdjustedInsertionLocation();
+  parent = FragmentInsertionTarget(parent);
   std::tie(parent, before) = RerouteTemplateInsertion(parent, before);
   AppendTextAt(parent, before, text);
 }
@@ -468,10 +547,19 @@ void Parser::ResetInsertionMode()
   bool last = false;
   for (auto it = stack_.rbegin(); it != stack_.rend(); ++it) {
     dom::Element* node = *it;
-    if (it + 1 == stack_.rend()) {
+    const bool is_first = (it + 1 == stack_.rend());
+    if (is_first) {
       last = true;
     }
-    const std::string_view tag = node->tag_name();
+    // Fragment case (13.2.6.1): the parser's fragment context element stands
+    // in for the synthetic root html element, so a fragment reports the
+    // context's insertion mode (e.g. a <table> context is "in table", a plain
+    // <div> context falls through to "in body").  The context element is never
+    // pushed onto the stack, so substituting it here is what makes the
+    // "last is false" guards (td/th/select/head) behave as the spec requires.
+    const std::string_view tag = (is_first && fragment_context_ != nullptr)
+                                     ? fragment_context_->tag_name()
+                                     : node->tag_name();
     if (tag == "select" && !last) {
       // "If node is a select element": the surrounding table context decides
       // between the two select modes (13.2.6.4.17).
@@ -1309,6 +1397,13 @@ void Parser::ProcessStartTag(Token token)
     if (tag == "head") {
       return; // parse error; ignored
     }
+    if (IsIgnoredInBodyStartTag(tag)) {
+      // WHATWG 13.2.6.4.7: caption/col/colgroup/frame/head/tbody/td/tfoot/
+      // th/thead/tr start tags are parse errors in the "in body" mode and are
+      // ignored.  This is what makes div.innerHTML = "<td>x" drop the stray
+      // cell instead of creating one.
+      return;
+    }
     if (tag == "body") {
       // WHATWG 13.2.6.4.7: a second <body> start tag is a parse error; its
       // attributes are copied onto the existing body if they are not already
@@ -1713,6 +1808,14 @@ void Parser::ProcessEndTag(Token token)
       return;
     }
     if (tag == "html") {
+      // WHATWG 13.2.6.4.7: if the stack of open elements has no body element in
+      // scope, </html> is a parse error and must be ignored.  This is the
+      // fragment case (the synthetic root has no body); ignoring it keeps
+      // trailing comments/text out of the synthetic root and inside the
+      // fragment.
+      if (!InScope("body")) {
+        return;
+      }
       mode_ = Mode::kAfterBody;
       Reprocess(std::move(token));
       return;

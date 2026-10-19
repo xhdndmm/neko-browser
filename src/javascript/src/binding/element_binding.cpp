@@ -1031,78 +1031,41 @@ JSValue ElementSetInnerHTML(JSContext* ctx, JSValueConst this_val, JSValueConst 
   if (!ok) {
     return JS_EXCEPTION;
   }
-  // <template> writes into its template contents, not the element itself.
+  // <template> writes into its template contents, not the element itself
+  // (HTML 4.12.3): the fragment is parsed with the template element as the
+  // context and its children are then adopted into template.content().
   dom::Node* target = element;
   if (dom::HTMLTemplateElement* tpl = element->AsTemplate()) {
     target = tpl->content();
   }
-  // Parse the fragment through the full document parser and move the <body>
-  // children into this element.  Scripts in the fragment are not executed.
-  std::unique_ptr<dom::Document> parsed = html::Parser(html).Parse();
-  dom::Element* body = nullptr;
-  for (dom::Node* child : parsed->ChildNodes()) {
-    if (dom::Element* el = AsElement(child)) {
-      if (el->tag_name() == "body") {
-        body = el;
-        break;
-      }
-      for (dom::Node* inner : el->ChildNodes()) {
-        if (dom::Element* in_el = AsElement(inner)) {
-          if (in_el->tag_name() == "body") {
-            body = in_el;
-            break;
-          }
-        }
-      }
-      if (body != nullptr) {
-        break;
-      }
-    }
-  }
+  // WHATWG HTML 13.4: parse |html| as a fragment with |element| as the
+  // context element (NOT as a full document).  This makes table contexts,
+  // <select>, RCDATA/RAWTEXT contexts and the "in body" stray-table-tag rule
+  // behave correctly.  The fragment's children become the element's new inner
+  // content.  Scripts in the fragment are not executed (the parser only
+  // builds elements; it never runs them).
+  std::unique_ptr<dom::DocumentFragment> fragment = html::Parser(html, *element).ParseFragment();
   while (target->first_child() != nullptr) {
     std::unique_ptr<dom::Node> removed = target->RemoveChild(target->first_child());
     impl->TakeOwnership(removed.get(), std::move(removed));
   }
-  if (body != nullptr) {
-    while (body->first_child() != nullptr) {
-      std::unique_ptr<dom::Node> child = body->RemoveChild(body->first_child());
-      target->AppendChild(std::move(child));
-    }
+  while (fragment->first_child() != nullptr) {
+    target->AppendChild(fragment->RemoveChild(fragment->first_child()));
   }
   impl->MarkDomDirty(target);
   return JS_UNDEFINED;
 }
 
-// Parses |html| as a fragment and moves the parsed <body> children into a
-// fresh document, returning them in document order (scripts are not run).
-std::vector<std::unique_ptr<dom::Node>> TakeFragmentChildren(std::string_view html)
+// Parses |html| as a fragment with |context| as the fragment context element
+// (WHATWG HTML 13.4) and returns the parsed nodes in document order (scripts
+// are not run).
+std::vector<std::unique_ptr<dom::Node>> TakeFragmentChildren(std::string_view html,
+                                                             const dom::Element& context)
 {
-  std::unique_ptr<dom::Document> parsed = html::Parser(html).Parse();
+  std::unique_ptr<dom::DocumentFragment> fragment = html::Parser(html, context).ParseFragment();
   std::vector<std::unique_ptr<dom::Node>> out;
-  dom::Element* body = nullptr;
-  for (dom::Node* child : parsed->ChildNodes()) {
-    if (dom::Element* el = AsElement(child)) {
-      if (el->tag_name() == "body") {
-        body = el;
-        break;
-      }
-      for (dom::Node* inner : el->ChildNodes()) {
-        if (dom::Element* in_el = AsElement(inner)) {
-          if (in_el->tag_name() == "body") {
-            body = in_el;
-            break;
-          }
-        }
-      }
-      if (body != nullptr) {
-        break;
-      }
-    }
-  }
-  if (body != nullptr) {
-    while (body->first_child() != nullptr) {
-      out.push_back(body->RemoveChild(body->first_child()));
-    }
+  while (fragment->first_child() != nullptr) {
+    out.push_back(fragment->RemoveChild(fragment->first_child()));
   }
   return out;
 }
@@ -1176,7 +1139,7 @@ ElementInsertAdjacentHTML(JSContext* ctx, JSValueConst this_val, int argc, JSVal
   if (parent == nullptr) {
     return JS_UNDEFINED; // detached element: nothing to do
   }
-  std::vector<std::unique_ptr<dom::Node>> nodes = TakeFragmentChildren(html);
+  std::vector<std::unique_ptr<dom::Node>> nodes = TakeFragmentChildren(html, *element);
   for (auto& node : nodes) {
     parent->InsertBefore(std::move(node), reference);
   }

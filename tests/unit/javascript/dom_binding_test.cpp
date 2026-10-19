@@ -1536,6 +1536,83 @@ TEST_F(DomBinderTest, InnerHTMLGetAndSet)
                        "       && e.children[0].children.length === 2; })()"));
 }
 
+TEST_F(DomBinderTest, InnerHTMLUsesTheElementAsFragmentParseContext)
+{
+  // WHATWG HTML 13.4: innerHTML parses a fragment with the element itself as
+  // the context element, so the context drives the tokenizer state and the
+  // insertion mode.  The previous implementation parsed every value as a full
+  // document and extracted the <body> children, which broke table contexts,
+  // <select>, RCDATA/RAWTEXT contexts and the stray-table-tag rule.
+  //
+  // <table> context -> "in table": the row/cell survive.
+  EXPECT_TRUE(EvalBool("(function(){"
+                       "  var t = document.createElement('table');"
+                       "  t.innerHTML = '<tr><td>x';"
+                       "  return t.querySelector('td') !== null"
+                       "      && t.querySelector('tbody') !== null"
+                       "      && t.textContent === 'x';"
+                       "})()"));
+  // <div> context -> "in body": the stray <td> is ignored.
+  EXPECT_TRUE(EvalBool("(function(){"
+                       "  var d = document.createElement('div');"
+                       "  d.innerHTML = '<td>x';"
+                       "  return d.querySelector('td') === null && d.textContent === 'x';"
+                       "})()"));
+  // <select> context: options become siblings.
+  EXPECT_TRUE(EvalBool("(function(){"
+                       "  var s = document.createElement('select');"
+                       "  s.innerHTML = '<option>a<option>b';"
+                       "  var opts = s.querySelectorAll('option');"
+                       "  return opts.length === 2 && opts[0].textContent === 'a'"
+                       "      && opts[1].textContent === 'b' && opts[1].parentNode === s;"
+                       "})()"));
+  // <title> context -> RCDATA: markup is text, not elements.
+  EXPECT_TRUE(EvalBool("(function(){"
+                       "  var ti = document.createElement('title');"
+                       "  ti.innerHTML = '<b>x</b>';"
+                       "  return ti.querySelector('b') === null"
+                       "      && ti.childNodes.length === 1 && ti.childNodes[0].nodeType === 3"
+                       "      && ti.textContent === '<b>x</b>';"
+                       "})()"));
+  // <style> context -> RAWTEXT: likewise.
+  EXPECT_TRUE(EvalBool("(function(){"
+                       "  var st = document.createElement('style');"
+                       "  st.innerHTML = '<b>x</b>';"
+                       "  return st.querySelector('b') === null && st.textContent === '<b>x</b>';"
+                       "})()"));
+}
+
+TEST_F(DomBinderTest, TemplateInnerHTMLUsesTemplateAsFragmentContext)
+{
+  // <template> innerHTML is parsed with the template element as the context
+  // and the resulting fragment is adopted into template.content() (HTML
+  // 4.12.3), leaving the element's own child list empty.
+  EXPECT_TRUE(EvalBool("(function(){"
+                       "  var t = document.createElement('template');"
+                       "  t.innerHTML = '<div id=q>hi</div>';"
+                       "  return t.childNodes.length === 0"
+                       "      && t.content.childNodes.length === 1"
+                       "      && t.content.querySelector('#q') !== null"
+                       "      && t.content.firstChild.textContent === 'hi';"
+                       "})()"));
+}
+
+TEST_F(DomBinderTest, InsertAdjacentHTMLUsesTheElementAsFragmentContext)
+{
+  // insertAdjacentHTML parses with the element as the fragment context too.
+  EXPECT_TRUE(EvalBool("(function(){"
+                       "  var t = document.createElement('table');"
+                       "  t.insertAdjacentHTML('beforeend', '<tr><td>y');"
+                       "  var td = t.querySelector('td');"
+                       "  return td !== null && td.textContent === 'y';"
+                       "})()"));
+  EXPECT_TRUE(EvalBool("(function(){"
+                       "  var d = document.createElement('div');"
+                       "  d.insertAdjacentHTML('beforeend', '<td>z');"
+                       "  return d.querySelector('td') === null && d.textContent === 'z';"
+                       "})()"));
+}
+
 TEST_F(DomBinderTest, CloneNode)
 {
   EXPECT_TRUE(EvalBool(

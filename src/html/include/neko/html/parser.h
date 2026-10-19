@@ -25,9 +25,23 @@ class Parser
 public:
   explicit Parser(std::string_view html);
 
+  // Fragment parsing (WHATWG HTML 13.4 "Parsing HTML fragments"): parses |html|
+  // with |context| as the fragment context element.  The tokenizer state is
+  // initialized from |context| (title/textarea -> RCDATA; style/xmp/iframe/
+  // noembed/noframes/noscript -> RAWTEXT; script -> script data; plaintext ->
+  // PLAINTEXT; otherwise data), and the insertion mode is derived by
+  // ResetInsertionMode() from the context element.  |context| must outlive the
+  // parse; it is only read (its tag name), never modified or inserted.
+  Parser(std::string_view html, const dom::Element& context);
+
   // Parses the document.  Never returns null; malformed HTML produces a
   // best-effort DOM.
   std::unique_ptr<dom::Document> Parse();
+
+  // Parses the fragment.  Returns the fragment's nodes (the children of the
+  // fragment), never null.  Scripts in the fragment are not executed.  Must be
+  // called on a parser built with the (html, context) constructor.
+  std::unique_ptr<dom::DocumentFragment> ParseFragment();
 
 private:
   enum class Mode
@@ -104,6 +118,11 @@ private:
   // element into its template contents fragment.
   static std::pair<dom::Node*, dom::Node*> RerouteTemplateInsertion(dom::Node* parent,
                                                                     dom::Node* before);
+  // WHATWG HTML 13.4: in fragment parsing, insertions whose adjusted insertion
+  // location is the synthetic root html element are redirected into the
+  // fragment (the spec models this with an insertion target redirection map).
+  // A no-op outside fragment parsing.
+  dom::Node* FragmentInsertionTarget(dom::Node* parent) const;
   void AppendTextAt(dom::Node* parent, dom::Node* before, std::string_view text);
   void InsertNodeAt(dom::Node* parent, dom::Node* before, std::unique_ptr<dom::Node> node);
 
@@ -143,6 +162,14 @@ private:
   // Pending character tokens for the "in table text" insertion mode.
   std::vector<Token> pending_table_chars_;
   Mode mode_before_text_ = Mode::kInBody;
+
+  // Fragment parsing state (WHATWG HTML 13.4): the context element provided by
+  // the (html, context) constructor, the synthetic root <html> element that
+  // seeds the stack of open elements, and the document fragment that receives
+  // the parsed nodes.  All three are null/inactive for document parsing.
+  const dom::Element* fragment_context_ = nullptr;
+  dom::Element* fragment_root_ = nullptr;
+  std::unique_ptr<dom::DocumentFragment> fragment_;
 };
 
 } // namespace neko::html

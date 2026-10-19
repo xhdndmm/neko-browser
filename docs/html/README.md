@@ -45,9 +45,14 @@
   2026-10 修复），因此解析出的 `<template>` 子树与 `template.content` 一致；
   差的是模式级细节（如模板内表格片段的模式的精确处理）
 - in frameset 模式
-- 无 fragment parsing（`innerHTML` 走完整文档解析器再取 `<body>` 子节点，
-  因此 `<style>`/`<meta>`/`<link>`/`<template>` 形式的片段会被静默丢弃，
-  表格片段的上下文规则也不正确 —— 见兼容性矩阵）
+- ~~无 fragment parsing~~ **已实现（2026-10）**：`html::Parser(html, context)` +
+  `ParseFragment()` 按 WHATWG 13.4 用 context element 初始化栈/模式/tokenizer
+  状态（title/textarea→RCDATA、script→script data、style/xmp/iframe/noembed/
+  noframes/noscript→RAWTEXT、plaintext→PLAINTEXT），结果是一棵
+  `DocumentFragment`；`innerHTML`/`insertAdjacentHTML` 已改走该路径（表格、
+  select、RCDATA 上下文与 in-body 忽略游离 `td/tr` 的规则因此正确）。仍差：
+  context 只按标签名匹配（无 SVG/MathML 命名空间）；`insertAdjacentHTML` 的
+  `beforebegin`/`afterend` 目前也用元素自身作 context（规范用父元素）
 - 重复 `<body>` 的属性合并、form element pointer 等次要规则
 
 ## 已修正的解析器缺陷（曾经的静默失真）
