@@ -1007,6 +1007,26 @@ TEST(StyleTest, PaddingAndBorder)
   EXPECT_EQ(style.border_color.value(), (css::Color{0, 0, 0, 255}));
 }
 
+// `border: none` is a shorthand: it resets width and style.  It must clear the
+// UA form-control chrome (baidu.com's AI search textarea turned solid black
+// because only the style was recorded and the old width survived).
+TEST(StyleTest, BorderNoneClearsThePreviousBorder)
+{
+  auto doc = MakeDoc("<body><textarea id=\"plain\"></textarea>"
+                     "<textarea id=\"bare\" style=\"border: none\"></textarea></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+
+  const ComputedStyle& plain = Style(engine, *doc, "#plain");
+  EXPECT_EQ(plain.border_style, BorderStyle::kSolid); // UA control chrome
+  EXPECT_FLOAT_EQ(plain.border_top.value, 1.0f);
+
+  const ComputedStyle& bare = Style(engine, *doc, "#bare");
+  EXPECT_EQ(bare.border_style, BorderStyle::kNone);
+  EXPECT_FLOAT_EQ(bare.border_top.value, 0.0f);
+  EXPECT_FLOAT_EQ(bare.border_left.value, 0.0f);
+}
+
 TEST(StyleTest, TextAlign)
 {
   auto doc = MakeDoc("<body><p style=\"text-align: center\">x</p></body>");

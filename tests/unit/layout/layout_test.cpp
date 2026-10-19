@@ -486,8 +486,7 @@ TEST(LayoutTest, ExplicitHeightIsNotGrownToFitTallerContent)
   EXPECT_FLOAT_EQ(a->height, 40.0f);
   const LayoutBox* b = FindBox(*page.root, "#b", *page.doc);
   ASSERT_NE(b, nullptr);
-  EXPECT_FLOAT_EQ(b->y, a->y + 40.0f)
-      << "the next sibling starts after the specified height";
+  EXPECT_FLOAT_EQ(b->y, a->y + 40.0f) << "the next sibling starts after the specified height";
 }
 
 TEST(LayoutTest, PercentWidth)
@@ -2797,6 +2796,24 @@ TEST(LayoutTest, BlockTextareaShowsDataPlaceholder)
   ASSERT_FALSE(box->lines.empty());
   ASSERT_FALSE(box->lines.front().runs.empty());
   EXPECT_EQ(box->lines.front().runs.front().text, "搜一下");
+}
+
+// The UA control chrome is a stylesheet rule now, so `border: none` clears it
+// and the used border width becomes 0 (CSS Backgrounds 3 §4.3).  baidu.com's
+// search textarea is an explicitly borderless <textarea>.
+TEST(LayoutTest, AuthorBorderNoneClearsTheUaControlBorder)
+{
+  Page page =
+      Build("<body><textarea id=\"plain\" style=\"display:block\"></textarea>"
+            "<textarea id=\"bare\" style=\"display:block;border: none\"></textarea></body>");
+  const LayoutBox* plain = FindBox(*page.root, "#plain", *page.doc);
+  ASSERT_NE(plain, nullptr);
+  EXPECT_FLOAT_EQ(plain->border_top, 1.0f);
+  const LayoutBox* bare = FindBox(*page.root, "#bare", *page.doc);
+  ASSERT_NE(bare, nullptr);
+  EXPECT_FLOAT_EQ(bare->border_top, 0.0f);
+  EXPECT_FLOAT_EQ(bare->border_left, 0.0f);
+  EXPECT_FLOAT_EQ(bare->border_right, 0.0f);
 }
 
 TEST(LayoutTest, HiddenInputDoesNotProduceABox)

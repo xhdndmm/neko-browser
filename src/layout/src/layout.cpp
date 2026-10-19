@@ -1673,10 +1673,16 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       box.margin_right = ResolveSize(box.style.margin_right, containing_width);
       box.margin_bottom = ResolveSize(box.style.margin_bottom, containing_width);
       box.margin_left = ResolveSize(box.style.margin_left, containing_width);
-      box.border_top = ResolveSize(box.style.border_top, containing_width);
-      box.border_right = ResolveSize(box.style.border_right, containing_width);
-      box.border_bottom = ResolveSize(box.style.border_bottom, containing_width);
-      box.border_left = ResolveSize(box.style.border_left, containing_width);
+      // border-style: none makes the used border width 0 (CSS Backgrounds 3
+      // §4.3), even though the computed width keeps its value.
+      const bool border_visible = box.style.border_style != style::BorderStyle::kNone;
+      box.border_top = border_visible ? ResolveSize(box.style.border_top, containing_width) : 0.0f;
+      box.border_right =
+          border_visible ? ResolveSize(box.style.border_right, containing_width) : 0.0f;
+      box.border_bottom =
+          border_visible ? ResolveSize(box.style.border_bottom, containing_width) : 0.0f;
+      box.border_left =
+          border_visible ? ResolveSize(box.style.border_left, containing_width) : 0.0f;
       box.padding_top = ResolveSize(box.style.padding_top, containing_width);
       box.padding_right = ResolveSize(box.style.padding_right, containing_width);
       box.padding_bottom = ResolveSize(box.style.padding_bottom, containing_width);
@@ -1833,31 +1839,11 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       ResolveBoxEdges(*box, containing_width);
       SetFormControlState(*box, kind);
 
-      // Default widget chrome; author CSS overrides via background/border.
-      if (!box->style.background_color.has_value()) {
-        box->style.background_color = css::Color{255, 255, 255, 255};
-      }
-      if (box->border_top == 0) {
-        box->border_top = 1;
-      }
-      if (box->border_right == 0) {
-        box->border_right = 1;
-      }
-      if (box->border_bottom == 0) {
-        box->border_bottom = 1;
-      }
-      if (box->border_left == 0) {
-        box->border_left = 1;
-      }
-      if (!box->style.border_color.has_value()) {
-        box->style.border_color = css::Color{0, 0, 0, 255};
-      }
-      if (box->padding_left == 0 && box->padding_right == 0) {
-        box->padding_left = box->padding_right = 4;
-      }
-      if (box->padding_top == 0 && box->padding_bottom == 0) {
-        box->padding_top = box->padding_bottom = 2;
-      }
+      // Default widget chrome (border, background, padding) comes from the UA
+      // stylesheet, so author declarations override it through the cascade.
+      // It must not be re-applied here: `border: none` is a valid author
+      // choice (baidu.com's search textarea), and a hardcoded default cannot
+      // distinguish it from "not specified".
 
       const float border_padding_w =
           box->border_left + box->border_right + box->padding_left + box->padding_right;

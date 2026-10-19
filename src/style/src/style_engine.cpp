@@ -117,6 +117,12 @@ input[type="hidden"] { display: none !important; }
 select, textarea { display: inline-block; }
 input, button { display: inline-block; }
 input, select, textarea { text-align: initial; }
+/* Default widget chrome (WHATWG §15.5): a 1px border, white background and
+   2px/4px padding.  These live in the UA sheet so author rules such as
+   `border: none` can clear them through the cascade; a hardcoded layout
+   default could not tell "not specified" from "explicitly none" and forced
+   the border back on (baidu.com's AI search textarea). */
+input, select, textarea { border: 1px solid #000; padding: 2px 4px; background-color: #fff; }
 input[type="reset"], input[type="button"], input[type="submit"], button {
   text-align: center;
 }
@@ -798,6 +804,7 @@ void ParseBorderValue(const std::string& value,
                       std::optional<css::Color>& color,
                       BorderStyle& style)
 {
+  bool has_width = false;
   for (const std::string& part : SplitWhitespace(value)) {
     if (const std::optional<css::Color> c = css::ParseColor(part)) {
       color = c;
@@ -808,6 +815,7 @@ void ParseBorderValue(const std::string& value,
         parsed.type == css::CssValue::Type::kNumber) {
       if (const std::optional<SizeSpec> spec = ParseSize(part, ctx)) {
         width = spec.value().value;
+        has_width = true;
       }
       continue;
     }
@@ -820,8 +828,22 @@ void ParseBorderValue(const std::string& value,
         style = BorderStyle::kDotted;
       } else if (parsed.text == "none") {
         style = BorderStyle::kNone;
+      } else if (parsed.text == "thin") {
+        width = 1;
+        has_width = true;
+      } else if (parsed.text == "medium") {
+        width = 3;
+        has_width = true;
+      } else if (parsed.text == "thick") {
+        width = 5;
+        has_width = true;
       }
     }
+  }
+  // `border: solid` keeps the initial width, i.e. medium (CSS Backgrounds 3
+  // §4.2).  Treating the omitted width as 0 silently erased such borders.
+  if (!has_width && style != BorderStyle::kNone) {
+    width = 3;
   }
 }
 
@@ -3029,10 +3051,10 @@ void StyleEngine::ComputeElement(dom::Element& element,
       std::optional<css::Color> color;
       BorderStyle style = BorderStyle::kNone;
       ParseBorderValue(d->value, size_ctx, w, color, style);
-      if (w > 0) {
-        width.value = w;
-        width.percent = false;
-      }
+      // A present shorthand always sets the width, including 0: `border: none`
+      // must clear a UA border rather than leave the previous width in place.
+      width.value = w;
+      width.percent = false;
       if (color.has_value()) {
         out.border_color = color;
       }
@@ -3051,12 +3073,10 @@ void StyleEngine::ComputeElement(dom::Element& element,
     std::optional<css::Color> color;
     BorderStyle style = BorderStyle::kNone;
     ParseBorderValue(d->value, size_ctx, w, color, style);
-    if (w > 0) {
-      out.border_top.value = out.border_right.value = out.border_bottom.value =
-          out.border_left.value = w;
-      out.border_top.percent = out.border_right.percent = out.border_bottom.percent =
-          out.border_left.percent = false;
-    }
+    out.border_top.value = out.border_right.value = out.border_bottom.value =
+        out.border_left.value = w;
+    out.border_top.percent = out.border_right.percent = out.border_bottom.percent =
+        out.border_left.percent = false;
   }
   if (const css::Declaration* d = find("border-color")) {
     if (const std::optional<css::Color> color = css::ParseColor(d->value)) {
@@ -3068,17 +3088,40 @@ void StyleEngine::ComputeElement(dom::Element& element,
     std::optional<css::Color> color;
     BorderStyle style = BorderStyle::kNone;
     ParseBorderValue(d->value, size_ctx, w, color, style);
-    if (w > 0) {
-      out.border_top.value = out.border_right.value = out.border_bottom.value =
-          out.border_left.value = w;
-      out.border_top.percent = out.border_right.percent = out.border_bottom.percent =
-          out.border_left.percent = false;
-    }
+    out.border_top.value = out.border_right.value = out.border_bottom.value =
+        out.border_left.value = w;
+    out.border_top.percent = out.border_right.percent = out.border_bottom.percent =
+        out.border_left.percent = false;
     if (color.has_value()) {
       out.border_color = color;
     }
-    if (style != BorderStyle::kNone) {
-      out.border_style = style;
+    // Always record the style, including `none`: the shorthand resets it, and
+    // a UA default border must be clearable by author `border: none`.
+    out.border_style = style;
+  }
+
+  if (const css::Declaration* d = find("border-style")) {
+    // The engine models one border style for all four sides (see
+    // ComputedStyle::border_style); a 1-4 value list is collapsed onto the
+    // first recognised keyword.  Applied after `border` because declaration
+    // order inside a block is not preserved here.
+    for (const std::string& part : SplitWhitespace(d->value)) {
+      if (part == "none") {
+        out.border_style = BorderStyle::kNone;
+        break;
+      }
+      if (part == "solid") {
+        out.border_style = BorderStyle::kSolid;
+        break;
+      }
+      if (part == "dashed") {
+        out.border_style = BorderStyle::kDashed;
+        break;
+      }
+      if (part == "dotted") {
+        out.border_style = BorderStyle::kDotted;
+        break;
+      }
     }
   }
 
