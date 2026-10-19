@@ -69,4 +69,15 @@ base::Result<HttpResponse> HttpGet(const url::Url& url,
                                    const HeaderProvider& extra_headers = {},
                                    const TlsOptions& tls_options = {});
 
+// Sends a POST request with |body| and |content_type|, following redirects
+// with the same rules as HttpClient::Post.  Used by form submission
+// (application/x-www-form-urlencoded).
+base::Result<HttpResponse>
+HttpPost(const url::Url& url,
+         std::string_view body,
+         std::string_view content_type = "application/x-www-form-urlencoded",
+         int redirect_limit = kDefaultRedirectLimit,
+         const HeaderProvider& extra_headers = {},
+         const TlsOptions& tls_options = {});
+
 } // namespace neko::network

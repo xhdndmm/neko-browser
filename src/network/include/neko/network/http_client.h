@@ -62,6 +62,20 @@ public:
                                  const HeaderProvider& extra_headers = {},
                                  const TlsOptions& tls_options = {});
 
+  // Sends a POST request with |body| (an empty body is allowed) and
+  // |content_type|, following redirects.  A 303 (and, per Fetch §4.4, a 301 or
+  // 302 answering a non-GET) switches the follow-up request to GET and drops
+  // the body; 307/308 replay the method and body.  Unlike GET, a POST is never
+  // retried on a dead pooled connection: the server may already have acted on
+  // it.
+  base::Result<HttpResponse>
+  Post(const url::Url& url,
+       std::string_view body,
+       std::string_view content_type = "application/x-www-form-urlencoded",
+       int redirect_limit = kDefaultRedirectLimit,
+       const HeaderProvider& extra_headers = {},
+       const TlsOptions& tls_options = {});
+
   Stats stats() const;
 
   // Closes every idle connection (a clean shutdown hook; also lets tests drop
@@ -72,6 +86,12 @@ private:
   // One request/response exchange, without redirect handling.
   base::Result<HttpResponse>
   GetOnce(const url::Url& url, const HeaderProvider& extra_headers, const TlsOptions& tls_options);
+  base::Result<HttpResponse> SendOnce(std::string_view method,
+                                      const url::Url& url,
+                                      std::string_view body,
+                                      std::string_view content_type,
+                                      const HeaderProvider& extra_headers,
+                                      const TlsOptions& tls_options);
 
   struct Impl;
   std::unique_ptr<Impl> impl_;

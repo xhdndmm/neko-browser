@@ -136,16 +136,22 @@ bool Fits(std::string_view text, std::uint32_t cap)
 
 base::Result<std::string> EncodeNetworkRequest(const NetworkRequest& request)
 {
-  if (!Fits(request.url, kMaxUrlBytes) || !Fits(request.cookie_header, kMaxCookieBytes)) {
+  if (!Fits(request.url, kMaxUrlBytes) || !Fits(request.cookie_header, kMaxCookieBytes) ||
+      !Fits(request.method, kMaxMethodBytes) || !Fits(request.body, kMaxNetworkRequestBodyBytes) ||
+      !Fits(request.content_type, kMaxHeaderFieldBytes)) {
     return base::Err(base::Error::InvalidArgument("request field exceeds its size cap"));
   }
   std::string out;
-  out.reserve(request.url.size() + request.cookie_header.size() + 12);
+  out.reserve(request.url.size() + request.cookie_header.size() + request.method.size() +
+              request.body.size() + request.content_type.size() + 24);
   PutU8(out, kNetworkProtocolVersion);
   PutU8(out, static_cast<std::uint8_t>(request.op));
   if (request.op == NetworkOp::kFetch) {
     PutString(out, request.url);
     PutString(out, request.cookie_header);
+    PutString(out, request.method);
+    PutString(out, request.body);
+    PutString(out, request.content_type);
   }
   return out;
 }
@@ -175,6 +181,18 @@ base::Result<NetworkRequest> DecodeNetworkRequest(std::string_view payload)
       return base::Err(e);
     }
     if (auto e = reader.String(kMaxCookieBytes, &request.cookie_header); !e.ok()) {
+      return base::Err(e);
+    }
+    if (auto e = reader.String(kMaxMethodBytes, &request.method); !e.ok()) {
+      return base::Err(e);
+    }
+    if (request.method != "GET" && request.method != "POST") {
+      return base::Err(base::Error::InvalidArgument("unsupported request method"));
+    }
+    if (auto e = reader.String(kMaxNetworkRequestBodyBytes, &request.body); !e.ok()) {
+      return base::Err(e);
+    }
+    if (auto e = reader.String(kMaxHeaderFieldBytes, &request.content_type); !e.ok()) {
       return base::Err(e);
     }
   }

@@ -45,8 +45,13 @@ public:
 
   // Fetches |url| through the child.  |cookie_header| is used for the first
   // hop when non-empty; every other hop's cookies come from |lookup|.
-  base::Result<network::HttpResponse>
-  Fetch(const url::Url& url, std::string_view cookie_header, const CookieLookupFn& lookup);
+  // |method|/|body|/|content_type| carry a form POST; the defaults are a GET.
+  base::Result<network::HttpResponse> Fetch(const url::Url& url,
+                                            std::string_view cookie_header,
+                                            const CookieLookupFn& lookup,
+                                            std::string_view method = "GET",
+                                            std::string_view body = {},
+                                            std::string_view content_type = {});
 
   // Sends kShutdown and reaps the child.  Safe to call more than once.
   void Shutdown();

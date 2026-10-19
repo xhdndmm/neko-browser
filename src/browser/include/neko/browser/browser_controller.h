@@ -468,8 +468,9 @@ public:
 
   // Submits |form| on |tab_id| (worker thread): runs the cancelable "submit"
   // event, then — unless preventDefault was called — collects the named form
-  // controls, URL-encodes them (application/x-www-form-urlencoded) and
-  // navigates to the form action with the encoded data (GET query).
+  // controls and URL-encodes them (application/x-www-form-urlencoded).  A
+  // method="post" form sends the entry list as the request body; every other
+  // form appends it to the action URL's query string (GET).
   void SubmitForm(int tab_id, dom::Element* form);
 
   // Worker/test thread only: raw handles into the live tab list.  The GUI
@@ -739,7 +740,12 @@ public:
   }
 
 private:
-  void FetchAndLoad(Tab& tab, const url::Url& url, const std::string& initiator_site);
+  void FetchAndLoad(Tab& tab,
+                    const url::Url& url,
+                    const std::string& initiator_site,
+                    std::string method = "GET",
+                    std::string body = {},
+                    std::string content_type = {});
   // The search URL for |query|: the custom search_engine_template preference
   // when set, otherwise the configured built-in engine's template.
   std::string SearchUrlFor(std::string_view query) const;
@@ -749,7 +755,19 @@ private:
                  const std::string& final_url);
   void LoadLocalPath(Tab& tab, const std::string& path);
   void RecordVisit(const std::string& url, const std::string& title);
-  void NavigateToUrl(Tab& tab, const std::string& url_string);
+  void NavigateToUrl(Tab& tab,
+                     const std::string& url_string,
+                     std::string method = "GET",
+                     std::string body = {},
+                     std::string content_type = {});
+  // Pushes |target| onto the tab's history stack (truncating forward entries,
+  // deduplicating a reload) and loads it with |method|/|body|.  Public
+  // Navigate() is the GET wrapper.
+  base::Result<void> NavigateWithRequestBody(int tab_id,
+                                             const std::string& target,
+                                             std::string method,
+                                             std::string body,
+                                             std::string content_type);
 
   // Renderer-process mode internals (worker thread only).
   // Ships |bytes| to the tab's renderer session (spawning one for |origin|

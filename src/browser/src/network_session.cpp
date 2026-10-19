@@ -49,12 +49,18 @@ void NetworkSession::Shutdown()
 
 base::Result<network::HttpResponse> NetworkSession::Fetch(const url::Url& url,
                                                           std::string_view cookie_header,
-                                                          const CookieLookupFn& lookup)
+                                                          const CookieLookupFn& lookup,
+                                                          std::string_view method,
+                                                          std::string_view body,
+                                                          std::string_view content_type)
 {
   NetworkRequest request;
   request.op = NetworkOp::kFetch;
   request.url = url.Serialize();
   request.cookie_header.assign(cookie_header);
+  request.method.assign(method);
+  request.body.assign(body);
+  request.content_type.assign(content_type);
   return RoundTrip(request, lookup);
 }
 

@@ -18,11 +18,13 @@ namespace neko::browser {
 // Messages (little-endian):
 //
 //   NetworkRequest (browser -> child):
-//     u8 version(1) | u8 op(1 = fetch, 2 = shutdown)
-//     fetch: u32 url_len | url | u32 cookie_len | cookie
+//     u8 version(2) | u8 op(1 = fetch, 2 = shutdown)
+//     fetch: u32 url_len | url | u32 cookie_len | cookie |
+//            u32 method_len | method | u32 body_len | body |
+//            u32 content_type_len | content_type
 //
 //   NetworkReply (child -> browser):
-//     u8 version(1) | u8 kind
+//     u8 version(2) | u8 kind
 //     kind 0 (response): u32 status_code | u32 reason_len | reason |
 //                        u32 final_url_len | final_url |
 //                        u32 header_count | (u32 name_len | name |
@@ -39,12 +41,16 @@ namespace neko::browser {
 // the child forwards each hop URL to the browser, and the browser answers with
 // the cookies for that exact host (HttpOnly cookies therefore never need to
 // exist in the child).
-inline constexpr std::uint8_t kNetworkProtocolVersion = 1;
+inline constexpr std::uint8_t kNetworkProtocolVersion = 2;
 
 // Response bodies travel inside one IPC frame (64 MiB cap).  Keep a safety
 // margin for the protocol overhead and reject larger bodies explicitly instead
 // of letting the frame layer fail: chunked/streamed delivery is M3b work.
 inline constexpr std::uint32_t kMaxNetworkBodyBytes = 48u * 1024u * 1024u;
+// A request body (a POSTed form's entry list) shares the reply body cap; it
+// travels in the same frame.
+inline constexpr std::uint32_t kMaxNetworkRequestBodyBytes = kMaxNetworkBodyBytes;
+inline constexpr std::uint32_t kMaxMethodBytes = 16;
 
 enum class NetworkOp : std::uint8_t
 {
@@ -59,6 +65,11 @@ struct NetworkRequest
   // Cookie header ("name=value; name2=value2", no "Cookie:" prefix) for the
   // first hop.  Redirect hops are resolved through the cookie-lookup channel.
   std::string cookie_header;
+  // "GET" (the default) or "POST".  A POST carries |body| with |content_type|;
+  // form submission is application/x-www-form-urlencoded (HTML §4.10.21.5).
+  std::string method = "GET";
+  std::string body;
+  std::string content_type;
 };
 
 struct NetworkReply

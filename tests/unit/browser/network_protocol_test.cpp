@@ -34,6 +34,7 @@ TEST(NetworkProtocolTest, FetchRequestRoundTrips)
   request.op = NetworkOp::kFetch;
   request.url = "https://example.com/a?b=c";
   request.cookie_header = "sid=secret; theme=dark";
+  request.method = "GET";
   const auto encoded = EncodeNetworkRequest(request);
   ASSERT_TRUE(encoded.has_value());
 
@@ -42,6 +43,27 @@ TEST(NetworkProtocolTest, FetchRequestRoundTrips)
   EXPECT_EQ(decoded.value().op, NetworkOp::kFetch);
   EXPECT_EQ(decoded.value().url, request.url);
   EXPECT_EQ(decoded.value().cookie_header, request.cookie_header);
+  EXPECT_EQ(decoded.value().method, "GET");
+  EXPECT_TRUE(decoded.value().body.empty());
+}
+
+TEST(NetworkProtocolTest, PostRequestCarriesMethodAndBody)
+{
+  NetworkRequest request;
+  request.op = NetworkOp::kFetch;
+  request.url = "https://example.com/min_yusu8_new.php";
+  request.cookie_header = "sid=secret";
+  request.method = "POST";
+  request.body = "yuzhis%5B%5D=%E7%B4%8D%E8%AA%9E%E6%94%AF&word=%E6%B0%B4";
+  request.content_type = "application/x-www-form-urlencoded";
+  const auto encoded = EncodeNetworkRequest(request);
+  ASSERT_TRUE(encoded.has_value());
+
+  const auto decoded = DecodeNetworkRequest(encoded.value());
+  ASSERT_TRUE(decoded.has_value());
+  EXPECT_EQ(decoded.value().method, "POST");
+  EXPECT_EQ(decoded.value().body, request.body);
+  EXPECT_EQ(decoded.value().content_type, request.content_type);
 }
 
 TEST(NetworkProtocolTest, ShutdownRequestRoundTrips)

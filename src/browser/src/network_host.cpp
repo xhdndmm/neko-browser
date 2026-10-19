@@ -105,7 +105,10 @@ private:
       return headers;
     };
 
-    auto response = network::HttpGet(parsed.value(), 5, provider);
+    auto response =
+        request.method == "POST"
+            ? network::HttpPost(parsed.value(), request.body, request.content_type, 5, provider)
+            : network::HttpGet(parsed.value(), 5, provider);
     if (browser_lost) {
       // The browser vanished mid-fetch; its session is being torn down, so
       // report the failure and let the next Receive observe the closed pipe.

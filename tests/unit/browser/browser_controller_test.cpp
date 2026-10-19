@@ -172,6 +172,26 @@ public:
     return requests_;
   }
 
+  // The method/body/content-type of each recorded request, parallel to
+  // Requests() (same index).
+  std::vector<std::string> Methods() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return methods_;
+  }
+
+  std::vector<std::string> Bodies() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return bodies_;
+  }
+
+  std::vector<std::string> ContentTypes() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return content_types_;
+  }
+
   std::vector<std::string> CookiesSeen() const
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -202,7 +222,7 @@ public:
 
   base::Result<network::HttpResponse> operator()(const url::Url& url,
                                                  std::string_view cookie_header,
-                                                 const RequestContext& /*extra_headers*/ = {})
+                                                 const RequestContext& context = {})
   {
     const std::string key = url.Serialize();
     network::HttpResponse response;
@@ -210,6 +230,9 @@ public:
       std::lock_guard<std::mutex> lock(mutex_);
       requests_.push_back(key);
       cookies_seen_.push_back(std::string(cookie_header));
+      methods_.push_back(context.method);
+      bodies_.push_back(context.body);
+      content_types_.push_back(context.content_type);
       // The real fetch decodes data: URLs locally before it opens a socket
       // (see network::DecodeDataUrl), so the fake one mirrors that instead of
       // demanding a route.
@@ -231,6 +254,9 @@ private:
   // Guarded by |mutex_|; read them through Requests()/CookiesSeen()/etc.
   std::vector<std::string> requests_;
   std::vector<std::string> cookies_seen_;
+  std::vector<std::string> methods_;
+  std::vector<std::string> bodies_;
+  std::vector<std::string> content_types_;
   std::map<std::string, Route> routes_;
 
   mutable std::mutex mutex_;
@@ -992,7 +1018,8 @@ TEST(BrowserControllerTest, TextInputAcceptsTypedCharacters)
 }
 
 // kaom.net min_z_sinotibetan.php triage: clicking the submit button of a
-// method=post form must submit it (the page's 「碰 碰 運 氣」 button).
+// method=post form must submit it as POST with the encoded entry list in the
+// body (the page's 「碰 碰 運 氣」 button).
 TEST(BrowserControllerTest, SubmitButtonPostsTheForm)
 {
   TempProfile tp;
@@ -1000,7 +1027,8 @@ TEST(BrowserControllerTest, SubmitButtonPostsTheForm)
   fetch.Add("http://example.com/",
             FakeFetcher::Route{200,
                                {{"content-type", "text/html"}},
-                               "<html><body><form action='min_yusu8_new.php' method='post'>"
+                               "<html><head><meta charset='utf-8'></head><body>"
+                               "<form action='min_yusu8_new.php' method='post'>"
                                "<input type='text' name='word' value='水'>"
                                "<input type='submit' value='碰 碰 運 氣'>"
                                "</form></body></html>"});
@@ -1020,10 +1048,71 @@ TEST(BrowserControllerTest, SubmitButtonPostsTheForm)
   controller.DispatchPointerClick(
       tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f);
   const std::vector<std::string> requests = fetch.Requests();
-  const bool submitted = std::any_of(requests.begin(), requests.end(), [](const std::string& url) {
-    return url.find("min_yusu8_new.php") != std::string::npos;
-  });
-  EXPECT_TRUE(submitted) << "clicking the submit button must request the form action";
+  const auto it =
+      std::find(requests.begin(), requests.end(), "http://example.com/min_yusu8_new.php");
+  ASSERT_NE(it, requests.end())
+      << "clicking the submit button must request the form action; recorded: "
+      << testing::PrintToString(requests);
+  const std::size_t index = static_cast<std::size_t>(std::distance(requests.begin(), it));
+  EXPECT_EQ(fetch.Methods()[index], "POST")
+      << "method=post must reach the wire as POST, not as a GET query";
+  EXPECT_EQ(fetch.Bodies()[index], "word=%E6%B0%B4");
+  EXPECT_EQ(fetch.ContentTypes()[index], "application/x-www-form-urlencoded");
+  EXPECT_EQ(tab->url, "http://example.com/min_yusu8_new.php")
+      << "a POST form's entry list belongs in the body, not in the URL";
+}
+
+// kaom.net min_z_sinotibetan.php (2026-10 report: 「勾选两个语支后无法正常
+// 发送」): the page's option checkboxes all share the name `yuzhis[]`, and its
+// PHP reads them from the POST body.  Submit two checked branches and assert
+// both entries travel in the body of a POST.  (The server answers a GET with
+// 「請勾選至少一個語支！」 because GET ignores them entirely.)
+TEST(BrowserControllerTest, FormPostCarriesEveryCheckedDuplicateName)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add(
+      "http://example.com/",
+      FakeFetcher::Route{200,
+                         {{"content-type", "text/html"}},
+                         "<html><head><meta charset='utf-8'></head><body>"
+                         "<form action='min_yusu8_new.php' method='post'>"
+                         "<input type='checkbox' name='yuzhis[]' value='尼語支·哈尼組' checked>"
+                         "<input type='checkbox' name='yuzhis[]' value='納語支' checked>"
+                         "<input type='checkbox' name='yuzhis[]' value='漢語支'>"
+                         "<input type='text' name='t' value='sinotibetan'>"
+                         "<input type='text' name='word' value='水'>"
+                         "<input type='submit' value='碰 碰 運 氣'>"
+                         "</form></body></html>"});
+  fetch.Add(
+      "http://example.com/min_yusu8_new.php",
+      FakeFetcher::Route{200, {{"content-type", "text/html"}}, "<html><body>ok</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* submit = dom::QuerySelector(*tab->page->document(), "input[type=submit]");
+  ASSERT_NE(submit, nullptr);
+  const auto geometry = tab->page->ElementBoxGeometry(*submit);
+  ASSERT_TRUE(geometry.has_value());
+
+  controller.DispatchPointerClick(
+      tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f);
+  const std::vector<std::string> requests = fetch.Requests();
+  const auto it =
+      std::find(requests.begin(), requests.end(), "http://example.com/min_yusu8_new.php");
+  ASSERT_NE(it, requests.end()) << "recorded: " << testing::PrintToString(requests);
+  const std::size_t index = static_cast<std::size_t>(std::distance(requests.begin(), it));
+  EXPECT_EQ(fetch.Methods()[index], "POST");
+  // Both checked duplicates in tree order, then the text controls; the
+  // unchecked box is omitted.
+  EXPECT_EQ(fetch.Bodies()[index],
+            "yuzhis%5B%5D=%E5%B0%BC%E8%AA%9E%E6%94%AF%C2%B7%E5%93%88%E5%B0%BC%E7%B5%84"
+            "&yuzhis%5B%5D=%E7%B4%8D%E8%AA%9E%E6%94%AF"
+            "&t=sinotibetan&word=%E6%B0%B4");
+  EXPECT_EQ(tab->url, "http://example.com/min_yusu8_new.php");
 }
 
 // The oninput handler runs after a value edit and document.title writes land

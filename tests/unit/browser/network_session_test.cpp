@@ -163,6 +163,28 @@ private:
         break;
       }
     }
+    // A POST's framing: keep reading until Content-Length body bytes arrived,
+    // so the recorded request can be asserted in full.
+    const std::size_t header_end = request.find("\r\n\r\n");
+    if (header_end != std::string::npos) {
+      const std::string lower = Lowercase(request.substr(0, header_end));
+      const std::size_t name = lower.find("\r\ncontent-length:");
+      std::size_t body_length = 0;
+      if (name != std::string::npos) {
+        const std::size_t value_start = request.find(':', name + 2);
+        if (value_start != std::string::npos) {
+          body_length = static_cast<std::size_t>(std::stoul(request.substr(value_start + 1)));
+        }
+      }
+      const std::size_t body_start = header_end + 4;
+      while (request.size() - body_start < body_length) {
+        const ssize_t n = ::recv(fd, buffer, sizeof(buffer), 0);
+        if (n <= 0) {
+          break;
+        }
+        request.append(buffer, static_cast<std::size_t>(n));
+      }
+    }
     {
       std::lock_guard<std::mutex> lock(mutex_);
       requests_.push_back(request);
@@ -205,6 +227,45 @@ TEST(NetworkSessionTest, FetchThroughChildReturnsTheResponse)
   EXPECT_EQ(response.value().GetHeader("x-test"), "1");
   EXPECT_EQ(response.value().body, "hello raw");
   EXPECT_NE(response.value().final_url.find("/hello"), std::string::npos);
+}
+
+TEST(NetworkSessionTest, PostBodyCrossesTheChild)
+{
+  LoopbackHttpServer server([](const std::string& path, const std::string&) {
+    if (path == "/min_yusu8_new.php") {
+      return std::string(
+          "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nok");
+    }
+    return std::string("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+  });
+  ASSERT_TRUE(server.valid());
+
+  auto session = NetworkSession::Spawn(NEKO_BROWSER_BIN);
+  ASSERT_TRUE(session.has_value()) << session.error().message();
+  const auto url = url::Url::Parse(server.Url("/min_yusu8_new.php"));
+  ASSERT_TRUE(url.has_value());
+
+  const std::string body =
+      "yuzhis%5B%5D=%E5%B0%BC%E8%AA%9E%E6%94%AF%C2%B7%E5%93%88%E5%B0%BC%E7%B5%84"
+      "&yuzhis%5B%5D=%E7%B4%8D%E8%AA%9E%E6%94%AF&word=%E6%B0%B4";
+  NetworkSession::CookieLookupFn no_lookup;
+  const auto response = session.value()->Fetch(url.value(),
+                                               /*cookie_header=*/{},
+                                               no_lookup,
+                                               "POST",
+                                               body,
+                                               "application/x-www-form-urlencoded");
+  ASSERT_TRUE(response.has_value()) << response.error().message();
+  EXPECT_EQ(response.value().status_code, 200);
+
+  const std::vector<std::string> requests = server.Requests();
+  ASSERT_EQ(requests.size(), 1u);
+  EXPECT_EQ(requests[0].rfind("POST /min_yusu8_new.php HTTP/1.1\r\n", 0), 0u);
+  EXPECT_NE(requests[0].find("Content-Type: application/x-www-form-urlencoded\r\n"),
+            std::string::npos);
+  const std::size_t body_start = requests[0].find("\r\n\r\n");
+  ASSERT_NE(body_start, std::string::npos);
+  EXPECT_EQ(requests[0].substr(body_start + 4), body);
 }
 
 TEST(NetworkSessionTest, RedirectHopsAskTheBrowserForCookies)

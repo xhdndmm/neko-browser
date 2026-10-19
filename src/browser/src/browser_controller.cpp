@@ -708,11 +708,12 @@ BrowserController::BrowserController(std::string profile_dir,
             return CookieHeader(target, NowUnix(), same_site_for(target));
           };
           // NOTE: extra_headers do not cross the network-process protocol yet
-          // (the request serializer carries only url + cookie); the CORS
-          // Origin header is therefore absent there.  That fails CLOSED (an
-          // Origin-varying server grants no ACAO -> the response is refused),
-          // so it is a compatibility gap, not a security hole.
-          auto fetched = session->Fetch(u, /*cookie_header=*/{}, lookup);
+          // (the request serializer carries url, cookie, method and body); the
+          // CORS Origin header is therefore absent there.  That fails CLOSED
+          // (an Origin-varying server grants no ACAO -> the response is
+          // refused), so it is a compatibility gap, not a security hole.
+          auto fetched = session->Fetch(
+              u, /*cookie_header=*/{}, lookup, context.method, context.body, context.content_type);
           if (fetched.has_value()) {
             return fetched;
           }
@@ -733,6 +734,11 @@ BrowserController::BrowserController(std::string profile_dir,
         }
         return headers;
       };
+      // Form submission posts an application/x-www-form-urlencoded body; every
+      // other fetch in the engine is a GET (the default context method).
+      if (context.method == "POST") {
+        return network::HttpPost(u, context.body, context.content_type, 5, provider);
+      }
       return network::HttpGet(u, 5, provider);
     };
   }
@@ -983,7 +989,11 @@ std::string BrowserController::SearchUrlFor(std::string_view query) const
   return BuildSearchUrl(DefaultSearchEngine(id).url_template, query);
 }
 
-void BrowserController::NavigateToUrl(Tab& tab, const std::string& url_string)
+void BrowserController::NavigateToUrl(Tab& tab,
+                                      const std::string& url_string,
+                                      std::string method,
+                                      std::string body,
+                                      std::string content_type)
 {
   // Every exit path below replaces the tab's document (or its error page);
   // release the previous document's arena pages when the navigation is done.
@@ -1042,7 +1052,12 @@ void BrowserController::NavigateToUrl(Tab& tab, const std::string& url_string)
     std::lock_guard<std::mutex> lock(mutex_);
     tab.loading = true;
   }
-  FetchAndLoad(tab, parsed.value(), navigation_initiator_site);
+  FetchAndLoad(tab,
+               parsed.value(),
+               navigation_initiator_site,
+               std::move(method),
+               std::move(body),
+               std::move(content_type));
   {
     std::lock_guard<std::mutex> lock(mutex_);
     tab.loading = false;
@@ -1082,12 +1097,21 @@ void BrowserController::LoadLocalPath(Tab& tab, const std::string& path)
 
 base::Result<void> BrowserController::Navigate(int tab_id, const std::string& input)
 {
-  Tab* tab = FindTab(tab_id);
-  if (tab == nullptr)
-    return base::Err(base::Error::InvalidArgument("no such tab"));
   const std::string target = ResolveInput(input);
   if (target.empty())
     return base::Err(base::Error::InvalidArgument("empty URL"));
+  return NavigateWithRequestBody(tab_id, target, "GET", {}, {});
+}
+
+base::Result<void> BrowserController::NavigateWithRequestBody(int tab_id,
+                                                              const std::string& target,
+                                                              std::string method,
+                                                              std::string body,
+                                                              std::string content_type)
+{
+  Tab* tab = FindTab(tab_id);
+  if (tab == nullptr)
+    return base::Err(base::Error::InvalidArgument("no such tab"));
 
   // Push onto the back/forward stack (truncating any forward entries).
   // The history stack is worker-thread only, so it needs no lock.
@@ -1102,7 +1126,7 @@ base::Result<void> BrowserController::Navigate(int tab_id, const std::string& in
     tab->history_index = static_cast<int>(tab->history.size()) - 1;
   }
 
-  NavigateToUrl(*tab, target);
+  NavigateToUrl(*tab, target, std::move(method), std::move(body), std::move(content_type));
 
   return base::Ok();
 }
@@ -1531,6 +1555,9 @@ void BrowserController::SubmitForm(int tab_id, dom::Element* form)
   // Everything that reads the live document happens under the DOM lock; the
   // navigation deliberately happens *after* the lock is released.
   std::string target;
+  std::string method;
+  std::string body;
+  std::string content_type;
   std::optional<PendingCredential> captured;
   {
     const std::unique_lock<std::recursive_mutex> dom_lock = tab->page->AcquireDomLock();
@@ -1539,8 +1566,13 @@ void BrowserController::SubmitForm(int tab_id, dom::Element* form)
         !tab->script_runtime->DispatchCancelableEvent(*form, "submit")) {
       return;
     }
-    // Encode the named controls (application/x-www-form-urlencoded) and
-    // navigate to the action with the data as the query string (GET).
+    // Encode the named controls (application/x-www-form-urlencoded).  The
+    // form's method decides where the entry list travels (HTML §4.10.21.5):
+    //   * GET: appended to the action URL's query string;
+    //   * POST: the request body, with the action URL left alone.
+    // An unrecognised method (and the unimplemented "dialog") falls back to
+    // GET, matching the spec's "get" default.  enctype is not consulted yet:
+    // everything is encoded as application/x-www-form-urlencoded.
     const std::string data = CollectFormData(*form);
     // Password manager: capture the login this submission would offer to
     // save (the origin gate below skips file:/data: documents).
@@ -1550,7 +1582,18 @@ void BrowserController::SubmitForm(int tab_id, dom::Element* form)
     if (target.empty()) {
       target = tab->url;
     }
-    target += (target.find('?') != std::string::npos ? "&" : "?") + data;
+    std::string method_attr = std::string(form->GetAttribute("method").value_or("get"));
+    const std::size_t first = method_attr.find_first_not_of(" \t\n\f\r");
+    const std::size_t last = method_attr.find_last_not_of(" \t\n\f\r");
+    method_attr = first == std::string::npos ? std::string()
+                                             : ToLower(method_attr.substr(first, last - first + 1));
+    if (method_attr == "post") {
+      method = "POST";
+      body = data;
+      content_type = "application/x-www-form-urlencoded";
+    } else {
+      target += (target.find('?') != std::string::npos ? "&" : "?") + data;
+    }
   }
   // Publish the captured login (if any) before navigating: the save prompt
   // belongs to this submission, not to whatever page comes next.
@@ -1561,11 +1604,12 @@ void BrowserController::SubmitForm(int tab_id, dom::Element* form)
       tab->pending_credential = std::move(captured);
     }
   }
-  // Navigate *outside* the DOM lock.  Navigate() replaces the tab's Page, which
-  // destroys the Page this lock was taken on; unlocking it afterwards was a
-  // use-after-free on the destroyed Page's mutex (reported by ThreadSanitizer,
-  // and undefined behaviour per the standard).
-  static_cast<void>(Navigate(tab_id, target));
+  // Navigate *outside* the DOM lock.  NavigateWithRequestBody() replaces the
+  // tab's Page, which destroys the Page this lock was taken on; unlocking it
+  // afterwards was a use-after-free on the destroyed Page's mutex (reported by
+  // ThreadSanitizer, and undefined behaviour per the standard).
+  static_cast<void>(NavigateWithRequestBody(
+      tab_id, target, std::move(method), std::move(body), std::move(content_type)));
 }
 
 base::Result<void> BrowserController::NavigateActive(const std::string& input)
@@ -2642,7 +2686,10 @@ void BrowserController::MarkSessionFailed(Tab& tab, std::string_view message)
 
 void BrowserController::FetchAndLoad(Tab& tab,
                                      const url::Url& url,
-                                     const std::string& initiator_site)
+                                     const std::string& initiator_site,
+                                     std::string method,
+                                     std::string body,
+                                     std::string content_type)
 {
   NavigationDepthGuard guard(20);
   if (guard.Exceeded()) {
@@ -2662,6 +2709,9 @@ void BrowserController::FetchAndLoad(Tab& tab,
   RequestContext context;
   context.initiator_site = initiator_site;
   context.top_level_navigation = true;
+  context.method = std::move(method);
+  context.body = std::move(body);
+  context.content_type = std::move(content_type);
   const storage::CookieSameSiteContext same_site{
       /*cross_site=*/!initiator_site.empty() && security::SiteForCookies(url) != initiator_site,
       /*top_level_navigation=*/true};
@@ -2671,6 +2721,7 @@ void BrowserController::FetchAndLoad(Tab& tab,
   const double elapsed_ms = std::chrono::duration<double, std::milli>(end - start).count();
 
   NetworkLogEntry entry;
+  entry.method = context.method;
   entry.url = url.Serialize();
   entry.elapsed_ms = elapsed_ms;
   entry.timestamp = NowUnix();
@@ -2713,12 +2764,12 @@ void BrowserController::FetchAndLoad(Tab& tab,
     return;
   }
 
-  const std::string content_type = response.value().GetHeader("content-type");
+  const std::string response_content_type = response.value().GetHeader("content-type");
   // Use the final URL (after redirects) so relative hrefs/srcs in the page
   // resolve against the real document URL, not the pre-redirect request URL.
   const std::string& final_url =
       response.value().final_url.empty() ? url.Serialize() : response.value().final_url;
-  LoadBytes(tab, response.value().body, content_type, final_url);
+  LoadBytes(tab, response.value().body, response_content_type, final_url);
 }
 
 void BrowserController::LoadBytes(Tab& tab,

@@ -987,12 +987,19 @@ base::Result<HttpResponse> DecodeDataUrl(std::string_view url)
 
 namespace {
 
-// Builds the HTTP/1.1 GET request line and headers for |url|.  The request is
+// Builds the HTTP/1.1 request line and headers for |url|.  The request is
 // persistent (no `Connection: close`): the connection goes back to the pool
-// unless the response says otherwise.
-std::string BuildGetRequest(const url::Url& url, const HeaderProvider& extra_headers)
+// unless the response says otherwise.  |method| is "GET" or "POST"; a POST
+// carries |body| with its Content-Type and an explicit Content-Length (0 for
+// an empty body, which is still a valid POST).
+std::string BuildRequest(std::string_view method,
+                         const url::Url& url,
+                         std::string_view body,
+                         std::string_view content_type,
+                         const HeaderProvider& extra_headers)
 {
-  std::string request = "GET ";
+  std::string request(method);
+  request.push_back(' ');
   // The request target must be percent-encoded (RFC 3986): raw path/query
   // bytes must not reach the request line (defense in depth against CRLF
   // and header injection even if a caller constructs a malformed Url).
@@ -1015,6 +1022,15 @@ std::string BuildGetRequest(const url::Url& url, const HeaderProvider& extra_hea
   request += "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n";
   request += "Accept-Language: en-US,en;q=0.9\r\n";
   request += "Accept-Encoding: gzip, deflate\r\n";
+  if (method == "POST") {
+    request += "Content-Type: ";
+    request +=
+        content_type.empty() ? "application/x-www-form-urlencoded" : std::string(content_type);
+    request += "\r\n";
+    request += "Content-Length: ";
+    request += std::to_string(body.size());
+    request += "\r\n";
+  }
   if (extra_headers) {
     for (const HttpHeader& header : extra_headers(url)) {
       // Last line of defense against request splitting: the request target is
@@ -1027,6 +1043,15 @@ std::string BuildGetRequest(const url::Url& url, const HeaderProvider& extra_hea
       if (!IsValidHeaderFieldName(header.name) || !IsValidHeaderFieldValue(header.value)) {
         continue;
       }
+      // Framing and routing headers are owned by this function; letting a
+      // caller repeat one would be request smuggling (RFC 9112 §6.3).
+      if (base::AsciiEqualsIgnoreCase(header.name, "content-length") ||
+          base::AsciiEqualsIgnoreCase(header.name, "transfer-encoding") ||
+          base::AsciiEqualsIgnoreCase(header.name, "host") ||
+          base::AsciiEqualsIgnoreCase(header.name, "connection") ||
+          (method == "POST" && base::AsciiEqualsIgnoreCase(header.name, "content-type"))) {
+        continue;
+      }
       request += header.name;
       request += ": ";
       request += header.value;
@@ -1034,6 +1059,9 @@ std::string BuildGetRequest(const url::Url& url, const HeaderProvider& extra_hea
     }
   }
   request += "\r\n";
+  if (method == "POST") {
+    request.append(body);
+  }
   return request;
 }
 
@@ -1225,14 +1253,36 @@ base::Result<HttpResponse> HttpClient::GetOnce(const url::Url& url,
                                                const HeaderProvider& extra_headers,
                                                const TlsOptions& tls_options)
 {
+  return SendOnce("GET", url, {}, {}, extra_headers, tls_options);
+}
+
+base::Result<HttpResponse> HttpClient::SendOnce(std::string_view method,
+                                                const url::Url& url,
+                                                std::string_view body,
+                                                std::string_view content_type,
+                                                const HeaderProvider& extra_headers,
+                                                const TlsOptions& tls_options)
+{
   if (url.scheme() != "http" && url.scheme() != "https") {
     return base::Err(base::Error::NotImplemented("unsupported URL scheme '" + url.scheme() +
                                                  "' (only http/https)"));
   }
-  const std::string request = BuildGetRequest(url, extra_headers);
+  if (method != "GET" && method != "POST") {
+    return base::Err(
+        base::Error::NotImplemented("unsupported HTTP method '" + std::string(method) + "'"));
+  }
+  // A CR/LF in the media type would split the request into headers.  Callers
+  // pass a constant today; validate at the seam so that stays true.
+  if (method == "POST" && !IsValidHeaderFieldValue(content_type)) {
+    return base::Err(base::Error::InvalidArgument("invalid Content-Type value"));
+  }
+  const std::string request = BuildRequest(method, url, body, content_type, extra_headers);
   const ConnectionKey key = Impl::KeyFor(url, tls_options);
   impl_->CountRequest();
 
+  // Only a GET is safe to replay: a POST may already have had side effects by
+  // the time the connection dies.
+  const bool idempotent = method == "GET";
   base::Result<HttpResponse> last = base::Err(base::Error::Network("request was not attempted"));
   for (int attempt = 0; attempt < 2; ++attempt) {
     bool reused = false;
@@ -1245,9 +1295,10 @@ base::Result<HttpResponse> HttpClient::GetOnce(const url::Url& url,
     // Retry exactly once, and only when a *pooled* connection failed before
     // producing a single byte: that is the "the peer closed it while it was
     // idle" case, where repeating an idempotent GET is safe.  A failure with
-    // response bytes on the wire, or on a freshly dialed connection, is real.
-    const bool retryable =
-        !result.response.has_value() && reused && !result.response_started && attempt == 0;
+    // response bytes on the wire, on a freshly dialed connection, or on a
+    // non-idempotent method is real.
+    const bool retryable = idempotent && !result.response.has_value() && reused &&
+                           !result.response_started && attempt == 0;
     if (result.reusable) {
       impl_->Release(key, std::move(lease.value()));
     } else {
@@ -1325,6 +1376,69 @@ base::Result<HttpResponse> HttpClient::Get(const url::Url& url,
   }
 }
 
+base::Result<HttpResponse> HttpClient::Post(const url::Url& url,
+                                            std::string_view body,
+                                            std::string_view content_type,
+                                            int redirect_limit,
+                                            const HeaderProvider& extra_headers,
+                                            const TlsOptions& tls_options)
+{
+  if (url.scheme() == "data") {
+    // data: URLs never accept a body; refuse instead of silently dropping it.
+    return base::Err(base::Error::InvalidArgument("cannot POST to a data: URL"));
+  }
+
+  std::string current_method = "POST";
+  std::string current_body(body);
+  std::string current_content_type(content_type);
+  url::Url current = url;
+  for (;;) {
+    base::Result<HttpResponse> response = SendOnce(
+        current_method, current, current_body, current_content_type, extra_headers, tls_options);
+    if (!response) {
+      return response;
+    }
+    const int status = response.value().status_code;
+    const bool is_redirect =
+        status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+    if (is_redirect && redirect_limit > 0) {
+      const std::string location = response.value().GetHeader("location");
+      if (!location.empty()) {
+        const base::Result<url::Url> next = url::Url::Parse(location, current);
+        if (next) {
+          if (current.scheme() == "https" && next.value().scheme() == "http") {
+            return base::Err(
+                base::Error::NotImplemented("refusing https->http redirect downgrade"));
+          }
+          // 303 means "see other": always GET.  301/302 answering a POST are
+          // rewritten to GET by Fetch §4.4 (and every browser in practice),
+          // because the user agent cannot know the server kept the body's
+          // effects.  307/308 were added to preserve method and body.
+          if (status == 303 || status == 301 || status == 302) {
+            current_method = "GET";
+            current_body.clear();
+            current_content_type.clear();
+          }
+          current = next.value();
+          --redirect_limit;
+          continue;
+        }
+      }
+    }
+    HttpResponse out = std::move(response.value());
+    out.final_url = current.Serialize();
+    const std::string content_encoding = out.GetHeader("content-encoding");
+    if (!content_encoding.empty() && !base::AsciiEqualsIgnoreCase(content_encoding, "identity")) {
+      const base::Result<std::string> decoded = DecodeContentEncodings(content_encoding, out.body);
+      if (!decoded) {
+        return base::Err(decoded.error());
+      }
+      out.body = std::move(decoded.value());
+    }
+    return base::Ok(std::move(out));
+  }
+}
+
 HttpClient& SharedHttpClient()
 {
   // One pool for the whole process: every existing HttpGet caller (stylesheet
@@ -1342,6 +1456,17 @@ base::Result<HttpResponse> HttpGet(const url::Url& url,
                                    const TlsOptions& tls_options)
 {
   return SharedHttpClient().Get(url, redirect_limit, extra_headers, tls_options);
+}
+
+base::Result<HttpResponse> HttpPost(const url::Url& url,
+                                    std::string_view body,
+                                    std::string_view content_type,
+                                    int redirect_limit,
+                                    const HeaderProvider& extra_headers,
+                                    const TlsOptions& tls_options)
+{
+  return SharedHttpClient().Post(
+      url, body, content_type, redirect_limit, extra_headers, tls_options);
 }
 
 } // namespace neko::network
