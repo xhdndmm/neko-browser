@@ -472,6 +472,24 @@ TEST(LayoutTest, ExplicitHeight)
   EXPECT_FLOAT_EQ(div->height, 100.0f);
 }
 
+// CSS 2.2 §10.6.3: a definite height is the used height; taller content
+// overflows (clipped or painted) instead of growing the box.  The old
+// `max(content, specified)` made `height:60px; overflow:hidden` reserve its
+// content height, which pushed baidu.com's page down by wrapped nav rows.
+TEST(LayoutTest, ExplicitHeightIsNotGrownToFitTallerContent)
+{
+  Page page = Build("<body><div id=\"a\" style=\"height: 40px; overflow: hidden\">"
+                    "<div style=\"height: 100px\">x</div></div>"
+                    "<div id=\"b\" style=\"height: 10px\"></div></body>");
+  const LayoutBox* a = FindBox(*page.root, "#a", *page.doc);
+  ASSERT_NE(a, nullptr);
+  EXPECT_FLOAT_EQ(a->height, 40.0f);
+  const LayoutBox* b = FindBox(*page.root, "#b", *page.doc);
+  ASSERT_NE(b, nullptr);
+  EXPECT_FLOAT_EQ(b->y, a->y + 40.0f)
+      << "the next sibling starts after the specified height";
+}
+
 TEST(LayoutTest, PercentWidth)
 {
   Page page = Build("<body><div style=\"width: 50%\">x</div></body>");

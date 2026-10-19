@@ -2866,11 +2866,13 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
           }
           // else: a percentage height against an auto containing block is auto.
         } else {
-          content_height = std::max(content_height,
-                                    SpecToContent(box->style.height.value(),
-                                                  containing_width,
-                                                  border_padding_h,
-                                                  box->style.box_sizing));
+          // A definite height wins over the content: the used height is the
+          // specified height and taller content overflows (CSS 2.2 §10.6.3).
+          // Growing the box to its content instead made `height:60px;
+          // overflow:hidden` reserve its content height, so baidu.com's
+          // adaptive top nav kept the space of its wrapped (clipped) rows.
+          content_height = SpecToContent(
+              box->style.height.value(), containing_width, border_padding_h, box->style.box_sizing);
         }
       } else if (box->style.aspect_ratio.has_value() && box->style.width.has_value()) {
         content_height = content_width / box->style.aspect_ratio.value();
