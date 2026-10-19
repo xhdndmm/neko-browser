@@ -441,6 +441,23 @@ std::unique_ptr<dom::Document> Parser::Parse()
           // body" rules (13.2.6.4.9), which simply stop parsing here.
           mode_ = Mode::kInBody;
           break;
+        case Mode::kInTemplate:
+          // 13.2.6.4.18 EOF: with no template element on the stack, stop
+          // parsing (the fragment case).  Otherwise pop through the template,
+          // clear active formatting to the marker, pop its template insertion
+          // mode, reset the insertion mode and reprocess the EOF token -- the
+          // enclosing while loop performs that reprocessing.
+          if (!StackHasTemplate()) {
+            mode_ = Mode::kInBody; // stop parsing
+          } else {
+            PopThrough("template");
+            ClearActiveFormattingToMarker();
+            if (!template_modes_.empty()) {
+              template_modes_.pop_back();
+            }
+            ResetInsertionMode();
+          }
+          break;
         case Mode::kInBody:
           break;
         }
@@ -449,6 +466,10 @@ std::unique_ptr<dom::Document> Parser::Parse()
     }
     ProcessToken(std::move(token));
   }
+  // The form element pointer only has meaning for the duration of one parse
+  // (WHATWG 13.2.1).  A Parser is single-use, but clear it so no stale pointer
+  // can survive if Parse() is ever called again.
+  form_element_ = nullptr;
   return std::move(document_);
 }
 
@@ -467,6 +488,16 @@ std::unique_ptr<dom::DocumentFragment> Parser::ParseFragment()
   stack_.clear();
   stack_.push_back(fragment_root_);
 
+  // WHATWG 13.4 step 4: "If context is a template element, then push 'in
+  // template' onto the stack of template insertion modes."  ResetInsertionMode
+  // then selects that mode for the fragment.  (The parsed nodes still land in
+  // the returned DocumentFragment: the context element is never inserted, so
+  // its own template contents fragment is not the parse target.  This matches
+  // the innerHTML-on-a-<template> caller, which moves the result itself.)
+  if (fragment_context_ != nullptr && fragment_context_->tag_name() == "template") {
+    template_modes_.push_back(Mode::kInTemplate);
+  }
+
   // Step 11: "Reset the parser's insertion mode appropriately."  In the
   // fragment case this reads the fragment context element (13.2.6.1).
   ResetInsertionMode();
@@ -484,6 +515,7 @@ std::unique_ptr<dom::DocumentFragment> Parser::ParseFragment()
     }
     ProcessToken(std::move(token));
   }
+  form_element_ = nullptr; // no meaning outside the parse; see Parse()
   return std::move(fragment_);
 }
 
@@ -796,6 +828,19 @@ dom::Element* Parser::FindInStack(std::string_view tag) const
   return nullptr;
 }
 
+dom::Element* Parser::FindInScopeElement(std::string_view tag) const
+{
+  for (auto it = stack_.rbegin(); it != stack_.rend(); ++it) {
+    if ((*it)->tag_name() == tag) {
+      return *it;
+    }
+    if (IsScopeBoundaryTag((*it)->tag_name())) {
+      return nullptr;
+    }
+  }
+  return nullptr;
+}
+
 void Parser::ClosePElement()
 {
   // "close a p element": only if the open <p> is in button scope.
@@ -873,6 +918,25 @@ void Parser::GenerateImpliedEndTags(std::optional<std::string_view> except)
       break;
     }
     if (except.has_value() && tag == except.value()) {
+      break;
+    }
+    PopElement();
+  }
+}
+
+// "Generate all implied end tags thoroughly" (13.2.6.3): the larger set used
+// by the </template> end tag rule (13.2.6.4.4), which also closes table
+// structure elements that a template may have left open.
+void Parser::GenerateImpliedEndTagsThoroughly()
+{
+  while (!stack_.empty()) {
+    const std::string_view tag = stack_.back()->tag_name();
+    const bool implied = tag == "caption" || tag == "colgroup" || tag == "dd" || tag == "dt" ||
+                         tag == "li" || tag == "optgroup" || tag == "option" || tag == "p" ||
+                         tag == "rb" || tag == "rp" || tag == "rt" || tag == "rtc" ||
+                         tag == "tbody" || tag == "td" || tag == "tfoot" || tag == "th" ||
+                         tag == "thead" || tag == "tr";
+    if (!implied) {
       break;
     }
     PopElement();
@@ -983,6 +1047,21 @@ void Parser::ResetInsertionMode()
       mode_ = Mode::kInTable;
       return;
     }
+    if (tag == "template") {
+      // WHATWG 13.2.6.1: "If node is a template element, then switch the
+      // insertion mode to the current template insertion mode and return."
+      // The stack is non-empty whenever a template element is open; the
+      // fallback keeps the parser well-defined for degenerate fragment input.
+      mode_ = template_modes_.empty() ? Mode::kInBody : template_modes_.back();
+      return;
+    }
+    if (tag == "head" && !last) {
+      // "If node is a head element and last is false, then switch the
+      // insertion mode to in head and return."  This matters when </template>
+      // rewinds to a <head> that is still on the stack.
+      mode_ = Mode::kInHead;
+      return;
+    }
     if (tag == "body") {
       mode_ = Mode::kInBody;
       return;
@@ -1014,6 +1093,46 @@ void Parser::ClearActiveFormattingToMarker()
       break;
     }
   }
+}
+
+bool Parser::StackHasTemplate() const
+{
+  return FindInStack("template") != nullptr;
+}
+
+// "<template> start tag" (WHATWG 13.2.6.4.4, the in head rules used by in
+// body, in table and in template): insert the element, push a marker onto the
+// list of active formatting elements, set the insertion mode to "in template"
+// and push it onto the stack of template insertion modes.
+//
+// The standard's "set the frameset-ok flag to not ok" step is NOT MODELLED:
+// this parser has no frameset-ok flag and never implements the "in frameset"
+// insertion mode, so no observable behaviour depends on it.
+void Parser::OpenTemplate(Token token)
+{
+  InsertElement(CreateElement(token));
+  PushFormattingMarker();
+  mode_ = Mode::kInTemplate;
+  template_modes_.push_back(Mode::kInTemplate);
+}
+
+// "</template> end tag" (WHATWG 13.2.6.4.4).  Implemented here because the in
+// body, in table, in table body, in row, in column group, in select and in
+// template rules all delegate to the in head rules for it.
+void Parser::CloseTemplate()
+{
+  if (!StackHasTemplate()) {
+    return; // parse error; ignore
+  }
+  GenerateImpliedEndTagsThoroughly();
+  // "If the current node is not a template element, then this is a parse
+  // error" -- no action beyond the diagnostic.
+  PopThrough("template");
+  ClearActiveFormattingToMarker();
+  if (!template_modes_.empty()) {
+    template_modes_.pop_back();
+  }
+  ResetInsertionMode();
 }
 
 // The adjusted insertion location (13.2.6.1).  When foster parenting is
@@ -1498,6 +1617,7 @@ void Parser::ProcessComment(Token token)
   case Mode::kInCell:
   case Mode::kInSelect:
   case Mode::kInSelectInTable:
+  case Mode::kInTemplate: // 13.2.6.4.18: comments use the in body rules
     AppendNode(std::make_unique<dom::Comment>(token.data));
     return;
   }
@@ -1552,6 +1672,9 @@ void Parser::ProcessCharacter(Token token)
     Reprocess(std::move(token));
     return;
 
+  // The "in template" rules process character tokens using the "in body" rules
+  // (13.2.6.4.18), so these two modes share this behaviour.
+  case Mode::kInTemplate:
   case Mode::kInBody:
     ReconstructActiveFormatting();
     AppendText(token.data);
@@ -1730,17 +1853,11 @@ void Parser::ProcessStartTag(Token token)
       return;
     }
     if (token.name == "template") {
-      // <template> needs the "in template" insertion mode and a separate
-      // DocumentFragment for its contents (13.2.6.4.7), which the engine does
-      // not model yet (see docs/html/README.md).  Until it does, keep the
-      // content as raw text: that is not the specified behaviour, but it is
-      // strictly better than the previous behaviour, which left <template> on
-      // the stack in kInHead and desynchronised the parser exactly like
-      // <noscript> did -- see the comment above.
-      InsertElement(CreateElement(token));
-      mode_before_text_ = Mode::kInHead;
-      tokenizer_.StartRawText(token.name);
-      mode_ = Mode::kText;
+      // WHATWG 13.2.6.4.4: a <template> start tag inserts the element, pushes
+      // a marker, sets the insertion mode to "in template" and pushes it onto
+      // the stack of template insertion modes.  Its content becomes a child of
+      // the template contents fragment (13.2.5.3), not of the element.
+      OpenTemplate(std::move(token));
       return;
     }
     if (token.name == "head") {
@@ -1813,6 +1930,35 @@ void Parser::ProcessStartTag(Token token)
             body->SetAttribute(attr.name, attr.value);
           }
         }
+      }
+      return;
+    }
+    if (tag == "template") {
+      // WHATWG 13.2.6.4.7: a <template> start tag is processed using the rules
+      // for the "in head" insertion mode (which open the template and switch to
+      // "in template").
+      ProcessInHead(std::move(token));
+      return;
+    }
+    if (tag == "form") {
+      // WHATWG 13.2.6.4.7 "form element pointer" (13.2.1).  A second <form>
+      // whose form element pointer is already set, with no template element on
+      // the stack, is a parse error and is ignored; otherwise any open form in
+      // scope is a parse error and is removed from the stack of open elements.
+      // The pointer is only set when there is no template element on the stack,
+      // so a <form> inside <template> does not capture form ownership.
+      if (form_element_ != nullptr && !StackHasTemplate()) {
+        return; // parse error; ignore
+      }
+      if (dom::Element* existing = FindInScopeElement("form")) {
+        auto it = std::find(stack_.begin(), stack_.end(), existing);
+        if (it != stack_.end()) {
+          stack_.erase(it);
+        }
+      }
+      dom::Element* form = InsertElement(CreateElement(token));
+      if (form != nullptr && !StackHasTemplate()) {
+        form_element_ = form;
       }
       return;
     }
@@ -2068,8 +2214,7 @@ void Parser::ProcessStartTag(Token token)
       return;
     }
     if (token.name == "template") {
-      mode_ = Mode::kInHead;
-      ProcessStartTag(std::move(token));
+      ProcessInHead(std::move(token));
       return;
     }
     // Anything else.
@@ -2160,6 +2305,10 @@ void Parser::ProcessStartTag(Token token)
     ProcessInSelectInTable(std::move(token));
     return;
 
+  case Mode::kInTemplate:
+    ProcessInTemplate(std::move(token));
+    return;
+
   case Mode::kAfterBody:
     if (token.name == "html") {
       mode_ = Mode::kInBody;
@@ -2200,7 +2349,16 @@ void Parser::ProcessEndTag(Token token)
       mode_ = Mode::kAfterHead;
       return;
     }
-    if (token.name == "noscript" || token.name == "noframes" || token.name == "template") {
+    if (token.name == "template") {
+      // WHATWG 13.2.6.4.4: the </template> rules (pop back to the template,
+      // clear active formatting to the marker, pop the template insertion mode,
+      // reset the insertion mode).  Reached from in body, in table, in table
+      // body, in row, in column group and in template via the delegation to
+      // the in head rules.
+      CloseTemplate();
+      return;
+    }
+    if (token.name == "noscript" || token.name == "noframes") {
       if (CurrentNode() != nullptr && CurrentNode()->tag_name() == token.name) {
         PopElement();
       }
@@ -2239,6 +2397,46 @@ void Parser::ProcessEndTag(Token token)
       }
       mode_ = Mode::kAfterBody;
       Reprocess(std::move(token));
+      return;
+    }
+    if (tag == "form") {
+      // WHATWG 13.2.6.4.7 </form>.  Without a template on the stack the target
+      // is the form element pointer, which is cleared even when the token is
+      // then ignored.  With a template on the stack the nearest form in scope
+      // is removed instead and the pointer is left untouched.
+      if (!StackHasTemplate()) {
+        dom::Element* node = form_element_;
+        form_element_ = nullptr;
+        if (node == nullptr || !ElementInScope(node)) {
+          return; // parse error; ignore
+        }
+        GenerateImpliedEndTags();
+        // "If the current node is not node, then this is a parse error" -- no
+        // action beyond the diagnostic.
+        auto it = std::find(stack_.begin(), stack_.end(), node);
+        if (it != stack_.end()) {
+          stack_.erase(it);
+        }
+        return;
+      }
+      dom::Element* node = FindInScopeElement("form");
+      if (node == nullptr) {
+        return; // parse error; ignore
+      }
+      GenerateImpliedEndTags();
+      auto it = std::find(stack_.begin(), stack_.end(), node);
+      if (it != stack_.end()) {
+        stack_.erase(it);
+      }
+      return;
+    }
+    if (tag == "template") {
+      // WHATWG 13.2.6.4.7: an end tag whose tag name is "template" is processed
+      // using the rules for the "in head" insertion mode.  CloseTemplate is
+      // called directly rather than through ProcessInHead: the wrapper would
+      // mistake the kInHead mode that ResetInsertionMode legitimately selects
+      // (a still-open <head>) for "unchanged" and restore the delegating mode.
+      CloseTemplate();
       return;
     }
     if (tag == "br") {
@@ -2350,8 +2548,7 @@ void Parser::ProcessEndTag(Token token)
       return; // parse error; ignore
     }
     if (token.name == "template") {
-      mode_ = Mode::kInHead;
-      ProcessEndTag(std::move(token));
+      CloseTemplate();
       return;
     }
     // Anything else.
@@ -2479,6 +2676,10 @@ void Parser::ProcessEndTag(Token token)
     ProcessInSelectInTable(std::move(token));
     return;
 
+  case Mode::kInTemplate:
+    ProcessInTemplate(std::move(token));
+    return;
+
   case Mode::kAfterBody:
     if (token.name == "html") {
       mode_ = Mode::kAfterAfterBody;
@@ -2540,8 +2741,11 @@ void Parser::ProcessStartTagInTable(Token token)
     return;
   }
   if (tag == "style" || tag == "script" || tag == "template") {
-    mode_ = Mode::kInHead;
-    ProcessStartTag(std::move(token));
+    // "Process the token using the rules for the in head insertion mode"
+    // (13.2.6.4.9).  ProcessInHead records the delegating mode ("in table") as
+    // the raw text element's original insertion mode, so </style>/</script>
+    // returns here rather than to "in head".
+    ProcessInHead(std::move(token));
     return;
   }
   if (tag == "input") {
@@ -2598,8 +2802,9 @@ void Parser::ProcessEndTagInTable(Token token)
     return; // parse error; ignore
   }
   if (tag == "template") {
-    mode_ = Mode::kInHead;
-    ProcessEndTag(std::move(token));
+    // In head rules for </template>; called directly so ResetInsertionMode's
+    // result is not overwritten by ProcessInHead's "unchanged" restore.
+    CloseTemplate();
     return;
   }
   // Anything else.
@@ -2632,6 +2837,62 @@ void Parser::ProcessWithInBodyRules(Token token)
   ProcessToken(std::move(token));
   if (mode_ == Mode::kInBody) {
     mode_ = saved;
+  }
+}
+
+// "in template" (WHATWG 13.2.6.4.18).  This mode exists while a template
+// element is open.  Content is routed to the mode its token implies, and the
+// chosen mode is recorded in template_modes_ so the rules can be resumed after
+// nested content (in particular so ResetInsertionMode reaches the right mode).
+void Parser::ProcessInTemplate(Token token)
+{
+  switch (token.type) {
+  case TokenType::kCharacter:
+  case TokenType::kComment:
+  case TokenType::kDoctype:
+    // "Process the token using the rules for the in body insertion mode."
+    ProcessWithInBodyRules(std::move(token));
+    return;
+
+  case TokenType::kStartTag: {
+    const std::string& tag = token.name;
+    if (tag == "base" || tag == "basefont" || tag == "bgsound" || tag == "link" || tag == "meta" ||
+        tag == "noframes" || tag == "script" || tag == "style" || tag == "template" ||
+        tag == "title") {
+      ProcessInHead(std::move(token));
+      return;
+    }
+    // Pop the current template insertion mode and replace it with the mode that
+    // owns this tag, then switch to it and reprocess.
+    Mode target = Mode::kInBody;
+    if (tag == "caption" || tag == "colgroup" || tag == "tbody" || tag == "tfoot" ||
+        tag == "thead") {
+      target = Mode::kInTable;
+    } else if (tag == "col") {
+      target = Mode::kInColumnGroup;
+    } else if (tag == "tr") {
+      target = Mode::kInTableBody;
+    } else if (tag == "td" || tag == "th") {
+      target = Mode::kInRow;
+    }
+    if (!template_modes_.empty()) {
+      template_modes_.pop_back();
+    }
+    template_modes_.push_back(target);
+    mode_ = target;
+    Reprocess(std::move(token));
+    return;
+  }
+
+  case TokenType::kEndTag:
+    if (token.name == "template") {
+      CloseTemplate(); // the in head </template> rules
+      return;
+    }
+    return; // any other end tag is a parse error; ignored
+
+  case TokenType::kEOF:
+    return; // EOF is handled by Parse()'s EOF loop (13.2.6.4.18)
   }
 }
 
@@ -2741,7 +3002,9 @@ void Parser::ProcessInSelect(Token token)
       return;
     }
     if (tag == "template") {
-      ProcessInHead(std::move(token));
+      // In head </template> rules.  Direct call: ProcessInHead would restore the
+      // delegating mode if ResetInsertionMode picked "in head".
+      CloseTemplate();
       return;
     }
     return; // anything else: parse error; ignored
@@ -2795,7 +3058,15 @@ void Parser::ProcessInHead(Token token)
   case TokenType::kEOF:
     break;
   }
-  if (mode_ == Mode::kInHead) {
+  if (mode_ == Mode::kText) {
+    // The in head raw text rules recorded "in head" as the original insertion
+    // mode.  When this call is a delegation (after head, in table, in column
+    // group, in select, in template), the mode active *before* the delegation
+    // is the correct original, so </title>, </style>, </script>, </noscript>
+    // and </noframes> return there instead of to "in head" (which would leave
+    // the parser in the wrong mode after the raw text element).
+    mode_before_text_ = saved_mode;
+  } else if (mode_ == Mode::kInHead) {
     mode_ = saved_mode;
   }
 }

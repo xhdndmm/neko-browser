@@ -614,11 +614,10 @@ TEST(HtmlTest, EmptyNoscriptInHeadKeepsBodyUsable)
 
 TEST(HtmlTest, TemplateInHeadDoesNotCorruptTheTree)
 {
-  // The full "in template" insertion mode (13.2.6.4.18) is not implemented
-  // yet (see docs/html/README.md); what is implemented is the template
-  // contents rule of 13.2.5.3: insertions addressed at a <template> element
-  // land in its separate contents fragment.  What must not happen is the
-  // parser desynchronising the way <noscript> did.
+  // Regression guard: <template> in head must not desynchronise the parser the
+  // way <noscript> once did.  The content is parsed with the "in template"
+  // insertion mode (13.2.6.4.18) and routed into the template contents
+  // fragment (13.2.5.3); after </template> the parser returns to "in head".
   auto doc = ParseDoc("<!DOCTYPE html><html><head>"
                       "<template><div>TT</div></template>"
                       "</head><body><p>x</p></body></html>");
@@ -661,6 +660,174 @@ TEST(HtmlTest, TemplateChildrenGoIntoTheContentsFragment)
   // Serialization includes the contents (browser outerHTML behavior).
   const std::string html = template_el->ToString();
   EXPECT_NE(html.find("<div class=\"face\">TT</div>"), std::string::npos) << html;
+}
+
+// ---- "in template" insertion mode (13.2.6.4.18) --------------------------
+
+TEST(HtmlTest, TemplateInHeadParsesMarkupIntoContents)
+{
+  // A <template> in head now runs the real "in template" insertion mode, so
+  // its children are parsed as markup (previously the element was switched to
+  // RAWTEXT and the content stayed text).  They land in template.content.
+  auto doc = ParseDoc("<!DOCTYPE html><html><head>"
+                      "<template id=t><div>TT</div></template>"
+                      "</head><body><p>x</p></body></html>");
+  dom::Element* template_el = dom::QuerySelector(*doc, "#t");
+  ASSERT_NE(template_el, nullptr);
+  dom::HTMLTemplateElement* tpl = template_el->AsTemplate();
+  ASSERT_NE(tpl, nullptr);
+  EXPECT_EQ(template_el->first_child(), nullptr);
+  dom::Element* div = dom::QuerySelector(*tpl->content(), "div");
+  ASSERT_NE(div, nullptr);
+  EXPECT_EQ(div->TextContent(), "TT");
+  // The template itself is a child of head and the parser stayed in sync.
+  EXPECT_EQ(ParentTag(template_el), "head");
+  ASSERT_NE(Body(*doc), nullptr);
+  EXPECT_EQ(ParentTag(Body(*doc)), "html");
+}
+
+TEST(HtmlTest, TemplateRoutesTableContentOutsideATable)
+{
+  // "in template" routes a <tr> to "in table body" (and then <td> to
+  // "in row"/"in cell") even though there is no <table>: the row is inserted
+  // directly into the template contents, with no implicit <tbody>.
+  auto doc = ParseDoc("<body><template id=t><tr><td>x</td></tr></template>"
+                      "<p id=after>y</p></body>");
+  dom::Element* template_el = dom::QuerySelector(*doc, "#t");
+  ASSERT_NE(template_el, nullptr);
+  dom::HTMLTemplateElement* tpl = template_el->AsTemplate();
+  ASSERT_NE(tpl, nullptr);
+  dom::Element* tr = dom::QuerySelector(*tpl->content(), "tr");
+  ASSERT_NE(tr, nullptr);
+  dom::Element* td = dom::QuerySelector(*tr, "td");
+  ASSERT_NE(td, nullptr);
+  EXPECT_EQ(td->TextContent(), "x");
+  EXPECT_EQ(dom::QuerySelectorAll(*tpl->content(), "tbody").size(), 0u);
+  // Content after </template> returns to the parent (body).
+  dom::Element* after = dom::QuerySelector(*doc, "#after");
+  ASSERT_NE(after, nullptr);
+  EXPECT_EQ(after->parent(), Body(*doc));
+  EXPECT_EQ(template_el->parent(), Body(*doc));
+}
+
+TEST(HtmlTest, TemplateInsideTableRoutesRowsIntoContents)
+{
+  // A <template> in table content is processed with the in head rules (it is a
+  // child of the table), and its own content starts in "in template": the
+  // <tr>/<td> are routed by the template rules, not fostered out of the table.
+  auto doc = ParseDoc("<table id=table><template id=tpl>"
+                      "<tr><td>x</td></tr></template></table>");
+  dom::Element* table = dom::QuerySelector(*doc, "#table");
+  ASSERT_NE(table, nullptr);
+  dom::Element* template_el = dom::QuerySelector(*doc, "#tpl");
+  ASSERT_NE(template_el, nullptr);
+  EXPECT_EQ(template_el->parent(), table);
+  dom::HTMLTemplateElement* tpl = template_el->AsTemplate();
+  ASSERT_NE(tpl, nullptr);
+  dom::Element* td = dom::QuerySelector(*tpl->content(), "td");
+  ASSERT_NE(td, nullptr);
+  EXPECT_EQ(td->TextContent(), "x");
+  EXPECT_EQ(dom::QuerySelectorAll(*tpl->content(), "tbody").size(), 0u);
+}
+
+TEST(HtmlTest, TemplateEndTagRestoresParentContent)
+{
+  // </template> closes the template (marker cleared, template insertion mode
+  // popped, insertion mode reset); subsequent content goes to the parent.
+  auto doc = ParseDoc("<div id=d><template><span id=in>in</span></template>"
+                      "<span id=out>out</span></div>");
+  dom::Element* div = dom::QuerySelector(*doc, "#d");
+  ASSERT_NE(div, nullptr);
+  dom::Element* template_el = dom::QuerySelector(*div, "template");
+  ASSERT_NE(template_el, nullptr);
+  dom::HTMLTemplateElement* tpl = template_el->AsTemplate();
+  ASSERT_NE(tpl, nullptr);
+  dom::Element* in = dom::QuerySelector(*tpl->content(), "#in");
+  ASSERT_NE(in, nullptr);
+  EXPECT_EQ(in->TextContent(), "in");
+  dom::Element* out = dom::QuerySelector(*doc, "#out");
+  ASSERT_NE(out, nullptr);
+  EXPECT_EQ(out->parent(), div);
+  EXPECT_EQ(out->TextContent(), "out");
+}
+
+TEST(HtmlTest, StrayTemplateEndTagIsIgnored)
+{
+  auto doc = ParseDoc("<div id=d>a</template>b</div>");
+  dom::Element* div = dom::QuerySelector(*doc, "#d");
+  ASSERT_NE(div, nullptr);
+  EXPECT_EQ(div->TextContent(), "ab");
+}
+
+TEST(HtmlTest, TemplateAtEofIsClosed)
+{
+  // EOF while "in template": the element is popped, the marker cleared and the
+  // template insertion mode stack emptied, leaving a usable body.
+  auto doc = ParseDoc("<body><template id=t><div>x");
+  ASSERT_NE(Body(*doc), nullptr);
+  dom::Element* template_el = dom::QuerySelector(*doc, "#t");
+  ASSERT_NE(template_el, nullptr);
+  dom::HTMLTemplateElement* tpl = template_el->AsTemplate();
+  ASSERT_NE(tpl, nullptr);
+  dom::Element* div = dom::QuerySelector(*tpl->content(), "div");
+  ASSERT_NE(div, nullptr);
+  EXPECT_EQ(div->TextContent(), "x");
+}
+
+// ---- form element pointer (13.2.1, 13.2.6.4.7) ---------------------------
+
+TEST(HtmlTest, NestedFormStartTagIsIgnored)
+{
+  // The second <form> is a parse error and is ignored while the form element
+  // pointer is set; </form> then closes the first form.
+  auto doc = ParseDoc("<form id=a><form id=b></form><p id=after>x</p>");
+  const auto forms = dom::QuerySelectorAll(*doc, "form");
+  ASSERT_EQ(forms.size(), 1u);
+  EXPECT_EQ(forms[0]->GetAttribute("id").value_or(""), "a");
+  EXPECT_EQ(dom::QuerySelector(*doc, "#b"), nullptr);
+  // </form> removed the form from the stack of open elements, so the paragraph
+  // is a child of body rather than of the form.
+  dom::Element* after = dom::QuerySelector(*doc, "#after");
+  ASSERT_NE(after, nullptr);
+  EXPECT_EQ(after->parent(), Body(*doc));
+}
+
+TEST(HtmlTest, SiblingFormsParseIndependently)
+{
+  // The form element pointer is cleared by each </form>, so a following
+  // sibling <form> must not be ignored.
+  auto doc = ParseDoc("<form id=a></form><form id=b></form><p id=after>x</p>");
+  dom::Element* a = dom::QuerySelector(*doc, "#a");
+  dom::Element* b = dom::QuerySelector(*doc, "#b");
+  ASSERT_NE(a, nullptr);
+  ASSERT_NE(b, nullptr);
+  EXPECT_EQ(a->parent(), Body(*doc));
+  EXPECT_EQ(b->parent(), Body(*doc));
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "form").size(), 2u);
+  dom::Element* after = dom::QuerySelector(*doc, "#after");
+  ASSERT_NE(after, nullptr);
+  EXPECT_EQ(after->parent(), Body(*doc));
+}
+
+TEST(HtmlTest, FormInsideTemplateDoesNotSetFormPointer)
+{
+  // A <form> inside <template> is inserted into the template contents but does
+  // not set the form element pointer, so the following outer <form> is neither
+  // ignored nor nested inside the template's form.
+  auto doc = ParseDoc("<body><template id=t><form id=inner></form></template>"
+                      "<form id=outer></form></body>");
+  dom::Element* template_el = dom::QuerySelector(*doc, "#t");
+  ASSERT_NE(template_el, nullptr);
+  dom::HTMLTemplateElement* tpl = template_el->AsTemplate();
+  ASSERT_NE(tpl, nullptr);
+  dom::Element* inner = dom::QuerySelector(*tpl->content(), "#inner");
+  ASSERT_NE(inner, nullptr);
+  dom::Element* outer = dom::QuerySelector(*doc, "#outer");
+  ASSERT_NE(outer, nullptr);
+  EXPECT_EQ(outer->parent(), Body(*doc));
+  EXPECT_EQ(ParentTag(outer), "body");
+  // The outer form is not inside the template.
+  EXPECT_EQ(dom::QuerySelector(*tpl->content(), "#outer"), nullptr);
 }
 
 TEST(HtmlTest, NoframesInHeadDoesNotCorruptTheTree)
@@ -1309,10 +1476,27 @@ TEST(HtmlTest, FragmentDoesNotIncludeTheContextElement)
 
 TEST(HtmlTest, FragmentTemplateContextParsesItsChildren)
 {
+  // A template context starts in "in template" (13.4), so its children are
+  // parsed with the template rules; the fragment is still the parse target
+  // because the context element itself is never inserted.
   auto frag = ParseFragment("<div>x</div>", "template");
   dom::Element* div = dom::QuerySelector(*frag, "div");
   ASSERT_NE(div, nullptr);
   EXPECT_EQ(div->TextContent(), "x");
+}
+
+TEST(HtmlTest, FragmentTemplateContextRoutesTableContent)
+{
+  // The "in template" rules send <tr> to "in table body" even in a fragment,
+  // so the row and cell are built in the returned fragment (not dropped as
+  // stray table content).
+  auto frag = ParseFragment("<tr><td>x", "template");
+  dom::Element* tr = dom::QuerySelector(*frag, "tr");
+  ASSERT_NE(tr, nullptr);
+  dom::Element* td = dom::QuerySelector(*tr, "td");
+  ASSERT_NE(td, nullptr);
+  EXPECT_EQ(td->TextContent(), "x");
+  EXPECT_EQ(dom::QuerySelectorAll(*frag, "tbody").size(), 0u);
 }
 
 TEST(HtmlTest, FragmentIgnoresStrayHtmlEndTagAndKeepsTrailingContent)

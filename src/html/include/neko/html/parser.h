@@ -16,10 +16,11 @@ namespace neko::html {
 //
 // Implements the insertion modes: initial, before html, before head, in head,
 // after head, in body, text, in table, in table text, in caption, in column
-// group, in table body, in row, in cell, after body, after after body.  Active
-// formatting elements and the adoption agency algorithm are implemented,
-// including markers.  Table content uses foster parenting (13.2.6.1); see
-// docs/html/README.md.
+// group, in table body, in row, in cell, in select, in select in table, in
+// template, after body, after after body.  Active formatting elements and the
+// adoption agency algorithm are implemented, including markers.  Table content
+// uses foster parenting (13.2.6.1); the template insertion modes stack and the
+// form element pointer are implemented; see docs/html/README.md.
 class Parser
 {
 public:
@@ -62,6 +63,7 @@ private:
     kInCell,
     kInSelect,
     kInSelectInTable,
+    kInTemplate,
     kAfterBody,
     kAfterAfterBody,
   };
@@ -76,6 +78,8 @@ private:
   // "in select" / "in select in table" insertion modes (13.2.6.4.16/17).
   void ProcessInSelect(Token token);
   void ProcessInSelectInTable(Token token);
+  // "in template" insertion mode (13.2.6.4.18).
+  void ProcessInTemplate(Token token);
   // Runs |token| with the "in body" rules from another insertion mode,
   // restoring the mode unless the rules changed it themselves.
   void ProcessWithInBodyRules(Token token);
@@ -113,11 +117,23 @@ private:
   bool IsRawTextElement(std::string_view tag) const;
 
   void GenerateImpliedEndTags(std::optional<std::string_view> except = std::nullopt);
+  // "Generate all implied end tags thoroughly" (13.2.6.3): the wider set used
+  // when closing a template (caption/colgroup/table-section tags included).
+  void GenerateImpliedEndTagsThoroughly();
   void ClearStackBackToTableContext();
   void ClearStackBackToTableBodyContext();
   void ClearStackBackToTableRowContext();
   void CloseTableCell();
   void ResetInsertionMode();
+  // The nearest |tag| element in the stack of open elements that is in the
+  // default scope, or nullptr (13.2.6.1).  Used by the form element rules.
+  dom::Element* FindInScopeElement(std::string_view tag) const;
+  // "<template> start tag" / "</template> end tag" (13.2.6.4.4, the in head
+  // rules): open pushes the marker and the "in template" mode; close pops back
+  // to the template and restores the insertion mode (13.2.6.4.18).
+  void OpenTemplate(Token token);
+  void CloseTemplate();
+  bool StackHasTemplate() const;
   void PushFormattingMarker();
   void ClearActiveFormattingToMarker();
 
@@ -168,6 +184,15 @@ private:
   Mode mode_ = Mode::kInitial;
   Mode original_mode_ = Mode::kInBody;
   dom::Element* head_element_ = nullptr;
+  // The form element pointer (WHATWG HTML 13.2.1): the form element that is
+  // the target of the "form owner" for form-associated elements.  It is not
+  // set for a <form> inside a <template> (13.2.6.4.7).
+  dom::Element* form_element_ = nullptr;
+  // The stack of template insertion modes (WHATWG HTML "the stack of template
+  // insertion modes").  The last entry is the "current template insertion
+  // mode"; ResetInsertionMode() uses it when it reaches a template element
+  // (13.2.6.1).
+  std::vector<Mode> template_modes_;
   bool foster_parenting_ = false;
   // Pending character tokens for the "in table text" insertion mode.
   std::vector<Token> pending_table_chars_;

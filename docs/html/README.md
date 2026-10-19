@@ -16,7 +16,8 @@
 - 树构建：initial → before html → before head → in head → after head →
   in body → text → after body，外加完整表格模式链：
   in table → in table text → in caption → in column group → in table body →
-  in row → in cell，以及 **in select / in select in table**；隐含 html/head/body、
+  in row → in cell，以及 **in select / in select in table**、
+  **in template（含模板插入模式栈，2026-10）**；隐含 html/head/body、
   隐含 p/li/标题闭合、void 元素、
   hr/center 关闭 p、dd/dt 互闭、游离结束标签、EOF 骨架
 - **表格容错（foster parenting）**：表格内误置的文本/元素被「寄养」到表格之前
@@ -25,6 +26,29 @@
 - **活动格式化元素列表的 marker**（td/th/caption 进入时插入，清栈回 table
   上下文时清除）+ Noah's Ark 条款 + adoption agency 算法（错嵌套格式化
   元素的领养/重建）
+- **`<template>` 与 "in template" 插入模式（WHATWG 13.2.6.4.4 / 13.2.6.4.18，
+  2026-10）**：`<template>` 在 in head / in body / in table 中按 in head 规则
+  插入，压入活动格式化元素 marker，切换到 "in template" 并把该模式压入
+  **模板插入模式栈**（`template_modes_`）。内容按 13.2.6.4.18 路由：
+  base/basefont/bgsound/link/meta/noframes/script/style/template/title 走
+  in head；caption/colgroup/tbody/tfoot/thead → in table，col → in column
+  group，tr → in table body，td/th → in row（均先弹出当前模板模式再压入目标）；
+  其它起始标签 → in body；character/comment/doctype → in body。
+  `</template>` 弹出到 template、清除活动格式化至 marker、弹出模板插入模式并
+  `ResetInsertionMode()`。按 13.2.5.3，插入目标为 `<template>` 的节点进入其
+  独立的 template contents fragment（即 `template.content`），因此解析出的子树
+  与 `template.content` 一致。`ResetInsertionMode` 遇到 template 节点时采用
+  当前模板插入模式（13.2.6.1）；fragment parsing 的 template context 先压入
+  "in template"（13.4），其节点仍写入返回的 `DocumentFragment`（context 元素
+  本身从不插入）。**未建模**：frameset-ok 标志——本解析器无 in frameset 模式，
+  该步骤没有可观察差异（见 `OpenTemplate` 注释）。
+- **form element pointer（WHATWG 13.2.1 / 13.2.6.4.7，2026-10）**：in body 的
+  `<form>` 在指针非空且栈上无 template 时是 parse error 并忽略；否则若默认
+  作用域内有打开的 form，先把它移出开元素栈再插入新元素，且仅当栈上无
+  template 时把指针指向新元素。`</form>` 分两条路径：无 template 时以指针为
+  目标（先清空指针），空或不在作用域内则忽略；栈上有 template 时改为移除
+  最近的 in-scope form，指针不变。因此 template 内的 form 不影响外层 form
+  所有权，连续兄弟 form 也可各自正常解析。
 - **列表项闭合**：`<li>` 按 WHATWG 13.2.6.4.7 规则闭合——逐节点向上找打开的
   li，遇 special 元素（非 address/div/p，如嵌套 `<ul>/<ol>`）即停止，因此嵌套
   列表的 li 不会错误关闭外层 li；`</li>` 结束标签按 list item scope 判定
@@ -70,11 +94,6 @@
   前缀/本地名/命名空间三元组（见 §13.2.6.5「adjust foreign attributes」）
 - SVG `<script>` 的执行步骤（13.2.6.5）**NOT IMPLEMENTED**：自闭合的
   `<script/>` 按普通弹出处理，不执行脚本
-- in template **插入模式**（13.2.6.4.18，栈/模式切换及其与 foster parenting 的
-  交互）；template 的**内容路由已实现**：按 13.2.5.3，插入目标为 `<template>`
-  的节点进入其独立的 template contents fragment（即 `template.content`，
-  2026-10 修复），因此解析出的 `<template>` 子树与 `template.content` 一致；
-  差的是模式级细节（如模板内表格片段的模式的精确处理）
 - in frameset 模式
 - ~~无 fragment parsing~~ **已实现（2026-10）**：`html::Parser(html, context)` +
   `ParseFragment()` 按 WHATWG 13.4 用 context element 初始化栈/模式/tokenizer
@@ -87,8 +106,6 @@
   命名空间的 context 会按 foreign content 解析其内容）；
   `insertAdjacentHTML` 的
   `beforebegin`/`afterend` 目前也用元素自身作 context（规范用父元素）
-- 重复 `<body>` 的属性合并、form element pointer 等次要规则
-
 ## 已修正的解析器缺陷（曾经的静默失真）
 
 以下几项曾静默产出错误 DOM，现已修复并各有回归测试：
@@ -101,7 +118,8 @@
   `<body>` 被插到 `<head>` 之下，其后所有元素成了 `<html>` 的直接子节点，
   **`document.body` 全程为 null**。`<noscript>` 内容此前还会被解析成活动元素
   并触发真实网络请求（`<img src>`）。`<template>` 曾同样有失步风险，现已按
-  WHATWG 13.2.5.3 把子节点路由进 template contents fragment（2026-10，见下节）。
+  WHATWG 13.2.5.3 把子节点路由进 template contents fragment（2026-10，见上文
+  `<template>` 与 "in template" 条目）。
 - **命名字符引用 13.2.5.78**：`for historical reasons` 规则只适用于属性上下文，
   且不查 legacy 名单。此前该拒绝逻辑被用在所有上下文并额外要求 legacy 名单，
   结果「缺分号」几乎在所有真实标记里都静默禁用实体。现缺分号仍展开：
