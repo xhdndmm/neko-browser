@@ -1,6 +1,7 @@
 #include "neko/html/parser.h"
 
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <optional>
 #include <string>
@@ -10,6 +11,12 @@
 
 namespace neko::html {
 namespace {
+
+// The three namespaces the HTML parser creates elements in (WHATWG "HTML
+// namespace", "SVG namespace", "MathML namespace").
+constexpr std::string_view kHtmlNamespace = "http://www.w3.org/1999/xhtml";
+constexpr std::string_view kSvgNamespace = "http://www.w3.org/2000/svg";
+constexpr std::string_view kMathMlNamespace = "http://www.w3.org/1998/Math/MathML";
 
 bool IsAllWhitespace(std::string_view text)
 {
@@ -32,6 +39,202 @@ bool IsFormattingElement(std::string_view tag)
   return tag == "a" || tag == "b" || tag == "big" || tag == "code" || tag == "em" ||
          tag == "font" || tag == "i" || tag == "nobr" || tag == "s" || tag == "small" ||
          tag == "strike" || tag == "strong" || tag == "tt" || tag == "u";
+}
+
+// WHATWG 13.2.6: a MathML text integration point is a MathML mi, mo, mn, ms or
+// mtext element.  Content inside one is parsed with the HTML rules.
+bool IsMathMlTextIntegrationPoint(const dom::Element& element)
+{
+  if (element.namespace_uri() != kMathMlNamespace) {
+    return false;
+  }
+  const std::string_view tag = element.tag_name();
+  return tag == "mi" || tag == "mo" || tag == "mn" || tag == "ms" || tag == "mtext";
+}
+
+// WHATWG 13.2.6: an SVG foreignObject, desc or title element, or a MathML
+// annotation-xml element whose encoding attribute is "text/html" or
+// "application/xhtml+xml", is an HTML integration point.
+bool IsHtmlIntegrationPoint(const dom::Element& element)
+{
+  const std::string_view tag = element.tag_name();
+  if (element.namespace_uri() == kSvgNamespace) {
+    return tag == "foreignObject" || tag == "desc" || tag == "title";
+  }
+  if (element.namespace_uri() == kMathMlNamespace && tag == "annotation-xml") {
+    const std::optional<std::string_view> encoding = element.GetAttribute("encoding");
+    if (!encoding.has_value()) {
+      return false;
+    }
+    const std::string lowered = ToLowerAscii(encoding.value());
+    return lowered == "text/html" || lowered == "application/xhtml+xml";
+  }
+  return false;
+}
+
+// "Adjust SVG tag names" (WHATWG 13.2.6.5): a start tag inside SVG whose name
+// is one of the table's first-column entries is renamed to the second-column
+// spelling.  The table is reproduced in full from the standard.
+std::string_view AdjustSvgTagName(std::string_view name)
+{
+  using Entry = std::pair<std::string_view, std::string_view>;
+  static constexpr auto kTable = std::to_array<Entry>({
+      {"altglyph", "altGlyph"},
+      {"altglyphdef", "altGlyphDef"},
+      {"altglyphitem", "altGlyphItem"},
+      {"animatecolor", "animateColor"},
+      {"animatemotion", "animateMotion"},
+      {"animatetransform", "animateTransform"},
+      {"clippath", "clipPath"},
+      {"feblend", "feBlend"},
+      {"fecolormatrix", "feColorMatrix"},
+      {"fecomponenttransfer", "feComponentTransfer"},
+      {"fecomposite", "feComposite"},
+      {"feconvolvematrix", "feConvolveMatrix"},
+      {"fediffuselighting", "feDiffuseLighting"},
+      {"fedisplacementmap", "feDisplacementMap"},
+      {"fedistantlight", "feDistantLight"},
+      {"fedropshadow", "feDropShadow"},
+      {"feflood", "feFlood"},
+      {"fefunca", "feFuncA"},
+      {"fefuncb", "feFuncB"},
+      {"fefuncg", "feFuncG"},
+      {"fefuncr", "feFuncR"},
+      {"fegaussianblur", "feGaussianBlur"},
+      {"feimage", "feImage"},
+      {"femerge", "feMerge"},
+      {"femergenode", "feMergeNode"},
+      {"femorphology", "feMorphology"},
+      {"feoffset", "feOffset"},
+      {"fepointlight", "fePointLight"},
+      {"fespecularlighting", "feSpecularLighting"},
+      {"fespotlight", "feSpotLight"},
+      {"fetile", "feTile"},
+      {"feturbulence", "feTurbulence"},
+      {"foreignobject", "foreignObject"},
+      {"glyphref", "glyphRef"},
+      {"lineargradient", "linearGradient"},
+      {"radialgradient", "radialGradient"},
+      {"textpath", "textPath"},
+  });
+  for (const Entry& entry : kTable) {
+    if (entry.first == name) {
+      return entry.second;
+    }
+  }
+  return name;
+}
+
+// "Adjust SVG attributes" (WHATWG 13.2.6.5): rename lowercased attribute
+// names to their camelCase spelling.  Applied to the start tag token before
+// the element is created.
+void AdjustSvgAttributes(Token& token)
+{
+  using Entry = std::pair<std::string_view, std::string_view>;
+  static constexpr auto kTable = std::to_array<Entry>({
+      {"attributename", "attributeName"},
+      {"attributetype", "attributeType"},
+      {"basefrequency", "baseFrequency"},
+      {"baseprofile", "baseProfile"},
+      {"calcmode", "calcMode"},
+      {"clippathunits", "clipPathUnits"},
+      {"diffuseconstant", "diffuseConstant"},
+      {"edgemode", "edgeMode"},
+      {"filterunits", "filterUnits"},
+      {"glyphref", "glyphRef"},
+      {"gradienttransform", "gradientTransform"},
+      {"gradientunits", "gradientUnits"},
+      {"kernelmatrix", "kernelMatrix"},
+      {"kernelunitlength", "kernelUnitLength"},
+      {"keypoints", "keyPoints"},
+      {"keysplines", "keySplines"},
+      {"keytimes", "keyTimes"},
+      {"lengthadjust", "lengthAdjust"},
+      {"limitingconeangle", "limitingConeAngle"},
+      {"markerheight", "markerHeight"},
+      {"markerunits", "markerUnits"},
+      {"markerwidth", "markerWidth"},
+      {"maskcontentunits", "maskContentUnits"},
+      {"maskunits", "maskUnits"},
+      {"numoctaves", "numOctaves"},
+      {"pathlength", "pathLength"},
+      {"patterncontentunits", "patternContentUnits"},
+      {"patterntransform", "patternTransform"},
+      {"patternunits", "patternUnits"},
+      {"pointsatx", "pointsAtX"},
+      {"pointsaty", "pointsAtY"},
+      {"pointsatz", "pointsAtZ"},
+      {"preservealpha", "preserveAlpha"},
+      {"preserveaspectratio", "preserveAspectRatio"},
+      {"primitiveunits", "primitiveUnits"},
+      {"refx", "refX"},
+      {"refy", "refY"},
+      {"repeatcount", "repeatCount"},
+      {"repeatdur", "repeatDur"},
+      {"requiredextensions", "requiredExtensions"},
+      {"requiredfeatures", "requiredFeatures"},
+      {"specularconstant", "specularConstant"},
+      {"specularexponent", "specularExponent"},
+      {"spreadmethod", "spreadMethod"},
+      {"startoffset", "startOffset"},
+      {"stddeviation", "stdDeviation"},
+      {"stitchtiles", "stitchTiles"},
+      {"surfacescale", "surfaceScale"},
+      {"systemlanguage", "systemLanguage"},
+      {"tablevalues", "tableValues"},
+      {"targetx", "targetX"},
+      {"targety", "targetY"},
+      {"textlength", "textLength"},
+      {"viewbox", "viewBox"},
+      {"viewtarget", "viewTarget"},
+      {"xchannelselector", "xChannelSelector"},
+      {"ychannelselector", "yChannelSelector"},
+      {"zoomandpan", "zoomAndPan"},
+  });
+  for (Attribute& attribute : token.attributes) {
+    for (const Entry& entry : kTable) {
+      if (attribute.name == entry.first) {
+        attribute.name = std::string(entry.second);
+        break;
+      }
+    }
+  }
+}
+
+// "Adjust MathML attributes" (WHATWG 13.2.6.5): definitionurl -> definitionURL.
+void AdjustMathMlAttributes(Token& token)
+{
+  for (Attribute& attribute : token.attributes) {
+    if (attribute.name == "definitionurl") {
+      attribute.name = "definitionURL";
+    }
+  }
+}
+
+// The start tags that break out of foreign content (WHATWG 13.2.6.5), plus a
+// "font" start tag carrying any of color/face/size.
+bool IsForeignContentBreakoutStartTag(const Token& token)
+{
+  static constexpr std::array<std::string_view, 44> kBreakout = {
+      "b",      "big",  "blockquote", "body",  "br",   "center", "code",    "dd",   "div",
+      "dl",     "dt",   "em",         "embed", "h1",   "h2",     "h3",      "h4",   "h5",
+      "h6",     "head", "hr",         "i",     "img",  "li",     "listing", "menu", "meta",
+      "nobr",   "ol",   "p",          "pre",   "ruby", "s",      "small",   "span", "strong",
+      "strike", "sub",  "sup",        "table", "tt",   "u",      "ul",      "var",
+  };
+  for (const std::string_view tag : kBreakout) {
+    if (token.name == tag) {
+      return true;
+    }
+  }
+  if (token.name == "font") {
+    for (const Attribute& attribute : token.attributes) {
+      if (attribute.name == "color" || attribute.name == "face" || attribute.name == "size") {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 // Elements in the WHATWG "special" category (used by the adoption agency).
@@ -85,14 +288,19 @@ bool SameAttributes(const dom::Element& a, const dom::Element& b)
   return true;
 }
 
-// Builds an element from a start tag token, copying its attributes.
-std::unique_ptr<dom::Element> CreateElement(const Token& token)
+// Builds an element from a start tag token, copying its attributes.  The
+// namespace defaults to HTML; foreign content passes the SVG or MathML
+// namespace explicitly.
+std::unique_ptr<dom::Element> CreateElement(const Token& token,
+                                            std::string_view namespace_uri = kHtmlNamespace)
 {
   // <template> becomes an HTMLTemplateElement so its children can be routed
-  // into the template contents fragment (WHATWG HTML 13.2.5.3).
-  auto element = token.name == "template"
+  // into the template contents fragment (WHATWG HTML 13.2.5.3).  Only an HTML
+  // <template> is a template element; an SVG/MathML element of the same name
+  // is an ordinary foreign element.
+  auto element = (namespace_uri == kHtmlNamespace && token.name == "template")
                      ? std::unique_ptr<dom::Element>(std::make_unique<dom::HTMLTemplateElement>())
-                     : std::make_unique<dom::Element>(token.name);
+                     : std::make_unique<dom::Element>(token.name, std::string(namespace_uri));
   for (const Attribute& attr : token.attributes) {
     // WHATWG 13.2.5.34 (attribute name state): "If there is already an
     // attribute on the token with the exact same name, then this is a
@@ -286,7 +494,189 @@ Token Parser::NextToken()
     pending_.reset();
     return token;
   }
+  // The tokenizer must know whether a "<![CDATA[" starts a CDATA section or a
+  // bogus comment, which depends on the adjusted current node (WHATWG
+  // 13.2.5.42).  The tree constructor updates it before every pull.
+  tokenizer_.SetForeignContext(IsAdjustedCurrentNodeForeign());
   return tokenizer_.Next();
+}
+
+// WHATWG 13.2.4.2 / 13.2.6.1: the adjusted current node is the fragment
+// context element when fragment parsing and the stack of open elements has
+// only one element in it; otherwise it is the current node.
+dom::Element* Parser::AdjustedCurrentNode() const
+{
+  if (fragment_context_ != nullptr && stack_.size() == 1) {
+    return const_cast<dom::Element*>(fragment_context_);
+  }
+  return stack_.empty() ? nullptr : stack_.back();
+}
+
+bool Parser::IsAdjustedCurrentNodeForeign() const
+{
+  const dom::Element* node = AdjustedCurrentNode();
+  return node != nullptr && node->namespace_uri() != kHtmlNamespace;
+}
+
+// The tree construction dispatcher (WHATWG 13.2.6): returns true when the
+// token must be handled by the foreign content rules rather than the current
+// insertion mode.  Tokens inside a MathML text integration point or an HTML
+// integration point are handled by the HTML rules instead.
+bool Parser::ShouldProcessInForeignContent(const Token& token) const
+{
+  const dom::Element* node = AdjustedCurrentNode();
+  if (node == nullptr || node->namespace_uri() == kHtmlNamespace) {
+    return false;
+  }
+  if (token.type == TokenType::kEOF) {
+    return false;
+  }
+  if (IsMathMlTextIntegrationPoint(*node)) {
+    if (token.type == TokenType::kStartTag && token.name != "mglyph" &&
+        token.name != "malignmark") {
+      return false;
+    }
+    if (token.type == TokenType::kCharacter) {
+      return false;
+    }
+  }
+  if (node->namespace_uri() == kMathMlNamespace && node->tag_name() == "annotation-xml" &&
+      token.type == TokenType::kStartTag && token.name == "svg") {
+    return false;
+  }
+  if (IsHtmlIntegrationPoint(*node) &&
+      (token.type == TokenType::kStartTag || token.type == TokenType::kCharacter)) {
+    return false;
+  }
+  return true;
+}
+
+// The rules for parsing tokens in foreign content (WHATWG 13.2.6.5).
+void Parser::ProcessForeignContent(Token token)
+{
+  switch (token.type) {
+  case TokenType::kCharacter:
+    // U+0000 NULL is replaced with U+FFFD by AppendTextAt; whitespace and any
+    // other character are inserted (no active formatting reconstruction in
+    // foreign content).
+    AppendText(token.data);
+    return;
+
+  case TokenType::kComment:
+    AppendNode(std::make_unique<dom::Comment>(token.data));
+    return;
+
+  case TokenType::kDoctype:
+    return; // parse error; ignored
+
+  case TokenType::kStartTag: {
+    // A breakout start tag (or </p>/</br>, handled in the end tag case) pops
+    // foreign elements back to an HTML element or integration point and the
+    // token is reprocessed with the HTML rules.
+    if (IsForeignContentBreakoutStartTag(token)) {
+      while (CurrentNode() != nullptr && CurrentNode()->namespace_uri() != kHtmlNamespace &&
+             !IsMathMlTextIntegrationPoint(*CurrentNode()) &&
+             !IsHtmlIntegrationPoint(*CurrentNode())) {
+        // Stop at the topmost element (the synthetic/fragment root): never pop
+        // the root off the stack (fragment case).
+        if (stack_.size() <= 1) {
+          break;
+        }
+        PopElement();
+      }
+      Reprocess(std::move(token));
+      return;
+    }
+
+    const dom::Element* adjusted = AdjustedCurrentNode();
+    // The namespace of the adjusted current node is where the element is
+    // created.  Adjust the token's tag/attribute names first ("adjust SVG
+    // tag names", "adjust SVG attributes", "adjust MathML attributes").
+    std::string_view name = token.name;
+    if (adjusted != nullptr && adjusted->namespace_uri() == kSvgNamespace) {
+      name = AdjustSvgTagName(token.name);
+      if (name != token.name) {
+        token.name = std::string(name);
+      }
+      AdjustSvgAttributes(token);
+    } else if (adjusted != nullptr && adjusted->namespace_uri() == kMathMlNamespace) {
+      AdjustMathMlAttributes(token);
+    }
+    // "Adjust foreign attributes" (xlink:/xml:/xmlns:) is NOT IMPLEMENTED:
+    // dom::Attribute stores only a name and a value, so a namespaced attribute
+    // (prefix + local name + XML/XLink/XMLNS namespace) cannot be represented.
+    // See docs/html/README.md.
+    const std::string_view ns =
+        adjusted != nullptr ? adjusted->namespace_uri() : std::string_view(kHtmlNamespace);
+    InsertElement(CreateElement(token, ns));
+    if (token.self_closing) {
+      // For an SVG <script> the spec acknowledges the flag and runs the
+      // script end tag steps; script execution is NOT IMPLEMENTED in this
+      // engine, so it is treated as the ordinary pop below.
+      PopElement();
+    }
+    return;
+  }
+
+  case TokenType::kEndTag: {
+    // An end tag whose name is "br" or "p" breaks out of foreign content
+    // exactly like the breakout start tags above.
+    if (token.name == "br" || token.name == "p") {
+      while (CurrentNode() != nullptr && CurrentNode()->namespace_uri() != kHtmlNamespace &&
+             !IsMathMlTextIntegrationPoint(*CurrentNode()) &&
+             !IsHtmlIntegrationPoint(*CurrentNode())) {
+        if (stack_.size() <= 1) {
+          break;
+        }
+        PopElement();
+      }
+      Reprocess(std::move(token));
+      return;
+    }
+    // An SVG </script> pops the current node.  (The SVG script execution steps
+    // are NOT IMPLEMENTED.)
+    if (token.name == "script" && CurrentNode() != nullptr &&
+        CurrentNode()->namespace_uri() == kSvgNamespace) {
+      PopElement();
+      return;
+    }
+
+    // Any other end tag: walk down the stack looking for a matching node.
+    if (stack_.empty()) {
+      return;
+    }
+    std::size_t index = stack_.size() - 1;
+    dom::Element* node = stack_[index];
+    // (A non-matching current node is a parse error, but the walk continues.)
+    for (;;) {
+      if (index == 0) {
+        return; // topmost element; fragment case
+      }
+      if (ToLowerAscii(node->tag_name()) == token.name) {
+        while (!stack_.empty()) {
+          dom::Element* popped = stack_.back();
+          PopElement();
+          if (popped == node) {
+            break;
+          }
+        }
+        return;
+      }
+      --index;
+      node = stack_[index];
+      if (node->namespace_uri() == kHtmlNamespace) {
+        // Process the token with the HTML rules for the current insertion
+        // mode.  Bypass the dispatcher: the adjusted current node may still be
+        // foreign, but the spec requires the HTML rules here.
+        ProcessEndTag(std::move(token));
+        return;
+      }
+    }
+  }
+
+  case TokenType::kEOF:
+    return; // never reached (EOF is always handled by the HTML rules)
+  }
 }
 
 void Parser::Reprocess(Token token)
@@ -1045,6 +1435,14 @@ void Parser::ProcessToken(Token token)
     Reprocess(std::move(token));
     return;
   }
+  // Tree construction dispatcher (WHATWG 13.2.6): a token whose adjusted
+  // current node is in a foreign namespace (and is not an integration point
+  // exception) is processed by the foreign content rules, independently of
+  // the current insertion mode.
+  if (ShouldProcessInForeignContent(token)) {
+    ProcessForeignContent(std::move(token));
+    return;
+  }
   switch (token.type) {
   case TokenType::kDoctype:
     // A DOCTYPE token is only processed in the "initial" insertion mode;
@@ -1576,6 +1974,29 @@ void Parser::ProcessStartTag(Token token)
         break;
       }
       mode_ = table_context ? Mode::kInSelectInTable : Mode::kInSelect;
+      return;
+    }
+
+    if (tag == "math") {
+      // WHATWG 13.2.6.4.7: a <math> start tag creates a MathML element and
+      // the foreign content rules take over for its content (the tree
+      // construction dispatcher, 13.2.6).
+      ReconstructActiveFormatting();
+      AdjustMathMlAttributes(token);
+      InsertElement(CreateElement(token, kMathMlNamespace));
+      if (token.self_closing) {
+        PopElement();
+      }
+      return;
+    }
+    if (tag == "svg") {
+      // WHATWG 13.2.6.4.7: likewise for <svg>, in the SVG namespace.
+      ReconstructActiveFormatting();
+      AdjustSvgAttributes(token);
+      InsertElement(CreateElement(token, kSvgNamespace));
+      if (token.self_closing) {
+        PopElement();
+      }
       return;
     }
 

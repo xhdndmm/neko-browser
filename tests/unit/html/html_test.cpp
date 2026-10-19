@@ -1328,5 +1328,208 @@ TEST(HtmlTest, FragmentIgnoresStrayHtmlEndTagAndKeepsTrailingContent)
   EXPECT_EQ(static_cast<dom::Comment*>(frag->last_child())->data(), "c");
 }
 
+// ---------------------------------------------------------------------------
+// Foreign content (WHATWG 13.2.6.5): SVG and MathML embedded in HTML.  The
+// tree construction dispatcher (13.2.6) sends tokens to these rules whenever
+// the adjusted current node is not in the HTML namespace, unless the node is
+// an integration point.
+// ---------------------------------------------------------------------------
+
+constexpr std::string_view kHtmlNamespace = "http://www.w3.org/1999/xhtml";
+constexpr std::string_view kSvgNamespace = "http://www.w3.org/2000/svg";
+constexpr std::string_view kMathMlNamespace = "http://www.w3.org/1998/Math/MathML";
+
+// First element child of |parent| whose tag name matches |tag| exactly (SVG
+// adjusted names such as "linearGradient" are case-sensitive, so the
+// case-insensitive query helpers cannot find them).
+dom::Element* ChildByTag(dom::Element* parent, std::string_view tag)
+{
+  if (parent == nullptr) {
+    return nullptr;
+  }
+  for (dom::Node* child : parent->ChildNodes()) {
+    if (child->node_type() == dom::NodeType::kElement &&
+        static_cast<dom::Element*>(child)->tag_name() == tag) {
+      return static_cast<dom::Element*>(child);
+    }
+  }
+  return nullptr;
+}
+
+TEST(HtmlTest, SvgElementsAreInTheSvgNamespace)
+{
+  auto doc = ParseDoc("<svg><circle/></svg>");
+  dom::Element* svg = dom::QuerySelector(*doc, "svg");
+  ASSERT_NE(svg, nullptr);
+  EXPECT_EQ(svg->namespace_uri(), kSvgNamespace);
+  dom::Element* circle = ChildByTag(svg, "circle");
+  ASSERT_NE(circle, nullptr);
+  EXPECT_EQ(circle->namespace_uri(), kSvgNamespace);
+}
+
+TEST(HtmlTest, SelfClosingForeignElementIsPoppedImmediately)
+{
+  // <circle/> is self-closing in foreign content, so <rect/> must be its
+  // sibling, not its child (the element is not left open).
+  auto doc = ParseDoc("<svg><circle/><rect/></svg>");
+  dom::Element* svg = dom::QuerySelector(*doc, "svg");
+  ASSERT_NE(svg, nullptr);
+  ASSERT_EQ(svg->child_count(), 2u);
+  dom::Element* circle = ChildByTag(svg, "circle");
+  dom::Element* rect = ChildByTag(svg, "rect");
+  ASSERT_NE(circle, nullptr);
+  ASSERT_NE(rect, nullptr);
+  EXPECT_EQ(circle->parent(), svg);
+  EXPECT_EQ(rect->parent(), svg);
+  EXPECT_EQ(circle->child_count(), 0u);
+  EXPECT_EQ(rect->child_count(), 0u);
+}
+
+TEST(HtmlTest, ForeignObjectIsAnHtmlIntegrationPoint)
+{
+  // <foreignObject> is an SVG HTML integration point: its content is parsed
+  // with the HTML rules, so <div> is an HTML element.
+  auto doc = ParseDoc("<svg><foreignObject><div>x</div></foreignObject></svg>");
+  dom::Element* svg = dom::QuerySelector(*doc, "svg");
+  ASSERT_NE(svg, nullptr);
+  dom::Element* foreign_object = ChildByTag(svg, "foreignObject");
+  ASSERT_NE(foreign_object, nullptr);
+  EXPECT_EQ(foreign_object->namespace_uri(), kSvgNamespace);
+  dom::Element* div = dom::QuerySelector(*doc, "div");
+  ASSERT_NE(div, nullptr);
+  EXPECT_EQ(div->namespace_uri(), kHtmlNamespace);
+  EXPECT_EQ(div->parent(), foreign_object);
+  EXPECT_EQ(div->TextContent(), "x");
+}
+
+TEST(HtmlTest, SvgTitleAndDescAreHtmlIntegrationPoints)
+{
+  auto doc = ParseDoc("<svg><desc><div>x</div></desc></svg>");
+  dom::Element* svg = dom::QuerySelector(*doc, "svg");
+  ASSERT_NE(svg, nullptr);
+  dom::Element* desc = ChildByTag(svg, "desc");
+  ASSERT_NE(desc, nullptr);
+  EXPECT_EQ(desc->namespace_uri(), kSvgNamespace);
+  dom::Element* div = dom::QuerySelector(*doc, "div");
+  ASSERT_NE(div, nullptr);
+  EXPECT_EQ(div->namespace_uri(), kHtmlNamespace);
+  EXPECT_EQ(div->parent(), desc);
+}
+
+TEST(HtmlTest, MathMlElementsAreInTheMathMlNamespace)
+{
+  auto doc = ParseDoc("<math><mi>x</mi><mn>1</mn></math>");
+  dom::Element* math = dom::QuerySelector(*doc, "math");
+  ASSERT_NE(math, nullptr);
+  EXPECT_EQ(math->namespace_uri(), kMathMlNamespace);
+  dom::Element* mi = ChildByTag(math, "mi");
+  ASSERT_NE(mi, nullptr);
+  EXPECT_EQ(mi->namespace_uri(), kMathMlNamespace);
+  EXPECT_EQ(mi->TextContent(), "x");
+  dom::Element* mn = ChildByTag(math, "mn");
+  ASSERT_NE(mn, nullptr);
+  EXPECT_EQ(mn->namespace_uri(), kMathMlNamespace);
+  EXPECT_EQ(mn->TextContent(), "1");
+}
+
+TEST(HtmlTest, MathMlTextIntegrationPointParsesHtmlContent)
+{
+  // <mi> is a MathML text integration point: content inside it is parsed with
+  // the HTML rules, so <b> is an HTML element (not MathML).
+  auto doc = ParseDoc("<math><mi><b>x</b></mi></math>");
+  dom::Element* mi = dom::QuerySelector(*doc, "mi");
+  ASSERT_NE(mi, nullptr);
+  dom::Element* b = ChildByTag(mi, "b");
+  ASSERT_NE(b, nullptr);
+  EXPECT_EQ(b->namespace_uri(), kHtmlNamespace);
+  EXPECT_EQ(b->TextContent(), "x");
+}
+
+TEST(HtmlTest, AnnotationXmlWithHtmlEncodingIsAnIntegrationPoint)
+{
+  auto doc =
+      ParseDoc("<math><annotation-xml encoding=\"text/html\"><div>x</div></annotation-xml></math>");
+  dom::Element* math = dom::QuerySelector(*doc, "math");
+  ASSERT_NE(math, nullptr);
+  dom::Element* annotation = ChildByTag(math, "annotation-xml");
+  ASSERT_NE(annotation, nullptr);
+  EXPECT_EQ(annotation->namespace_uri(), kMathMlNamespace);
+  dom::Element* div = dom::QuerySelector(*doc, "div");
+  ASSERT_NE(div, nullptr);
+  EXPECT_EQ(div->namespace_uri(), kHtmlNamespace);
+  EXPECT_EQ(div->parent(), annotation);
+}
+
+TEST(HtmlTest, HtmlStartTagBreaksOutOfForeignContent)
+{
+  // <div> is a foreign-content breakout start tag: the open <svg> is popped
+  // and the token is reprocessed with the HTML rules.
+  auto doc = ParseDoc("<svg><div>x</div></svg>");
+  dom::Element* body = Body(*doc);
+  ASSERT_NE(body, nullptr);
+  dom::Element* div = dom::QuerySelector(*doc, "div");
+  ASSERT_NE(div, nullptr);
+  EXPECT_EQ(div->namespace_uri(), kHtmlNamespace);
+  EXPECT_EQ(div->parent(), body);
+  // The <svg> was popped and left behind empty.
+  dom::Element* svg = dom::QuerySelector(*doc, "svg");
+  ASSERT_NE(svg, nullptr);
+  EXPECT_EQ(svg->child_count(), 0u);
+}
+
+TEST(HtmlTest, ForeignFontWithAttributeBreaksOut)
+{
+  // "font" breaks out only when it carries a color/face/size attribute.
+  auto doc = ParseDoc("<svg><font color=\"red\">x</font></svg>");
+  dom::Element* font = dom::QuerySelector(*doc, "font");
+  ASSERT_NE(font, nullptr);
+  EXPECT_EQ(font->namespace_uri(), kHtmlNamespace);
+  EXPECT_EQ(font->parent(), Body(*doc));
+}
+
+TEST(HtmlTest, CdataSectionInForeignContentYieldsText)
+{
+  auto doc = ParseDoc("<svg><![CDATA[<b>raw</b>]]></svg>");
+  dom::Element* svg = dom::QuerySelector(*doc, "svg");
+  ASSERT_NE(svg, nullptr);
+  // The CDATA content is a single text child; the markup inside is not parsed.
+  ASSERT_NE(svg->first_child(), nullptr);
+  EXPECT_EQ(svg->first_child()->node_type(), dom::NodeType::kText);
+  EXPECT_EQ(svg->TextContent(), "<b>raw</b>");
+  EXPECT_EQ(dom::QuerySelectorAll(*doc, "b").size(), 0u);
+}
+
+TEST(HtmlTest, CdataSectionOutsideForeignContentIsAComment)
+{
+  // cdata-in-html-content: without a foreign adjusted current node, "[CDATA["
+  // starts a bogus comment rather than a CDATA section.
+  auto doc = ParseDoc("<div><![CDATA[raw]]></div>");
+  dom::Element* div = dom::QuerySelector(*doc, "div");
+  ASSERT_NE(div, nullptr);
+  ASSERT_NE(div->first_child(), nullptr);
+  EXPECT_EQ(div->first_child()->node_type(), dom::NodeType::kComment);
+  EXPECT_EQ(static_cast<dom::Comment*>(div->first_child())->data(), "[CDATA[raw]]");
+}
+
+TEST(HtmlTest, SvgTagNamesAreAdjustedToCamelCase)
+{
+  auto doc = ParseDoc("<svg><lineargradient/></svg>");
+  dom::Element* svg = dom::QuerySelector(*doc, "svg");
+  ASSERT_NE(svg, nullptr);
+  ASSERT_EQ(svg->child_count(), 1u);
+  dom::Element* gradient = static_cast<dom::Element*>(svg->first_child());
+  EXPECT_EQ(gradient->tag_name(), "linearGradient");
+  EXPECT_EQ(gradient->namespace_uri(), kSvgNamespace);
+}
+
+TEST(HtmlTest, SvgAttributeNamesAreAdjusted)
+{
+  auto doc = ParseDoc("<svg viewbox=\"0 0 10 10\"></svg>");
+  dom::Element* svg = dom::QuerySelector(*doc, "svg");
+  ASSERT_NE(svg, nullptr);
+  EXPECT_EQ(svg->GetAttribute("viewBox"), "0 0 10 10");
+  EXPECT_FALSE(svg->GetAttribute("viewbox").has_value());
+}
+
 } // namespace
 } // namespace neko::html

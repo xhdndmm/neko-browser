@@ -35,10 +35,41 @@
 - 字符集：解析前由 `neko::base::encoding` 完成检测与转码（BOM > HTTP
   Content-Type > meta 预扫描 > UTF-8 默认；见 ADR 0012），解析器只接收
   已转码的 UTF-8
+- **foreign content（WHATWG 13.2.6.5，2026-10）**：`<svg>`/`<math>` 起始标签在
+  in body 模式按 SVG（`http://www.w3.org/2000/svg`）/ MathML
+  （`http://www.w3.org/1998/Math/MathML`）命名空间创建元素；其后由 tree
+  construction dispatcher（13.2.6）按「adjusted current node」的命名空间切换到
+  foreign content 规则：
+  * 任意起始标签在 adjusted current node 的命名空间内插入；**自闭合标签立即弹出**
+    （`<svg><circle/><rect/>` 中 circle 与 rect 是兄弟而非父子）
+  * **MathML 文本集成点**（`mi`/`mo`/`mn`/`ms`/`mtext`）与 **HTML 集成点**（SVG
+    `foreignObject`/`desc`/`title`，以及 `annotation-xml` 且 `encoding` 为
+    `text/html`/`application/xhtml+xml`）内部按 HTML 规则解析，因此其中的 HTML
+    标签仍属 HTML 命名空间
+  * **越界起始标签**（`b`/`big`/`div`/`font`(带 color/face/size)/`p`/`table`/…）与
+    `</p>`/`</br>` 会沿栈弹出 foreign 元素直到集成点或 HTML 元素，再按 HTML 规则
+    重新处理
+  * **「调整 SVG 标签名」表全量实现**（37 项：`lineargradient`→`linearGradient`、
+    `foreignobject`→`foreignObject`、`clippath`→`clipPath` 等）；SVG 属性名调整
+    （`viewbox`→`viewBox` …）与 MathML `definitionurl`→`definitionURL` 亦已实现
+  * **`Any other end tag`**：沿栈向下查找匹配节点，找到即弹到该节点；若先遇到
+    HTML 命名空间元素，则改用当前插入模式的 HTML 规则；否则（到栈顶仍未匹配）忽略
+- **CDATA section（WHATWG 13.2.5.69-71，2026-10）**：tokenizer 新增
+  `SetForeignContext`，由树构建器在每次取 token 前按 adjusted current node 更新；
+  foreign content 中的 `<![CDATA[…]]>` 产生字符 token（`]]>` 被消费）；HTML 内容
+  中的相同构造按 `cdata-in-html-content` 处理为以 `[CDATA[` 起始的 bogus comment
 
 ## 未实现
 
-- CDATA section 状态、processing instruction 状态（依赖 foreign content）
+- processing instruction：`<?…>` 目前仍按 **bogus comment** 处理（tokenizer 既有
+  行为，任务要求保持；`?` 由 tag open 状态直接进入 bogus comment）。注意现行
+  WHATWG 已把 `?` 改为进入 processing instruction 状态（最终多被忽略或转为注释），
+  本实现未单独建模 PI token，故对 `<?php … ?>` 这类输入会产出一条注释而非忽略
+- foreign attribute 的命名空间化（`xlink:`/`xml:`/`xmlns:` 前缀 + XLink/XML/XMLNS
+  命名空间）**NOT IMPLEMENTED**：`dom::Attribute` 仅存名字与值，无法表示
+  前缀/本地名/命名空间三元组（见 §13.2.6.5「adjust foreign attributes」）
+- SVG `<script>` 的执行步骤（13.2.6.5）**NOT IMPLEMENTED**：自闭合的
+  `<script/>` 按普通弹出处理，不执行脚本
 - in template **插入模式**（13.2.6.4.18，栈/模式切换及其与 foster parenting 的
   交互）；template 的**内容路由已实现**：按 13.2.5.3，插入目标为 `<template>`
   的节点进入其独立的 template contents fragment（即 `template.content`，
@@ -51,7 +82,10 @@
   noframes/noscript→RAWTEXT、plaintext→PLAINTEXT），结果是一棵
   `DocumentFragment`；`innerHTML`/`insertAdjacentHTML` 已改走该路径（表格、
   select、RCDATA 上下文与 in-body 忽略游离 `td/tr` 的规则因此正确）。仍差：
-  context 只按标签名匹配（无 SVG/MathML 命名空间）；`insertAdjacentHTML` 的
+  构造函数仍只按**标签名**选择 tokenizer 状态（不读命名空间），但 tree
+  construction dispatcher 会采用 context 元素自身的命名空间（传入带 SVG/MathML
+  命名空间的 context 会按 foreign content 解析其内容）；
+  `insertAdjacentHTML` 的
   `beforebegin`/`afterend` 目前也用元素自身作 context（规范用父元素）
 - 重复 `<body>` 的属性合并、form element pointer 等次要规则
 

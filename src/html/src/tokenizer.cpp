@@ -633,7 +633,8 @@ void Tokenizer::ProcessChar(char c)
 
   case State::kMarkupDeclarationOpen:
     // |c| is the first character after "<!".  "--" starts a comment and
-    // "DOCTYPE" starts a doctype; anything else is a bogus comment.
+    // "DOCTYPE" starts a doctype; "[CDATA[" starts a CDATA section in foreign
+    // content (otherwise a bogus comment); anything else is a bogus comment.
     if (c == '-' && Peek(0).size() >= 1 && Peek(0)[0] == '-') {
       Skip(1); // the second '-'
       comment_data_.clear();
@@ -641,6 +642,20 @@ void Tokenizer::ProcessChar(char c)
     } else if ((c == 'd' || c == 'D') && MatchIgnoreCase("OCTYPE")) {
       Skip(6);
       state_ = State::kBeforeDoctypeName;
+    } else if (c == '[' && Peek(0).starts_with("CDATA[")) {
+      // WHATWG 13.2.5.42: "<![CDATA[" matches (case-sensitive).  Consume it,
+      // then switch to the CDATA section state only when there is an adjusted
+      // current node and it is not in the HTML namespace; otherwise this is a
+      // cdata-in-html-content parse error, the data is the literal "[CDATA[",
+      // and the run is tokenized as a bogus comment.
+      Skip(6);
+      if (foreign_context_) {
+        state_ = State::kCdataSection;
+      } else {
+        comment_data_.clear();
+        comment_data_.append("[CDATA[");
+        state_ = State::kBogusComment;
+      }
     } else {
       comment_data_.clear();
       comment_data_.push_back(c);
@@ -992,6 +1007,38 @@ void Tokenizer::ProcessChar(char c)
       char_run_ += "\xEF\xBF\xBD";
     } else {
       char_run_.push_back(c);
+    }
+    break;
+
+  // CDATA section states (WHATWG 13.2.5.69-71).  Entered from the markup
+  // declaration open state only in foreign content.  The "]]>" terminator is
+  // consumed; its content is emitted as character tokens.
+  case State::kCdataSection:
+    if (c == ']') {
+      state_ = State::kCdataSectionBracket;
+    } else {
+      char_run_.push_back(c);
+    }
+    break;
+
+  case State::kCdataSectionBracket:
+    if (c == ']') {
+      state_ = State::kCdataSectionEnd;
+    } else {
+      char_run_.push_back(']');
+      ReconsumeIn(State::kCdataSection);
+    }
+    break;
+
+  case State::kCdataSectionEnd:
+    if (c == ']') {
+      char_run_.push_back(']');
+    } else if (c == '>') {
+      FlushCharacterRun();
+      state_ = State::kData;
+    } else {
+      char_run_.append("]]");
+      ReconsumeIn(State::kCdataSection);
     }
     break;
 

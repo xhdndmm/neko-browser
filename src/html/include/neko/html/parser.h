@@ -80,6 +80,16 @@ private:
   // restoring the mode unless the rules changed it themselves.
   void ProcessWithInBodyRules(Token token);
 
+  // The tree construction dispatcher (WHATWG 13.2.6) and the rules for parsing
+  // tokens in foreign content (13.2.6.5).  When the adjusted current node is
+  // not in the HTML namespace (and the token is not one of the integration
+  // point exceptions), the token is handled by the foreign content rules
+  // instead of the current insertion mode.
+  dom::Element* AdjustedCurrentNode() const;
+  bool IsAdjustedCurrentNodeForeign() const;
+  bool ShouldProcessInForeignContent(const Token& token) const;
+  void ProcessForeignContent(Token token);
+
   // Inserts |element| into the document and returns it as a non-owning
   // pointer (nullptr when the depth guard drops it): the tree takes
   // ownership on insertion, so callers hand over the unique_ptr.

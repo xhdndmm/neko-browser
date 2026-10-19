@@ -15,12 +15,14 @@ namespace neko::html {
 // doctype (including public/system identifiers), character references
 // (numeric + the full WHATWG named table), raw text elements (script: script
 // data with escape/double-escape states; style/xmp/iframe/noembed: RAWTEXT;
-// title/textarea: RCDATA), plaintext, newline normalization, and the
-// attribute-context character reference rules.
+// title/textarea: RCDATA), plaintext, newline normalization, CDATA sections
+// inside foreign content, and the attribute-context character reference
+// rules.
 //
 // Known deviations (see docs/html/README.md):
-//   - CDATA sections and processing instructions are not tokenized (foreign
-//     content is not produced).
+//   - processing instructions are not tokenized as such: "<?..." is handled as
+//     a bogus comment (the current WHATWG spec routes "?" to the processing
+//     instruction states instead).
 class Tokenizer
 {
 public:
@@ -39,6 +41,15 @@ public:
   // emitted as character tokens.  The parser calls this after emitting a
   // "plaintext" start tag.
   void StartPlaintext();
+
+  // Tells the tokenizer whether the "adjusted current node" is in a foreign
+  // (non-HTML) namespace.  The tree constructor updates this before pulling
+  // each token; it decides whether "<![CDATA[" opens a CDATA section (foreign
+  // content, WHATWG 13.2.5.42) or is a bogus comment (HTML content).
+  void SetForeignContext(bool foreign)
+  {
+    foreign_context_ = foreign;
+  }
 
 private:
   enum class State
@@ -80,6 +91,9 @@ private:
     kAfterDoctypeSystemIdentifier,
     kBogusDoctype,
     kPlaintext,
+    kCdataSection,
+    kCdataSectionBracket,
+    kCdataSectionEnd,
     kRcdata,
     kRcdataLessThanSign,
     kRcdataEndTagOpen,
@@ -126,6 +140,10 @@ private:
   bool eof_ = false;
   bool reconsume_ = false;
   char last_char_ = '\0';
+  // Whether the adjusted current node is in a foreign namespace; set by the
+  // tree constructor.  Controls the CDATA-section branch of the markup
+  // declaration open state.
+  bool foreign_context_ = false;
 
   std::deque<Token> out_;
   Token pending_;
