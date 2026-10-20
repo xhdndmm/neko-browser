@@ -550,6 +550,270 @@ TEST_F(DomBinderTest, UrlInputExposesValidityState)
                "&& typeof descriptor.get === 'function'; })()"));
 }
 
+TEST_F(DomBinderTest, RequiredTextControlReportsValueMissing)
+{
+  EXPECT_TRUE(EvalBool(R"JS((function() {
+    var form = document.createElement('form');
+    var input = document.createElement('input');
+    input.setAttribute('required', '');
+    form.appendChild(input);
+    document.body.appendChild(form);
+    var validity = input.validity;
+    var missing = validity.valueMissing && !validity.valid;
+    var checks = input.willValidate && input.validationMessage.length > 0
+        && input.checkValidity() === false && input.form === form;
+    input.value = 'filled';
+    // A stored ValidityState object reflects the live DOM, as in browsers.
+    var live = validity.valid === true && validity.valueMissing === false;
+    var noOwnKeys = Object.keys(validity).length === 0;
+    return missing && checks && live && noOwnKeys;
+  })())JS"));
+}
+
+TEST_F(DomBinderTest, RequiredTextAreaAndSelectReportValueMissing)
+{
+  EXPECT_TRUE(EvalBool(R"JS((function() {
+    var form = document.createElement('form');
+    var textarea = document.createElement('textarea');
+    textarea.setAttribute('required', '');
+    var select = document.createElement('select');
+    select.setAttribute('required', '');
+    form.appendChild(textarea);
+    form.appendChild(select);
+    document.body.appendChild(form);
+    var textareaMissing = textarea.validity.valueMissing;
+    var selectMissing = select.validity.valueMissing;
+    textarea.appendChild(document.createTextNode('filled'));
+    var option = document.createElement('option');
+    option.setAttribute('value', 'v');
+    select.appendChild(option);
+    return textareaMissing && selectMissing
+        && textarea.validity.valid && select.validity.valid
+        && textarea instanceof HTMLTextAreaElement && select instanceof HTMLSelectElement
+        && textarea.validity instanceof ValidityState;
+  })())JS"));
+}
+
+TEST_F(DomBinderTest, RequiredCheckboxAndRadioGroup)
+{
+  EXPECT_TRUE(EvalBool(R"JS((function() {
+    var form = document.createElement('form');
+    var checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.setAttribute('required', '');
+    var first = document.createElement('input');
+    first.type = 'radio';
+    first.setAttribute('required', '');
+    first.setAttribute('name', 'group');
+    var second = document.createElement('input');
+    second.type = 'radio';
+    second.setAttribute('name', 'group');
+    form.appendChild(checkbox);
+    form.appendChild(first);
+    form.appendChild(second);
+    document.body.appendChild(form);
+    var checkboxMissing = checkbox.validity.valueMissing;
+    var radioMissing = first.validity.valueMissing && second.validity.valid;
+    checkbox.setAttribute('checked', 'checked');
+    first.setAttribute('checked', 'checked');
+    return checkboxMissing && radioMissing
+        && checkbox.validity.valid
+        && first.validity.valid && second.validity.valid;
+  })())JS"));
+}
+
+TEST_F(DomBinderTest, EmailAndUrlTypeMismatch)
+{
+  EXPECT_TRUE(EvalBool(R"JS((function() {
+    var email = document.createElement('input');
+    email.type = 'email';
+    email.value = 'not-an-email';
+    var badEmail = email.validity.typeMismatch && !email.validity.valid;
+    email.value = 'a@example.com';
+    var goodEmail = email.validity.valid;
+    email.setAttribute('multiple', '');
+    email.value = 'a@example.com, b@example.org';
+    var multipleGood = email.validity.valid;
+    email.value = 'a@example.com, nope';
+    var multipleBad = email.validity.typeMismatch;
+    var url = document.createElement('input');
+    url.type = 'url';
+    url.value = 'not a url';
+    var badUrl = url.validity.typeMismatch && !url.validity.valid;
+    url.value = 'https://example.com/path?q=1';
+    var goodUrl = url.validity.valid;
+    return badEmail && goodEmail && multipleGood && multipleBad && badUrl && goodUrl;
+  })())JS"));
+}
+
+TEST_F(DomBinderTest, NumberRangeLimitsAndStep)
+{
+  EXPECT_TRUE(EvalBool(R"JS((function() {
+    var number = document.createElement('input');
+    number.type = 'number';
+    number.value = '5';
+    number.setAttribute('min', '10');
+    var underflow = number.validity.rangeUnderflow && !number.validity.valid;
+    number.removeAttribute('min');
+    number.setAttribute('max', '4');
+    var overflow = number.validity.rangeOverflow && !number.validity.valid;
+    number.removeAttribute('max');
+    number.setAttribute('min', '0');
+    number.setAttribute('step', '2');
+    number.value = '3';
+    var stepMismatch = number.validity.stepMismatch && !number.validity.valid;
+    number.setAttribute('step', 'any');
+    var any = number.validity.valid;
+    number.value = 'not-a-number';
+    var badInput = number.validity.badInput && !number.validity.valid;
+    var range = document.createElement('input');
+    range.type = 'range';
+    range.setAttribute('min', '0');
+    range.setAttribute('max', '10');
+    range.setAttribute('step', '1');
+    return underflow && overflow && stepMismatch && any && badInput && range.validity.valid;
+  })())JS"));
+}
+
+TEST_F(DomBinderTest, MaxlengthAndMinlengthUseUtf16CodeUnits)
+{
+  EXPECT_TRUE(EvalBool(R"JS((function() {
+    var input = document.createElement('input');
+    input.value = 'abcd';
+    input.setAttribute('maxlength', '3');
+    var tooLong = input.validity.tooLong && !input.validity.valid;
+    input.removeAttribute('maxlength');
+    input.setAttribute('minlength', '5');
+    input.value = 'ab';
+    var tooShort = input.validity.tooShort && !input.validity.valid;
+    input.value = '';
+    var emptyNotShort = input.validity.valid;
+    input.removeAttribute('minlength');
+    var emoji = String.fromCharCode(0xD83D, 0xDE00);
+    input.value = emoji;
+    input.setAttribute('maxlength', '2');
+    var surrogatePairFits = input.validity.valid;
+    input.setAttribute('maxlength', '1');
+    var surrogatePairTooLong = input.validity.tooLong;
+    return tooLong && tooShort && emptyNotShort && surrogatePairFits && surrogatePairTooLong;
+  })())JS"));
+}
+
+TEST_F(DomBinderTest, CustomValidityErrorAndClear)
+{
+  EXPECT_TRUE(EvalBool(R"JS((function() {
+    var input = document.createElement('input');
+    input.setCustomValidity('custom boom');
+    var set = input.validity.customError && !input.validity.valid
+        && input.validationMessage === 'custom boom';
+    input.setCustomValidity('');
+    var cleared = !input.validity.customError && input.validity.valid
+        && input.validationMessage === '';
+    input.setAttribute('disabled', '');
+    input.setCustomValidity('still barred');
+    var barred = input.willValidate === false && input.validity.valid
+        && input.validity.customError && input.checkValidity() === true;
+    return set && cleared && barred;
+  })())JS"));
+}
+
+TEST_F(DomBinderTest, BarredControlsAreValid)
+{
+  EXPECT_TRUE(EvalBool(R"JS((function() {
+    function barred(configure) {
+      var input = document.createElement('input');
+      input.setAttribute('required', '');
+      configure(input);
+      return input.willValidate === false && input.validity.valid
+          && input.checkValidity() === true;
+    }
+    var readonly = barred(function(input) { input.setAttribute('readonly', ''); });
+    var hidden = barred(function(input) { input.type = 'hidden'; });
+    var submit = barred(function(input) { input.type = 'submit'; });
+    var disabled = barred(function(input) { input.setAttribute('disabled', ''); });
+    var fieldset = document.createElement('fieldset');
+    fieldset.setAttribute('disabled', '');
+    var inFieldset = document.createElement('input');
+    inFieldset.setAttribute('required', '');
+    fieldset.appendChild(inFieldset);
+    document.body.appendChild(fieldset);
+    var fieldsetBarred = inFieldset.willValidate === false && inFieldset.validity.valid;
+    var legend = document.createElement('legend');
+    var inLegend = document.createElement('input');
+    inLegend.setAttribute('required', '');
+    legend.appendChild(inLegend);
+    var fieldset2 = document.createElement('fieldset');
+    fieldset2.setAttribute('disabled', '');
+    fieldset2.appendChild(legend);
+    document.body.appendChild(fieldset2);
+    var legendNotBarred = inLegend.willValidate === true;
+    return readonly && hidden && submit && disabled && fieldsetBarred && legendNotBarred;
+  })())JS"));
+}
+
+TEST_F(DomBinderTest, FormAggregatesValidityAndFiresInvalidOncePerCheck)
+{
+  EXPECT_TRUE(EvalBool(R"JS((function() {
+    var form = document.createElement('form');
+    var invalid = document.createElement('input');
+    invalid.setAttribute('required', '');
+    var valid = document.createElement('input');
+    valid.value = 'ok';
+    form.appendChild(invalid);
+    form.appendChild(valid);
+    document.body.appendChild(form);
+    var fired = 0;
+    var ancestorFired = 0;
+    var bubbles = null;
+    var cancelable = null;
+    invalid.addEventListener('invalid', function(event) {
+      fired += 1;
+      bubbles = event.bubbles;
+      cancelable = event.cancelable;
+    });
+    form.addEventListener('invalid', function() { ancestorFired += 1; });
+    var first = form.checkValidity();
+    var afterFirst = fired;
+    var reported = form.reportValidity();
+    var afterReport = fired;
+    // HTMLFormElement has no `validity` member; only checkValidity/reportValidity/noValidate.
+    var no_invented_form_validity = form.validity === undefined;
+    form.noValidate = true;
+    var novalidate = form.noValidate && form.hasAttribute('novalidate');
+    form.noValidate = false;
+    return first === false && afterFirst === 1
+        && reported === false && afterReport === 2
+        && bubbles === false && cancelable === true && ancestorFired === 0
+        && no_invented_form_validity && novalidate && form.noValidate === false;
+  })())JS"));
+}
+
+TEST_F(DomBinderTest, FormAssociatedControlFindsOwnerForm)
+{
+  EXPECT_TRUE(EvalBool(R"JS((function() {
+    var form = document.createElement('form');
+    form.setAttribute('id', 'owner');
+    document.body.appendChild(form);
+    var input = document.createElement('input');
+    input.setAttribute('form', 'owner');
+    input.setAttribute('required', '');
+    document.body.appendChild(input);
+    return input.form === form && form.checkValidity() === false;
+  })())JS"));
+}
+
+TEST_F(DomBinderTest, PatternMismatchIsDeferredNotFaked)
+{
+  // patternMismatch is documented as NOT IMPLEMENTED (no ECMAScript RegExp in
+  // the shared HTML layer).  The flag must stay false rather than fake a match.
+  EXPECT_TRUE(EvalBool(R"JS((function() {
+    var input = document.createElement('input');
+    input.value = 'abc';
+    input.setAttribute('pattern', '[0-9]+');
+    return input.validity.patternMismatch === false && input.validity.valid === true;
+  })())JS"));
+}
+
 TEST_F(DomBinderTest, NodeListCollectionSemantics)
 {
   EXPECT_TRUE(EvalBool("typeof NodeList === 'function'"));

@@ -8,6 +8,7 @@
 #include "neko/dom/element.h"
 #include "neko/dom/node.h"
 #include "neko/dom/query.h"
+#include "neko/html/form_validation.h"
 #include "neko/url/url.h"
 
 #include "binding_internal.h"
@@ -298,17 +299,10 @@ JSValue ElementSetValue(JSContext* ctx, JSValueConst this_val, JSValueConst valu
   return JS_UNDEFINED;
 }
 
-JSValue ElementGetValidity(JSContext* ctx, JSValueConst this_val)
+namespace {
+
+JSValue MakeValidityStateObject(JSContext* ctx, Impl& impl, dom::Element& element)
 {
-  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
-  if (element == nullptr || element->tag_name() != "input") {
-    return JS_ThrowTypeError(ctx, "not an input element");
-  }
-
-  const std::string type = ToLower(RawAttr(*element, "type"));
-  const std::string value = RawAttr(*element, "value");
-  const bool type_mismatch = type == "url" && !value.empty() && !url::Url::Parse(value).has_value();
-
   JSValue global = JS_GetGlobalObject(ctx);
   JSValue constructor = JS_GetPropertyStr(ctx, global, "ValidityState");
   JS_FreeValue(ctx, global);
@@ -316,19 +310,299 @@ JSValue ElementGetValidity(JSContext* ctx, JSValueConst this_val)
   JS_FreeValue(ctx, constructor);
   JSValue validity = JS_NewObjectProto(ctx, prototype);
   JS_FreeValue(ctx, prototype);
-  JS_SetPropertyStr(ctx, validity, "__nekoValidityValid", JS_NewBool(ctx, !type_mismatch));
-  JS_SetPropertyStr(ctx, validity, "__nekoValidityTypeMismatch", JS_NewBool(ctx, type_mismatch));
+  // The state is computed on every getter access from the live DOM (a stored
+  // `input.validity` object stays live, as in browsers), so the object only
+  // needs to remember which element it describes.  The link is non-enumerable.
+  JS_DefinePropertyValueStr(
+      ctx, validity, "__nekoValidityElement", impl.WrapNode(&element), JS_PROP_CONFIGURABLE);
   return validity;
 }
 
-JSValue ValidityStateGetValid(JSContext* ctx, JSValueConst this_val)
+// Returns the element whose validity is exposed by |this_val|, or null when
+// the receiver is not a ValidityState created by ElementGetValidity.
+dom::Element* ValidityElementOf(JSContext* ctx, JSValueConst this_val)
 {
-  return JS_GetPropertyStr(ctx, this_val, "__nekoValidityValid");
+  JSValue element_value = JS_GetPropertyStr(ctx, this_val, "__nekoValidityElement");
+  dom::Element* element = AsElement(UnwrapNode(ctx, element_value));
+  JS_FreeValue(ctx, element_value);
+  return element;
 }
 
-JSValue ValidityStateGetTypeMismatch(JSContext* ctx, JSValueConst this_val)
+bool ValidityFlagValue(const html::ValidityState& state, int magic)
 {
-  return JS_GetPropertyStr(ctx, this_val, "__nekoValidityTypeMismatch");
+  switch (magic) {
+  case kValidityValueMissing:
+    return state.value_missing;
+  case kValidityTypeMismatch:
+    return state.type_mismatch;
+  case kValidityPatternMismatch:
+    return state.pattern_mismatch;
+  case kValidityTooLong:
+    return state.too_long;
+  case kValidityTooShort:
+    return state.too_short;
+  case kValidityRangeUnderflow:
+    return state.range_underflow;
+  case kValidityRangeOverflow:
+    return state.range_overflow;
+  case kValidityStepMismatch:
+    return state.step_mismatch;
+  case kValidityBadInput:
+    return state.bad_input;
+  case kValidityCustomError:
+    return state.custom_error;
+  case kValidityValid:
+    return state.valid;
+  default:
+    return false;
+  }
+}
+
+} // namespace
+
+JSValue ElementGetValidity(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  Impl* impl = ImplFor(ctx, this_val);
+  if (element == nullptr || impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  if (!html::IsSubmittableControl(*element)) {
+    return JS_ThrowTypeError(ctx, "not a form control");
+  }
+  return MakeValidityStateObject(ctx, *impl, *element);
+}
+
+JSValue ValidityStateGetFlag(JSContext* ctx, JSValueConst this_val, int magic)
+{
+  if (magic < 0 || magic >= kValidityFlagCount) {
+    return JS_ThrowInternalError(ctx, "bad ValidityState flag");
+  }
+  dom::Element* element = ValidityElementOf(ctx, this_val);
+  Impl* impl = ImplFor(ctx, this_val);
+  if (element == nullptr || impl == nullptr) {
+    return JS_NewBool(ctx, false);
+  }
+  html::ValidityState state;
+  if (element->tag_name() == "form") {
+    // HTMLFormElement has no standard `validity`; the engine exposes an
+    // aggregate (all constraint flags false, valid = no invalid controls).
+    state.valid = impl->InvalidFormControls(*element).empty();
+  } else {
+    state = html::ValidateControl(*element, impl->CustomValidityMessage(*element)).state;
+  }
+  return JS_NewBool(ctx, ValidityFlagValue(state, magic));
+}
+
+JSValue ElementGetWillValidate(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (element == nullptr || !html::IsSubmittableControl(*element)) {
+    return JS_ThrowTypeError(ctx, "not a form control");
+  }
+  return JS_NewBool(ctx, html::IsCandidateForConstraintValidation(*element));
+}
+
+JSValue ElementGetValidationMessage(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  Impl* impl = ImplFor(ctx, this_val);
+  if (element == nullptr || impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  if (element->tag_name() == "form") {
+    // Non-standard aggregate: the first invalid control's message.
+    for (dom::Element* control : impl->InvalidFormControls(*element)) {
+      const html::ControlValidity validity =
+          html::ValidateControl(*control, impl->CustomValidityMessage(*control));
+      if (!validity.message.empty()) {
+        return JS_NewStringLen(ctx, validity.message.data(), validity.message.size());
+      }
+    }
+    return JS_NewStringLen(ctx, "", 0);
+  }
+  if (!html::IsSubmittableControl(*element)) {
+    return JS_ThrowTypeError(ctx, "not a form control");
+  }
+  const html::ControlValidity validity =
+      html::ValidateControl(*element, impl->CustomValidityMessage(*element));
+  return JS_NewStringLen(ctx, validity.message.data(), validity.message.size());
+}
+
+JSValue
+ElementCheckValidity(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  Impl* impl = ImplFor(ctx, this_val);
+  if (element == nullptr || impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  if (element->tag_name() == "form") {
+    return JS_NewBool(ctx, impl->CheckFormValidity(*element));
+  }
+  if (!html::IsSubmittableControl(*element)) {
+    return JS_ThrowTypeError(ctx, "not a form control");
+  }
+  return JS_NewBool(ctx, impl->CheckControlValidity(*element));
+}
+
+JSValue ElementReportValidity(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  // PARTIALLY IMPLEMENTED: reportValidity() runs the same constraint check
+  // (and fires the invalid events) but does not move focus to the first
+  // invalid control -- the DOM binding has no focus API, and focus is owned
+  // by the browser's UI layer.  The browser's form-submission path *does*
+  // focus the first invalid control.
+  return ElementCheckValidity(ctx, this_val, argc, argv);
+}
+
+JSValue
+ElementSetCustomValidity(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  Impl* impl = ImplFor(ctx, this_val);
+  if (element == nullptr || impl == nullptr || !html::IsSubmittableControl(*element)) {
+    return JS_ThrowTypeError(ctx, "not a form control");
+  }
+  bool ok = true;
+  const std::string message = argc > 0 ? ArgString(ctx, argv[0], &ok) : std::string();
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  impl->SetCustomValidity(*element, message);
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetForm(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  Impl* impl = ImplFor(ctx, this_val);
+  if (element == nullptr || impl == nullptr || !html::IsSubmittableControl(*element)) {
+    return JS_ThrowTypeError(ctx, "not a form control");
+  }
+  dom::Element* form = html::OwnerForm(*element);
+  return form != nullptr ? impl->WrapNode(form) : JS_NULL;
+}
+
+JSValue
+FormCheckValidity(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  Impl* impl = ImplFor(ctx, this_val);
+  if (element == nullptr || impl == nullptr || element->tag_name() != "form") {
+    return JS_ThrowTypeError(ctx, "not a form element");
+  }
+  return JS_NewBool(ctx, impl->CheckFormValidity(*element));
+}
+
+JSValue FormReportValidity(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  // Same focus limitation as ElementReportValidity above.
+  return FormCheckValidity(ctx, this_val, argc, argv);
+}
+
+JSValue FormGetNoValidate(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (element == nullptr || element->tag_name() != "form") {
+    return JS_ThrowTypeError(ctx, "not a form element");
+  }
+  return JS_NewBool(ctx, element->HasAttribute("novalidate"));
+}
+
+JSValue FormSetNoValidate(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (element == nullptr || element->tag_name() != "form") {
+    return JS_ThrowTypeError(ctx, "not a form element");
+  }
+  const int enabled = JS_ToBool(ctx, value);
+  if (enabled < 0) {
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return JS_EXCEPTION;
+  }
+  if (enabled != 0) {
+    element->SetAttribute("novalidate", "novalidate");
+  } else {
+    element->RemoveAttribute("novalidate");
+  }
+  // novalidate has no cascade/layout effect, so the dirty flags stay clear.
+  return JS_UNDEFINED;
+}
+
+std::string Impl::CustomValidityMessage(const dom::Element& element) const
+{
+  const auto it = custom_validity.find(&element);
+  return it != custom_validity.end() ? it->second : std::string();
+}
+
+void Impl::SetCustomValidity(dom::Element& element, std::string message)
+{
+  if (message.empty()) {
+    custom_validity.erase(&element);
+  } else {
+    custom_validity[&element] = std::move(message);
+  }
+}
+
+void Impl::DispatchInvalidToNode(dom::Node* node)
+{
+  if (node == nullptr) {
+    return;
+  }
+  // The `invalid` event is cancelable but does not bubble (WHATWG HTML
+  // §4.10.21.3): listeners on the control run, ancestors do not.
+  JSValue event = MakeEvent("invalid", /*bubbles=*/false, /*cancelable=*/true);
+  (void)DispatchPropagated(node, event);
+  JS_FreeValue(ctx, event);
+  engine.RunPendingJobs();
+}
+
+std::vector<dom::Element*> Impl::InvalidFormControls(dom::Element& form) const
+{
+  return html::InvalidControls(
+      form, [this](const dom::Element& element) { return CustomValidityMessage(element); });
+}
+
+bool Impl::CheckControlValidity(dom::Element& element)
+{
+  const html::ControlValidity validity =
+      html::ValidateControl(element, CustomValidityMessage(element));
+  if (validity.state.valid) {
+    return true;
+  }
+  DispatchInvalidToNode(&element);
+  return false;
+}
+
+bool Impl::CheckFormValidity(dom::Element& form)
+{
+  const std::vector<dom::Element*> invalid = InvalidFormControls(form);
+  for (dom::Element* control : invalid) {
+    DispatchInvalidToNode(control);
+  }
+  return invalid.empty();
+}
+
+// DomBinder forwarding surface used by the browser's form-submission path.
+std::string DomBinder::CustomValidityMessage(const dom::Element& element) const
+{
+  return impl_->CustomValidityMessage(element);
+}
+
+void DomBinder::SetCustomValidity(dom::Element& element, std::string message)
+{
+  impl_->SetCustomValidity(element, std::move(message));
+}
+
+void DomBinder::DispatchInvalidEvent(dom::Element& element)
+{
+  impl_->DispatchInvalidToNode(&element);
+}
+
+std::vector<dom::Element*> DomBinder::InvalidFormControls(dom::Element& form) const
+{
+  return impl_->InvalidFormControls(form);
 }
 
 JSValue ElementGetChecked(JSContext* ctx, JSValueConst this_val)

@@ -553,6 +553,8 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   html_form_element_proto = JS_NewObjectProto(ctx, element_proto);
   html_button_element_proto = JS_NewObjectProto(ctx, element_proto);
   html_input_element_proto = JS_NewObjectProto(ctx, element_proto);
+  html_text_area_element_proto = JS_NewObjectProto(ctx, element_proto);
+  html_select_element_proto = JS_NewObjectProto(ctx, element_proto);
   html_image_element_proto = JS_NewObjectProto(ctx, element_proto);
   html_media_element_proto = JS_NewObjectProto(ctx, element_proto);
   html_video_element_proto = JS_NewObjectProto(ctx, html_media_element_proto);
@@ -817,12 +819,25 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
                  "method",
                  MakeGetter(ctx, "method", FormGetMethod),
                  MakeSetter(ctx, "method", FormSetMethod));
+  DefineAccessor(ctx,
+                 html_form_element_proto,
+                 "noValidate",
+                 MakeGetter(ctx, "noValidate", FormGetNoValidate),
+                 MakeSetter(ctx, "noValidate", FormSetNoValidate));
   JS_SetPropertyStr(
       ctx, html_form_element_proto, "submit", JS_NewCFunction(ctx, FormSubmit, "submit", 0));
   JS_SetPropertyStr(ctx,
                     html_form_element_proto,
                     "requestSubmit",
                     JS_NewCFunction(ctx, FormRequestSubmit, "requestSubmit", 1));
+  JS_SetPropertyStr(ctx,
+                    html_form_element_proto,
+                    "checkValidity",
+                    JS_NewCFunction(ctx, FormCheckValidity, "checkValidity", 0));
+  JS_SetPropertyStr(ctx,
+                    html_form_element_proto,
+                    "reportValidity",
+                    JS_NewCFunction(ctx, FormReportValidity, "reportValidity", 0));
   DefineInterface(ctx, global, "HTMLFormElement", html_form_element_proto);
   DefineAccessor(ctx,
                  html_button_element_proto,
@@ -840,17 +855,60 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
                  "value",
                  MakeGetter(ctx, "value", ElementGetValue),
                  MakeSetter(ctx, "value", ElementSetValue));
-  DefineGetter(
-      ctx, html_input_element_proto, "validity", MakeGetter(ctx, "validity", ElementGetValidity));
+  // Constraint validation surface shared by HTMLInputElement,
+  // HTMLTextAreaElement and HTMLSelectElement (WHATWG HTML §4.10.21).
+  const auto define_control_validity = [context = ctx](JSValue proto) {
+    DefineGetter(context, proto, "validity", MakeGetter(context, "validity", ElementGetValidity));
+    DefineGetter(context,
+                 proto,
+                 "willValidate",
+                 MakeGetter(context, "willValidate", ElementGetWillValidate));
+    DefineGetter(context,
+                 proto,
+                 "validationMessage",
+                 MakeGetter(context, "validationMessage", ElementGetValidationMessage));
+    DefineGetter(context, proto, "form", MakeGetter(context, "form", ElementGetForm));
+    JS_SetPropertyStr(context,
+                      proto,
+                      "checkValidity",
+                      JS_NewCFunction(context, ElementCheckValidity, "checkValidity", 0));
+    JS_SetPropertyStr(context,
+                      proto,
+                      "reportValidity",
+                      JS_NewCFunction(context, ElementReportValidity, "reportValidity", 0));
+    JS_SetPropertyStr(context,
+                      proto,
+                      "setCustomValidity",
+                      JS_NewCFunction(context, ElementSetCustomValidity, "setCustomValidity", 1));
+  };
+  define_control_validity(html_input_element_proto);
+  define_control_validity(html_text_area_element_proto);
+  define_control_validity(html_select_element_proto);
   DefineInterface(ctx, global, "HTMLInputElement", html_input_element_proto);
+  DefineInterface(ctx, global, "HTMLTextAreaElement", html_text_area_element_proto);
+  DefineInterface(ctx, global, "HTMLSelectElement", html_select_element_proto);
   {
     JSValue validity_state_proto = JS_NewObject(ctx);
-    DefineGetter(
-        ctx, validity_state_proto, "valid", MakeGetter(ctx, "valid", ValidityStateGetValid));
-    DefineGetter(ctx,
-                 validity_state_proto,
-                 "typeMismatch",
-                 MakeGetter(ctx, "typeMismatch", ValidityStateGetTypeMismatch));
+    static constexpr const char* kValidityNames[kValidityFlagCount] = {
+        "valueMissing",
+        "typeMismatch",
+        "patternMismatch",
+        "tooLong",
+        "tooShort",
+        "rangeUnderflow",
+        "rangeOverflow",
+        "stepMismatch",
+        "badInput",
+        "customError",
+        "valid",
+    };
+    for (int i = 0; i < kValidityFlagCount; ++i) {
+      DefineGetter(
+          ctx,
+          validity_state_proto,
+          kValidityNames[i],
+          MakeGetterMagic(ctx, kValidityNames[i], ValidityStateGetFlag, static_cast<int>(i)));
+    }
     DefineInterface(ctx, global, "ValidityState", validity_state_proto);
     JS_FreeValue(ctx, validity_state_proto);
   }
@@ -1632,6 +1690,8 @@ Impl::~Impl()
   JS_FreeValue(ctx, html_form_element_proto);
   JS_FreeValue(ctx, html_button_element_proto);
   JS_FreeValue(ctx, html_input_element_proto);
+  JS_FreeValue(ctx, html_text_area_element_proto);
+  JS_FreeValue(ctx, html_select_element_proto);
   JS_FreeValue(ctx, html_image_element_proto);
   JS_FreeValue(ctx, html_media_element_proto);
   JS_FreeValue(ctx, html_video_element_proto);
@@ -1769,6 +1829,12 @@ JSValue Impl::PrototypeFor(const dom::Node* node) const
     }
     if (element->tag_name() == "input") {
       return html_input_element_proto;
+    }
+    if (element->tag_name() == "textarea") {
+      return html_text_area_element_proto;
+    }
+    if (element->tag_name() == "select") {
+      return html_select_element_proto;
     }
     if (element->tag_name() == "img") {
       return html_image_element_proto;

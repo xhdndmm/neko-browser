@@ -12,6 +12,7 @@
 #include "neko/css/parser.h"
 #include "neko/dom/element.h"
 #include "neko/dom/query.h"
+#include "neko/html/form_validation.h"
 #include "neko/image/image.h"
 #include "neko/layout/form_control.h"
 #include "neko/network/http.h"
@@ -1565,6 +1566,29 @@ void BrowserController::SubmitForm(int tab_id, dom::Element* form)
     if (tab->script_runtime != nullptr &&
         !tab->script_runtime->DispatchCancelableEvent(*form, "submit")) {
       return;
+    }
+    // Interactive constraint validation (WHATWG HTML §4.10.21.3).  Unless the
+    // form is novalidate, an invalid control fires a cancelable, non-bubbling
+    // `invalid` event, the first invalid control is focused, and no navigation
+    // happens.  The rules are the shared html::form_validation ones (the same
+    // ones the JS bindings call); the binder supplies setCustomValidity
+    // messages and the event dispatch when a runtime exists.
+    if (!form->HasAttribute("novalidate")) {
+      std::vector<dom::Element*> invalid;
+      if (tab->script_runtime != nullptr) {
+        invalid = tab->script_runtime->InvalidFormControls(*form);
+        for (dom::Element* control : invalid) {
+          tab->script_runtime->DispatchInvalidEvent(*control);
+        }
+      } else {
+        invalid = html::InvalidControls(*form);
+      }
+      if (!invalid.empty()) {
+        // Interactive validation reports the problem at the first invalid
+        // control (focus; the UI paints the caret there).
+        FocusControl(tab, invalid.front());
+        return;
+      }
     }
     // Encode the named controls (application/x-www-form-urlencoded).  The
     // form's method decides where the entry list travels (HTML §4.10.21.5):

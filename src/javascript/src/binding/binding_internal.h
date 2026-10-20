@@ -418,8 +418,38 @@ JSValue ElementGetScrollHeight(JSContext* ctx, JSValueConst this_val);
 JSValue ElementGetValue(JSContext* ctx, JSValueConst this_val);
 JSValue ElementSetValue(JSContext* ctx, JSValueConst this_val, JSValueConst value);
 JSValue ElementGetValidity(JSContext* ctx, JSValueConst this_val);
-JSValue ValidityStateGetValid(JSContext* ctx, JSValueConst this_val);
-JSValue ValidityStateGetTypeMismatch(JSContext* ctx, JSValueConst this_val);
+JSValue ElementGetWillValidate(JSContext* ctx, JSValueConst this_val);
+JSValue ElementGetValidationMessage(JSContext* ctx, JSValueConst this_val);
+JSValue ElementCheckValidity(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue ElementReportValidity(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue
+ElementSetCustomValidity(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue ElementGetForm(JSContext* ctx, JSValueConst this_val);
+
+// Index of a ValidityState member, used as the magic value of the prototype
+// getter (the order matches the hidden fields written by
+// ElementGetValidity).
+enum ValidityFlag : int
+{
+  kValidityValueMissing = 0,
+  kValidityTypeMismatch,
+  kValidityPatternMismatch,
+  kValidityTooLong,
+  kValidityTooShort,
+  kValidityRangeUnderflow,
+  kValidityRangeOverflow,
+  kValidityStepMismatch,
+  kValidityBadInput,
+  kValidityCustomError,
+  kValidityValid,
+  kValidityFlagCount,
+};
+
+JSValue ValidityStateGetFlag(JSContext* ctx, JSValueConst this_val, int magic);
+JSValue FormCheckValidity(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue FormReportValidity(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue FormGetNoValidate(JSContext* ctx, JSValueConst this_val);
+JSValue FormSetNoValidate(JSContext* ctx, JSValueConst this_val, JSValueConst value);
 JSValue ElementGetChecked(JSContext* ctx, JSValueConst this_val);
 JSValue ElementSetChecked(JSContext* ctx, JSValueConst this_val, JSValueConst value);
 JSValue ElementGetType(JSContext* ctx, JSValueConst this_val);
@@ -739,6 +769,8 @@ struct Impl
   JSValue html_form_element_proto = JS_UNDEFINED;
   JSValue html_button_element_proto = JS_UNDEFINED;
   JSValue html_input_element_proto = JS_UNDEFINED;
+  JSValue html_text_area_element_proto = JS_UNDEFINED;
+  JSValue html_select_element_proto = JS_UNDEFINED;
   JSValue html_image_element_proto = JS_UNDEFINED;
   JSValue html_media_element_proto = JS_UNDEFINED;
   JSValue html_video_element_proto = JS_UNDEFINED;
@@ -765,6 +797,11 @@ struct Impl
   // live for the binder's lifetime so a detached node can never dangle.
   std::unordered_map<const dom::Node*, JSValue> wrappers;
   std::unordered_map<const dom::Element*, JSValue> canvas_contexts;
+
+  // setCustomValidity messages, keyed by the element.  Nodes are kept alive by
+  // the binder (the document, |created| and |retained|), so the addresses are
+  // stable for the binder's lifetime; the table is cleared with it.
+  std::unordered_map<const dom::Element*, std::string> custom_validity;
 
   // Nodes created via createElement/createTextNode/cloneNode and not yet in a
   // tree.  Owned here until appended into the document.
@@ -1160,6 +1197,14 @@ struct Impl
   void DispatchFocusToNode(dom::Node* node, std::string_view type);
   // Dispatches a bubbling "input" event to |node|.
   void DispatchInputToNode(dom::Node* node);
+  // Dispatches a cancelable, non-bubbling "invalid" event to |node|.
+  void DispatchInvalidToNode(dom::Node* node);
+  // Constraint-validation helpers (rules live in html::form_validation).
+  std::string CustomValidityMessage(const dom::Element& element) const;
+  void SetCustomValidity(dom::Element& element, std::string message);
+  std::vector<dom::Element*> InvalidFormControls(dom::Element& form) const;
+  bool CheckControlValidity(dom::Element& element);
+  bool CheckFormValidity(dom::Element& form);
   // Fires the element's global event handler (element.onclick/oninput/...),
   // whether set via JS (IDL) or a content attribute (on*="code"), during
   // dispatch for every element on the propagation path.

@@ -470,6 +470,22 @@ public:
   // value changed (fires listeners and the element's oninput handler).
   void DispatchInputEvent(dom::Element& element);
 
+  // Constraint validation state shared with the browser's form-submission
+  // path (html::form_validation owns the rules; this binder owns the
+  // per-element setCustomValidity messages and the invalid event).
+  //
+  // The custom validity error message last set with setCustomValidity (empty
+  // when none).
+  std::string CustomValidityMessage(const dom::Element& element) const;
+  void SetCustomValidity(dom::Element& element, std::string message);
+  // Dispatches the cancelable, non-bubbling "invalid" event (WHATWG HTML
+  // §4.10.21.3).
+  void DispatchInvalidEvent(dom::Element& element);
+  // The associated controls of |form| whose validity state is false, in tree
+  // order.  Uses html::FormControls + ValidateControl and the per-element
+  // custom messages above.
+  std::vector<dom::Element*> InvalidFormControls(dom::Element& form) const;
+
   // Returns whether any JS DOM mutation has run since the last time this was
   // called (or since the binder was created), clearing the flag.  The browser
   // layer uses it after dispatching user-interaction events to decide whether

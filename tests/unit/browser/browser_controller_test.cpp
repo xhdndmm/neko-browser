@@ -1212,6 +1212,168 @@ TEST(BrowserControllerTest, SubmitEventPreventDefaultBlocksNavigation)
   EXPECT_EQ(tab->url, "http://example.com/");
 }
 
+TEST(BrowserControllerTest, RequiredFieldBlocksSubmissionAndFiresInvalid)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add(
+      "http://example.com/",
+      FakeFetcher::Route{200,
+                         {{"content-type", "text/html; charset=utf-8"}},
+                         "<html><head><meta charset=\"utf-8\"></head><body>"
+                         "<form action=\"/done\" method=\"post\">"
+                         "<input name=\"q\" type=\"text\" required>"
+                         "<input type=\"submit\" value=\"Go\">"
+                         "</form>"
+                         "<script>document.querySelector(\"input[name='q']\")"
+                         ".addEventListener('invalid', function() { document.title = 'invalid'; });"
+                         "</script>"
+                         "</body></html>"});
+  fetch.Add(
+      "http://example.com/done",
+      FakeFetcher::Route{200, {{"content-type", "text/html"}}, "<html><body>ok</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* submit = dom::QuerySelector(*tab->page->document(), "input[type=submit]");
+  ASSERT_NE(submit, nullptr);
+  const auto geometry = tab->page->ElementBoxGeometry(*submit);
+  ASSERT_TRUE(geometry.has_value());
+
+  EXPECT_TRUE(controller.DispatchPointerClick(
+      tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f));
+  const std::vector<std::string> requests = fetch.Requests();
+  EXPECT_EQ(std::find(requests.begin(), requests.end(), "http://example.com/done"), requests.end())
+      << "an invalid required field must block navigation";
+  EXPECT_EQ(tab->url, "http://example.com/");
+  EXPECT_EQ(tab->page->document()->Title(), "invalid")
+      << "interactive validation must fire the invalid event on the control";
+}
+
+TEST(BrowserControllerTest, FillingRequiredFieldAllowsSubmission)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html; charset=utf-8"}},
+                               "<html><head><meta charset=\"utf-8\"></head><body>"
+                               "<form action=\"/done\" method=\"post\">"
+                               "<input name=\"q\" type=\"text\" required>"
+                               "<input type=\"submit\" value=\"Go\">"
+                               "</form></body></html>"});
+  fetch.Add(
+      "http://example.com/done",
+      FakeFetcher::Route{200, {{"content-type", "text/html"}}, "<html><body>ok</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* input = dom::QuerySelector(*tab->page->document(), "input[name=q]");
+  ASSERT_NE(input, nullptr);
+  // The engine models a control's value as its value content attribute.
+  input->SetAttribute("value", "filled");
+  dom::Element* submit = dom::QuerySelector(*tab->page->document(), "input[type=submit]");
+  ASSERT_NE(submit, nullptr);
+  const auto geometry = tab->page->ElementBoxGeometry(*submit);
+  ASSERT_TRUE(geometry.has_value());
+
+  EXPECT_TRUE(controller.DispatchPointerClick(
+      tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f));
+  const std::vector<std::string> requests = fetch.Requests();
+  const auto it = std::find(requests.begin(), requests.end(), "http://example.com/done");
+  ASSERT_NE(it, requests.end()) << "recorded: " << testing::PrintToString(requests);
+  const std::size_t index = static_cast<std::size_t>(std::distance(requests.begin(), it));
+  EXPECT_EQ(fetch.Methods()[index], "POST");
+  EXPECT_EQ(fetch.Bodies()[index], "q=filled");
+  EXPECT_EQ(tab->url, "http://example.com/done");
+}
+
+TEST(BrowserControllerTest, NovalidateBypassesConstraintValidation)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html; charset=utf-8"}},
+                               "<html><head><meta charset=\"utf-8\"></head><body>"
+                               "<form action=\"/done\" method=\"post\" novalidate>"
+                               "<input name=\"q\" type=\"text\" required>"
+                               "<input type=\"submit\" value=\"Go\">"
+                               "</form></body></html>"});
+  fetch.Add(
+      "http://example.com/done",
+      FakeFetcher::Route{200, {{"content-type", "text/html"}}, "<html><body>ok</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* submit = dom::QuerySelector(*tab->page->document(), "input[type=submit]");
+  ASSERT_NE(submit, nullptr);
+  const auto geometry = tab->page->ElementBoxGeometry(*submit);
+  ASSERT_TRUE(geometry.has_value());
+
+  EXPECT_TRUE(controller.DispatchPointerClick(
+      tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f));
+  const std::vector<std::string> requests = fetch.Requests();
+  const auto it = std::find(requests.begin(), requests.end(), "http://example.com/done");
+  ASSERT_NE(it, requests.end()) << "novalidate must bypass validation; recorded: "
+                                << testing::PrintToString(requests);
+  const std::size_t index = static_cast<std::size_t>(std::distance(requests.begin(), it));
+  EXPECT_EQ(fetch.Methods()[index], "POST");
+  EXPECT_EQ(fetch.Bodies()[index], "q=");
+  EXPECT_EQ(tab->url, "http://example.com/done");
+}
+
+TEST(BrowserControllerTest, CustomValidityBlocksSubmission)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html; charset=utf-8"}},
+                               "<html><head><meta charset=\"utf-8\"></head><body>"
+                               "<form action=\"/done\" method=\"post\">"
+                               "<input name=\"q\" type=\"text\" value=\"filled\">"
+                               "<input type=\"submit\" value=\"Go\">"
+                               "</form>"
+                               "<script>var input = document.querySelector(\"input[name='q']\");"
+                               "input.setCustomValidity('blocked by script');"
+                               "input.addEventListener('invalid', function() {"
+                               "  document.title = this.validationMessage;"
+                               "});</script>"
+                               "</body></html>"});
+  fetch.Add(
+      "http://example.com/done",
+      FakeFetcher::Route{200, {{"content-type", "text/html"}}, "<html><body>ok</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* submit = dom::QuerySelector(*tab->page->document(), "input[type=submit]");
+  ASSERT_NE(submit, nullptr);
+  const auto geometry = tab->page->ElementBoxGeometry(*submit);
+  ASSERT_TRUE(geometry.has_value());
+
+  EXPECT_TRUE(controller.DispatchPointerClick(
+      tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f));
+  const std::vector<std::string> requests = fetch.Requests();
+  EXPECT_EQ(std::find(requests.begin(), requests.end(), "http://example.com/done"), requests.end())
+      << "setCustomValidity must block submission";
+  EXPECT_EQ(tab->url, "http://example.com/");
+  EXPECT_EQ(tab->page->document()->Title(), "blocked by script")
+      << "the custom validation message must reach validationMessage";
+}
+
 TEST(BrowserControllerTest, PageScriptConsoleGoesToDevToolsLog)
 {
   TempProfile tp;
