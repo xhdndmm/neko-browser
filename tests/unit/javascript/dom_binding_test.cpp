@@ -913,6 +913,54 @@ TEST_F(DomBinderTest, HtmlFormElementReflectsSubmissionAttributes)
       "    && form.method === 'post' && submitted; })()"));
 }
 
+TEST_F(DomBinderTest, FormSubmitDoesNotFireSubmitEvent)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var form = document.createElement('form'); var fired = false; "
+                       "form.addEventListener('submit', function() { fired = true; }); "
+                       "form.submit(); return !fired; })()"));
+}
+
+TEST_F(DomBinderTest, FormRequestSubmitValidatesBeforeFiringSubmit)
+{
+  EXPECT_TRUE(
+      EvalBool("(function(){ var form = document.createElement('form'); "
+               "var input = document.createElement('input'); input.setAttribute('name', 'q'); "
+               "input.setAttribute('required', ''); form.appendChild(input); "
+               "var submitted = false; var invalid = false; "
+               "form.addEventListener('submit', function() { submitted = true; }); "
+               "input.addEventListener('invalid', function() { invalid = true; }); "
+               "form.requestSubmit(); return invalid && !submitted; })()"));
+  // With the required field filled the event fires; preventDefault keeps the
+  // standalone binder from doing anything else.
+  EXPECT_TRUE(
+      EvalBool("(function(){ var form = document.createElement('form'); "
+               "var input = document.createElement('input'); input.setAttribute('name', 'q'); "
+               "input.setAttribute('required', ''); input.setAttribute('value', 'filled'); "
+               "form.appendChild(input); var submitted = false; "
+               "form.addEventListener('submit', function(event) { submitted = true; "
+               "event.preventDefault(); }); "
+               "form.requestSubmit(); return submitted; })()"));
+}
+
+TEST_F(DomBinderTest, FormRequestSubmitRejectsInvalidSubmitter)
+{
+  EXPECT_TRUE(EvalBool("(function(){ var form = document.createElement('form'); "
+                       "var div = document.createElement('div'); "
+                       "try { form.requestSubmit(div); return false; } "
+                       "catch (error) { return error.name === 'TypeError'; } })()"));
+  EXPECT_TRUE(EvalBool("(function(){ var form = document.createElement('form'); "
+                       "var other = document.createElement('form'); "
+                       "var button = document.createElement('button'); other.appendChild(button); "
+                       "try { form.requestSubmit(button); return false; } "
+                       "catch (error) { return error.name === 'NotFoundError'; } })()"));
+  EXPECT_TRUE(EvalBool("(function(){ var form = document.createElement('form'); "
+                       "var button = document.createElement('button'); form.appendChild(button); "
+                       "var submitted = false; "
+                       "form.addEventListener('submit', function(event) { submitted = true; "
+                       "event.preventDefault(); }); "
+                       "form.requestSubmit(button); return submitted; })()"));
+}
+
 TEST_F(DomBinderTest, HtmlButtonElementUsesDedicatedPrototype)
 {
   EXPECT_TRUE(EvalBool(

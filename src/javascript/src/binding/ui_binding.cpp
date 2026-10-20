@@ -862,20 +862,60 @@ JSValue FormSetMethod(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 
 JSValue FormSubmit(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
+  Impl* impl = ImplFor(ctx, this_val);
   dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
-  if (element == nullptr || element->tag_name() != "form") {
+  if (impl == nullptr || element == nullptr || element->tag_name() != "form") {
     return JS_ThrowTypeError(ctx, "not a form element");
+  }
+  // HTMLFormElement.submit(): no submit event, no validation, no submitter.
+  // The browser layer performs the submission after this script returns.
+  if (impl->apis.form_submit) {
+    impl->apis.form_submit(*element, nullptr, /*request_submit=*/false);
   }
   return JS_UNDEFINED;
 }
 
-JSValue
-FormRequestSubmit(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+JSValue FormRequestSubmit(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
   Impl* impl = ImplFor(ctx, this_val);
   dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (impl == nullptr || element == nullptr || element->tag_name() != "form") {
     return JS_ThrowTypeError(ctx, "not a form element");
+  }
+  dom::Element* submitter = nullptr;
+  if (argc > 0 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0])) {
+    submitter = AsElement(UnwrapNode(ctx, argv[0]));
+    if (submitter == nullptr) {
+      return JS_ThrowTypeError(ctx, "requestSubmit: submitter is not an element");
+    }
+    // HTMLFormElement.requestSubmit() steps: a submit button that belongs to
+    // this form, or TypeError / NotFoundError.
+    if (!html::IsSubmitButton(*submitter)) {
+      return JS_ThrowTypeError(ctx, "requestSubmit: submitter is not a submit button");
+    }
+    if (html::OwnerForm(*submitter) != element) {
+      return ThrowDomException(
+          ctx, "NotFoundError", "requestSubmit: submitter is not owned by this form");
+    }
+  }
+  if (impl->apis.form_submit) {
+    // The callback records the request; the browser runs the submission
+    // algorithm after this script run.  This means the submit event and
+    // interactive validation happen after requestSubmit() returns, not
+    // synchronously inside it (documented approximation: navigation must not
+    // re-enter the page mid-script).
+    impl->apis.form_submit(*element, submitter, /*request_submit=*/true);
+    return JS_UNDEFINED;
+  }
+  // Standalone binder (no browser submission callback): run the observable
+  // part of the sequence locally -- interactive validation, then the
+  // cancelable submit event.
+  const std::vector<dom::Element*> invalid = impl->InvalidFormControls(*element);
+  for (dom::Element* control : invalid) {
+    impl->DispatchInvalidToNode(control);
+  }
+  if (!invalid.empty()) {
+    return JS_UNDEFINED;
   }
   (void)impl->DispatchCancelableToNode(element, "submit");
   return JS_UNDEFINED;

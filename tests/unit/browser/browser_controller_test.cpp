@@ -1374,6 +1374,471 @@ TEST(BrowserControllerTest, CustomValidityBlocksSubmission)
       << "the custom validation message must reach validationMessage";
 }
 
+// ---------------------------------------------------------------------------
+// Form submission: submitter, enctype and target (WHATWG HTML §4.10.22)
+// ---------------------------------------------------------------------------
+
+// Returns the index of the first request for |url| and asserts it was made.
+std::size_t RequestIndexOf(const FakeFetcher& fetch, std::string_view url)
+{
+  const std::vector<std::string> requests = fetch.Requests();
+  const auto it = std::find(requests.begin(), requests.end(), url);
+  EXPECT_NE(it, requests.end()) << "recorded: " << testing::PrintToString(requests);
+  return it == requests.end() ? requests.size()
+                              : static_cast<std::size_t>(std::distance(requests.begin(), it));
+}
+
+TEST(BrowserControllerTest, SubmitButtonNameAndValueTravelInGetQuery)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<form action=\"/search\">"
+                               "<input name=\"q\" value=\"hi there\">"
+                               "<input id=\"named\" type=\"submit\" name=\"go\" value=\"Go Now\">"
+                               "<input id=\"unnamed\" type=\"submit\" value=\"Unnamed\">"
+                               "</form></body></html>"});
+  fetch.Add(
+      "http://example.com/search?q=hi%20there&go=Go%20Now",
+      FakeFetcher::Route{200, {{"content-type", "text/html"}}, "<html><body>ok</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  tab->page->Layout(800, 600);
+  dom::Element* named = dom::QuerySelector(*tab->page->document(), "#named");
+  ASSERT_NE(named, nullptr);
+  const auto geometry = tab->page->ElementBoxGeometry(*named);
+  ASSERT_TRUE(geometry.has_value());
+
+  EXPECT_TRUE(controller.DispatchPointerClick(
+      tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f));
+  EXPECT_EQ(tab->url, "http://example.com/search?q=hi%20there&go=Go%20Now")
+      << "the activated submit button contributes its name/value; the other one does not";
+}
+
+TEST(BrowserControllerTest, SubmitButtonNameAndValueTravelInPostBody)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<form action=\"/search\" method=\"post\">"
+                               "<input name=\"q\" value=\"hi there\">"
+                               "<input type=\"submit\" name=\"go\" value=\"Go Now\">"
+                               "</form></body></html>"});
+  fetch.Add(
+      "http://example.com/search",
+      FakeFetcher::Route{200, {{"content-type", "text/html"}}, "<html><body>ok</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  tab->page->Layout(800, 600);
+  dom::Element* submit = dom::QuerySelector(*tab->page->document(), "input[type=submit]");
+  ASSERT_NE(submit, nullptr);
+  const auto geometry = tab->page->ElementBoxGeometry(*submit);
+  ASSERT_TRUE(geometry.has_value());
+
+  EXPECT_TRUE(controller.DispatchPointerClick(
+      tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f));
+  const std::size_t index = RequestIndexOf(fetch, "http://example.com/search");
+  EXPECT_EQ(fetch.Methods()[index], "POST");
+  EXPECT_EQ(fetch.Bodies()[index], "q=hi%20there&go=Go%20Now");
+  EXPECT_EQ(fetch.ContentTypes()[index], "application/x-www-form-urlencoded");
+}
+
+TEST(BrowserControllerTest, UnnamedSubmitButtonContributesNoEntry)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<form action=\"/search\" method=\"post\">"
+                               "<input name=\"q\" value=\"x\">"
+                               "<input id=\"other\" type=\"submit\" name=\"other\" value=\"nope\">"
+                               "<input id=\"mine\" type=\"submit\" value=\"Unnamed\">"
+                               "</form></body></html>"});
+  fetch.Add(
+      "http://example.com/search",
+      FakeFetcher::Route{200, {{"content-type", "text/html"}}, "<html><body>ok</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  tab->page->Layout(800, 600);
+  dom::Element* submit = dom::QuerySelector(*tab->page->document(), "#mine");
+  ASSERT_NE(submit, nullptr);
+  const auto geometry = tab->page->ElementBoxGeometry(*submit);
+  ASSERT_TRUE(geometry.has_value());
+
+  EXPECT_TRUE(controller.DispatchPointerClick(
+      tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f));
+  const std::size_t index = RequestIndexOf(fetch, "http://example.com/search");
+  EXPECT_EQ(fetch.Bodies()[index], "q=x")
+      << "an unnamed submitter adds no entry; a named non-submitter button is omitted";
+}
+
+TEST(BrowserControllerTest, MultipartEnctypeSendsBoundaryAndNormalizedParts)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<form action=\"/upload\" method=\"post\" "
+                               "enctype=\"multipart/form-data\">"
+                               "<input name=\"a\" value=\"1\">"
+                               "<textarea name=\"t\">line1\nline2</textarea>"
+                               "<input type=\"file\" name=\"ignored\">"
+                               "<input type=\"submit\" name=\"go\" value=\"Go\">"
+                               "</form></body></html>"});
+  fetch.Add(
+      "http://example.com/upload",
+      FakeFetcher::Route{200, {{"content-type", "text/html"}}, "<html><body>ok</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  tab->page->Layout(800, 600);
+  dom::Element* submit = dom::QuerySelector(*tab->page->document(), "input[type=submit]");
+  ASSERT_NE(submit, nullptr);
+  const auto geometry = tab->page->ElementBoxGeometry(*submit);
+  ASSERT_TRUE(geometry.has_value());
+
+  EXPECT_TRUE(controller.DispatchPointerClick(
+      tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f));
+  const std::size_t index = RequestIndexOf(fetch, "http://example.com/upload");
+  const std::string content_type = fetch.ContentTypes()[index];
+  const std::string prefix = "multipart/form-data; boundary=";
+  ASSERT_EQ(content_type.rfind(prefix, 0), 0u) << content_type;
+  const std::string boundary = content_type.substr(prefix.size());
+  EXPECT_FALSE(boundary.empty());
+
+  const std::string expected =
+      "--" + boundary +
+      "\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\n1\r\n"
+      "--" +
+      boundary +
+      "\r\nContent-Disposition: form-data; name=\"t\"\r\n\r\nline1\r\nline2\r\n"
+      "--" +
+      boundary +
+      "\r\nContent-Disposition: form-data; name=\"go\"\r\n\r\nGo\r\n"
+      "--" +
+      boundary + "--\r\n";
+  EXPECT_EQ(fetch.Bodies()[index], expected)
+      << "multipart bodies CRLF-normalize values; the file input sends no fabricated part";
+}
+
+TEST(BrowserControllerTest, TextPlainEnctypeSendsExactBody)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<form action=\"/plain\" method=\"post\" enctype=\"text/plain\">"
+                               "<input name=\"a\" value=\"1\">"
+                               "<textarea name=\"t\">x y\nz</textarea>"
+                               "<input type=\"submit\" name=\"go\" value=\"Go\">"
+                               "</form></body></html>"});
+  fetch.Add(
+      "http://example.com/plain",
+      FakeFetcher::Route{200, {{"content-type", "text/html"}}, "<html><body>ok</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  tab->page->Layout(800, 600);
+  dom::Element* submit = dom::QuerySelector(*tab->page->document(), "input[type=submit]");
+  ASSERT_NE(submit, nullptr);
+  const auto geometry = tab->page->ElementBoxGeometry(*submit);
+  ASSERT_TRUE(geometry.has_value());
+
+  EXPECT_TRUE(controller.DispatchPointerClick(
+      tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f));
+  const std::size_t index = RequestIndexOf(fetch, "http://example.com/plain");
+  EXPECT_EQ(fetch.ContentTypes()[index], "text/plain");
+  EXPECT_EQ(fetch.Bodies()[index], "a=1\r\nt=x y\r\nz\r\ngo=Go\r\n");
+}
+
+TEST(BrowserControllerTest, SubmitterFormMethodOverridePostsTheForm)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<form action=\"/save\">"
+                               "<input name=\"q\" value=\"x\">"
+                               "<input id=\"post\" type=\"submit\" formmethod=\"post\" "
+                               "name=\"go\" value=\"Post\">"
+                               "<input id=\"get\" type=\"submit\" name=\"go\" value=\"Get\">"
+                               "</form></body></html>"});
+  fetch.Add(
+      "http://example.com/save",
+      FakeFetcher::Route{200, {{"content-type", "text/html"}}, "<html><body>ok</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  tab->page->Layout(800, 600);
+  dom::Element* submit = dom::QuerySelector(*tab->page->document(), "#post");
+  ASSERT_NE(submit, nullptr);
+  const auto geometry = tab->page->ElementBoxGeometry(*submit);
+  ASSERT_TRUE(geometry.has_value());
+
+  EXPECT_TRUE(controller.DispatchPointerClick(
+      tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f));
+  const std::size_t index = RequestIndexOf(fetch, "http://example.com/save");
+  EXPECT_EQ(fetch.Methods()[index], "POST")
+      << "formmethod=post on the submitter overrides the form's GET method";
+  EXPECT_EQ(fetch.Bodies()[index], "q=x&go=Post");
+  EXPECT_EQ(tab->url, "http://example.com/save");
+}
+
+TEST(BrowserControllerTest, SubmitterFormEnctypeOverridesTheFormEnctype)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<form action=\"/save\" method=\"post\" "
+                               "enctype=\"application/x-www-form-urlencoded\">"
+                               "<input name=\"q\" value=\"x\">"
+                               "<input type=\"submit\" name=\"go\" value=\"Go\" "
+                               "formenctype=\"text/plain\">"
+                               "</form></body></html>"});
+  fetch.Add(
+      "http://example.com/save",
+      FakeFetcher::Route{200, {{"content-type", "text/html"}}, "<html><body>ok</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  tab->page->Layout(800, 600);
+  dom::Element* submit = dom::QuerySelector(*tab->page->document(), "input[type=submit]");
+  ASSERT_NE(submit, nullptr);
+  const auto geometry = tab->page->ElementBoxGeometry(*submit);
+  ASSERT_TRUE(geometry.has_value());
+
+  EXPECT_TRUE(controller.DispatchPointerClick(
+      tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f));
+  const std::size_t index = RequestIndexOf(fetch, "http://example.com/save");
+  EXPECT_EQ(fetch.ContentTypes()[index], "text/plain");
+  EXPECT_EQ(fetch.Bodies()[index], "q=x\r\ngo=Go\r\n");
+}
+
+TEST(BrowserControllerTest, SubmitterFormNoValidateBypassesRequired)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<form action=\"/done\" method=\"post\">"
+                               "<input name=\"q\" required>"
+                               "<input type=\"submit\" formnovalidate name=\"save\" value=\"Save\">"
+                               "</form></body></html>"});
+  fetch.Add(
+      "http://example.com/done",
+      FakeFetcher::Route{200, {{"content-type", "text/html"}}, "<html><body>ok</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  tab->page->Layout(800, 600);
+  dom::Element* submit = dom::QuerySelector(*tab->page->document(), "input[type=submit]");
+  ASSERT_NE(submit, nullptr);
+  const auto geometry = tab->page->ElementBoxGeometry(*submit);
+  ASSERT_TRUE(geometry.has_value());
+
+  EXPECT_TRUE(controller.DispatchPointerClick(
+      tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f));
+  const std::size_t index = RequestIndexOf(fetch, "http://example.com/done");
+  EXPECT_EQ(fetch.Bodies()[index], "q=&save=Save")
+      << "formnovalidate on the submitter skips interactive validation";
+}
+
+TEST(BrowserControllerTest, SubmitterFormTargetBlankOpensNewTab)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<form action=\"/next\">"
+                               "<input name=\"q\" value=\"x\">"
+                               "<input type=\"submit\" formtarget=\"_blank\" value=\"Go\">"
+                               "</form></body></html>"});
+  fetch.Add(
+      "http://example.com/next?q=x",
+      FakeFetcher::Route{200, {{"content-type", "text/html"}}, "<html><body>next</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  tab->page->Layout(800, 600);
+  dom::Element* submit = dom::QuerySelector(*tab->page->document(), "input[type=submit]");
+  ASSERT_NE(submit, nullptr);
+  const auto geometry = tab->page->ElementBoxGeometry(*submit);
+  ASSERT_TRUE(geometry.has_value());
+
+  EXPECT_TRUE(controller.DispatchPointerClick(
+      tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f));
+  ASSERT_EQ(controller.tabs().size(), 2u)
+      << "formtarget=_blank must open a new tab through NewTab()";
+  EXPECT_EQ(controller.ActiveTab()->url, "http://example.com/next?q=x");
+  EXPECT_EQ(tab->url, "http://example.com/") << "the submitting tab stays on its document";
+  (void)RequestIndexOf(fetch, "http://example.com/next?q=x");
+}
+
+TEST(BrowserControllerTest, EnterUsesTheDefaultSubmitButtonsEntry)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<form action=\"/search\">"
+                               "<input id=\"q\" name=\"q\" value=\"go\">"
+                               "<input type=\"submit\" name=\"first\" value=\"One\">"
+                               "<input type=\"submit\" name=\"second\" value=\"Two\">"
+                               "</form></body></html>"});
+  fetch.Add(
+      "http://example.com/search?q=go&first=One",
+      FakeFetcher::Route{200, {{"content-type", "text/html"}}, "<html><body>ok</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  tab->page->Layout(800, 600);
+  dom::Element* input = dom::QuerySelector(*tab->page->document(), "#q");
+  ASSERT_NE(input, nullptr);
+  float x = 0;
+  float y = 0;
+  ASSERT_TRUE(FindElementRunPoint(*tab->page->layout_root(), input, x, y));
+  controller.DispatchPointerClick(tab->id, x, y);
+  ASSERT_EQ(tab->focused_element, input);
+
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Enter", "Enter"));
+  EXPECT_EQ(tab->url, "http://example.com/search?q=go&first=One")
+      << "implicit submission uses the first submit button in tree order";
+}
+
+TEST(BrowserControllerTest, ScriptedSubmitSkipsEventAndValidation)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html; charset=utf-8"}},
+                               "<html><body>"
+                               "<form action=\"/next\" method=\"post\" "
+                               "onsubmit=\"document.title='SUBMITTED'\">"
+                               "<input name=\"q\" required>"
+                               "<input type=\"submit\" name=\"go\" value=\"Go\">"
+                               "</form>"
+                               "<script>document.querySelector('form').submit();</script>"
+                               "</body></html>"});
+  fetch.Add("http://example.com/next",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>next</title></head><body>next</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  EXPECT_EQ(tab->url, "http://example.com/next");
+  const std::size_t index = RequestIndexOf(fetch, "http://example.com/next");
+  EXPECT_EQ(fetch.Methods()[index], "POST");
+  EXPECT_EQ(fetch.Bodies()[index], "q=")
+      << "submit() has no submitter and bypasses required validation";
+  EXPECT_EQ(tab->title, "next") << "submit() must not fire the submit event";
+}
+
+TEST(BrowserControllerTest, ScriptRequestSubmitValidatesAndBlocksInvalidForm)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html; charset=utf-8"}},
+                               "<html><body>"
+                               "<form action=\"/next\" onsubmit=\"document.title='SUBMITTED'\">"
+                               "<input id=\"q\" name=\"q\" required>"
+                               "<input id=\"go\" type=\"submit\" name=\"go\" value=\"Go\">"
+                               "</form>"
+                               "<script>"
+                               "var input = document.getElementById('q');"
+                               "input.addEventListener('invalid', function() {"
+                               "  document.title = 'invalid'; });"
+                               "document.querySelector('form').requestSubmit("
+                               "  document.getElementById('go'));"
+                               "</script>"
+                               "</body></html>"});
+  fetch.Add("http://example.com/next?q=&go=Go",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>next</title></head><body>ok</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  EXPECT_EQ(tab->url, "http://example.com/")
+      << "requestSubmit must run interactive validation and block the navigation";
+  EXPECT_EQ(tab->page->document()->Title(), "invalid");
+  ASSERT_EQ(controller.tabs().size(), 1u);
+}
+
+TEST(BrowserControllerTest, ScriptRequestSubmitWithValidSubmitterNavigates)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html; charset=utf-8"}},
+                               "<html><body>"
+                               "<form action=\"/next\" onsubmit=\"document.title='SUBMITTED'\">"
+                               "<input name=\"q\" value=\"x\">"
+                               "<input id=\"go\" type=\"submit\" name=\"go\" value=\"Go\">"
+                               "</form>"
+                               "<script>"
+                               "document.querySelector('form').requestSubmit("
+                               "  document.getElementById('go'));"
+                               "</script>"
+                               "</body></html>"});
+  fetch.Add("http://example.com/next?q=x&go=Go",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>next</title></head><body>ok</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  EXPECT_EQ(tab->url, "http://example.com/next?q=x&go=Go")
+      << "requestSubmit(submitter) includes the submitter's entry";
+  EXPECT_EQ(tab->title, "next") << "requestSubmit fires the submit event before navigating";
+}
+
 TEST(BrowserControllerTest, PageScriptConsoleGoesToDevToolsLog)
 {
   TempProfile tp;

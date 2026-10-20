@@ -197,6 +197,12 @@ struct Tab
   // and LoadBytes act on the request and clear it.  Worker thread only.
   ScriptRequestedNavigation pending_script_navigation;
 
+  // A form submission requested by form.submit()/requestSubmit().  The
+  // runtime's callback writes it (it points into the live document); the
+  // browser layer acts on it after the script run and clears it.  Worker
+  // thread only.
+  ScriptRequestedFormSubmission pending_form_submission;
+
   // The security origin of the current page (scheme+host+port, e.g.
   // "https://example.com"), used by the Same-Origin Policy.  "null" for
   // non-URL content and pages whose URL has no origin.  Worker thread only.
@@ -466,12 +472,18 @@ public:
   bool
   DispatchKeyboard(int tab_id, std::string_view type, std::string_view key, std::string_view code);
 
-  // Submits |form| on |tab_id| (worker thread): runs the cancelable "submit"
-  // event, then — unless preventDefault was called — collects the named form
-  // controls and URL-encodes them (application/x-www-form-urlencoded).  A
-  // method="post" form sends the entry list as the request body; every other
-  // form appends it to the action URL's query string (GET).
-  void SubmitForm(int tab_id, dom::Element* form);
+  // Submits |form| on |tab_id| (worker thread) with an optional |submitter|
+  // submit button.  Runs the WHATWG HTML §4.10.22.3 sequence: interactive
+  // constraint validation (unless the form is novalidate or the submitter has
+  // formnovalidate), the cancelable "submit" event, then the entry list
+  // (html::ConstructEntryList) encoded by the effective enctype
+  // (submitter formenctype > form enctype).  A method="post" form sends the
+  // body with the matching Content-Type; GET appends the urlencoded entry list
+  // to the action URL's query.  The effective method and target come from the
+  // submitter's formmethod/formtarget when present, else the form's
+  // method/target.  _blank opens a new tab; _parent/_top and named targets fall
+  // back to the current tab (no frame tree yet).
+  void SubmitForm(int tab_id, dom::Element* form, dom::Element* submitter = nullptr);
 
   // Worker/test thread only: raw handles into the live tab list.  The GUI
   // must use SnapshotTabs()/SnapshotActiveTab() instead.
@@ -822,6 +834,49 @@ private:
   // delivered here on the script thread).  Returns the number of events
   // dispatched.  Worker thread only.
   std::size_t FirePendingImageEvents(Tab& tab);
+
+  // ---- Form submission (worker thread) -----------------------------------
+  // One submission's computed navigation (WHATWG HTML §4.10.22.3), assembled
+  // under the page's DOM lock and applied after it is released.
+  struct PreparedFormSubmission
+  {
+    std::string url;
+    std::string method;
+    std::string body;
+    std::string content_type;
+    // Effective target keyword; "_blank" opens a new tab.
+    std::string target;
+    std::optional<PendingCredential> credential;
+  };
+
+  // Runs the submission algorithm for |form| in |page| (|document_url| is the
+  // form document's URL).  |scripted| skips interactive validation and the
+  // submit event (form.submit()).  A form.submit()/requestSubmit() issued by
+  // script during this submission supersedes it (the spec's planned-navigation
+  // "last wins"), so the newest request is run instead.  Returns true when a
+  // navigation was started.
+  bool RunFormSubmission(Tab& tab,
+                         renderer::Page& page,
+                         const std::string& document_url,
+                         dom::Element* form,
+                         dom::Element* submitter,
+                         bool scripted);
+  // Computes the effective action/method/enctype/target and the encoded entry
+  // list.  Caller holds the DOM lock.  Returns false when the form cannot be
+  // submitted (no page/document ownership check here; callers validate it).
+  bool PrepareFormSubmission(const std::string& document_url,
+                             dom::Element& form,
+                             dom::Element* submitter,
+                             PreparedFormSubmission* out);
+  // Applies a prepared submission: publishes the pending credential and
+  // navigates the current tab (or a new tab for target=_blank).  Must be
+  // called without the DOM lock held.  Returns true when the current tab's
+  // document was replaced.
+  bool ApplyFormSubmission(Tab& tab, PreparedFormSubmission submission);
+  // Executes the tab's pending scripted form submission, if any.  Called after
+  // every script run that can submit (load, pointer/keyboard default actions,
+  // timer pump).  Worker thread only.
+  void DrainPendingFormSubmission(Tab& tab);
 
   // ---- Password manager (worker thread) ---------------------------------
   // Fills the first password form of |page| with the saved credential for

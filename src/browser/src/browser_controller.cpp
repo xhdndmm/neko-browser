@@ -32,6 +32,7 @@
 #include <filesystem>
 #include <future>
 #include <optional>
+#include <random>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -79,81 +80,180 @@ std::string ResolveUrlAgainstBase(std::string_view ref, std::string_view base_ur
   return resolved.has_value() ? resolved.value() : std::string(ref);
 }
 
-// Collects the named, enabled form controls of |form| and encodes them as an
-// application/x-www-form-urlencoded string (HTML §4.10.21.5, simplified: text
-// /search /hidden /password inputs, checkboxes and radios, textarea, first
-// option of a select).
-std::string CollectFormData(const dom::Element& form)
+// A submission request being executed (direct user activation or a scripted
+// form.submit()/requestSubmit()).  |scripted| skips interactive validation and
+// the submit event (HTMLFormElement.submit()).
+struct FormSubmissionRequest
+{
+  dom::Element* form = nullptr;
+  dom::Element* submitter = nullptr;
+  bool scripted = false;
+};
+
+// Normalizes line breaks the way the form entry-list conversion does (WHATWG
+// HTML §4.10.22.6): every CR not followed by LF, and every LF not preceded by
+// CR, becomes CR LF.  Existing CR LF pairs stay a single pair.
+std::string NormalizeNewlines(std::string_view value)
 {
   std::string out;
-  const auto add_field = [&](const std::string& name, const std::string& value) {
-    if (name.empty()) {
-      return;
+  out.reserve(value.size());
+  for (std::size_t i = 0; i < value.size(); ++i) {
+    const char c = value[i];
+    if (c == '\r') {
+      out += "\r\n";
+      if (i + 1 < value.size() && value[i + 1] == '\n') {
+        ++i; // the LF is part of this CR LF pair
+      }
+    } else if (c == '\n') {
+      out += "\r\n";
+    } else {
+      out += c;
+    }
+  }
+  return out;
+}
+
+// The three form submission encodings (HTML §4.10.19.6 "enctype").
+enum class FormEnctype
+{
+  kUrlEncoded,
+  kMultipart,
+  kTextPlain,
+};
+
+// Parses an enctype/formenctype attribute's state.  The missing value default
+// and the invalid value default are both application/x-www-form-urlencoded
+// (HTML §4.10.19.6).
+FormEnctype ParseEnctype(std::string_view raw)
+{
+  const std::string value = base::ToLower(std::string(Trim(raw)));
+  if (value == "multipart/form-data") {
+    return FormEnctype::kMultipart;
+  }
+  if (value == "text/plain") {
+    return FormEnctype::kTextPlain;
+  }
+  return FormEnctype::kUrlEncoded;
+}
+
+// Appends |query| to |url|'s query component, keeping any fragment last.
+std::string AppendQuery(std::string url, std::string_view query)
+{
+  const std::size_t hash = url.find('#');
+  std::string fragment;
+  if (hash != std::string::npos) {
+    fragment = url.substr(hash);
+    url.resize(hash);
+  }
+  url += url.find('?') == std::string::npos ? '?' : '&';
+  url += query;
+  url += fragment;
+  return url;
+}
+
+// A fresh multipart/form-data boundary.  The random part makes a collision
+// with user data (which would corrupt the body) unpredictable; only RFC 2046
+// boundary characters are used.
+std::string GenerateMultipartBoundary()
+{
+  static std::atomic<std::uint64_t> counter{0};
+  std::random_device random;
+  const std::uint64_t noise =
+      (static_cast<std::uint64_t>(random()) << 32) ^ static_cast<std::uint64_t>(random());
+  const std::uint64_t now =
+      static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+  const std::uint64_t value = noise ^ (now << 16) ^ counter.fetch_add(1);
+  static constexpr char kHex[] = "0123456789abcdef";
+  std::string boundary = "----NekoFormBoundary";
+  for (int shift = 60; shift >= 0; shift -= 4) {
+    boundary += kHex[(value >> static_cast<unsigned>(shift)) & 0xFU];
+  }
+  return boundary;
+}
+
+// Escapes a multipart field name (HTML §4.10.22.8): LF -> %0A, CR -> %0D,
+// quote -> %22.  No other escaping is permitted.
+std::string EscapeMultipartName(std::string_view name)
+{
+  std::string out;
+  out.reserve(name.size());
+  for (const char c : name) {
+    switch (c) {
+    case '\n':
+      out += "%0A";
+      break;
+    case '\r':
+      out += "%0D";
+      break;
+    case '"':
+      out += "%22";
+      break;
+    default:
+      out += c;
+      break;
+    }
+  }
+  return out;
+}
+
+// application/x-www-form-urlencoded serialization of an entry list (the
+// engine's existing serializer: UTF-8 percent-encoding, spaces as %20 rather
+// than the URL standard's '+').  File entries are dropped: without the File
+// API they carry no file name or content.
+std::string EncodeUrlEncoded(const std::vector<html::FormEntry>& entries)
+{
+  std::string out;
+  for (const html::FormEntry& entry : entries) {
+    if (entry.is_file) {
+      continue;
     }
     if (!out.empty()) {
       out += '&';
     }
-    out += url::PercentEncode(name) + '=' + url::PercentEncode(value);
-  };
-  std::vector<dom::Node*> stack;
-  // Pre-order (document-order) walk: push children in reverse so they pop in
-  // tree order, matching the HTML entry-list order.
-  auto push_children = [&stack](dom::Node& n) {
-    std::vector<dom::Node*> children;
-    for (dom::Node* c : n.ChildNodes()) {
-      children.push_back(c);
-    }
-    for (auto it = children.rbegin(); it != children.rend(); ++it) {
-      stack.push_back(*it);
-    }
-  };
-  push_children(const_cast<dom::Element&>(form));
-  while (!stack.empty()) {
-    dom::Node* n = stack.back();
-    stack.pop_back();
-    if (n->node_type() != dom::NodeType::kElement) {
-      continue;
-    }
-    dom::Element& e = static_cast<dom::Element&>(*n);
-    push_children(e);
-    const std::string tag = std::string(e.tag_name());
-    if (tag != "input" && tag != "textarea" && tag != "select") {
-      continue;
-    }
-    const std::optional<std::string_view> name = e.GetAttribute("name");
-    if (!name.has_value() || name->empty() || e.HasAttribute("disabled")) {
-      continue;
-    }
-    if (tag == "textarea") {
-      add_field(std::string(*name), e.TextContent());
-    } else if (tag == "select") {
-      for (dom::Node* c : e.ChildNodes()) {
-        if (c->node_type() != dom::NodeType::kElement) {
-          continue;
-        }
-        dom::Element& opt = static_cast<dom::Element&>(*c);
-        if (opt.tag_name() == "option") {
-          const std::optional<std::string_view> val = opt.GetAttribute("value");
-          add_field(std::string(*name), val.has_value() ? std::string(*val) : opt.TextContent());
-          break;
-        }
-      }
-    } else {
-      const std::string type = std::string(e.GetAttribute("type").value_or("text"));
-      if (type == "checkbox" || type == "radio") {
-        if (!e.HasAttribute("checked")) {
-          continue;
-        }
-        const std::optional<std::string_view> val = e.GetAttribute("value");
-        add_field(std::string(*name), val.has_value() ? std::string(*val) : "on");
-      } else if (type == "hidden" || type == "text" || type == "search" || type == "password" ||
-                 type == "email" || type == "url") {
-        const std::optional<std::string_view> val = e.GetAttribute("value");
-        add_field(std::string(*name), val.has_value() ? std::string(*val) : "");
-      }
-      // submit/reset/button/file/image/... are not part of the entry list here.
-    }
+    out += url::PercentEncode(NormalizeNewlines(entry.name)) + '=' +
+           url::PercentEncode(NormalizeNewlines(entry.value));
   }
+  return out;
+}
+
+// text/plain encoding (HTML §4.10.22.9): name, '=', value, CR LF per entry.  No
+// percent-encoding; line breaks in names and values are normalized first.
+std::string EncodePlainText(const std::vector<html::FormEntry>& entries)
+{
+  std::string out;
+  for (const html::FormEntry& entry : entries) {
+    if (entry.is_file) {
+      continue;
+    }
+    out += NormalizeNewlines(entry.name);
+    out += '=';
+    out += NormalizeNewlines(entry.value);
+    out += "\r\n";
+  }
+  return out;
+}
+
+// multipart/form-data encoding (HTML §4.10.22.8 / RFC 7578).  Non-file parts
+// carry a Content-Disposition header only; values and names are CRLF
+// normalized, names additionally escaped per the spec.
+std::string EncodeMultipart(const std::vector<html::FormEntry>& entries, std::string_view boundary)
+{
+  std::string out;
+  for (const html::FormEntry& entry : entries) {
+    if (entry.is_file) {
+      continue;
+    }
+    out += "--";
+    out += boundary;
+    out += "\r\nContent-Disposition: form-data; name=\"";
+    out += EscapeMultipartName(NormalizeNewlines(entry.name));
+    out += "\"\r\n\r\n";
+    out += NormalizeNewlines(entry.value);
+    out += "\r\n";
+  }
+  out += "--";
+  out += boundary;
+  out += "--\r\n";
   return out;
 }
 
@@ -232,14 +332,19 @@ void DispatchToggleEvents(javascript::DomBinder* runtime, dom::Element& element)
 
 // Moves keyboard focus to |element| (or clears it when null), firing blur on
 // the old target and focus on the new one (only when the target changes).
-void FocusControl(Tab* tab, dom::Element* element)
+// |page| overrides tab->page: a scripted submission can run while a document
+// is still loading and has not been published on the tab yet.
+void FocusControl(Tab* tab, dom::Element* element, renderer::Page* page = nullptr)
 {
   dom::Element* prev = tab->focused_element;
   if (prev == element) {
     return;
   }
   tab->focused_element = element;
-  tab->page->SetFocusedElement(element);
+  renderer::Page* target_page = page != nullptr ? page : tab->page.get();
+  if (target_page != nullptr) {
+    target_page->SetFocusedElement(element);
+  }
   if (tab->script_runtime != nullptr) {
     if (prev != nullptr) {
       tab->script_runtime->DispatchFocusEvent(*prev, "blur");
@@ -322,56 +427,16 @@ dom::Element* NextFocusable(Tab* tab, bool backwards)
   return focusables[static_cast<std::size_t>(index)];
 }
 
-// Walks from |node| up to find a submit button (<button> or <input
-// type=submit>), then returns the <form> that owns it.
-dom::Element* FindSubmitForm(dom::Node* node)
-{
-  dom::Element* button = nullptr;
-  for (dom::Node* n = node; n != nullptr; n = n->parent()) {
-    if (n->node_type() != dom::NodeType::kElement) {
-      continue;
-    }
-    dom::Element& e = static_cast<dom::Element&>(*n);
-    const std::string tag = std::string(e.tag_name());
-    if (tag == "button") {
-      const std::string type = std::string(e.GetAttribute("type").value_or("submit"));
-      if (type == "submit") {
-        button = &e;
-        break;
-      }
-    } else if (tag == "input") {
-      const std::string type = std::string(e.GetAttribute("type").value_or("text"));
-      if (type == "submit") {
-        button = &e;
-        break;
-      }
-    }
-  }
-  if (button == nullptr) {
-    return nullptr;
-  }
-  for (dom::Node* n = button; n != nullptr; n = n->parent()) {
-    if (n->node_type() != dom::NodeType::kElement) {
-      continue;
-    }
-    dom::Element& e = static_cast<dom::Element&>(*n);
-    if (e.tag_name() == "form") {
-      return &e;
-    }
-  }
-  return nullptr;
-}
-
-// Returns the closest <form> ancestor of a control, if any (used for
-// implicit submission when Enter is pressed inside a text input).
-dom::Element* FindEnclosingForm(dom::Node* node)
+// Walks from |node| up to find a submit button (<button>, <input type=submit>
+// or <input type=image>) and returns it, or nullptr.
+dom::Element* FindSubmitButton(dom::Node* node)
 {
   for (dom::Node* n = node; n != nullptr; n = n->parent()) {
     if (n->node_type() != dom::NodeType::kElement) {
       continue;
     }
     dom::Element& e = static_cast<dom::Element&>(*n);
-    if (e.tag_name() == "form") {
+    if (html::IsSubmitButton(e)) {
       return &e;
     }
   }
@@ -1019,6 +1084,8 @@ void BrowserController::NavigateToUrl(Tab& tab,
   }
   // A fresh document replaces the old one; any focused element is stale.
   tab.focused_element = nullptr;
+  // A form submission requested against the old document is stale too.
+  tab.pending_form_submission = {};
 #ifdef _WIN32
   // Windows local paths are also valid URLs: "C:\dir\page.html" parses as the
   // one-letter scheme "c".  They belong to the filesystem, so route them before
@@ -1205,6 +1272,13 @@ bool BrowserController::DispatchPointerClick(int tab_id, float doc_x, float doc_
     if (style_changed || dom_changed) {
       SchedulePendingImageFetch(*tab);
     }
+    // A pointer handler may have submitted the form through script
+    // (form.submit()/requestSubmit()); that request takes over the default
+    // action (the spec's planned navigation, last one wins).
+    if (tab->pending_form_submission.form != nullptr) {
+      DrainPendingFormSubmission(*tab);
+      return true;
+    }
     if (!not_canceled) {
       return true; // preventDefault: the page handled the click.
     }
@@ -1225,10 +1299,13 @@ bool BrowserController::DispatchPointerClick(int tab_id, float doc_x, float doc_
     static_cast<void>(Navigate(tab_id, target.value()));
     return true;
   }
-  // Default action: a submit button submits its enclosing form.
-  if (dom::Element* form = FindSubmitForm(const_cast<dom::Element*>(element))) {
-    SubmitForm(tab_id, form);
-    return true;
+  // Default action: a submit button submits its form (the clicked button is
+  // the submitter: its name/value and form*method/enctype/target overrides).
+  if (dom::Element* submitter = FindSubmitButton(const_cast<dom::Element*>(element))) {
+    if (dom::Element* form = html::OwnerForm(*submitter)) {
+      SubmitForm(tab_id, form, submitter);
+      return true;
+    }
   }
   return false;
 }
@@ -1457,6 +1534,15 @@ bool BrowserController::DispatchKeyboard(int tab_id,
       tab->script_runtime != nullptr && target != nullptr
           ? tab->script_runtime->DispatchKeyboardEvent(*target, type, key, code)
           : true;
+  // A key handler may have submitted a form through script; that navigation
+  // takes over (nothing below may run against the replaced document).
+  if (tab->pending_form_submission.form != nullptr) {
+    const std::shared_ptr<renderer::Page> page_before = tab->page;
+    DrainPendingFormSubmission(*tab);
+    if (tab->page != page_before) {
+      return not_canceled;
+    }
+  }
   if (!not_canceled || type != "keydown") {
     return not_canceled;
   }
@@ -1489,8 +1575,13 @@ bool BrowserController::DispatchKeyboard(int tab_id,
       if (key == "Backspace") {
         RemoveLastUtf8CodePoint(value);
       } else if (key == "Enter") {
-        if (dom::Element* form = FindEnclosingForm(control)) {
-          SubmitForm(tab_id, form);
+        if (dom::Element* form = html::OwnerForm(*control)) {
+          // Implicit submission uses the form's default button (HTML
+          // §4.10.22.2) as the submitter, so its name/value and form*
+          // overrides apply.  The spec fires a click at that button; this
+          // engine submits directly with it as the submitter (documented
+          // approximation -- no synthetic activation event).
+          SubmitForm(tab_id, form, html::DefaultButton(*form));
         }
         return not_canceled;
       } else if (!key.empty() && static_cast<unsigned char>(key.front()) >= 0x20U) {
@@ -1544,96 +1635,278 @@ bool BrowserController::DispatchKeyboard(int tab_id,
   if (key_style_changed || key_dom_changed) {
     SchedulePendingImageFetch(*tab);
   }
+  // An input handler may have submitted the form.
+  DrainPendingFormSubmission(*tab);
   return not_canceled;
 }
 
-void BrowserController::SubmitForm(int tab_id, dom::Element* form)
+bool ContainsNode(const dom::Node& root, const dom::Node* target)
+{
+  if (target == nullptr) {
+    return false;
+  }
+  std::vector<const dom::Node*> stack{&root};
+  while (!stack.empty()) {
+    const dom::Node* node = stack.back();
+    stack.pop_back();
+    if (node == target) {
+      return true;
+    }
+    for (const dom::Node* child : node->ChildNodes()) {
+      stack.push_back(child);
+    }
+  }
+  return false;
+}
+
+void BrowserController::SubmitForm(int tab_id, dom::Element* form, dom::Element* submitter)
 {
   Tab* tab = FindTab(tab_id);
   if (tab == nullptr || form == nullptr || tab->page == nullptr) {
     return;
   }
-  // Everything that reads the live document happens under the DOM lock; the
-  // navigation deliberately happens *after* the lock is released.
-  std::string target;
-  std::string method;
+  // Keep the Page alive while the submission runs: a scripted submission (a
+  // form.submit() issued from a submit/invalid handler) replaces the document
+  // before this call returns.
+  const std::shared_ptr<renderer::Page> page_lock_keepalive = tab->page;
+  const std::string document_url = tab->url;
+  const bool navigated =
+      RunFormSubmission(*tab, *page_lock_keepalive, document_url, form, submitter, false);
+  // A navigation replaces the document, invalidating every queued element
+  // pointer; only drain while the submitting document is still current.
+  if (!navigated) {
+    DrainPendingFormSubmission(*tab);
+  }
+}
+
+bool BrowserController::RunFormSubmission(Tab& tab,
+                                          renderer::Page& page,
+                                          const std::string& document_url,
+                                          dom::Element* form,
+                                          dom::Element* submitter,
+                                          bool scripted)
+{
+  FormSubmissionRequest request{form, submitter, scripted};
+  // A form.submit()/requestSubmit() issued by a handler during this submission
+  // supersedes it (the spec's planned navigation).  Returns true when a newer
+  // request was taken over.
+  const auto supersede = [&tab, &request]() -> bool {
+    if (tab.pending_form_submission.form == nullptr) {
+      return false;
+    }
+    request.form = tab.pending_form_submission.form;
+    request.submitter = tab.pending_form_submission.submitter;
+    request.scripted = !tab.pending_form_submission.request_submit;
+    tab.pending_form_submission = {};
+    return true;
+  };
+  for (int attempt = 0; attempt < 8; ++attempt) {
+    if (request.form == nullptr) {
+      return false;
+    }
+    const dom::Document* document = page.document();
+    if (document == nullptr || !ContainsNode(*document, request.form) ||
+        (request.submitter != nullptr && !ContainsNode(*document, request.submitter))) {
+      // The element was removed by a script between the request and its
+      // execution.  Dropping the request is the only safe option: the pointer
+      // is no longer part of the live tree.
+      return false;
+    }
+    std::optional<PreparedFormSubmission> prepared;
+    {
+      const std::unique_lock<std::recursive_mutex> dom_lock = page.AcquireDomLock();
+      if (!request.scripted) {
+        // Interactive validation comes before the submit event (HTML
+        // §4.10.22.3).  A scripted submission during either phase supersedes
+        // this one.
+        if (supersede()) {
+          continue;
+        }
+        const bool no_validate =
+            request.form->HasAttribute("novalidate") ||
+            (request.submitter != nullptr && request.submitter->HasAttribute("formnovalidate"));
+        if (!no_validate) {
+          std::vector<dom::Element*> invalid;
+          if (tab.script_runtime != nullptr) {
+            invalid = tab.script_runtime->InvalidFormControls(*request.form);
+            for (dom::Element* control : invalid) {
+              tab.script_runtime->DispatchInvalidEvent(*control);
+            }
+          } else {
+            invalid = html::InvalidControls(*request.form);
+          }
+          if (!invalid.empty()) {
+            // Interactive validation reports the problem at the first invalid
+            // control (focus; the UI paints the caret there).
+            FocusControl(&tab, invalid.front(), &page);
+            if (supersede()) {
+              continue;
+            }
+            return false;
+          }
+        }
+        if (supersede()) {
+          continue;
+        }
+        if (tab.script_runtime != nullptr &&
+            !tab.script_runtime->DispatchCancelableEvent(*request.form, "submit")) {
+          // preventDefault canceled this submission.  A form.submit() issued
+          // by the handler still navigates (submit() skips the event).
+          if (supersede()) {
+            continue;
+          }
+          return false;
+        }
+        if (supersede()) {
+          continue;
+        }
+      }
+      PreparedFormSubmission candidate;
+      if (!PrepareFormSubmission(document_url, *request.form, request.submitter, &candidate)) {
+        return false;
+      }
+      // No script runs between the last supersede check and here, so the
+      // prepared submission is still the newest one.
+      prepared = std::move(candidate);
+    }
+    return ApplyFormSubmission(tab, std::move(*prepared));
+  }
+  // A pathological submit-handler loop: drop anything still queued.
+  tab.pending_form_submission = {};
+  return false;
+}
+
+bool BrowserController::PrepareFormSubmission(const std::string& document_url,
+                                              dom::Element& form,
+                                              dom::Element* submitter,
+                                              PreparedFormSubmission* out)
+{
+  // Attributes for form submission: the submitter's form* attributes win over
+  // the form's (HTML §4.10.19.6).
+  const auto attr_or_form = [&form, submitter](std::string_view submitter_attr,
+                                               std::string_view form_attr) -> std::string {
+    if (submitter != nullptr && submitter->HasAttribute(submitter_attr)) {
+      return std::string(submitter->GetAttribute(submitter_attr).value_or(""));
+    }
+    return std::string(form.GetAttribute(form_attr).value_or(""));
+  };
+
+  // The action of the element: submitter's formaction, else the form's action.
+  std::string action = attr_or_form("formaction", "action");
+  std::string target = ResolveUrlAgainstBase(action, document_url);
+  if (target.empty()) {
+    target = document_url;
+  }
+
+  // Method: enumerated attribute.  get/post are implemented; dialog is
+  // explicitly NOT IMPLEMENTED (there is no dialog element/close algorithm),
+  // so it falls back to GET rather than silently posting.
+  const std::string method_value = ToLower(std::string(Trim(attr_or_form("formmethod", "method"))));
+  const bool post = method_value == "post";
+
+  // Enctype: submitter's formenctype, else the form's enctype (invalid/missing
+  // value default: application/x-www-form-urlencoded).
+  const FormEnctype enctype = ParseEnctype(attr_or_form("formenctype", "enctype"));
+
+  std::vector<html::FormEntry> entries = html::ConstructEntryList(form, submitter);
   std::string body;
   std::string content_type;
-  std::optional<PendingCredential> captured;
-  {
-    const std::unique_lock<std::recursive_mutex> dom_lock = tab->page->AcquireDomLock();
-    // Cancelable submit event; the page can preventDefault() to block it.
-    if (tab->script_runtime != nullptr &&
-        !tab->script_runtime->DispatchCancelableEvent(*form, "submit")) {
-      return;
+  if (post) {
+    out->method = "POST";
+    switch (enctype) {
+    case FormEnctype::kMultipart: {
+      const std::string boundary = GenerateMultipartBoundary();
+      body = EncodeMultipart(entries, boundary);
+      content_type = "multipart/form-data; boundary=" + boundary;
+      break;
     }
-    // Interactive constraint validation (WHATWG HTML §4.10.21.3).  Unless the
-    // form is novalidate, an invalid control fires a cancelable, non-bubbling
-    // `invalid` event, the first invalid control is focused, and no navigation
-    // happens.  The rules are the shared html::form_validation ones (the same
-    // ones the JS bindings call); the binder supplies setCustomValidity
-    // messages and the event dispatch when a runtime exists.
-    if (!form->HasAttribute("novalidate")) {
-      std::vector<dom::Element*> invalid;
-      if (tab->script_runtime != nullptr) {
-        invalid = tab->script_runtime->InvalidFormControls(*form);
-        for (dom::Element* control : invalid) {
-          tab->script_runtime->DispatchInvalidEvent(*control);
-        }
-      } else {
-        invalid = html::InvalidControls(*form);
-      }
-      if (!invalid.empty()) {
-        // Interactive validation reports the problem at the first invalid
-        // control (focus; the UI paints the caret there).
-        FocusControl(tab, invalid.front());
-        return;
-      }
-    }
-    // Encode the named controls (application/x-www-form-urlencoded).  The
-    // form's method decides where the entry list travels (HTML §4.10.21.5):
-    //   * GET: appended to the action URL's query string;
-    //   * POST: the request body, with the action URL left alone.
-    // An unrecognised method (and the unimplemented "dialog") falls back to
-    // GET, matching the spec's "get" default.  enctype is not consulted yet:
-    // everything is encoded as application/x-www-form-urlencoded.
-    const std::string data = CollectFormData(*form);
-    // Password manager: capture the login this submission would offer to
-    // save (the origin gate below skips file:/data: documents).
-    captured = CredentialFromForm(*form);
-    const std::string action = std::string(form->GetAttribute("action").value_or(""));
-    target = ResolveUrlAgainstBase(action, tab->url);
-    if (target.empty()) {
-      target = tab->url;
-    }
-    std::string method_attr = std::string(form->GetAttribute("method").value_or("get"));
-    const std::size_t first = method_attr.find_first_not_of(" \t\n\f\r");
-    const std::size_t last = method_attr.find_last_not_of(" \t\n\f\r");
-    method_attr = first == std::string::npos ? std::string()
-                                             : ToLower(method_attr.substr(first, last - first + 1));
-    if (method_attr == "post") {
-      method = "POST";
-      body = data;
+    case FormEnctype::kTextPlain:
+      body = EncodePlainText(entries);
+      content_type = "text/plain";
+      break;
+    case FormEnctype::kUrlEncoded:
+      body = EncodeUrlEncoded(entries);
       content_type = "application/x-www-form-urlencoded";
-    } else {
-      target += (target.find('?') != std::string::npos ? "&" : "?") + data;
+      break;
     }
+  } else {
+    // GET ("mutate action URL", including the dialog fallback): the entry list
+    // always travels as an application/x-www-form-urlencoded query string,
+    // whatever the enctype says.
+    out->method.clear();
+    target = AppendQuery(std::move(target), EncodeUrlEncoded(entries));
   }
+
+  out->url = std::move(target);
+  out->body = std::move(body);
+  out->content_type = std::move(content_type);
+  out->target = std::string(Trim(attr_or_form("formtarget", "target")));
+  // Password manager: capture the login this submission would offer to save
+  // (the origin gate below skips file:/data: documents).
+  out->credential = CredentialFromForm(form);
+  return true;
+}
+
+bool BrowserController::ApplyFormSubmission(Tab& tab, PreparedFormSubmission submission)
+{
   // Publish the captured login (if any) before navigating: the save prompt
   // belongs to this submission, not to whatever page comes next.
-  if (captured.has_value()) {
+  if (submission.credential.has_value()) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!tab->origin.empty() && tab->origin != "null") {
-      captured->origin = tab->origin;
-      tab->pending_credential = std::move(captured);
+    if (!tab.origin.empty() && tab.origin != "null") {
+      submission.credential->origin = tab.origin;
+      tab.pending_credential = std::move(submission.credential);
     }
   }
-  // Navigate *outside* the DOM lock.  NavigateWithRequestBody() replaces the
-  // tab's Page, which destroys the Page this lock was taken on; unlocking it
+  // Navigate outside the DOM lock.  NavigateWithRequestBody() replaces the
+  // tab's Page, which destroys the Page the lock was taken on; unlocking it
   // afterwards was a use-after-free on the destroyed Page's mutex (reported by
   // ThreadSanitizer, and undefined behaviour per the standard).
-  static_cast<void>(NavigateWithRequestBody(
-      tab_id, target, std::move(method), std::move(body), std::move(content_type)));
+  //
+  // _blank opens a new tab through the normal navigation path (history and
+  // cookies stay browser-side).  _self, _parent and _top all map to the
+  // current tab, and a named target falls back to it as well: the engine has no
+  // frame tree / named browsing contexts yet (documented approximation).
+  const std::string target_keyword = ToLower(submission.target);
+  if (target_keyword == "_blank") {
+    const int new_tab = NewTab();
+    static_cast<void>(NavigateWithRequestBody(new_tab,
+                                              submission.url,
+                                              std::move(submission.method),
+                                              std::move(submission.body),
+                                              std::move(submission.content_type)));
+    return false;
+  }
+  static_cast<void>(NavigateWithRequestBody(tab.id,
+                                            submission.url,
+                                            std::move(submission.method),
+                                            std::move(submission.body),
+                                            std::move(submission.content_type)));
+  return true;
+}
+
+void BrowserController::DrainPendingFormSubmission(Tab& tab)
+{
+  for (int attempt = 0; attempt < 8; ++attempt) {
+    const ScriptRequestedFormSubmission request = tab.pending_form_submission;
+    tab.pending_form_submission = {};
+    if (request.form == nullptr) {
+      return;
+    }
+    const std::shared_ptr<renderer::Page> page = tab.page;
+    if (page == nullptr) {
+      return;
+    }
+    const std::string document_url = tab.url;
+    const bool navigated = RunFormSubmission(
+        tab, *page, document_url, request.form, request.submitter, !request.request_submit);
+    // Any navigation replaces the document (and invalidates the queued
+    // pointers); stop rather than interpreting stale state.
+    if (navigated || tab.page != page) {
+      return;
+    }
+  }
+  tab.pending_form_submission = {};
 }
 
 base::Result<void> BrowserController::NavigateActive(const std::string& input)
@@ -1666,6 +1939,7 @@ base::Result<void> BrowserController::LoadDocument(int tab_id,
   }
   tab->focused_element = nullptr;
   tab->hovered_element = nullptr;
+  tab->pending_form_submission = {};
   LoadBytes(*tab, bytes, content_type, final_url);
   if (tab->content_type == ContentType::kError && tab->error != nullptr) {
     return base::Err(base::Error::Unknown(*tab->error));
@@ -2040,6 +2314,10 @@ int BrowserController::PumpScriptTimersUntilQuiet(int max_iterations)
   // Deliver any image load/error events the pool queued during the pump.
   // These dispatch page scripts, so they stay inside the DOM lock scope.
   FirePendingImageEvents(*tab);
+  // A timer (or an image event handler) may have called form.submit() /
+  // requestSubmit(); run the newest request now.  The outer keepalive keeps
+  // the lock's Page alive across the navigation this may start.
+  DrainPendingFormSubmission(*tab);
   return iterations;
 }
 
@@ -2181,6 +2459,11 @@ void BrowserController::PumpScriptTimers()
       ++tab->image_frame;
     }
   }
+  // A timer or event handler may have called form.submit()/requestSubmit():
+  // run the newest request.  Do this before window.location handling so a
+  // submission is not dropped by a navigation the same callback requested
+  // (last navigation still wins; both go through the same path).
+  DrainPendingFormSubmission(*tab);
   // A timer callback may have requested a navigation (window.location): the
   // request was written into the tab by the runtime's callback, so act on it
   // now (and clear it so it fires once).
@@ -2901,6 +3184,7 @@ void BrowserController::LoadBytes(Tab& tab,
     // The navigation request lives in the tab (stable address): the runtime's
     // callback keeps writing into it when a timer navigates later.
     tab.pending_script_navigation = {};
+    tab.pending_form_submission = {};
     tab.script_runtime = RunPageScripts(
         *new_page,
         final_url,
@@ -2915,7 +3199,23 @@ void BrowserController::LoadBytes(Tab& tab,
         [this](std::string_view level, std::string_view text) { LogConsole(level, text); },
         pool(),
         services,
-        &tab.pending_script_navigation);
+        &tab.pending_script_navigation,
+        /*timings=*/nullptr,
+        &tab.pending_form_submission);
+
+    // A script may have called form.submit()/requestSubmit() while the
+    // document was loading (auto-submitting redirect pages).  Run the
+    // submission against the not-yet-published document: if it navigates, it
+    // replaces this document before it is ever shown.
+    if (tab.pending_form_submission.form != nullptr) {
+      const ScriptRequestedFormSubmission request = tab.pending_form_submission;
+      tab.pending_form_submission = {};
+      const bool navigated = RunFormSubmission(
+          tab, *new_page, final_url, request.form, request.submitter, !request.request_submit);
+      if (navigated) {
+        return;
+      }
+    }
 
     // A script may have requested a navigation (window.location.href=,
     // assign()/replace(), or reload()) — e.g. Baidu's anti-bot page replaces

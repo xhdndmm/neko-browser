@@ -104,6 +104,41 @@ dom::Element* OwnerForm(const dom::Element& element);
 // completeness but are always barred from validation.
 std::vector<dom::Element*> FormControls(const dom::Element& form);
 
+// True when |element| is a submit button (WHATWG HTML §4.10.19.6):
+//   * <button> with a missing type attribute or type=submit;
+//   * <input type=submit> or <input type=image>.
+// The type keywords are ASCII case-insensitive.  A disabled button is still a
+// submit button; callers that implement activation check |disabled|
+// separately.
+bool IsSubmitButton(const dom::Element& element);
+
+// The form's default button: the first submit button whose form owner is
+// |form|, in tree order (WHATWG HTML §4.10.22.2 "Implicit submission"), or
+// nullptr when the form has none.
+dom::Element* DefaultButton(const dom::Element& form);
+
+// One entry of a form's entry list (WHATWG HTML §4.10.22.4).  |is_file| marks
+// an entry contributed by a file input; the engine has no File API, so such an
+// entry carries no file content and the submission encoders skip it (the
+// browser's form-submission path documents this gap).  |value| is empty for a
+// file entry.
+struct FormEntry
+{
+  std::string name;
+  std::string value;
+  bool is_file = false;
+};
+
+// Builds the entry list of |form| (WHATWG HTML §4.10.22.4), with the optional
+// |submitter| included when it is a submit button.  Controls are visited in
+// tree order; disabled controls, controls inside a <datalist>, unchecked
+// checkboxes/radios, non-submitter buttons and image-button coordinates
+// (NOT IMPLEMENTED) are omitted.  File inputs produce a file entry with no
+// content.  |submitter| does not have to be a descendant of |form|: its form
+// owner is used by the caller to decide whether it belongs to this submission.
+std::vector<FormEntry> ConstructEntryList(const dom::Element& form,
+                                          const dom::Element* submitter = nullptr);
+
 // The controls of |form| whose computed validity is false.  |custom_error|
 // optionally supplies each element's custom validity message (the JavaScript
 // layer passes its per-element store; the browser layer does the same when a

@@ -217,14 +217,16 @@ bool HasEventHandlerContentAttributes(const dom::Node& root)
 
 } // namespace
 
-std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
-                                                      const std::string& base_url,
-                                                      ScriptFetcher fetch,
-                                                      javascript::ScriptEngine::ConsoleSink sink,
-                                                      base::ThreadPool& pool,
-                                                      const PageScriptServices& services,
-                                                      ScriptRequestedNavigation* out_navigation,
-                                                      ScriptTimings* timings)
+std::shared_ptr<javascript::DomBinder>
+RunPageScripts(renderer::Page& page,
+               const std::string& base_url,
+               ScriptFetcher fetch,
+               javascript::ScriptEngine::ConsoleSink sink,
+               base::ThreadPool& pool,
+               const PageScriptServices& services,
+               ScriptRequestedNavigation* out_navigation,
+               ScriptTimings* timings,
+               ScriptRequestedFormSubmission* out_form_submission)
 {
   dom::Document* document = page.document();
   if (document == nullptr) {
@@ -522,6 +524,18 @@ std::shared_ptr<javascript::DomBinder> RunPageScripts(renderer::Page& page,
     apis.reload = [out_navigation]() { out_navigation->is_reload = true; };
   } else {
     apis.location_href = [base_url]() { return base_url; };
+  }
+  // form.submit()/requestSubmit(): record the request for the browser layer,
+  // which runs the submission algorithm after the script run (it must not
+  // navigate mid-script).  The storage lives in the tab, whose address is
+  // stable for the page's lifetime (timers may submit later).
+  if (out_form_submission != nullptr) {
+    apis.form_submit =
+        [out_form_submission](dom::Element& form, dom::Element* submitter, bool request_submit) {
+          out_form_submission->form = &form;
+          out_form_submission->submitter = submitter;
+          out_form_submission->request_submit = request_submit;
+        };
   }
 
   // window.history: script-visible session history.  The controller passes

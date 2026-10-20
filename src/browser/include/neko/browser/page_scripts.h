@@ -126,6 +126,22 @@ struct ScriptRequestedNavigation
   bool is_reload = false;
 };
 
+// A form submission requested by page script through HTMLFormElement.submit()
+// or requestSubmit().  Like ScriptRequestedNavigation, the request is recorded
+// for the browser layer to act on after the synchronous script run: form
+// submission must never re-enter navigation from inside JavaScript (the page
+// may be replaced).  The pointed-to elements belong to the page's document;
+// the browser re-checks that they are still connected before submitting.
+struct ScriptRequestedFormSubmission
+{
+  dom::Element* form = nullptr;
+  dom::Element* submitter = nullptr;
+  // True for requestSubmit(): fire the cancelable submit event and run
+  // interactive constraint validation.  False for submit(): no event, no
+  // validation, no submitter (WHATWG HTML §4.10.22.3).
+  bool request_submit = false;
+};
+
 // Executes the page's <script> elements (inline text or external src=) through
 // a fresh JavaScript runtime with DOM bindings, then re-applies the style
 // cascade so DOM mutations made by the scripts are reflected.
@@ -154,9 +170,11 @@ struct ScriptRequestedNavigation
 // provided) and does not stop the remaining scripts.
 //
 // When a script requests a navigation (window.location), it is recorded in
-// |out_navigation| (last request wins).  The caller is expected to start that
-// navigation after this function returns; RunPageScripts itself never recurses
-// into the network stack.
+// |out_navigation| (last request wins).  A scripted form submission
+// (form.submit()/requestSubmit()) is recorded in |out_form_submission| instead;
+// the caller runs the submission algorithm after this function returns.  Both
+// are recorded rather than acted on so RunPageScripts never recurses into the
+// network stack mid-script.
 //
 // Returns the live runtime handle so the caller can keep it for the page's
 // lifetime and pump timers / dispatch events (see javascript::DomBinder), or
@@ -169,7 +187,8 @@ RunPageScripts(renderer::Page& page,
                base::ThreadPool& pool,
                const PageScriptServices& services = {},
                ScriptRequestedNavigation* out_navigation = nullptr,
-               ScriptTimings* timings = nullptr);
+               ScriptTimings* timings = nullptr,
+               ScriptRequestedFormSubmission* out_form_submission = nullptr);
 
 // Drives |binder|'s event loop until it goes quiet, so deferred work actually
 // runs before the page is observed.  Returns the number of pump iterations.

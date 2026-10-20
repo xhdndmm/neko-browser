@@ -127,6 +127,16 @@ struct PageApis
   std::function<void(const std::string&)> navigate;
   std::function<void()> reload;
 
+  // HTMLFormElement.submit() / requestSubmit().  |form| and |submitter| point
+  // into the page's document; |request_submit| is true for requestSubmit()
+  // (fire the submit event and run interactive validation) and false for
+  // submit() (no event, no validation, no submitter).  The browser layer
+  // records the request and runs the submission algorithm after the current
+  // script run instead of navigating mid-script.  When the callback is absent
+  // (a standalone binder, e.g. a JS unit test) requestSubmit falls back to the
+  // local validation + submit-event sequence and submit() is a no-op.
+  std::function<void(dom::Element&, dom::Element*, bool)> form_submit;
+
   // window.history (script-visible session history).  |history_push| records a
   // new entry for the resolved absolute URL (or the current URL when empty);
   // |history_replace| replaces the current entry.  |history_length| reports the
@@ -288,7 +298,9 @@ struct PageApis
 //               scrollTop/scrollLeft (get/set, documentElement/body) and
 //               scrollWidth/scrollHeight
 //   Form/links: input/textarea/select/option value/checked/type/placeholder/
-//               disabled/name; a.href (resolved absolute)/target/rel;
+//               disabled/name; form.submit()/requestSubmit() (the browser
+//               layer performs the submission after the script run);
+//               a.href (resolved absolute)/target/rel;
 //               img.src (resolved)/currentSrc/alt/width/height/
 //               naturalWidth/naturalHeight/complete
 //   Style:      setProperty/getPropertyValue/removeProperty plus direct

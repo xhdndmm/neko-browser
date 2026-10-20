@@ -240,6 +240,73 @@ std::string OptionValue(const Element& option)
   return value.has_value() ? std::string(*value) : option.TextContent();
 }
 
+// True when |option| is disabled itself or by a disabled <optgroup> ancestor
+// inside |select| (HTML §4.10.10/§4.10.11).
+bool OptionIsDisabled(const Element& option, const Element& select)
+{
+  if (option.HasAttribute("disabled")) {
+    return true;
+  }
+  for (const Node* current = option.parent(); current != nullptr; current = current->parent()) {
+    if (current == &select) {
+      break;
+    }
+    const Element* element = AsElement(current);
+    if (element != nullptr && element->tag_name() == "optgroup" &&
+        element->HasAttribute("disabled")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Every enabled, selected option of |select| in tree order.  A single-select
+// with no explicitly selected option selects its first option (the browser
+// default, matching SelectedOption).
+std::vector<const Element*> SelectedOptions(const Element& select)
+{
+  std::vector<const Element*> options;
+  std::vector<Node*> stack;
+  for (Node* child : select.ChildNodes()) {
+    stack.push_back(child);
+  }
+  while (!stack.empty()) {
+    Node* node = stack.back();
+    stack.pop_back();
+    const Element* element = AsElement(node);
+    if (element != nullptr && element->tag_name() == "option") {
+      options.push_back(element);
+      continue; // options do not nest
+    }
+    std::vector<Node*> children;
+    for (Node* child : node->ChildNodes()) {
+      children.push_back(child);
+    }
+    for (auto it = children.rbegin(); it != children.rend(); ++it) {
+      stack.push_back(*it);
+    }
+  }
+  std::vector<const Element*> selected;
+  for (const Element* option : options) {
+    if (option->HasAttribute("selected") && !OptionIsDisabled(*option, select)) {
+      selected.push_back(option);
+    }
+  }
+  if (!selected.empty()) {
+    return selected; // a multiple select may have several; single keeps all selected (first wins
+                     // below)
+  }
+  if (select.HasAttribute("multiple")) {
+    return {};
+  }
+  for (const Element* option : options) {
+    if (!OptionIsDisabled(*option, select)) {
+      return {option};
+    }
+  }
+  return {};
+}
+
 std::string RawValue(const Element& element)
 {
   const Kind kind = KindOf(element);
@@ -868,6 +935,103 @@ std::vector<dom::Element*> FormControls(const dom::Element& form)
     }
   }
   return controls;
+}
+
+bool IsSubmitButton(const dom::Element& element)
+{
+  const std::string_view tag = element.tag_name();
+  if (tag == "button") {
+    const std::string type = base::ToLower(RawAttr(element, "type"));
+    // <button>'s missing value default is Submit (HTML §4.10.6).
+    return type.empty() || type == "submit";
+  }
+  if (tag == "input") {
+    const std::string type = InputType(element);
+    return type == "submit" || type == "image";
+  }
+  return false;
+}
+
+dom::Element* DefaultButton(const dom::Element& form)
+{
+  for (Element* control : FormControls(form)) {
+    if (IsSubmitButton(*control)) {
+      return control;
+    }
+  }
+  return nullptr;
+}
+
+std::vector<FormEntry> ConstructEntryList(const dom::Element& form, const dom::Element* submitter)
+{
+  std::vector<FormEntry> entries;
+  for (Element* field : FormControls(form)) {
+    // HTML §4.10.22.4: datalist descendants and disabled controls never
+    // contribute, nor do buttons other than the submitter.
+    if (HasAncestorNamed(*field, "datalist") || IsDisabled(*field)) {
+      continue;
+    }
+    const std::string tag(field->tag_name());
+    const bool is_input = tag == "input";
+    const std::string type = is_input ? InputType(*field) : std::string();
+    if (tag == "button") {
+      if (field != submitter || !IsSubmitButton(*field)) {
+        continue;
+      }
+    } else if (is_input) {
+      if (type == "checkbox" || type == "radio") {
+        if (!field->HasAttribute("checked")) {
+          continue;
+        }
+      } else if (type == "reset" || type == "button") {
+        continue;
+      } else if (type == "submit" || type == "image") {
+        if (field != submitter) {
+          continue;
+        }
+        // NOT IMPLEMENTED: an active image button contributes its selected
+        // coordinate as name.x/name.y.  The engine has no click coordinate at
+        // submission time, so it contributes no entry (not even empty ones).
+        if (type == "image") {
+          continue;
+        }
+      }
+    }
+    const std::optional<std::string_view> name_attr = field->GetAttribute("name");
+    if (!name_attr.has_value() || name_attr->empty()) {
+      continue;
+    }
+    const std::string name(*name_attr);
+    if (is_input && (type == "checkbox" || type == "radio")) {
+      const std::optional<std::string_view> value_attr = field->GetAttribute("value");
+      entries.push_back({name, value_attr.has_value() ? std::string(*value_attr) : "on", false});
+      continue;
+    }
+    if (is_input && type == "file") {
+      // No File API / picker: the control has no selected files.  This is a
+      // file entry with no content, which the encoders skip rather than
+      // sending a fabricated empty file part.
+      entries.push_back({name, std::string(), true});
+      continue;
+    }
+    if (tag == "button") {
+      // A submit button's value is its `value` attribute (default empty).
+      entries.push_back({name, RawAttr(*field, "value"), false});
+      continue;
+    }
+    if (tag == "select") {
+      std::vector<const Element*> selected = SelectedOptions(*field);
+      if (!field->HasAttribute("multiple") && selected.size() > 1) {
+        selected.resize(1);
+      }
+      for (const Element* option : selected) {
+        entries.push_back({name, OptionValue(*option), false});
+      }
+      continue;
+    }
+    entries.push_back({name, SanitizedValue(*field), false});
+  }
+  return entries;
 }
 
 std::vector<dom::Element*> InvalidControls(const dom::Element& form,
