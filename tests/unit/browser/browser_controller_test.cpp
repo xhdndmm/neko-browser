@@ -4923,6 +4923,341 @@ TEST(BrowserControllerTest, FocusAndBlurFireOnClick)
   EXPECT_EQ(input->GetAttribute("data-f"), "2");
 }
 
+// Element.focus()/blur() (WHATWG HTML §6.6.3) move the tab's focus through the
+// same machinery clicks and Tab use: the previous element gets blur then
+// focusout, the new one focus then focusin (UI Events §3.3.2), and
+// document.activeElement follows the tab state.  blur() clears the focus so
+// activeElement falls back to <body>; focusing a non-focusable element is a
+// no-op.
+TEST(BrowserControllerTest, ScriptFocusAndBlurUpdateActiveElement)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{
+                200,
+                {{"content-type", "text/html"}},
+                "<html><body>"
+                "<div id=\"wrap\"><input id=\"a\"><input id=\"b\">"
+                "<p id=\"plain\">text</p></div>"
+                "<script>"
+                "window.__log = [];"
+                "function log(s) { __log.push(s);"
+                "  document.body.setAttribute('data-log', __log.join(',')); }"
+                "var a = document.getElementById('a');"
+                "var b = document.getElementById('b');"
+                "['focus','blur','focusin','focusout'].forEach(function(type) {"
+                "  a.addEventListener(type, function() { log(type + '-a'); });"
+                "  b.addEventListener(type, function() { log(type + '-b'); });"
+                "});"
+                "window.run = function() {"
+                "  a.focus();"
+                "  document.body.setAttribute('data-active-a', document.activeElement.id);"
+                "  b.focus();"
+                "  document.body.setAttribute('data-active-b', document.activeElement.id);"
+                "  b.blur();"
+                "  document.body.setAttribute('data-active-c', document.activeElement.tagName);"
+                "  document.getElementById('plain').focus();"
+                "  document.body.setAttribute('data-plain', document.activeElement.tagName);"
+                "  document.body.setAttribute('data-focus', String(document.hasFocus()));"
+                "};"
+                "</script></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  ASSERT_NE(tab->script_runtime, nullptr);
+  dom::Element* body = dom::QuerySelector(*tab->page->document(), "body");
+  dom::Element* a = dom::QuerySelector(*tab->page->document(), "#a");
+  dom::Element* b = dom::QuerySelector(*tab->page->document(), "#b");
+  dom::Element* plain = dom::QuerySelector(*tab->page->document(), "#plain");
+  ASSERT_NE(body, nullptr);
+  ASSERT_NE(a, nullptr);
+  ASSERT_NE(b, nullptr);
+  ASSERT_NE(plain, nullptr);
+
+  ASSERT_TRUE(tab->script_runtime->Evaluate("run()").has_value());
+  // UI Events order: blur before focusout on the old target, focus before
+  // focusin on the new one.
+  EXPECT_EQ(body->GetAttribute("data-log").value_or(""),
+            "focus-a,focusin-a,blur-a,focusout-a,focus-b,focusin-b,blur-b,focusout-b");
+  EXPECT_EQ(body->GetAttribute("data-active-a").value_or(""), "a");
+  EXPECT_EQ(body->GetAttribute("data-active-b").value_or(""), "b");
+  EXPECT_EQ(body->GetAttribute("data-active-c").value_or(""), "BODY");
+  EXPECT_EQ(body->GetAttribute("data-plain").value_or(""), "BODY");
+  // document.hasFocus(): this tab is the active one.
+  EXPECT_EQ(body->GetAttribute("data-focus").value_or(""), "true");
+  // Focused state is cleared by blur(); the non-focusable <p> never took it.
+  EXPECT_EQ(tab->focused_element, nullptr);
+
+  // document.hasFocus() reports whether this tab is the active one (the
+  // engine's approximation of window focus): a background tab says false.
+  controller.NewTab(); // activates the new tab
+  const auto background_focus = tab->script_runtime->Evaluate("String(document.hasFocus())");
+  ASSERT_TRUE(background_focus.has_value());
+  EXPECT_EQ(background_focus.value().ToString().value_or(""), "false");
+  controller.ActivateTab(tab->id);
+  const auto active_focus = tab->script_runtime->Evaluate("String(document.hasFocus())");
+  ASSERT_TRUE(active_focus.has_value());
+  EXPECT_EQ(active_focus.value().ToString().value_or(""), "true");
+}
+
+// focusin/focusout bubble, focus/blur do not (UI Events §3.3.4): a listener on
+// an ancestor sees only the two bubbling events.
+TEST(BrowserControllerTest, FocusInAndFocusOutBubbleWhileFocusAndBlurDoNot)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<div id=\"wrap\"><input id=\"a\"><input id=\"b\"></div>"
+                               "<script>"
+                               "window.__log = [];"
+                               "var wrap = document.getElementById('wrap');"
+                               "['focus','blur','focusin','focusout'].forEach(function(type) {"
+                               "  wrap.addEventListener(type, function() {"
+                               "    __log.push(type);"
+                               "    document.body.setAttribute('data-log', __log.join(','));"
+                               "  });"
+                               "});"
+                               "window.run = function() {"
+                               "  document.getElementById('a').focus();"
+                               "  document.getElementById('b').focus();"
+                               "};"
+                               "</script></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  ASSERT_NE(tab->script_runtime, nullptr);
+  dom::Element* body = dom::QuerySelector(*tab->page->document(), "body");
+  ASSERT_NE(body, nullptr);
+
+  ASSERT_TRUE(tab->script_runtime->Evaluate("run()").has_value());
+  // a.focus() -> focusin; b.focus() -> focusout (from a) then focusin.
+  // The non-bubbling focus/blur never reach the wrapper.
+  EXPECT_EQ(body->GetAttribute("data-log").value_or(""), "focusin,focusout,focusin");
+}
+
+// Sequential focus navigation order (WHATWG HTML §6.6.4): positive tabindex
+// values first, ascending (tree order for ties), then tabindex=0 / naturally
+// focusable elements in tree order.  tabindex=-1 is skipped by Tab but can be
+// focused by script, and Tab from a tabindex=-1 element continues at the start
+// of the order.
+TEST(BrowserControllerTest, TabFollowsTabIndexOrderAndSkipsNegative)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<input id=\"first\">"
+                               "<input id=\"pos2\" tabindex=\"2\">"
+                               "<button id=\"pos1\" tabindex=\"1\">b</button>"
+                               "<a id=\"link\" href=\"http://example.com/x\">x</a>"
+                               "<div id=\"neg\" tabindex=\"-1\">n</div>"
+                               "<input id=\"pos2b\" tabindex=\"2\">"
+                               "<script>window.__loaded = true;</script>"
+                               "</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  const auto element = [tab](const char* id) {
+    return dom::QuerySelector(*tab->page->document(), id);
+  };
+  dom::Element* neg = element("#neg");
+  ASSERT_NE(neg, nullptr);
+
+  // Positive tabindex first (ascending, tree order for the two 2s), then the
+  // naturally focusable elements in tree order.
+  EXPECT_EQ(tab->focused_element, nullptr);
+  const std::vector<dom::Element*> expected = {
+      element("#pos1"), element("#pos2"), element("#pos2b"), element("#first"), element("#link")};
+  for (dom::Element* expected_element : expected) {
+    controller.DispatchKeyboard(tab->id, "keydown", "Tab", "Tab");
+    EXPECT_EQ(tab->focused_element, expected_element);
+  }
+  // Wraps to the first positive entry.
+  controller.DispatchKeyboard(tab->id, "keydown", "Tab", "Tab");
+  EXPECT_EQ(tab->focused_element, element("#pos1"));
+  // Backwards from the first wraps to the last plain entry.
+  controller.DispatchKeyboard(tab->id, "keydown", "Backtab", "Tab");
+  EXPECT_EQ(tab->focused_element, element("#link"));
+
+  // tabindex=-1: focusable by script, never visited by Tab.
+  ASSERT_NE(tab->script_runtime, nullptr);
+  ASSERT_TRUE(tab->script_runtime->Evaluate("document.getElementById('neg').focus()").has_value());
+  EXPECT_EQ(tab->focused_element, neg);
+  // Tab from a tabindex=-1 element starts at the beginning of the order.
+  controller.DispatchKeyboard(tab->id, "keydown", "Tab", "Tab");
+  EXPECT_EQ(tab->focused_element, element("#pos1"));
+}
+
+// autofocus (WHATWG HTML §6.6.1): on a completed navigation the first focusable
+// element in tree order with the attribute takes focus.  A non-focusable
+// candidate is skipped, and a script that already focused something during the
+// load is not overridden.
+TEST(BrowserControllerTest, AutofocusFocusesFirstCandidateOnLoad)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<div id=\"notfocusable\" autofocus></div>"
+                               "<input id=\"plain\">"
+                               "<input id=\"auto\" autofocus "
+                               "onfocus=\"document.body.setAttribute('data-focused','1')\">"
+                               "</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  dom::Element* auto_input = dom::QuerySelector(*tab->page->document(), "#auto");
+  dom::Element* body = dom::QuerySelector(*tab->page->document(), "body");
+  ASSERT_NE(auto_input, nullptr);
+  ASSERT_NE(body, nullptr);
+  EXPECT_EQ(tab->focused_element, auto_input);
+  // The autofocus event sequence fired through the page's runtime.
+  EXPECT_EQ(body->GetAttribute("data-focused").value_or(""), "1");
+  // activeElement agrees.
+  ASSERT_NE(tab->script_runtime, nullptr);
+  const auto active_id = tab->script_runtime->Evaluate("document.activeElement.id");
+  ASSERT_TRUE(active_id.has_value());
+  EXPECT_EQ(active_id.value().ToString().value_or(""), "auto");
+}
+
+TEST(BrowserControllerTest, AutofocusDoesNotStealScriptFocusDuringLoad)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{
+                200,
+                {{"content-type", "text/html"}},
+                "<html><body>"
+                "<input id=\"auto\" autofocus "
+                "onfocus=\"document.body.setAttribute('data-auto','1')\">"
+                "<input id=\"scripted\" "
+                "onfocus=\"document.body.setAttribute('data-scripted-focus','1')\">"
+                "<script>"
+                "document.getElementById('scripted').focus();"
+                "document.body.setAttribute('data-scripted', document.activeElement.id);"
+                "document.body.setAttribute('data-has-focus', String(document.hasFocus()));"
+                "</script></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  dom::Element* auto_input = dom::QuerySelector(*tab->page->document(), "#auto");
+  dom::Element* scripted = dom::QuerySelector(*tab->page->document(), "#scripted");
+  dom::Element* body = dom::QuerySelector(*tab->page->document(), "body");
+  ASSERT_NE(auto_input, nullptr);
+  ASSERT_NE(scripted, nullptr);
+  ASSERT_NE(body, nullptr);
+  // Script focus during the load works and wins over autofocus.
+  EXPECT_EQ(tab->focused_element, scripted);
+  EXPECT_EQ(body->GetAttribute("data-scripted").value_or(""), "scripted");
+  EXPECT_EQ(body->GetAttribute("data-scripted-focus").value_or(""), "1");
+  EXPECT_EQ(body->GetAttribute("data-has-focus").value_or(""), "true");
+  // autofocus did not steal the script's focus.
+  EXPECT_FALSE(body->GetAttribute("data-auto").has_value());
+}
+
+// inert (WHATWG HTML §6.6.1): an element in an inert subtree is not focusable
+// (script focus is a no-op), Tab skips it, and its click has no default action
+// (no toggle, no navigation).  Documented approximation: the pointer events
+// still dispatch, because the engine has no event-level inert suppression.
+TEST(BrowserControllerTest, InertSubtreeIsNotFocusableClickableOrTabbable)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{
+                200,
+                {{"content-type", "text/html"}},
+                "<html><body style=\"margin:0\">"
+                "<div id=\"inert\" inert>"
+                "<input id=\"field\">"
+                "<input id=\"box\" type=\"checkbox\">"
+                "<a id=\"gone\" href=\"http://example.com/gone\">gone</a>"
+                "</div>"
+                "<input id=\"after\">"
+                "<script>"
+                "var box = document.getElementById('box');"
+                "window.__clicked = false;"
+                "box.addEventListener('click', function() { window.__clicked = true; });"
+                "window.run = function() {"
+                "  document.getElementById('field').focus();"
+                "  document.body.setAttribute('data-active', document.activeElement.tagName);"
+                "  document.body.setAttribute('data-focused',"
+                "    String(document.activeElement === document.getElementById('field')));"
+                "};"
+                "</script></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* field = dom::QuerySelector(*tab->page->document(), "#field");
+  dom::Element* box = dom::QuerySelector(*tab->page->document(), "#box");
+  dom::Element* after = dom::QuerySelector(*tab->page->document(), "#after");
+  dom::Element* body = dom::QuerySelector(*tab->page->document(), "body");
+  ASSERT_NE(field, nullptr);
+  ASSERT_NE(box, nullptr);
+  ASSERT_NE(after, nullptr);
+  ASSERT_NE(body, nullptr);
+
+  // Tab visits only the non-inert control.
+  EXPECT_EQ(tab->focused_element, nullptr);
+  controller.DispatchKeyboard(tab->id, "keydown", "Tab", "Tab");
+  EXPECT_EQ(tab->focused_element, after);
+  controller.DispatchKeyboard(tab->id, "keydown", "Tab", "Tab");
+  EXPECT_EQ(tab->focused_element, after); // wraps to itself
+
+  // Script focus is a no-op inside the inert subtree.
+  ASSERT_NE(tab->script_runtime, nullptr);
+  ASSERT_TRUE(tab->script_runtime->Evaluate("run()").has_value());
+  EXPECT_EQ(tab->focused_element, after); // unchanged
+  EXPECT_EQ(body->GetAttribute("data-focused").value_or(""), "false");
+  EXPECT_EQ(body->GetAttribute("data-active").value_or(""), "INPUT");
+
+  // Clicking the inert checkbox runs the click event (approximation) but does
+  // not toggle it or focus it.
+  const auto box_geometry = tab->page->ElementBoxGeometry(*box);
+  ASSERT_TRUE(box_geometry.has_value());
+  controller.DispatchPointerClick(tab->id,
+                                  box_geometry->x + box_geometry->width / 2.0f,
+                                  box_geometry->y + box_geometry->height / 2.0f);
+  EXPECT_FALSE(box->HasAttribute("checked"));
+  const auto clicked = tab->script_runtime->Evaluate("String(window.__clicked)");
+  ASSERT_TRUE(clicked.has_value());
+  EXPECT_EQ(clicked.value().ToString().value_or(""), "true");
+  EXPECT_EQ(tab->focused_element, after);
+
+  // Navigation from an inert link does not run.
+  const auto gone_geometry =
+      tab->page->ElementBoxGeometry(*dom::QuerySelector(*tab->page->document(), "#gone"));
+  ASSERT_TRUE(gone_geometry.has_value());
+  controller.DispatchPointerClick(tab->id,
+                                  gone_geometry->x + gone_geometry->width / 2.0f,
+                                  gone_geometry->y + gone_geometry->height / 2.0f);
+  EXPECT_EQ(controller.ActiveTab()->url, "http://example.com/");
+  EXPECT_THAT(fetch.Requests(), testing::Not(testing::Contains("http://example.com/gone")));
+}
+
 TEST(BrowserControllerTest, HoverFiresMouseOverAndOut)
 {
   TempProfile tp;

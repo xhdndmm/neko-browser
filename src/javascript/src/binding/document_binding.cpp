@@ -140,6 +140,55 @@ JSValue DocGetBody(JSContext* ctx, JSValueConst this_val)
   return JS_NULL;
 }
 
+// Document.activeElement (WHATWG HTML §6.6.2): the document's focused
+// element, or the body element when nothing is focused, or null when there is
+// no body.  The focused element is owned by the browser's tab state; the
+// callback reports it (null when none).
+JSValue DocGetActiveElement(JSContext* ctx, JSValueConst this_val)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
+  if (impl == nullptr || node == nullptr || node->node_type() != dom::NodeType::kDocument) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  if (impl->apis.active_element) {
+    if (dom::Element* focused = impl->apis.active_element()) {
+      // The callback reports the browsing context's document; a script may be
+      // looking at another Document object (DOMParser/createHTMLDocument), so
+      // only answer when the focused element belongs to |node|.
+      const dom::Node* root = focused;
+      while (root->parent() != nullptr) {
+        root = root->parent();
+      }
+      if (root == node) {
+        return impl->WrapNode(focused);
+      }
+    }
+  }
+  // Nothing focused: the spec's fallback is the body element (null when the
+  // document has none).
+  return DocGetBody(ctx, this_val);
+}
+
+// Document.hasFocus(): true when this document's tab is the browser's active
+// tab.  APPROXIMATION: the engine does not model OS/GUI window activation, so
+// "the user agent's focus is on this document" is reported as "this tab is the
+// active tab".  A standalone binder (no browsing context) reports false.
+JSValue DocHasFocus(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  Impl* impl = ImplFor(ctx, this_val);
+  dom::Node* node = UnwrapNode(ctx, this_val);
+  if (impl == nullptr || node == nullptr || node->node_type() != dom::NodeType::kDocument) {
+    return JS_ThrowTypeError(ctx, "not a document");
+  }
+  // A Document not bound to the browsing context (a parsed or created
+  // document) never has focus.
+  if (node != &impl->document) {
+    return JS_NewBool(ctx, false);
+  }
+  return JS_NewBool(ctx, impl->apis.has_focus && impl->apis.has_focus());
+}
+
 JSValue DocGetHead(JSContext* ctx, JSValueConst this_val)
 {
   Impl* impl = ImplFor(ctx, this_val);
@@ -1250,7 +1299,7 @@ void DefineStyleSheetPrototype(JSContext* ctx, Impl& impl)
 
 void DefineDocumentPrototype(JSContext* ctx, Impl& impl)
 {
-  static const std::array<JSCFunctionListEntry, 15> kMethods = {{
+  static const std::array<JSCFunctionListEntry, 16> kMethods = {{
       JS_CFUNC_DEF("getElementById", 1, DocGetElementById),
       JS_CFUNC_DEF("createElement", 1, DocCreateElement),
       JS_CFUNC_DEF("createElementNS", 2, DocCreateElementNS),
@@ -1266,6 +1315,7 @@ void DefineDocumentPrototype(JSContext* ctx, Impl& impl)
       JS_CFUNC_DEF("getElementsByClassName", 1, DocGetElementsByClassName),
       JS_CFUNC_DEF("write", 1, DocWrite),
       JS_CFUNC_DEF("writeln", 1, DocWrite),
+      JS_CFUNC_DEF("hasFocus", 0, DocHasFocus),
   }};
   JS_SetPropertyFunctionList(
       ctx, impl.document_proto, kMethods.data(), static_cast<int>(kMethods.size()));
@@ -1294,6 +1344,10 @@ void DefineDocumentPrototype(JSContext* ctx, Impl& impl)
                MakeGetter(ctx, "documentElement", DocGetDocumentElement));
   DefineGetter(ctx, impl.document_proto, "doctype", MakeGetter(ctx, "doctype", DocGetDoctype));
   DefineGetter(ctx, impl.document_proto, "body", MakeGetter(ctx, "body", DocGetBody));
+  DefineGetter(ctx,
+               impl.document_proto,
+               "activeElement",
+               MakeGetter(ctx, "activeElement", DocGetActiveElement));
   DefineGetter(ctx, impl.document_proto, "head", MakeGetter(ctx, "head", DocGetHead));
   DefineGetter(
       ctx, impl.document_proto, "readyState", MakeGetter(ctx, "readyState", DocGetReadyState));

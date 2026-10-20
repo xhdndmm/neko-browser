@@ -2459,14 +2459,15 @@ bool Impl::DispatchWheelToNode(dom::Node* node, std::string_view type, double de
   return not_canceled;
 }
 
-// Dispatches a focus event ("focus"/"blur") to |node|.  Non-bubbling and
-// non-cancelable, matching the UI Events spec.
+// Dispatches a focus-family event to |node|.  "focus"/"blur" do not bubble,
+// "focusin"/"focusout" do; none of them are cancelable (UI Events §3.3.4).
 void Impl::DispatchFocusToNode(dom::Node* node, std::string_view type)
 {
   if (node == nullptr) {
     return;
   }
-  JSValue event = MakeEvent(std::string(type), /*bubbles=*/false, /*cancelable=*/false);
+  const bool bubbles = type == "focusin" || type == "focusout";
+  JSValue event = MakeEvent(std::string(type), bubbles, /*cancelable=*/false);
   (void)DispatchPropagated(node, event);
   JS_FreeValue(ctx, event);
   engine.RunPendingJobs();

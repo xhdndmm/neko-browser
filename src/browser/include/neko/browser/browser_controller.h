@@ -137,6 +137,12 @@ struct Tab
   // current document; cleared on navigation (the document is replaced).
   dom::Element* focused_element = nullptr;
 
+  // Elements whose autofocus attribute has already been processed for the
+  // current document (HTML §6.6.1 autofocus: a candidate is focused at most
+  // once).  Cleared when a navigation replaces the document.  Worker thread
+  // only.
+  std::vector<const dom::Element*> autofocus_processed;
+
   // Script-visible session history (window.history): the URLs the page pushed,
   // the index of the current entry, and the last pushed state as JSON.  Worker
   // thread only; reset to the loaded URL on each navigation.  Distinct from the

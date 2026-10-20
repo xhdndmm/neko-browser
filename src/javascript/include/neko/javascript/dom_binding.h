@@ -240,6 +240,32 @@ struct PageApis
   std::function<base::Result<int64_t>(std::string_view db, std::string_view store)> idb_count;
   std::function<base::Result<std::vector<std::string>>(std::string_view db, std::string_view store)>
       idb_get_all;
+
+  // Focus (WHATWG HTML §6.6).  The focused element is owned by the browser
+  // layer (the tab's focus controller), so script focus() goes through the
+  // same focusing steps as clicks, Tab and autofocus:
+  //   * |focus_element| runs the focusing steps for the element, making it the
+  //     document's focused element when it is a focusable area connected to
+  //     the document, and returns whether it is now focused (false = not
+  //     focusable or detached: the call is a no-op).  It must NOT dispatch
+  //     the focus events: the binder runs the UI Events sequence itself
+  //     through DomBinder::PerformFocusUpdate, so the events fire in the
+  //     realm that called focus().
+  //   * |blur_element| clears the focus when the element is the focused one
+  //     and returns whether it did (false = it was not focused: no-op).
+  //   * |active_element| reports the document's focused element (nullptr when
+  //     nothing is focused).  document.activeElement falls back to <body>
+  //     itself, per HTML §6.6.2.
+  //   * |has_focus| reports whether this document's tab is the browser's
+  //     active tab.  This is an approximation of window focus: OS/GUI window
+  //     activation is not modelled (see Document.hasFocus()).
+  // When the browser layer does not wire them (a standalone binder with no
+  // browsing context, or the headless CLI's page loader), focus()/blur() are
+  // no-ops, activeElement reports <body> and hasFocus() reports false.
+  std::function<bool(dom::Element&)> focus_element;
+  std::function<bool(dom::Element&)> blur_element;
+  std::function<dom::Element*()> active_element;
+  std::function<bool()> has_focus;
 };
 
 // Binds a DOM document into a JavaScript runtime, exposing a practical subset
@@ -474,9 +500,18 @@ public:
   // delta (px).  Returns true when NOT canceled.
   bool DispatchWheelEvent(dom::Element& element, std::string_view type, double delta_y);
 
-  // Dispatches a non-bubbling focus/blur event to |element| (fires listeners
-  // and the element's onfocus/onblur handler).
+  // Dispatches a focus-family event to |element| (fires listeners and the
+  // element's onfocus/onblur/onfocusin/onfocusout handler).  "focus"/"blur"
+  // do not bubble; "focusin"/"focusout" do (UI Events §3.3.4).
   void DispatchFocusEvent(dom::Element& element, std::string_view type);
+
+  // Runs the focus event sequence for a focus change from |previous| to
+  // |next| (UI Events §3.3.2): blur on |previous|, focusout on |previous|,
+  // focus on |next|, focusin on |next|.  |previous|/|next| may be null (focus
+  // was cleared / there was no previous target).  The browser's focus
+  // controller calls this from the one shared focus path, so clicks, Tab,
+  // script focus() and autofocus produce the same sequence.
+  void PerformFocusUpdate(dom::Element* previous, dom::Element* next);
 
   // Dispatches a bubbling "input" event to |element| after a text control's
   // value changed (fires listeners and the element's oninput handler).

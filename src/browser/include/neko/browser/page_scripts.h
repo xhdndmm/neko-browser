@@ -54,6 +54,18 @@ struct PageScriptServices
   // bumps a latch the GUI consumes to move its scroll bar).
   float* scroll_offset_y = nullptr;
   std::function<void(int, float)> set_scroll_request;
+
+  // Focus control (WHATWG HTML §6.6): Element.focus()/blur(),
+  // document.activeElement and document.hasFocus() are served by the browser's
+  // focus controller, which owns the focused element.  See the matching
+  // PageApis callbacks for the exact contract (focus_element only updates the
+  // state and returns whether the element is now focused; the binder runs the
+  // UI Events sequence itself).  All of them are optional: a binder without
+  // them has no browsing context to focus in.
+  std::function<bool(dom::Element&)> focus_element;
+  std::function<bool(dom::Element&)> blur_element;
+  std::function<dom::Element*()> active_element;
+  std::function<bool()> has_focus;
 };
 
 // Where the script phase spent its time.  The two costs are very different --

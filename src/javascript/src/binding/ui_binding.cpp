@@ -450,9 +450,10 @@ JSValue ElementReportValidity(JSContext* ctx, JSValueConst this_val, int argc, J
 {
   // PARTIALLY IMPLEMENTED: reportValidity() runs the same constraint check
   // (and fires the invalid events) but does not move focus to the first
-  // invalid control -- the DOM binding has no focus API, and focus is owned
-  // by the browser's UI layer.  The browser's form-submission path *does*
-  // focus the first invalid control.
+  // invalid control, as interactive validation requires (HTML §4.10.21.3).
+  // The binder has Element.focus() now, but this path still leaves focus to
+  // the browser layer; the browser's form-submission path does focus the
+  // first invalid control.
   return ElementCheckValidity(ctx, this_val, argc, argv);
 }
 
@@ -497,7 +498,8 @@ FormCheckValidity(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueCo
 
 JSValue FormReportValidity(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
-  // Same focus limitation as ElementReportValidity above.
+  // Same focus limitation as ElementReportValidity above: the invalid events
+  // fire, but focus does not move to the first invalid control.
   return FormCheckValidity(ctx, this_val, argc, argv);
 }
 

@@ -5254,5 +5254,255 @@ TEST(IntersectionObserverTest, TakeRecordsDrainsQueuedEntries)
   EXPECT_EQ(h.Num("window.__taken.length"), 1.0);
 }
 
+// ---------------------------------------------------------------------------
+// Focus (WHATWG HTML §6.6): UI Events sequence/bubbling, and the binder's
+// script-visible focus API over the PageApis focus controller callbacks.
+// ---------------------------------------------------------------------------
+
+// The shared focus path dispatches UI Events §3.3.2 order: blur then focusout
+// on the old target, focus then focusin on the new one.  blur/focus do not
+// bubble, focusout/focusin do.
+TEST_F(DomBinderTest, FocusUpdateDispatchesOrderedEventsAndBubbles)
+{
+  ASSERT_TRUE(
+      binder_
+          ->Evaluate("window.__log = [];"
+                     "function log(s) { __log.push(s); }"
+                     "var main = document.getElementById('main');"
+                     "var first = document.getElementById('first');"
+                     "var second = document.querySelectorAll('.para')[1];"
+                     "['focus','blur','focusin','focusout'].forEach(function(type) {"
+                     "  main.addEventListener(type, function() { log('main-' + type); });"
+                     "  first.addEventListener(type, function() { log('first-' + type); });"
+                     "  second.addEventListener(type, function() { log('second-' + type); });"
+                     "});")
+          .has_value());
+
+  dom::Element* main = dom::QuerySelector(*document_, "#main");
+  dom::Element* first = dom::QuerySelector(*document_, "#first");
+  const std::vector<dom::Element*> paras = dom::QuerySelectorAll(*document_, "p.para");
+  ASSERT_NE(main, nullptr);
+  ASSERT_NE(first, nullptr);
+  ASSERT_EQ(paras.size(), 2u);
+  dom::Element* second = paras[1];
+
+  binder_->PerformFocusUpdate(first, second);
+  EXPECT_EQ(EvalString("__log.join(',')"),
+            "first-blur,first-focusout,main-focusout,"
+            "second-focus,second-focusin,main-focusin");
+
+  ASSERT_TRUE(binder_->Evaluate("__log = []").has_value());
+  binder_->PerformFocusUpdate(second, nullptr);
+  EXPECT_EQ(EvalString("__log.join(',')"), "second-blur,second-focusout,main-focusout");
+
+  ASSERT_TRUE(binder_->Evaluate("__log = []").has_value());
+  binder_->PerformFocusUpdate(nullptr, first);
+  EXPECT_EQ(EvalString("__log.join(',')"), "first-focus,first-focusin,main-focusin");
+}
+
+// The onfocusin/onfocusout IDL handlers and content attributes fire with the
+// bubbling events (the focus/blur pair keeps its own onfocus/onblur).
+TEST_F(DomBinderTest, FocusInContentAttributeHandlerFires)
+{
+  std::unique_ptr<dom::Document> inline_handler_document = html::Parser(R"HTML(<!doctype html>
+<html><body><input id="field" onfocusin="document.body.setAttribute('data-in','1')"
+onfocusout="document.body.setAttribute('data-out','1')"></body></html>)HTML")
+                                                               .Parse();
+  dom::Element* field = dom::QuerySelector(*inline_handler_document, "#field");
+  dom::Element* body = dom::QuerySelector(*inline_handler_document, "body");
+  ASSERT_NE(field, nullptr);
+  ASSERT_NE(body, nullptr);
+  DomBinder handler_binder(*inline_handler_document);
+  handler_binder.PerformFocusUpdate(nullptr, field);
+  EXPECT_EQ(body->GetAttribute("data-in").value_or(""), "1");
+  EXPECT_FALSE(body->GetAttribute("data-out").has_value());
+  handler_binder.PerformFocusUpdate(field, nullptr);
+  EXPECT_EQ(body->GetAttribute("data-out").value_or(""), "1");
+}
+
+// document.activeElement / document.hasFocus() / Element.focus()/blur() are
+// served by the browser layer's focus controller callbacks: focus() runs the
+// same event sequence as a click or Tab, activeElement follows the focused
+// element (body when none), and focus() on an element the controller rejects is
+// a no-op.
+TEST(FocusBindingTest, ScriptFocusUsesTheBrowsersFocusCallbacks)
+{
+  std::unique_ptr<dom::Document> document = html::Parser(R"(<!doctype html>
+<html><body><div id="wrap"><input id="a"><input id="b"></div>
+<div id="plain"></div></body></html>)")
+                                                .Parse();
+  dom::Element* a = dom::QuerySelector(*document, "#a");
+  dom::Element* b = dom::QuerySelector(*document, "#b");
+  dom::Element* plain = dom::QuerySelector(*document, "#plain");
+  dom::Element* body = dom::QuerySelector(*document, "body");
+  ASSERT_NE(a, nullptr);
+  ASSERT_NE(b, nullptr);
+  ASSERT_NE(plain, nullptr);
+  ASSERT_NE(body, nullptr);
+  // The test doubles as the browser layer: only elements marked focusable can
+  // be focused (the real controller also checks connectivity and inertness).
+  a->SetAttribute("data-focusable", "");
+  b->SetAttribute("data-focusable", "");
+
+  dom::Element* focused = nullptr;
+  PageApis apis;
+  apis.location_href = []() { return "https://www.example.com/"; };
+  apis.focus_element = [&focused](dom::Element& element) {
+    if (!element.HasAttribute("data-focusable")) {
+      return false;
+    }
+    focused = &element;
+    return true;
+  };
+  apis.blur_element = [&focused](dom::Element& element) {
+    if (focused != &element) {
+      return false;
+    }
+    focused = nullptr;
+    return true;
+  };
+  apis.active_element = [&focused]() { return focused; };
+  apis.has_focus = []() { return true; };
+  DomBinder binder(*document, apis);
+
+  const auto run = [&binder](const std::string& code) {
+    const auto result = binder.Evaluate(code);
+    EXPECT_TRUE(result.has_value());
+    return result.has_value() ? result.value().ToString().value_or("<none>")
+                              : std::string("<error>");
+  };
+  EXPECT_EQ(run("document.activeElement.tagName"), "BODY");
+  EXPECT_EQ(run("String(document.hasFocus())"), "true");
+  EXPECT_EQ(run("(function() {"
+                "  var a = document.getElementById('a');"
+                "  var b = document.getElementById('b');"
+                "  var log = [];"
+                "  ['focus','blur','focusin','focusout'].forEach(function(type) {"
+                "    a.addEventListener(type, function() { log.push('a-' + type); });"
+                "    b.addEventListener(type, function() { log.push('b-' + type); });"
+                "  });"
+                "  a.focus();"
+                "  var after_a = document.activeElement.id;"
+                "  b.focus();"
+                "  var after_b = document.activeElement.id;"
+                "  b.blur();"
+                "  var after_blur = document.activeElement.tagName;"
+                "  a.blur();"
+                "  var blur_unfocused = document.activeElement.tagName;"
+                "  document.getElementById('plain').focus();"
+                "  var after_plain = document.activeElement.tagName;"
+                "  return [after_a, after_b, after_blur, blur_unfocused, after_plain,"
+                "          log.join(',')].join('|');"
+                "})()"),
+            "a|b|BODY|BODY|BODY|"
+            "a-focus,a-focusin,a-blur,a-focusout,b-focus,b-focusin,"
+            "b-blur,b-focusout");
+  EXPECT_EQ(focused, nullptr);
+}
+
+// activeElement and hasFocus are document-scoped: a Document created by
+// script (document.implementation.createHTMLDocument) reports its own body as
+// activeElement and never claims focus, even when the page document has a
+// focused element.
+TEST(FocusBindingTest, ActiveElementAndHasFocusAreDocumentScoped)
+{
+  std::unique_ptr<dom::Document> document =
+      html::Parser(R"(<!doctype html><html><body><input id="field"></body></html>)").Parse();
+  dom::Element* field = dom::QuerySelector(*document, "#field");
+  ASSERT_NE(field, nullptr);
+  dom::Element* focused = nullptr;
+  PageApis apis;
+  apis.location_href = []() { return "https://www.example.com/"; };
+  apis.focus_element = [&focused](dom::Element& element) {
+    focused = &element;
+    return true;
+  };
+  apis.blur_element = [&focused](dom::Element&) {
+    focused = nullptr;
+    return true;
+  };
+  apis.active_element = [&focused]() { return focused; };
+  apis.has_focus = []() { return true; };
+  DomBinder binder(*document, apis);
+  const auto result = binder.Evaluate(
+      "(function() {"
+      "  document.getElementById('field').focus();"
+      "  var other = document.implementation.createHTMLDocument('other');"
+      "  var main = document.getElementById('field') === document.activeElement"
+      "      ? 'main-focused' : 'main-unfocused';"
+      "  return main + '|' + other.activeElement.tagName + '|' + String(other.hasFocus());"
+      "})()");
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result.value().ToString().value_or(""), "main-focused|BODY|false");
+}
+
+// Without a browsing context (a standalone binder), focus()/blur() are no-ops,
+// activeElement falls back to <body> and hasFocus() is false.  No focus event
+// sequence is invented.
+TEST_F(DomBinderTest, FocusWithoutBrowsingContextIsANoop)
+{
+  EXPECT_EQ(EvalString("(function() {"
+                       "  var first = document.getElementById('first');"
+                       "  first.focus();"
+                       "  var active = document.activeElement.tagName;"
+                       "  first.blur();"
+                       "  return active + '|' + document.activeElement.tagName"
+                       "      + '|' + String(document.hasFocus());"
+                       "})()"),
+            "BODY|BODY|false");
+}
+
+// tabIndex reflects the attribute (HTML's integer parsing) and falls back to
+// the historical per-element default (0 for links/form controls, -1
+// otherwise); inert reflects its content attribute.
+TEST(FocusBindingTest, TabIndexAndInertReflectTheirAttributes)
+{
+  std::unique_ptr<dom::Document> document =
+      html::Parser(R"(<!doctype html><html><body><input id="field"></body></html>)").Parse();
+  PageApis apis;
+  apis.location_href = []() { return "https://www.example.com/"; };
+  DomBinder binder(*document, apis);
+  const auto run = [&binder](const std::string& code) {
+    const auto result = binder.Evaluate(code);
+    EXPECT_TRUE(result.has_value());
+    return result.has_value() ? result.value().ToString().value_or("<none>")
+                              : std::string("<error>");
+  };
+
+  // No attribute: the historical default is 0 for an input and -1 for a plain
+  // <div> (HTML §6.6.3).
+  EXPECT_EQ(run("String(document.createElement('input').tabIndex)"), "0");
+  EXPECT_EQ(run("String(document.createElement('div').tabIndex)"), "-1");
+  // Setter writes the content attribute; getter reads it back.
+  EXPECT_EQ(run("(function() { var d = document.createElement('div'); d.tabIndex = 3;"
+                "  return d.getAttribute('tabindex') + '|' + String(d.tabIndex); })()"),
+            "3|3");
+  // HTML's rules for parsing integers: leading whitespace, sign, digits;
+  // trailing junk is ignored.
+  EXPECT_EQ(run("(function() { var d = document.createElement('div');"
+                "  d.setAttribute('tabindex', '  +2x'); return String(d.tabIndex); })()"),
+            "2");
+  EXPECT_EQ(run("(function() { var d = document.createElement('div');"
+                "  d.setAttribute('tabindex', ' -1'); return String(d.tabIndex); })()"),
+            "-1");
+  // No digits: the attribute is unusable, so the element's default applies
+  // (-1 for a <div>, 0 for an <input>'s historical default).
+  EXPECT_EQ(run("(function() { var d = document.createElement('div');"
+                "  d.setAttribute('tabindex', 'nope'); return String(d.tabIndex); })()"),
+            "-1");
+  EXPECT_EQ(run("(function() { var i = document.createElement('input');"
+                "  i.setAttribute('tabindex', 'nope'); return String(i.tabIndex); })()"),
+            "0");
+
+  // inert reflects the attribute, defaulting to false.
+  EXPECT_EQ(run("(function() { var d = document.createElement('div');"
+                "  var before = String(d.inert);"
+                "  d.inert = true;"
+                "  var mid = String(d.inert) + '|' + String(d.hasAttribute('inert'));"
+                "  d.inert = false;"
+                "  return before + '|' + mid + '|' + String(d.hasAttribute('inert')); })()"),
+            "false|true|true|false");
+}
+
 } // namespace
 } // namespace neko::javascript

@@ -330,56 +330,170 @@ void DispatchToggleEvents(javascript::DomBinder* runtime, dom::Element& element)
   }
 }
 
-// Moves keyboard focus to |element| (or clears it when null), firing blur on
-// the old target and focus on the new one (only when the target changes).
-// |page| overrides tab->page: a scripted submission can run while a document
-// is still loading and has not been published on the tab yet.
-void FocusControl(Tab* tab, dom::Element* element, renderer::Page* page = nullptr)
+// ---- Focus (WHATWG HTML §6.6) ---------------------------------------------
+
+bool IsAsciiSpace(char c)
 {
-  dom::Element* prev = tab->focused_element;
-  if (prev == element) {
-    return;
-  }
-  tab->focused_element = element;
-  renderer::Page* target_page = page != nullptr ? page : tab->page.get();
-  if (target_page != nullptr) {
-    target_page->SetFocusedElement(element);
-  }
-  if (tab->script_runtime != nullptr) {
-    if (prev != nullptr) {
-      tab->script_runtime->DispatchFocusEvent(*prev, "blur");
-    }
-    if (element != nullptr) {
-      tab->script_runtime->DispatchFocusEvent(*element, "focus");
-    }
-  }
+  return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r';
 }
 
-// True when |element| participates in sequential (Tab) focus navigation: a
-// form control or a link.  Hidden/disabled controls and href-less anchors
-// are skipped (no tabindex support yet -- the matrix tracks it).
-bool IsFocusable(const dom::Element& element)
+// Parses the tabindex content attribute with HTML's "rules for parsing
+// integers": leading ASCII whitespace, an optional sign, then digits; trailing
+// characters are ignored and a value without digits is invalid.  The parsed
+// magnitude is clamped to 1e6 (far beyond any real tab order) so a huge literal
+// cannot overflow; ordering of realistic values is preserved.
+std::optional<int> TabIndexAttribute(const dom::Element& element)
 {
-  if (element.HasAttribute("disabled")) {
-    return false;
+  const std::optional<std::string_view> value = element.GetAttribute("tabindex");
+  if (!value.has_value()) {
+    return std::nullopt;
   }
-  const std::string_view tag = element.tag_name();
-  if (tag == "a" || tag == "area") {
-    return element.HasAttribute("href");
+  const std::string_view text = value.value();
+  std::size_t i = 0;
+  while (i < text.size() && IsAsciiSpace(text[i])) {
+    ++i;
   }
-  if (tag == "textarea" || tag == "select" || tag == "button") {
-    return true;
+  bool negative = false;
+  if (i < text.size() && (text[i] == '+' || text[i] == '-')) {
+    negative = text[i] == '-';
+    ++i;
   }
-  if (tag == "input") {
-    return layout::ClassifyFormControl(element) != layout::FormControlKind::kHidden;
+  if (i >= text.size() || text[i] < '0' || text[i] > '9') {
+    return std::nullopt;
+  }
+  int parsed = 0;
+  while (i < text.size() && text[i] >= '0' && text[i] <= '9') {
+    if (parsed < 1000000) {
+      parsed = (parsed * 10) + (text[i] - '0');
+    }
+    ++i;
+  }
+  return negative ? -parsed : parsed;
+}
+
+// True when |element| or one of its ancestors carries the inert attribute: an
+// element in an inert subtree is neither focusable nor clickable (HTML
+// §6.6.1).  Only the attribute is consulted; the engine has no CSS `inert`
+// property, and a modal <dialog>'s implicit inertness is not modelled.
+bool InInertSubtree(const dom::Element& element)
+{
+  for (const dom::Node* node = &element; node != nullptr; node = node->parent()) {
+    if (node->node_type() == dom::NodeType::kElement &&
+        static_cast<const dom::Element&>(*node).HasAttribute("inert")) {
+      return true;
+    }
   }
   return false;
 }
 
-// The document's focusable controls in document order (pre-order walk).
-std::vector<dom::Element*> Focusables(dom::Element& from)
+// True when |node| is connected to |document| (walking parent() to the root).
+bool IsInDocument(const dom::Node& node, const dom::Document& document)
 {
-  std::vector<dom::Element*> out;
+  const dom::Node* root = &node;
+  while (root->parent() != nullptr) {
+    root = root->parent();
+  }
+  return root == &document;
+}
+
+// True when |element| is a focusable area (HTML §6.6.1): the naturally
+// focusable controls and links this engine already supported, or any element
+// with a valid tabindex attribute (which also makes a plain <div> focusable by
+// script; a negative value only removes it from Tab navigation).  Excluded:
+// disabled controls, input type=hidden, href-less anchors and inert subtrees.
+//
+// Approximation: layout is not consulted, so an element CSS hides
+// (display:none) but that carries a tabindex stays focusable.  The browser
+// layer does not own the layout tree, and the focus model here is DOM-based.
+bool IsFocusable(const dom::Element& element)
+{
+  if (InInertSubtree(element) || element.HasAttribute("disabled")) {
+    return false;
+  }
+  const std::string_view tag = element.tag_name();
+  if (tag == "input") {
+    // A hidden input never takes focus, even with a tabindex attribute.
+    return layout::ClassifyFormControl(element) != layout::FormControlKind::kHidden;
+  }
+  if (tag == "textarea" || tag == "select" || tag == "button") {
+    return true;
+  }
+  if ((tag == "a" || tag == "area") && element.HasAttribute("href")) {
+    return true;
+  }
+  return TabIndexAttribute(element).has_value();
+}
+
+// True when |element| is a sequential focus navigation candidate (HTML
+// §6.6.4): focusable, and its tabindex (if any) is not negative.
+bool IsTabbable(const dom::Element& element)
+{
+  if (!IsFocusable(element)) {
+    return false;
+  }
+  const std::optional<int> index = TabIndexAttribute(element);
+  return !index.has_value() || index.value() >= 0;
+}
+
+// True when |element| can become the focused element of |page|'s document.
+bool CanFocus(const dom::Element& element, renderer::Page* page)
+{
+  if (page == nullptr) {
+    return false;
+  }
+  const dom::Document* document = page->document();
+  return document != nullptr && IsFocusable(element) && IsInDocument(element, *document);
+}
+
+// Moves the tab's focus state to |element| (null clears it) without firing
+// events: the caller runs the UI Events sequence through its binder (see
+// javascript::DomBinder::PerformFocusUpdate).  Keeps the renderer's focused
+// element in sync for caret painting and marks the frame dirty.
+void SetFocusState(Tab* tab, dom::Element* element, renderer::Page* page)
+{
+  tab->focused_element = element;
+  tab->frame_dirty = true;
+  if (page != nullptr) {
+    page->SetFocusedElement(element);
+  }
+}
+
+// Moves keyboard focus to |element| (or clears it when null) and fires the
+// focus event sequence -- blur, focusout on the old target; focus, focusin on
+// the new one -- through the tab's script runtime, or through |runtime| when
+// the caller is the page script that invoked focus() (the events must fire in
+// the realm that called it).  Focusing a non-focusable or detached element is
+// a no-op.  |page| overrides tab->page: a script can focus while a document is
+// still loading and has not been published on the tab yet.
+void FocusControl(Tab* tab,
+                  dom::Element* element,
+                  renderer::Page* page = nullptr,
+                  javascript::DomBinder* runtime = nullptr)
+{
+  dom::Element* previous = tab->focused_element;
+  if (previous == element) {
+    return;
+  }
+  renderer::Page* target_page = page != nullptr ? page : tab->page.get();
+  if (element != nullptr && !CanFocus(*element, target_page)) {
+    return;
+  }
+  SetFocusState(tab, element, target_page);
+  javascript::DomBinder* binder = runtime != nullptr ? runtime : tab->script_runtime.get();
+  if (binder != nullptr) {
+    binder->PerformFocusUpdate(previous, element);
+  }
+}
+
+// The document's tabbable elements in sequential focus navigation order
+// (HTML §6.6.4): positive tabindex values first, ascending by tabindex (ties
+// keep tree order), then tabindex=0 / naturally focusable elements in tree
+// order.  tabindex=-1 elements are excluded: script-focusable, not
+// Tab-reachable.
+std::vector<dom::Element*> SequentialFocusOrder(dom::Element& from)
+{
+  std::vector<dom::Element*> positive;
+  std::vector<dom::Element*> plain;
   const dom::Node* root = &from;
   while (root->parent() != nullptr) {
     root = root->parent();
@@ -388,20 +502,33 @@ std::vector<dom::Element*> Focusables(dom::Element& from)
   while (!stack.empty()) {
     dom::Node* node = stack.back();
     stack.pop_back();
-    if (node->node_type() == dom::NodeType::kElement &&
-        IsFocusable(static_cast<const dom::Element&>(*node))) {
-      out.push_back(static_cast<dom::Element*>(node));
+    if (node->node_type() == dom::NodeType::kElement) {
+      auto& element = static_cast<dom::Element&>(*node);
+      if (IsTabbable(element)) {
+        const std::optional<int> index = TabIndexAttribute(element);
+        if (index.has_value() && index.value() > 0) {
+          positive.push_back(&element);
+        } else {
+          plain.push_back(&element);
+        }
+      }
     }
-    // Reverse-push so children pop in document order.
+    // Reverse-push so children pop in document order (tree-order ties).
     const std::size_t count = node->child_count();
     for (std::size_t i = count; i > 0; --i) {
       stack.push_back(node->child_at(i - 1));
     }
   }
-  return out;
+  // Stable: equal tabindex values keep the tree order they were collected in.
+  std::stable_sort(
+      positive.begin(), positive.end(), [](const dom::Element* a, const dom::Element* b) {
+        return TabIndexAttribute(*a).value_or(0) < TabIndexAttribute(*b).value_or(0);
+      });
+  positive.insert(positive.end(), plain.begin(), plain.end());
+  return positive;
 }
 
-// The next focusable control after |tab|'s (walking |backwards| wraps at the
+// The next tabbable control after |tab|'s (walking |backwards| wraps at the
 // ends), or nullptr when the document has none.
 dom::Element* NextFocusable(Tab* tab, bool backwards)
 {
@@ -412,7 +539,7 @@ dom::Element* NextFocusable(Tab* tab, bool backwards)
   if (doc == nullptr || doc->document_element() == nullptr) {
     return nullptr;
   }
-  const std::vector<dom::Element*> focusables = Focusables(*doc->document_element());
+  const std::vector<dom::Element*> focusables = SequentialFocusOrder(*doc->document_element());
   if (focusables.empty()) {
     return nullptr;
   }
@@ -425,6 +552,44 @@ dom::Element* NextFocusable(Tab* tab, bool backwards)
     index = (index + 1) % count;
   }
   return focusables[static_cast<std::size_t>(index)];
+}
+
+// Autofocus processing for a freshly loaded document (HTML §6.6.1): focus the
+// first element in tree order with an unprocessed autofocus attribute, if it
+// is focusable.  A script that already moved focus during the load wins --
+// autofocus never steals it.  Candidates are remembered on the tab, so one is
+// applied at most once; adding the attribute after the load does not move
+// focus (the spec only processes candidates when the document is loaded).
+void ApplyAutofocus(Tab& tab, renderer::Page& page)
+{
+  if (tab.focused_element != nullptr) {
+    return;
+  }
+  dom::Document* document = page.document();
+  if (document == nullptr || document->document_element() == nullptr) {
+    return;
+  }
+  std::vector<dom::Node*> stack{document->document_element()};
+  while (!stack.empty()) {
+    dom::Node* node = stack.back();
+    stack.pop_back();
+    if (node->node_type() == dom::NodeType::kElement) {
+      auto& element = static_cast<dom::Element&>(*node);
+      const auto processed =
+          std::find(tab.autofocus_processed.begin(), tab.autofocus_processed.end(), &element);
+      if (element.HasAttribute("autofocus") && processed == tab.autofocus_processed.end()) {
+        tab.autofocus_processed.push_back(&element);
+        if (IsFocusable(element)) {
+          FocusControl(&tab, &element, &page);
+          return;
+        }
+      }
+    }
+    const std::size_t count = node->child_count();
+    for (std::size_t i = count; i > 0; --i) {
+      stack.push_back(node->child_at(i - 1));
+    }
+  }
 }
 
 // Walks from |node| up to find a submit button (<button>, <input type=submit>
@@ -1084,6 +1249,7 @@ void BrowserController::NavigateToUrl(Tab& tab,
   }
   // A fresh document replaces the old one; any focused element is stale.
   tab.focused_element = nullptr;
+  tab.autofocus_processed.clear();
   // A form submission requested against the old document is stale too.
   tab.pending_form_submission = {};
 #ifdef _WIN32
@@ -1243,15 +1409,22 @@ bool BrowserController::DispatchPointerClick(int tab_id, float doc_x, float doc_
   if (element == nullptr) {
     return false;
   }
-  // Focus a clicked form control so keyboard input reaches it; clicking
-  // anywhere else clears the focus.  The page keeps the focused element for
-  // the UI's caret painting (read across threads under the page lock).
-  // Focus changes fire blur (old) / focus (new) on the elements.
-  const std::string clicked_tag = std::string(element->tag_name());
-  if (clicked_tag == "input" || clicked_tag == "textarea" || clicked_tag == "select") {
-    FocusControl(tab, const_cast<dom::Element*>(element));
-  } else if (tab->focused_element != nullptr) {
-    FocusControl(tab, nullptr);
+  // Inert subtrees are not clickable (HTML §6.6.1): the pointer events below
+  // still dispatch (documented approximation -- a conforming inert subtree
+  // would swallow them), but the element does not take focus and its default
+  // action (toggle / navigation) does not run.
+  const bool inert = InInertSubtree(*element);
+  // Focus the clicked element when it is a focusable area (a form control, a
+  // link, or anything with a tabindex attribute); clicking anywhere else
+  // clears the focus.  The page keeps the focused element for the UI's caret
+  // painting (read across threads under the page lock).  Focus changes run the
+  // blur/focusout/focus/focusin sequence.
+  if (!inert) {
+    if (IsFocusable(*element)) {
+      FocusControl(tab, const_cast<dom::Element*>(element));
+    } else if (tab->focused_element != nullptr) {
+      FocusControl(tab, nullptr);
+    }
   }
   // Run the page's cancelable pointer events (mousedown -> mouseup -> click)
   // when a script runtime exists; a page with no scripts skips straight to the
@@ -1282,6 +1455,11 @@ bool BrowserController::DispatchPointerClick(int tab_id, float doc_x, float doc_
     if (!not_canceled) {
       return true; // preventDefault: the page handled the click.
     }
+  }
+  if (inert) {
+    // An inert element has no activation behaviour: no toggle, no navigation,
+    // no form submission.  Events above already dispatched (approximation).
+    return false;
   }
   // Default action: a checkable input toggles its checkedness (HTML
   // §4.10.5.3).  The toggle changes the cascade (input:checked) and the
@@ -1938,6 +2116,7 @@ base::Result<void> BrowserController::LoadDocument(int tab_id,
     tab->url = final_url;
   }
   tab->focused_element = nullptr;
+  tab->autofocus_processed.clear();
   tab->hovered_element = nullptr;
   tab->pending_form_submission = {};
   LoadBytes(*tab, bytes, content_type, final_url);
@@ -3163,6 +3342,40 @@ void BrowserController::LoadBytes(Tab& tab,
     // apply to its scroll bar.  [this] and &tab are worker-thread only.
     services.scroll_offset_y = &tab.scroll_offset_y;
     services.set_scroll_request = [this, &tab](int, float y) { SetTabScrollRequest(tab.id, y); };
+    // Focus control (WHATWG HTML §6.6): Element.focus()/blur(),
+    // document.activeElement and document.hasFocus() go through the browser's
+    // focus state -- the same machinery clicks, Tab and autofocus use.  The
+    // page is not published on the tab yet, so these callbacks target
+    // |new_page| explicitly; a script may focus during the load, and
+    // ApplyAutofocus below then leaves that focus alone.  They never dispatch
+    // the focus events themselves: the binder that called focus() runs the UI
+    // Events sequence, so handlers fire in the calling realm.  [&tab] and
+    // |new_page| are worker-thread only, like the binder they outlive.
+    services.focus_element = [&tab, new_page](dom::Element& element) {
+      if (!CanFocus(element, new_page.get())) {
+        return false;
+      }
+      if (tab.focused_element != &element) {
+        SetFocusState(&tab, &element, new_page.get());
+      }
+      return true;
+    };
+    services.blur_element = [&tab, new_page](dom::Element& element) {
+      if (tab.focused_element != &element) {
+        return false;
+      }
+      SetFocusState(&tab, nullptr, new_page.get());
+      return true;
+    };
+    services.active_element = [&tab, new_page]() -> dom::Element* {
+      const dom::Document* document = new_page->document();
+      if (tab.focused_element == nullptr || document == nullptr ||
+          !IsInDocument(*tab.focused_element, *document)) {
+        return nullptr;
+      }
+      return tab.focused_element;
+    };
+    services.has_focus = [this, &tab]() { return ActiveTab() == &tab; };
     // The page's own site: these are subresource requests initiated by it.
     RequestContext subresource_context;
     if (const base::Result<url::Url> page_url = url::Url::Parse(final_url); page_url.has_value()) {
@@ -3237,6 +3450,11 @@ void BrowserController::LoadBytes(Tab& tab,
     // published, so the first frame already shows it.  The renderer-process
     // path returned above (the child owns the DOM in that mode).
     AutofillLoginForms(*new_page, origin);
+
+    // Autofocus processing (HTML §6.6.1) runs once the document has loaded and
+    // after every navigation decision was taken; a script that focused another
+    // element during the load wins (ApplyAutofocus checks the tab state).
+    ApplyAutofocus(tab, *new_page);
 
     // Publish first so the UI paints text immediately; <img>/<video>
     // subresources load on the pool afterwards and pop in through the

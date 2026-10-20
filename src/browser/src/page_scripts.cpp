@@ -585,6 +585,15 @@ RunPageScripts(renderer::Page& page,
     }
   };
 
+  // Focus control (HTML §6.6): the browser layer owns the focused element, so
+  // script focus()/blur() and document.activeElement/hasFocus() are served by
+  // callbacks from its focus controller.  Copy them; the binder outlives this
+  // function, like the scroll callbacks above.
+  apis.focus_element = services.focus_element;
+  apis.blur_element = services.blur_element;
+  apis.active_element = services.active_element;
+  apis.has_focus = services.has_focus;
+
   // window.innerWidth/innerHeight/devicePixelRatio: the renderer's layout
   // viewport in CSS pixels (so it follows window resizes and the page zoom) and
   // a device pixel ratio of 1 (the engine rasterizes at CSS-pixel scale).

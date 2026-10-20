@@ -533,6 +533,184 @@ JSValue ElementRemove(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSVal
   return JS_UNDEFINED;
 }
 
+// Parses the tabindex content attribute with HTML's "rules for parsing
+// integers": leading ASCII whitespace, an optional sign, then digits; any
+// trailing characters are ignored, and a value with no digits is invalid.
+// Values are clamped to +/- 1e6 (well beyond any real page's tab order; the
+// clamp only stops a huge literal from overflowing while it is parsed).
+std::optional<int> ParseTabIndexAttribute(std::string_view value)
+{
+  const auto is_space = [](char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r';
+  };
+  std::size_t i = 0;
+  while (i < value.size() && is_space(value[i])) {
+    ++i;
+  }
+  bool negative = false;
+  if (i < value.size() && (value[i] == '+' || value[i] == '-')) {
+    negative = value[i] == '-';
+    ++i;
+  }
+  if (i >= value.size() || value[i] < '0' || value[i] > '9') {
+    return std::nullopt;
+  }
+  int parsed = 0;
+  while (i < value.size() && value[i] >= '0' && value[i] <= '9') {
+    if (parsed < 1000000) {
+      parsed = (parsed * 10) + (value[i] - '0');
+    }
+    ++i;
+  }
+  return negative ? -parsed : parsed;
+}
+
+// HTMLElement.focus(options) (WHATWG HTML §6.6.3): run the browser's focusing
+// steps through the PageApis callback (the same path clicks, Tab and autofocus
+// use), then dispatch the UI Events focus sequence.  The options dictionary is
+// accepted but ignored: preventScroll has no effect because focusing does not
+// scroll the page in this engine (documented limitation).  Focusing an element
+// that is not a focusable area, or is detached, is a no-op.
+JSValue ElementFocus(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.focus_element) {
+    // No browsing context / focus controller attached (a standalone binder):
+    // there is no element that could become focused, so focus() is a no-op.
+    return JS_UNDEFINED;
+  }
+  dom::Element* previous = impl->apis.active_element ? impl->apis.active_element() : nullptr;
+  if (!impl->apis.focus_element(*element)) {
+    return JS_UNDEFINED; // not focusable / detached: no-op
+  }
+  if (previous != element) {
+    impl->PerformFocusUpdate(previous, element);
+  }
+  return JS_UNDEFINED;
+}
+
+// HTMLElement.blur() (WHATWG HTML §6.6.3): clear the focus when the element is
+// the document's focused element, dispatching blur/focusout.
+JSValue ElementBlur(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  Impl* impl = ImplFor(ctx, this_val);
+  if (impl == nullptr || !impl->apis.blur_element) {
+    return JS_UNDEFINED;
+  }
+  if (impl->apis.blur_element(*element)) {
+    impl->PerformFocusUpdate(element, nullptr);
+  }
+  return JS_UNDEFINED;
+}
+
+// The historical default tabIndex when no valid tabindex attribute is present
+// (HTML §6.6.3): 0 for the form-control/link element types, -1 otherwise.  The
+// varying default is a legacy artifact of the IDL, not of focusability.
+int DefaultTabIndex(const dom::Element& element)
+{
+  const std::string_view tag = element.tag_name();
+  const std::string_view ns = element.namespace_uri();
+  if ((ns == "http://www.w3.org/2000/svg" || ns == "http://www.w3.org/1998/Math/MathML") &&
+      tag == "a") {
+    return 0;
+  }
+  if (tag == "a" || tag == "area" || tag == "button" || tag == "frame" || tag == "iframe" ||
+      tag == "input" || tag == "object" || tag == "select" || tag == "textarea") {
+    return 0;
+  }
+  if (tag == "summary") {
+    // A summary is tabIndex 0 only when it is the first summary child of its
+    // <details> parent.
+    const dom::Node* parent = element.parent();
+    if (parent == nullptr || parent->node_type() != dom::NodeType::kElement ||
+        static_cast<const dom::Element&>(*parent).tag_name() != "details") {
+      return -1;
+    }
+    for (dom::Node* child : parent->ChildNodes()) {
+      if (child->node_type() == dom::NodeType::kElement &&
+          static_cast<const dom::Element&>(*child).tag_name() == "summary") {
+        return child == &element ? 0 : -1;
+      }
+    }
+  }
+  return -1;
+}
+
+// HTMLElement.tabIndex (HTML §6.6.3): the parsed tabindex attribute when it is
+// a valid integer, otherwise the historical per-element default (0 for links
+// and form controls, -1 otherwise).
+JSValue ElementGetTabIndex(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  if (const std::optional<std::string_view> value = element->GetAttribute("tabindex");
+      value.has_value()) {
+    if (const std::optional<int> parsed = ParseTabIndexAttribute(value.value());
+        parsed.has_value()) {
+      return JS_NewInt32(ctx, parsed.value());
+    }
+  }
+  return JS_NewInt32(ctx, DefaultTabIndex(*element));
+}
+
+JSValue ElementSetTabIndex(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  Impl* impl = ImplFor(ctx, this_val);
+  if (element == nullptr || impl == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  int32_t index = 0;
+  if (JS_ToInt32(ctx, &index, value) != 0) {
+    return JS_EXCEPTION;
+  }
+  element->SetAttribute("tabindex", std::to_string(index));
+  impl->MarkAttrDirty(element, "tabindex");
+  return JS_UNDEFINED;
+}
+
+// HTMLElement.inert: reflects the content attribute (HTML §6.6.1).  Focusable
+// area and activation rules that read the attribute live in the browser's
+// focus controller/click path.
+JSValue ElementGetInert(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  return JS_NewBool(ctx, element->HasAttribute("inert"));
+}
+
+JSValue ElementSetInert(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const int inert = JS_ToBool(ctx, value);
+  if (inert < 0) {
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return JS_EXCEPTION;
+  }
+  if (inert != 0) {
+    element->SetAttribute("inert", "");
+  } else {
+    element->RemoveAttribute("inert");
+  }
+  ImplFor(ctx, this_val)->MarkAttrDirty(element, "inert");
+  return JS_UNDEFINED;
+}
+
 // DOMRect.toJSON(): a plain object with the rect fields (numbers).
 
 JSValue ElementGetHidden(JSContext* ctx, JSValueConst this_val)
@@ -1561,7 +1739,7 @@ void DefineClassListPrototype(JSContext* ctx, Impl& impl)
 
 void DefineElementPrototype(JSContext* ctx, Impl& impl)
 {
-  static const std::array<JSCFunctionListEntry, 20> kMethods = {{
+  static const std::array<JSCFunctionListEntry, 22> kMethods = {{
       JS_CFUNC_DEF("getAttribute", 1, ElementGetAttribute),
       JS_CFUNC_DEF("getAttributeNames", 0, ElementGetAttributeNames),
       JS_CFUNC_DEF("setAttribute", 2, ElementSetAttribute),
@@ -1576,6 +1754,8 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
       JS_CFUNC_DEF("matches", 1, ElementMatches),
       JS_CFUNC_DEF("closest", 1, ElementClosest),
       JS_CFUNC_DEF("remove", 0, ElementRemove),
+      JS_CFUNC_DEF("focus", 0, ElementFocus),
+      JS_CFUNC_DEF("blur", 0, ElementBlur),
       JS_CFUNC_DEF("insertAdjacentHTML", 2, ElementInsertAdjacentHTML),
       JS_CFUNC_DEF("insertAdjacentElement", 2, ElementInsertAdjacentElement),
       JS_CFUNC_DEF("insertAdjacentText", 2, ElementInsertAdjacentText),
@@ -1718,6 +1898,18 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
                  "dir",
                  MakeGetter(ctx, "dir", ElementGetDir),
                  MakeSetter(ctx, "dir", ElementSetDir));
+  // Focus-related attributes: tabindex drives sequential focus navigation and
+  // inert removes a subtree from focus/activation (HTML §6.6.1).
+  DefineAccessor(ctx,
+                 impl.element_proto,
+                 "tabIndex",
+                 MakeGetter(ctx, "tabIndex", ElementGetTabIndex),
+                 MakeSetter(ctx, "tabIndex", ElementSetTabIndex));
+  DefineAccessor(ctx,
+                 impl.element_proto,
+                 "inert",
+                 MakeGetter(ctx, "inert", ElementGetInert),
+                 MakeSetter(ctx, "inert", ElementSetInert));
 
   // Form controls (input/textarea/select/option/button).
   DefineAccessor(ctx,

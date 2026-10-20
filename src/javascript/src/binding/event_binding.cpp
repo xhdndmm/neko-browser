@@ -509,6 +509,10 @@ const char* OnHandlerForType(std::string_view type)
     return "onfocus";
   if (type == "blur")
     return "onblur";
+  if (type == "focusin")
+    return "onfocusin";
+  if (type == "focusout")
+    return "onfocusout";
   if (type == "keydown")
     return "onkeydown";
   if (type == "keyup")
@@ -533,25 +537,11 @@ const char* OnHandlerForType(std::string_view type)
 // Element-level global event handler IDL attributes (onclick/oninput/...).
 // IDL handlers are stored by Impl. A content attribute (on*="code") is
 // compiled when it fires.
-static constexpr std::array<const char*, 19> kElementEventHandlers = {"onclick",
-                                                                      "ondblclick",
-                                                                      "onmousedown",
-                                                                      "onmouseup",
-                                                                      "onmousemove",
-                                                                      "onmouseover",
-                                                                      "onmouseout",
-                                                                      "onfocus",
-                                                                      "onblur",
-                                                                      "onkeydown",
-                                                                      "onkeyup",
-                                                                      "oninput",
-                                                                      "onchange",
-                                                                      "onsubmit",
-                                                                      "onwheel",
-                                                                      "onload",
-                                                                      "onerror",
-                                                                      "onscroll",
-                                                                      "onresize"};
+static constexpr std::array<const char*, 21> kElementEventHandlers = {
+    "onclick",    "ondblclick", "onmousedown", "onmouseup", "onmousemove", "onmouseover",
+    "onmouseout", "onfocus",    "onblur",      "onfocusin", "onfocusout",  "onkeydown",
+    "onkeyup",    "oninput",    "onchange",    "onsubmit",  "onwheel",     "onload",
+    "onerror",    "onscroll",   "onresize"};
 
 // The getter/setter are JS_CFUNC_getter_magic / JS_CFUNC_setter_magic: the
 // magic (handler index) arrives as the trailing int argument (no argc/argv).
@@ -860,6 +850,30 @@ void DefineElementEventHandlers(JSContext* ctx, Impl& impl)
         MakeSetterMagic(
             ctx, kElementEventHandlers[static_cast<std::size_t>(i)], ElementSetEventHandler, i));
   }
+}
+
+// Runs the UI Events §3.3.2 focus sequence: the old target gets blur then
+// focusout, the new target focus then focusin.  The dispatch happens after the
+// browser layer has already moved its focus state, as the spec requires
+// ("the focus MUST be given to the element before the dispatch").  |previous|
+// and |next| may be null (cleared focus / no previous target).
+void Impl::PerformFocusUpdate(dom::Element* previous, dom::Element* next)
+{
+  if (previous != nullptr && previous != next) {
+    DispatchFocusToNode(previous, "blur");
+    DispatchFocusToNode(previous, "focusout");
+  }
+  if (next != nullptr) {
+    DispatchFocusToNode(next, "focus");
+    DispatchFocusToNode(next, "focusin");
+  }
+}
+
+// DomBinder public entry point, kept next to the event dispatch it drives (the
+// rest of the DomBinder surface lives in src/dom_binding.cpp).
+void DomBinder::PerformFocusUpdate(dom::Element* previous, dom::Element* next)
+{
+  impl_->PerformFocusUpdate(previous, next);
 }
 
 void EnsureEventClassRegistered(JSRuntime* rt)

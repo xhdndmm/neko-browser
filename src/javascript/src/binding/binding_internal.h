@@ -1193,8 +1193,13 @@ struct Impl
       dom::Node* node, std::string_view type, double client_x, double client_y, int button);
   // Dispatches a cancelable wheel event to |node|; returns whether NOT canceled.
   bool DispatchWheelToNode(dom::Node* node, std::string_view type, double delta_y);
-  // Dispatches a non-bubbling focus/blur event to |node|.
+  // Dispatches a non-bubbling focus/blur (or bubbling focusin/focusout)
+  // event to |node|.
   void DispatchFocusToNode(dom::Node* node, std::string_view type);
+  // Runs the UI Events focus sequence for a focus change from |previous| to
+  // |next| (blur/focusout on |previous|, focus/focusin on |next|); see
+  // DomBinder::PerformFocusUpdate.
+  void PerformFocusUpdate(dom::Element* previous, dom::Element* next);
   // Dispatches a bubbling "input" event to |node|.
   void DispatchInputToNode(dom::Node* node);
   // Dispatches a cancelable, non-bubbling "invalid" event to |node|.
