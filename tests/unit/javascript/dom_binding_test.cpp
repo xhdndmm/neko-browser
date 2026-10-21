@@ -3547,7 +3547,7 @@ TEST_F(DomBinderTest, RangeCompareBoundaryPoints)
       ].join(',');
     })()
   )js"),
-            "-1,1,-1,-1,0");
+            "-1,-1,-1,1,0");
 
   EXPECT_EQ(EvalString("(function(){ var p = document.createElement('p');"
                        " var t = document.createTextNode('a'); p.appendChild(t);"
@@ -3573,6 +3573,29 @@ TEST_F(DomBinderTest, RangeCompareBoundaryPoints)
     })()
   )js"),
             "WrongDocumentError");
+}
+
+TEST_F(DomBinderTest, RangeCompareBoundaryPointsAcrossAncestorDescendant)
+{
+  // DOM §5.2: when the child index equals the ancestor offset, the point lies
+  // inside that child and the comparison descends.  (paragraph, 0) and
+  // (firstText, 0) are the same position, not ordered.
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.createElement('p');
+      var t = document.createTextNode('abcdef');
+      p.appendChild(t); document.body.appendChild(p);
+      var outer = document.createRange(); outer.selectNodeContents(p);
+      var inner = document.createRange(); inner.setStart(t, 0); inner.setEnd(t, 3);
+      return [
+        outer.compareBoundaryPoints(Range.START_TO_START, inner),
+        outer.compareBoundaryPoints(Range.START_TO_END, inner),
+        outer.compareBoundaryPoints(Range.END_TO_END, inner),
+        outer.compareBoundaryPoints(Range.END_TO_START, inner)
+      ].join(',');
+    })()
+  )js"),
+            "0,-1,1,1");
 }
 
 TEST_F(DomBinderTest, RangeComparePointIsPointInRangeAndIntersectsNode)
