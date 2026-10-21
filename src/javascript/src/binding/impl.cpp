@@ -202,10 +202,15 @@ std::string NodeNameOf(const dom::Node& node)
   switch (node.node_type()) {
   case dom::NodeType::kElement: {
     const auto& el = static_cast<const dom::Element&>(node);
+    // DOM §4.4: tagName/nodeName is the qualified name uppercased for HTML
+    // elements in the HTML namespace only.  SVG camelCase names keep their
+    // case (linearGradient, foreignObject, ...).
+    const bool html_namespace = el.namespace_uri() == "http://www.w3.org/1999/xhtml";
     std::string out;
     out.reserve(el.tag_name().size());
     for (const char c : el.tag_name()) {
-      out.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
+      out.push_back(html_namespace ? static_cast<char>(std::toupper(static_cast<unsigned char>(c)))
+                                   : c);
     }
     return out;
   }

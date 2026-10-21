@@ -2608,7 +2608,7 @@ TEST_F(DomBinderTest, DocumentCreateFragmentCommentElementNS)
                        "var c = d.createComment('note'); "
                        "ok = ok && c.nodeType === 8 && c.nodeName === '#comment'; "
                        "var svg = d.createElementNS('http://www.w3.org/2000/svg', 'svg'); "
-                       "ok = ok && svg.tagName === 'SVG'; "
+                       "ok = ok && svg.tagName === 'svg'; "
                        "return ok; })()"));
 }
 
@@ -6792,6 +6792,22 @@ TEST(DetailsBindingTest, OpenReflectsAndFiresToggle)
                 "  d.open = false;" // closes without the attribute present
                 "  return [a, b, c, e, f, n + '|' + d.open].join(';'); })()"),
             "true||1|false|true;1;1;2|false;3|true;4|false");
+}
+
+// DOM §4.4: tagName/nodeName uppercases the qualified name only for HTML
+// elements in the HTML namespace.  SVG camelCase names keep their case.
+TEST_F(DomBinderTest, SvgTagNameKeepsItsCase)
+{
+  EXPECT_TRUE(EvalBool(R"JS((function() {
+    var host = document.createElement('div');
+    host.innerHTML = '<svg><lineargradient></lineargradient><foreignobject></foreignobject></svg>';
+    var svg = host.querySelector('svg');
+    return svg.namespaceURI === 'http://www.w3.org/2000/svg'
+        && svg.children[0].tagName === 'linearGradient'
+        && svg.children[1].tagName === 'foreignObject'
+        && svg.children[0].nodeName === 'linearGradient'
+        && document.createElement('div').tagName === 'DIV';
+  })())JS"));
 }
 
 } // namespace
