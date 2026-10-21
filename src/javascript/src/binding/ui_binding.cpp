@@ -13,6 +13,10 @@
 
 #include "binding_internal.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <quickjs.h>
 #include <string>
 #include <string_view>
@@ -240,6 +244,52 @@ bool IsCheckableInput(const dom::Element& element)
   return type == "checkbox" || type == "radio";
 }
 
+namespace {
+
+// Writes a text control's value through the single engine store: the `value`
+// content attribute for <input>, the text child for <textarea>.  Removed
+// textarea children are retained by the binder so live JS references to them
+// do not dangle.
+void StoreTextControlValue(JSContext* ctx,
+                           JSValueConst this_val,
+                           dom::Element& element,
+                           std::string_view text)
+{
+  if (element.tag_name() == "textarea") {
+    Impl* impl = ImplFor(ctx, this_val);
+    while (element.first_child() != nullptr) {
+      dom::Node* child = element.first_child();
+      std::unique_ptr<dom::Node> removed = element.RemoveChild(child);
+      if (impl != nullptr) {
+        impl->TakeOwnership(child, std::move(removed));
+      }
+    }
+    if (!text.empty()) {
+      element.AppendChild(std::make_unique<dom::Text>(std::string(text)));
+    }
+  } else {
+    element.SetAttribute("value", text);
+  }
+  if (Impl* impl = ImplFor(ctx, this_val)) {
+    impl->MarkDomDirty(&element);
+  }
+}
+
+// Clamps an existing selection after the relevant value shrank (WHATWG HTML
+// §4.10.20 "whenever the relevant value changes").
+void ClampTextControlSelection(dom::Element& element)
+{
+  dom::TextControlState* state = element.text_control_state();
+  if (state == nullptr) {
+    return;
+  }
+  const std::size_t length = dom::Utf16Length(dom::TextControlValue(element));
+  state->selection_start = std::min(state->selection_start, length);
+  state->selection_end = std::min(state->selection_end, length);
+}
+
+} // namespace
+
 JSValue ElementGetValue(JSContext* ctx, JSValueConst this_val)
 {
   dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
@@ -249,7 +299,7 @@ JSValue ElementGetValue(JSContext* ctx, JSValueConst this_val)
   const std::string_view tag = element->tag_name();
   if (tag == "textarea") {
     // value == the text content (textContent; <br> not meaningful here).
-    const std::string text = element->TextContent();
+    const std::string text = dom::TextControlValue(*element);
     return JS_NewStringLen(ctx, text.data(), text.size());
   }
   if (tag == "option") {
@@ -276,26 +326,417 @@ JSValue ElementSetValue(JSContext* ctx, JSValueConst this_val, JSValueConst valu
   if (!ok) {
     return JS_EXCEPTION;
   }
-  if (element->tag_name() == "textarea") {
-    // Setting value on a textarea replaces its text child.  RemoveChild
-    // returns ownership; keep the removed subtree alive in the binder's
-    // retained set so JS references to the old children do not dangle.
-    Impl* impl = ImplFor(ctx, this_val);
-    while (element->first_child() != nullptr) {
-      dom::Node* child = element->first_child();
-      std::unique_ptr<dom::Node> removed = element->RemoveChild(child);
-      if (impl != nullptr) {
-        impl->TakeOwnership(child, std::move(removed));
-      }
-    }
-    if (!text.empty()) {
-      element->AppendChild(std::make_unique<dom::Text>(text));
-    }
-  } else {
-    element->SetAttribute("value", text);
+  StoreTextControlValue(ctx, this_val, *element, text);
+  if (dom::TextControlState* state = element->text_control_state()) {
+    state->dirty_value = true; // the script value setter sets the dirty flag
   }
-  // Reflector setter: behaves like setAttribute (cascade may change).
-  ImplFor(ctx, this_val)->MarkDomDirty(element);
+  ClampTextControlSelection(*element);
+  return JS_UNDEFINED;
+}
+
+// ---------------------------------------------------------------------------
+// Text control selection APIs (WHATWG HTML §4.10.20)
+// ---------------------------------------------------------------------------
+//
+// The state lives on dom::Element (TextControlState), so a selection created
+// here is the same selection the browser's keyboard editing uses.  Getters
+// return null for input types to which the APIs do not apply, exactly as the
+// standard specifies; setters, setSelectionRange() and setRangeText() throw
+// InvalidStateError for those types.  select() is a no-op there (the spec
+// returns early rather than throwing).
+
+namespace {
+
+dom::Element* TextControlReceiver(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (element == nullptr) {
+    JS_ThrowTypeError(ctx, "not an element");
+  }
+  return element;
+}
+
+JSValue SelectionDoesNotApply(JSContext* ctx)
+{
+  return ThrowDomException(
+      ctx, "InvalidStateError", "the selection APIs do not apply to this input type");
+}
+
+bool ToOffset(JSContext* ctx, JSValueConst value, double* out)
+{
+  double number = 0;
+  if (JS_ToFloat64(ctx, &number, value) != 0) {
+    return false;
+  }
+  if (std::isnan(number) || number < 0) {
+    number = 0;
+  }
+  *out = number;
+  return true;
+}
+
+std::size_t ClampToLength(double value, std::size_t length)
+{
+  if (!(value > 0)) {
+    return 0;
+  }
+  if (value >= static_cast<double>(length)) {
+    return length;
+  }
+  return static_cast<std::size_t>(value);
+}
+
+dom::SelectionDirection DirectionFromString(std::string_view text)
+{
+  if (text == "forward") {
+    return dom::SelectionDirection::kForward;
+  }
+  if (text == "backward") {
+    return dom::SelectionDirection::kBackward;
+  }
+  return dom::SelectionDirection::kNone;
+}
+
+const char* DirectionName(dom::SelectionDirection direction)
+{
+  switch (direction) {
+  case dom::SelectionDirection::kForward:
+    return "forward";
+  case dom::SelectionDirection::kBackward:
+    return "backward";
+  case dom::SelectionDirection::kNone:
+  default:
+    return "none";
+  }
+}
+
+std::size_t CurrentSelectionStart(const dom::Element& element, std::size_t length)
+{
+  const dom::TextControlState* state = element.text_control_state();
+  return state != nullptr ? std::min(state->selection_start, length) : 0;
+}
+
+std::size_t CurrentSelectionEnd(const dom::Element& element, std::size_t length)
+{
+  const dom::TextControlState* state = element.text_control_state();
+  return state != nullptr ? std::min(state->selection_end, length) : 0;
+}
+
+dom::SelectionDirection CurrentSelectionDirection(const dom::Element& element)
+{
+  const dom::TextControlState* state = element.text_control_state();
+  return state != nullptr ? state->selection_direction : dom::SelectionDirection::kNone;
+}
+
+// The spec's "set the selection range" algorithm: clamp both ends, collapse an
+// inverted/empty range immediately before the character at |end|, and record
+// the direction.  Returns whether extent or direction changed (the trigger for
+// the select event).
+bool ApplySelection(dom::Element& element,
+                    std::size_t start,
+                    std::size_t end,
+                    dom::SelectionDirection direction)
+{
+  const std::size_t length = dom::Utf16Length(dom::TextControlValue(element));
+  start = std::min(start, length);
+  end = std::min(end, length);
+  if (end <= start) {
+    start = end;
+  }
+  dom::TextControlState& state = element.EnsureTextControlState();
+  const bool changed = state.selection_start != start || state.selection_end != end ||
+                       state.selection_direction != direction;
+  state.selection_start = start;
+  state.selection_end = end;
+  state.selection_direction = direction;
+  return changed;
+}
+
+// Queues (here: synchronously dispatches) the bubbling select event the spec
+// requires when setSelectionRange()/select() changes the selection.  The
+// task-queue delay is not modelled.
+void FireSelectEvent(JSContext* ctx, JSValueConst this_val, dom::Element& element)
+{
+  if (Impl* impl = ImplFor(ctx, this_val)) {
+    impl->DispatchEvent(element, "select");
+  }
+}
+
+} // namespace
+
+JSValue ElementGetSelectionStart(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = TextControlReceiver(ctx, this_val);
+  if (element == nullptr) {
+    return JS_EXCEPTION;
+  }
+  if (!dom::SupportsTextControlSelection(*element)) {
+    return JS_NULL;
+  }
+  const std::size_t length = dom::Utf16Length(dom::TextControlValue(*element));
+  return JS_NewInt64(ctx, static_cast<std::int64_t>(CurrentSelectionStart(*element, length)));
+}
+
+JSValue ElementSetSelectionStart(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = TextControlReceiver(ctx, this_val);
+  if (element == nullptr) {
+    return JS_EXCEPTION;
+  }
+  if (!dom::SupportsTextControlSelection(*element)) {
+    return SelectionDoesNotApply(ctx);
+  }
+  double start = 0;
+  if (!ToOffset(ctx, value, &start)) {
+    return JS_EXCEPTION;
+  }
+  const std::size_t length = dom::Utf16Length(dom::TextControlValue(*element));
+  const std::size_t current_end = CurrentSelectionEnd(*element, length);
+  // "If end is less than the given value, set end to the given value."
+  const double end =
+      static_cast<double>(current_end) < start ? start : static_cast<double>(current_end);
+  const bool changed = ApplySelection(*element,
+                                      ClampToLength(start, length),
+                                      ClampToLength(end, length),
+                                      CurrentSelectionDirection(*element));
+  if (changed) {
+    FireSelectEvent(ctx, this_val, *element);
+  }
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetSelectionEnd(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = TextControlReceiver(ctx, this_val);
+  if (element == nullptr) {
+    return JS_EXCEPTION;
+  }
+  if (!dom::SupportsTextControlSelection(*element)) {
+    return JS_NULL;
+  }
+  const std::size_t length = dom::Utf16Length(dom::TextControlValue(*element));
+  return JS_NewInt64(ctx, static_cast<std::int64_t>(CurrentSelectionEnd(*element, length)));
+}
+
+JSValue ElementSetSelectionEnd(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = TextControlReceiver(ctx, this_val);
+  if (element == nullptr) {
+    return JS_EXCEPTION;
+  }
+  if (!dom::SupportsTextControlSelection(*element)) {
+    return SelectionDoesNotApply(ctx);
+  }
+  double end = 0;
+  if (!ToOffset(ctx, value, &end)) {
+    return JS_EXCEPTION;
+  }
+  const std::size_t length = dom::Utf16Length(dom::TextControlValue(*element));
+  const bool changed = ApplySelection(*element,
+                                      CurrentSelectionStart(*element, length),
+                                      ClampToLength(end, length),
+                                      CurrentSelectionDirection(*element));
+  if (changed) {
+    FireSelectEvent(ctx, this_val, *element);
+  }
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetSelectionDirection(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = TextControlReceiver(ctx, this_val);
+  if (element == nullptr) {
+    return JS_EXCEPTION;
+  }
+  if (!dom::SupportsTextControlSelection(*element)) {
+    return JS_NULL;
+  }
+  return JS_NewString(ctx, DirectionName(CurrentSelectionDirection(*element)));
+}
+
+JSValue ElementSetSelectionDirection(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = TextControlReceiver(ctx, this_val);
+  if (element == nullptr) {
+    return JS_EXCEPTION;
+  }
+  if (!dom::SupportsTextControlSelection(*element)) {
+    return SelectionDoesNotApply(ctx);
+  }
+  bool ok = false;
+  const std::string direction = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  const std::size_t length = dom::Utf16Length(dom::TextControlValue(*element));
+  const bool changed = ApplySelection(*element,
+                                      CurrentSelectionStart(*element, length),
+                                      CurrentSelectionEnd(*element, length),
+                                      DirectionFromString(direction));
+  if (changed) {
+    FireSelectEvent(ctx, this_val, *element);
+  }
+  return JS_UNDEFINED;
+}
+
+JSValue
+ElementSetSelectionRange(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  dom::Element* element = TextControlReceiver(ctx, this_val);
+  if (element == nullptr) {
+    return JS_EXCEPTION;
+  }
+  if (!dom::SupportsTextControlSelection(*element)) {
+    return SelectionDoesNotApply(ctx);
+  }
+  double start = 0;
+  double end = 0;
+  dom::SelectionDirection direction = dom::SelectionDirection::kNone;
+  if (argc > 0 && !ToOffset(ctx, argv[0], &start)) {
+    return JS_EXCEPTION;
+  }
+  if (argc > 1 && !ToOffset(ctx, argv[1], &end)) {
+    return JS_EXCEPTION;
+  }
+  if (argc > 2) {
+    bool ok = false;
+    const std::string text = ArgString(ctx, argv[2], &ok);
+    if (!ok) {
+      return JS_EXCEPTION;
+    }
+    // Any value other than "forward"/"backward" (including an omitted
+    // argument) means "none", per the spec's set-the-selection-range steps.
+    direction = DirectionFromString(text);
+  }
+  const std::size_t length = dom::Utf16Length(dom::TextControlValue(*element));
+  const bool changed =
+      ApplySelection(*element, ClampToLength(start, length), ClampToLength(end, length), direction);
+  if (changed) {
+    FireSelectEvent(ctx, this_val, *element);
+  }
+  return JS_UNDEFINED;
+}
+
+JSValue ElementSetRangeText(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+  dom::Element* element = TextControlReceiver(ctx, this_val);
+  if (element == nullptr) {
+    return JS_EXCEPTION;
+  }
+  if (!dom::SupportsTextControlSelection(*element)) {
+    return SelectionDoesNotApply(ctx);
+  }
+  if (argc < 1) {
+    return JS_ThrowTypeError(ctx, "setRangeText requires a replacement argument");
+  }
+  bool ok = false;
+  const std::string replacement = ArgString(ctx, argv[0], &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  // The three-argument form is replacement, start, end; passing start without
+  // end is a WebIDL arity error.
+  const bool one_argument = argc < 2;
+  if (!one_argument && argc < 3) {
+    return JS_ThrowTypeError(ctx, "setRangeText requires both start and end");
+  }
+  std::string mode = "preserve";
+  if (argc > 3) {
+    mode = ArgString(ctx, argv[3], &ok);
+    if (!ok) {
+      return JS_EXCEPTION;
+    }
+    if (mode != "select" && mode != "start" && mode != "end" && mode != "preserve") {
+      return JS_ThrowTypeError(ctx, "invalid selectionMode for setRangeText");
+    }
+  }
+
+  std::string value = dom::TextControlValue(*element);
+  const std::size_t length = dom::Utf16Length(value);
+  const std::size_t selection_start = CurrentSelectionStart(*element, length);
+  const std::size_t selection_end = CurrentSelectionEnd(*element, length);
+  std::size_t start = selection_start;
+  std::size_t end = selection_end;
+  if (!one_argument) {
+    double start_number = 0;
+    double end_number = 0;
+    if (!ToOffset(ctx, argv[1], &start_number) || !ToOffset(ctx, argv[2], &end_number)) {
+      return JS_EXCEPTION;
+    }
+    if (start_number > end_number) {
+      return ThrowDomException(ctx, "IndexSizeError", "setRangeText: start is greater than end");
+    }
+    start = ClampToLength(start_number, length);
+    end = ClampToLength(end_number, length);
+  }
+
+  dom::TextControlState& state = element->EnsureTextControlState();
+  state.dirty_value = true; // setRangeText always sets the dirty value flag
+
+  const std::size_t new_length = dom::Utf16Length(replacement);
+  const std::string updated = dom::ReplaceUtf16Range(value, start, end, replacement);
+  std::size_t new_selection_start = selection_start;
+  std::size_t new_selection_end = selection_end;
+  if (mode == "select") {
+    new_selection_start = start;
+    new_selection_end = start + new_length;
+  } else if (mode == "start") {
+    new_selection_start = start;
+    new_selection_end = start;
+  } else if (mode == "end") {
+    new_selection_start = start + new_length;
+    new_selection_end = start + new_length;
+  } else if (mode == "preserve" && one_argument) {
+    // Shift the current selection when it lies after the replaced range; snap
+    // it into the new text when it overlapped the range (spec subtitle).
+    const std::ptrdiff_t delta =
+        static_cast<std::ptrdiff_t>(new_length) - static_cast<std::ptrdiff_t>(end - start);
+    if (new_selection_start > end) {
+      new_selection_start =
+          static_cast<std::size_t>(static_cast<std::ptrdiff_t>(new_selection_start) + delta);
+    } else if (new_selection_start > start) {
+      new_selection_start = start;
+    }
+    if (new_selection_end > end) {
+      new_selection_end =
+          static_cast<std::size_t>(static_cast<std::ptrdiff_t>(new_selection_end) + delta);
+    } else if (new_selection_end > start) {
+      new_selection_end = start + new_length;
+    }
+  }
+
+  StoreTextControlValue(ctx, this_val, *element, updated);
+  const bool changed = ApplySelection(
+      *element, new_selection_start, new_selection_end, dom::SelectionDirection::kNone);
+  if (changed) {
+    FireSelectEvent(ctx, this_val, *element);
+  }
+  return JS_UNDEFINED;
+}
+
+JSValue ElementSelect(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
+{
+  dom::Element* element = TextControlReceiver(ctx, this_val);
+  if (element == nullptr) {
+    return JS_EXCEPTION;
+  }
+  // select() returns early (without throwing) when it does not apply.
+  if (!dom::SupportsTextControlSelection(*element)) {
+    return JS_UNDEFINED;
+  }
+  const std::size_t length = dom::Utf16Length(dom::TextControlValue(*element));
+  const bool changed = ApplySelection(*element, 0, length, dom::SelectionDirection::kNone);
+  if (changed) {
+    FireSelectEvent(ctx, this_val, *element);
+  }
+  // Browsers focus an <input> when select() is called; textarea focus is left
+  // to the caller (the standard's select() steps only set the range).
+  if (element->tag_name() == "input") {
+    const JSValue result = ElementFocus(ctx, this_val, 0, nullptr);
+    if (JS_IsException(result)) {
+      return result;
+    }
+  }
   return JS_UNDEFINED;
 }
 

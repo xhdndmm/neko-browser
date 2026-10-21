@@ -1012,6 +1012,7 @@ TEST(BrowserControllerTest, TextInputAcceptsTypedCharacters)
 
   controller.DispatchPointerClick(
       tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f);
+  // Pointer focus leaves the caret at the end, so typing extends the value.
   controller.DispatchKeyboard(tab->id, "keydown", "a", "KeyA");
   EXPECT_EQ(input->GetAttribute("value").value_or(""), "水a")
       << "typing must extend the input value";
@@ -1139,6 +1140,7 @@ TEST(BrowserControllerTest, InputEventRunsOninputAndTitleFollows)
   ASSERT_TRUE(geometry.has_value());
   controller.DispatchPointerClick(
       tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f);
+  // Pointer focus leaves the caret at the end; typing appends there.
   controller.DispatchKeyboard(tab->id, "keydown", "a", "KeyA");
   EXPECT_EQ(input->GetAttribute("value").value_or(""), "水a");
   EXPECT_EQ(tab->page->document()->Title(), "水a")
@@ -4663,12 +4665,12 @@ TEST(BrowserControllerTest, FocusAndTypeIntoInput)
   EXPECT_EQ(tab->focused_element, input);
   EXPECT_EQ(tab->page->FocusedElement(), input);
 
-  // Typing appends to the value.
+  // Pointer focus leaves the caret at the end, so typing extends the value.
   EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "a", "KeyA"));
   EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "b", "KeyB"));
   EXPECT_EQ(std::string(input->GetAttribute("value").value_or("")), "hiab");
 
-  // Backspace deletes the last character.
+  // Backspace deletes the character before the collapsed caret.
   EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Backspace", "Backspace"));
   EXPECT_EQ(std::string(input->GetAttribute("value").value_or("")), "hia");
 }
@@ -4727,12 +4729,154 @@ TEST(BrowserControllerTest, FocusAndTypeIntoTextarea)
 
   controller.DispatchPointerClick(tab->id, x, y);
   EXPECT_EQ(tab->focused_element, textarea);
+  // Pointer focus leaves the caret at the end of "hi"; typing appends there.
   EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "你", "KeyN"));
   EXPECT_EQ(textarea->TextContent(), "hi你");
   EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Backspace", "Backspace"));
   EXPECT_EQ(textarea->TextContent(), "hi");
   EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Enter", "Enter"));
   EXPECT_EQ(textarea->TextContent(), "hi\n");
+}
+
+TEST(BrowserControllerTest, TextControlSelectionKeyboardEditing)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html; charset=utf-8"}},
+                               "<html><head><meta charset=\"utf-8\"></head><body>"
+                               "<input id=\"q\" value=\"hello\">"
+                               "<textarea id=\"t\">hi</textarea>"
+                               "</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* input = dom::QuerySelector(*tab->page->document(), "#q");
+  dom::Element* textarea = dom::QuerySelector(*tab->page->document(), "#t");
+  ASSERT_NE(input, nullptr);
+  ASSERT_NE(textarea, nullptr);
+
+  const auto focus_with_tab = [&](dom::Element& expected) {
+    EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Tab", "Tab"));
+    EXPECT_EQ(tab->focused_element, &expected);
+  };
+
+  // Keyboard focus selects the whole value (UTF-16 offsets).  Pointer focus
+  // is different: clicking leaves a caret at the end (see the separate
+  // PointerFocusPlacesCaretAtEnd test).
+  focus_with_tab(*input);
+  dom::TextControlState* state = input->text_control_state();
+  ASSERT_NE(state, nullptr);
+  EXPECT_EQ(state->selection_start, 0u);
+  EXPECT_EQ(state->selection_end, 5u);
+  EXPECT_EQ(state->selection_direction, dom::SelectionDirection::kNone);
+
+  // A printable character replaces the selection and leaves the caret after
+  // the inserted text; the next character appends there.
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "你", "KeyN"));
+  EXPECT_EQ(input->GetAttribute("value").value_or(""), "你");
+  EXPECT_EQ(state->selection_start, 1u);
+  EXPECT_EQ(state->selection_end, 1u);
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "a", "KeyA"));
+  EXPECT_EQ(input->GetAttribute("value").value_or(""), "你a");
+  EXPECT_EQ(state->selection_start, 2u);
+  EXPECT_EQ(state->selection_end, 2u);
+
+  // Backspace with a collapsed caret removes one code point (the previous
+  // value "你a" ends with a BMP character).
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Backspace", "Backspace"));
+  EXPECT_EQ(input->GetAttribute("value").value_or(""), "你");
+  EXPECT_EQ(state->selection_start, 1u);
+
+  // Backspace over a selected range removes the whole selection.
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "a", "KeyA")); // "你a"
+  input->SetAttribute("value", "a😀");                                       // 1 + 2 code units
+  controller.DispatchKeyboard(tab->id, "keydown", "End", "End");
+  EXPECT_EQ(state->selection_start, 3u);
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Backspace", "Backspace"));
+  EXPECT_EQ(input->GetAttribute("value").value_or(""), "a")
+      << "a surrogate pair is one code point for Backspace";
+
+  // Delete removes the next code point; with a selection it removes the
+  // selection.
+  input->SetAttribute("value", "abc");
+  state->selection_start = 0;
+  state->selection_end = 3;
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Delete", "Delete"));
+  EXPECT_EQ(input->GetAttribute("value").value_or(""), "")
+      << "Delete with a whole-value selection must remove it";
+
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "a", "KeyA"));
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "b", "KeyB"));
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "c", "KeyC"));
+  EXPECT_EQ(input->GetAttribute("value").value_or(""), "abc");
+  controller.DispatchKeyboard(tab->id, "keydown", "Home", "Home");
+  EXPECT_EQ(state->selection_start, 0u);
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Delete", "Delete"));
+  EXPECT_EQ(input->GetAttribute("value").value_or(""), "bc");
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Delete", "Delete"));
+  EXPECT_EQ(input->GetAttribute("value").value_or(""), "c");
+
+  // Arrow keys collapse a selection and otherwise move one code point;
+  // Home/End move to the value boundaries.  (Shift+Arrow extension is
+  // deferred: the controller's key API carries no modifier state.)
+  input->SetAttribute("value", "abc");
+  controller.DispatchKeyboard(tab->id, "keydown", "End", "End");
+  controller.DispatchKeyboard(tab->id, "keydown", "Home", "Home");
+  controller.DispatchKeyboard(tab->id, "keydown", "ArrowLeft", "ArrowLeft");
+  EXPECT_EQ(state->selection_start, 0u);
+  controller.DispatchKeyboard(tab->id, "keydown", "ArrowRight", "ArrowRight");
+  EXPECT_EQ(state->selection_start, 1u);
+  controller.DispatchKeyboard(tab->id, "keydown", "End", "End");
+  EXPECT_EQ(state->selection_start, 3u);
+  // Named navigation keys must not be inserted as literal text.
+  controller.DispatchKeyboard(tab->id, "keydown", "ArrowDown", "ArrowDown");
+  EXPECT_EQ(input->GetAttribute("value").value_or(""), "abc");
+
+  // Textarea editing uses the same shared state and keyboard rules.
+  focus_with_tab(*textarea);
+  state = textarea->text_control_state();
+  ASSERT_NE(state, nullptr);
+  EXPECT_EQ(state->selection_start, 0u);
+  EXPECT_EQ(state->selection_end, 2u);
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "x", "KeyX"));
+  EXPECT_EQ(textarea->TextContent(), "x");
+  EXPECT_EQ(state->selection_start, 1u);
+}
+TEST(BrowserControllerTest, PointerFocusPlacesCaretAtEnd)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body><input id=\"q\" value=\"hello\"></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* input = dom::QuerySelector(*tab->page->document(), "#q");
+  ASSERT_NE(input, nullptr);
+  float x = 0;
+  float y = 0;
+  ASSERT_TRUE(FindElementRunPoint(*tab->page->layout_root(), input, x, y));
+
+  // A pointer click does not have text hit-testing data here, so it keeps the
+  // engine's historical caret-at-end behavior instead of selecting the value.
+  controller.DispatchPointerClick(tab->id, x, y);
+  EXPECT_EQ(tab->focused_element, input);
+  const dom::TextControlState* state = input->text_control_state();
+  ASSERT_NE(state, nullptr);
+  EXPECT_EQ(state->selection_start, 5u);
+  EXPECT_EQ(state->selection_end, 5u);
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "a", "KeyA"));
+  EXPECT_EQ(input->GetAttribute("value").value_or(""), "helloa");
 }
 
 TEST(BrowserControllerTest, ElementGeometryApisReflectLayout)
@@ -4884,8 +5028,9 @@ TEST(BrowserControllerTest, TypingFiresInputEvent)
   float y = 0;
   ASSERT_TRUE(FindElementRunPoint(*tab->page->layout_root(), input, x, y));
   controller.DispatchPointerClick(tab->id, x, y);
+  // Pointer focus leaves the caret at the end; typing appends.  oninput + input
+  // listener both fire; the value reflects the typed char.
   EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "a", "KeyA"));
-  // oninput + input listener both fire; the value reflects the typed char.
   EXPECT_EQ(input->GetAttribute("data-v"), "xa");
   EXPECT_EQ(input->GetAttribute("data-n"), "2");
 }

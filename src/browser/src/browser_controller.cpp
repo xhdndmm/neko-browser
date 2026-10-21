@@ -51,20 +51,28 @@ std::string_view Trim(std::string_view s)
   return s;
 }
 
-void RemoveLastUtf8CodePoint(std::string& value)
+// True when |key| is text to insert into a focused text control.  DOM key
+// values are either a single character / IME commit string or a named key such
+// as "ArrowUp"; named keys must never be inserted literally.
+bool IsPrintableKey(std::string_view key)
 {
-  if (value.empty()) {
-    return;
+  if (key.empty() || static_cast<unsigned char>(key.front()) < 0x20U) {
+    return false;
   }
-  value.pop_back();
-  bool removed_continuation = false;
-  while (!value.empty() && (static_cast<unsigned char>(value.back()) & 0xc0U) == 0x80U) {
-    value.pop_back();
-    removed_continuation = true;
+  static constexpr std::string_view kNamedKeys[] = {
+      "ArrowLeft",    "ArrowRight", "ArrowUp",    "ArrowDown", "Home",        "End",
+      "PageUp",       "PageDown",   "Insert",     "Delete",    "Backspace",   "Enter",
+      "Escape",       "Tab",        "Shift",      "Control",   "Alt",         "Meta",
+      "CapsLock",     "NumLock",    "ScrollLock", "Pause",     "PrintScreen", "ContextMenu",
+      "Unidentified", "F1",         "F2",         "F3",        "F4",          "F5",
+      "F6",           "F7",         "F8",         "F9",        "F10",         "F11",
+      "F12"};
+  for (const std::string_view named : kNamedKeys) {
+    if (named == key) {
+      return false;
+    }
   }
-  if (removed_continuation && !value.empty()) {
-    value.pop_back();
-  }
+  return true;
 }
 
 // Resolves a possibly-relative reference against a base page URL.  Handles
@@ -458,6 +466,23 @@ void SetFocusState(Tab* tab, dom::Element* element, renderer::Page* page)
   }
 }
 
+// Initializes a newly focused text control's selection: keyboard/script focus
+// selects the whole value (browsers do this when tabbing into a field), while
+// a pointer click leaves a collapsed caret at the end.  Click-position caret
+// placement needs text hit-testing the browser layer does not have; the
+// end-of-value caret preserves the engine's long-standing typing behavior.
+void FocusTextControlSelection(dom::Element& element, bool select_contents)
+{
+  if (!dom::SupportsTextControlSelection(element)) {
+    return;
+  }
+  const std::size_t length = dom::Utf16Length(dom::TextControlValue(element));
+  dom::TextControlState& state = element.EnsureTextControlState();
+  state.selection_start = select_contents ? 0 : length;
+  state.selection_end = length;
+  state.selection_direction = dom::SelectionDirection::kNone;
+}
+
 // Moves keyboard focus to |element| (or clears it when null) and fires the
 // focus event sequence -- blur, focusout on the old target; focus, focusin on
 // the new one -- through the tab's script runtime, or through |runtime| when
@@ -468,7 +493,8 @@ void SetFocusState(Tab* tab, dom::Element* element, renderer::Page* page)
 void FocusControl(Tab* tab,
                   dom::Element* element,
                   renderer::Page* page = nullptr,
-                  javascript::DomBinder* runtime = nullptr)
+                  javascript::DomBinder* runtime = nullptr,
+                  bool select_contents = true)
 {
   dom::Element* previous = tab->focused_element;
   if (previous == element) {
@@ -479,6 +505,9 @@ void FocusControl(Tab* tab,
     return;
   }
   SetFocusState(tab, element, target_page);
+  if (element != nullptr) {
+    FocusTextControlSelection(*element, select_contents);
+  }
   javascript::DomBinder* binder = runtime != nullptr ? runtime : tab->script_runtime.get();
   if (binder != nullptr) {
     binder->PerformFocusUpdate(previous, element);
@@ -1421,7 +1450,11 @@ bool BrowserController::DispatchPointerClick(int tab_id, float doc_x, float doc_
   // blur/focusout/focus/focusin sequence.
   if (!inert) {
     if (IsFocusable(*element)) {
-      FocusControl(tab, const_cast<dom::Element*>(element));
+      // Pointer focus leaves a caret at the end rather than selecting the
+      // whole value (click-position hit testing is not modelled; keyboard and
+      // script focus do select the contents).
+      FocusControl(
+          tab, const_cast<dom::Element*>(element), nullptr, nullptr, /*select_contents=*/false);
     } else if (tab->focused_element != nullptr) {
       FocusControl(tab, nullptr);
     }
@@ -1741,56 +1774,99 @@ bool BrowserController::DispatchKeyboard(int tab_id,
     return not_canceled;
   }
   const bool input_is_text = control != nullptr && control->tag_name() == "input";
-  const bool textarea_is_text = control != nullptr && control->tag_name() == "textarea";
   bool value_changed = false;
-  if (input_is_text) {
-    const std::string input_type = std::string(control->GetAttribute("type").value_or("text"));
-    const bool text_like = input_type == "text" || input_type == "search" ||
-                           input_type == "password" || input_type == "email" ||
-                           input_type == "url" || input_type == "hidden";
-    if (text_like) {
-      std::string value = std::string(control->GetAttribute("value").value_or(""));
-      if (key == "Backspace") {
-        RemoveLastUtf8CodePoint(value);
-      } else if (key == "Enter") {
-        if (dom::Element* form = html::OwnerForm(*control)) {
-          // Implicit submission uses the form's default button (HTML
-          // §4.10.22.2) as the submitter, so its name/value and form*
-          // overrides apply.  The spec fires a click at that button; this
-          // engine submits directly with it as the submitter (documented
-          // approximation -- no synthetic activation event).
-          SubmitForm(tab_id, form, html::DefaultButton(*form));
-        }
-        return not_canceled;
-      } else if (!key.empty() && static_cast<unsigned char>(key.front()) >= 0x20U) {
-        value += key;
+  if (control != nullptr && dom::SupportsTextControlSelection(*control)) {
+    const bool is_input = input_is_text;
+    // The keyboard and JavaScript layers share one value store and one
+    // selection state (dom::Element::TextControlState).  A printable key
+    // replaces the selected range (or inserts at the collapsed caret);
+    // Backspace/Delete remove the selection or the adjacent code point.
+    std::string value = dom::TextControlValue(*control);
+    std::size_t length = dom::Utf16Length(value);
+    dom::TextControlState& state = control->EnsureTextControlState();
+    state.selection_start = std::min(state.selection_start, length);
+    state.selection_end = std::min(state.selection_end, length);
+
+    const auto store_value = [&](const std::string& updated) {
+      if (is_input) {
+        control->SetAttribute("value", updated);
       } else {
-        return not_canceled;
+        while (control->first_child() != nullptr) {
+          control->RemoveChild(control->first_child());
+        }
+        control->AppendChild(std::make_unique<dom::Text>(updated));
       }
-      control->SetAttribute("value", value);
+      state.dirty_value = true;
       value_changed = true;
-      // Fire the bubbling "input" event (oninput / addEventListener('input')).
-      if (tab->script_runtime != nullptr) {
-        tab->script_runtime->DispatchInputEvent(*control);
+    };
+    const auto replace_selection = [&](std::string_view inserted) {
+      const std::size_t caret = state.selection_start + dom::Utf16Length(inserted);
+      value = dom::ReplaceUtf16Range(value, state.selection_start, state.selection_end, inserted);
+      store_value(value);
+      state.selection_start = caret;
+      state.selection_end = caret;
+      state.selection_direction = dom::SelectionDirection::kNone;
+    };
+
+    if (key == "Enter" && is_input) {
+      if (dom::Element* form = html::OwnerForm(*control)) {
+        // Implicit submission uses the form's default button (HTML
+        // §4.10.22.2) as the submitter, so its name/value and form*
+        // overrides apply.  The spec fires a click at that button; this
+        // engine submits directly with it as the submitter (documented
+        // approximation -- no synthetic activation event).
+        SubmitForm(tab_id, form, html::DefaultButton(*form));
       }
-    }
-  } else if (textarea_is_text) {
-    std::string value = control->TextContent();
-    if (key == "Backspace") {
-      RemoveLastUtf8CodePoint(value);
-    } else if (key == "Enter") {
-      value.push_back('\n');
-    } else if (!key.empty() && static_cast<unsigned char>(key.front()) >= 0x20U) {
-      value += key;
-    } else {
       return not_canceled;
     }
-    while (control->first_child() != nullptr) {
-      control->RemoveChild(control->first_child());
+    if (key == "Backspace" || key == "Delete") {
+      std::size_t from = state.selection_start;
+      std::size_t to = state.selection_end;
+      if (from == to) {
+        if (key == "Backspace") {
+          from = dom::PreviousUtf16Offset(value, from);
+        } else {
+          to = dom::NextUtf16Offset(value, to);
+        }
+      }
+      if (from != to) {
+        value = dom::ReplaceUtf16Range(value, from, to, {});
+        store_value(value);
+        state.selection_start = from;
+        state.selection_end = from;
+        state.selection_direction = dom::SelectionDirection::kNone;
+      }
+    } else if (key == "ArrowLeft" || key == "ArrowRight" || key == "Home" || key == "End") {
+      std::size_t caret = state.selection_start;
+      if (key == "ArrowLeft") {
+        caret = state.selection_start != state.selection_end
+                    ? state.selection_start
+                    : dom::PreviousUtf16Offset(value, state.selection_start);
+      } else if (key == "ArrowRight") {
+        caret = state.selection_start != state.selection_end
+                    ? state.selection_end
+                    : dom::NextUtf16Offset(value, state.selection_end);
+      } else if (key == "Home") {
+        caret = 0;
+      } else if (key == "End") {
+        caret = length;
+      }
+      // Home moves to offset 0.  Both are whole-value boundaries; line-based
+      // Home/End for textarea is not implemented (documented).
+      state.selection_start = caret;
+      state.selection_end = caret;
+      state.selection_direction = dom::SelectionDirection::kNone;
+    } else if (key == "Enter") {
+      replace_selection("\n");
+    } else if (IsPrintableKey(key)) {
+      replace_selection(key);
+    } else {
+      // Named keys without a default text action (ArrowUp/Down, PageUp/Down,
+      // Escape, function keys, ...) must not be inserted as literal text.
+      return not_canceled;
     }
-    control->AppendChild(std::make_unique<dom::Text>(std::move(value)));
-    value_changed = true;
-    if (tab->script_runtime != nullptr) {
+    if (value_changed && tab->script_runtime != nullptr) {
+      // Fire the bubbling "input" event (oninput / addEventListener('input')).
       tab->script_runtime->DispatchInputEvent(*control);
     }
   }
@@ -3357,6 +3433,9 @@ void BrowserController::LoadBytes(Tab& tab,
       }
       if (tab.focused_element != &element) {
         SetFocusState(&tab, &element, new_page.get());
+        // Script focus behaves like keyboard focus: a text control's contents
+        // are selected (browsers' focus()/select() behavior).
+        FocusTextControlSelection(element, /*select_contents=*/true);
       }
       return true;
     };

@@ -11,12 +11,74 @@
 namespace neko::dom {
 
 class HTMLTemplateElement;
+class Element;
 
 struct Attribute
 {
   std::string name;
   std::string value;
 };
+
+// Direction of a text control selection (WHATWG HTML §4.10.20).  "none" means
+// no particular end of the selection owns the caret yet (the platform
+// default); "backward" means the caret sits at the start of the selection.
+enum class SelectionDirection
+{
+  kNone,
+  kForward,
+  kBackward,
+};
+
+// Per-element state for the text control selection APIs (WHATWG HTML
+// §4.10.20).  Both the browser's keyboard editing and the JavaScript bindings
+// read and write this one object; there is no second copy in either layer.
+//
+// Offsets are UTF-16 code unit offsets into the control's relevant value (the
+// `value` content attribute for <input>, the text content for <textarea>),
+// because the HTML API is defined that way and a surrogate pair counts as two
+// code units.
+struct TextControlState
+{
+  std::size_t selection_start = 0;
+  std::size_t selection_end = 0;
+  SelectionDirection selection_direction = SelectionDirection::kNone;
+  // HTML's "dirty value flag": true once the value was changed by the user or
+  // by script.  The engine keeps a single value store (the input `value`
+  // content attribute / the textarea text child), so this is bookkeeping for
+  // the maxlength/minlength distinction, not a second value.
+  bool dirty_value = false;
+};
+
+// --- UTF-16 offset helpers over UTF-8 text --------------------------------
+// The HTML selection API is defined in UTF-16 code units while the engine
+// stores UTF-8.  These helpers are shared by the DOM, JavaScript and browser
+// layers; malformed UTF-8 bytes count as one code unit each so the functions
+// never split a valid scalar value and always terminate.
+
+std::size_t Utf16Length(std::string_view utf8);
+// Byte offset of the code unit boundary at |utf16_offset| (clamped; an offset
+// inside a surrogate pair maps to the start of that pair).
+std::size_t Utf8OffsetForUtf16Offset(std::string_view utf8, std::size_t utf16_offset);
+// Boundary of the code point before / after |utf16_offset| (clamped).
+std::size_t PreviousUtf16Offset(std::string_view utf8, std::size_t utf16_offset);
+std::size_t NextUtf16Offset(std::string_view utf8, std::size_t utf16_offset);
+// Replaces the UTF-16 range [start, end) of |value| with |replacement|.
+std::string ReplaceUtf16Range(std::string_view value,
+                              std::size_t start,
+                              std::size_t end,
+                              std::string_view replacement);
+
+// True when the element is a text control to which the selection APIs apply:
+// <textarea>, or <input> in the Text, Search, URL, Telephone, Email or
+// Password state (WHATWG HTML §4.10.20's "do not apply" list excludes number,
+// date/time, checkbox, radio, file, range, color, hidden, submit, reset,
+// button and image).  A missing or unknown type value is the Text state.
+bool SupportsTextControlSelection(const Element& element);
+
+// The control's relevant value: the `value` content attribute for <input>,
+// the text content for <textarea>.  This is the one value store the browser
+// keyboard layer and the JavaScript bindings edit.
+std::string TextControlValue(const Element& element);
 
 // A DOM element with a tag name and an ordered attribute list.
 // Attribute names are lowercased by the HTML parser (HTML semantics).
@@ -65,12 +127,33 @@ public:
     return nullptr;
   }
 
+  // Text control selection state (WHATWG HTML §4.10.20), allocated on first
+  // use.  The browser keyboard layer and the JavaScript bindings both use
+  // this object, so a selection made by script is honoured by the next key
+  // press and vice versa.
+  TextControlState& EnsureTextControlState()
+  {
+    if (text_control_state_ == nullptr) {
+      text_control_state_ = std::make_unique<TextControlState>();
+    }
+    return *text_control_state_;
+  }
+  TextControlState* text_control_state()
+  {
+    return text_control_state_.get();
+  }
+  const TextControlState* text_control_state() const
+  {
+    return text_control_state_.get();
+  }
+
   std::string ToString() const override;
 
 private:
   std::string tag_name_;
   std::string namespace_uri_;
   std::vector<Attribute> attributes_;
+  std::unique_ptr<TextControlState> text_control_state_;
 };
 
 // Leaf node holding character data.

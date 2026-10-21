@@ -417,6 +417,21 @@ JSValue ElementGetScrollWidth(JSContext* ctx, JSValueConst this_val);
 JSValue ElementGetScrollHeight(JSContext* ctx, JSValueConst this_val);
 JSValue ElementGetValue(JSContext* ctx, JSValueConst this_val);
 JSValue ElementSetValue(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+// Text control selection APIs (WHATWG HTML §4.10.20), defined on
+// HTMLInputElement.prototype and HTMLTextAreaElement.prototype only.
+JSValue ElementGetSelectionStart(JSContext* ctx, JSValueConst this_val);
+JSValue ElementSetSelectionStart(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+JSValue ElementGetSelectionEnd(JSContext* ctx, JSValueConst this_val);
+JSValue ElementSetSelectionEnd(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+JSValue ElementGetSelectionDirection(JSContext* ctx, JSValueConst this_val);
+JSValue ElementSetSelectionDirection(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+JSValue
+ElementSetSelectionRange(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue ElementSetRangeText(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue ElementSelect(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+// element_binding.cpp: HTMLElement.focus(), reused by input.select() (which
+// focuses the control before selecting, as browsers do).
+JSValue ElementFocus(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue ElementGetValidity(JSContext* ctx, JSValueConst this_val);
 JSValue ElementGetWillValidate(JSContext* ctx, JSValueConst this_val);
 JSValue ElementGetValidationMessage(JSContext* ctx, JSValueConst this_val);

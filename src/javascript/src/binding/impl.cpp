@@ -855,6 +855,39 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
                  "value",
                  MakeGetter(ctx, "value", ElementGetValue),
                  MakeSetter(ctx, "value", ElementSetValue));
+  // Text control selection APIs (WHATWG HTML §4.10.20).  They exist only on
+  // HTMLInputElement/HTMLTextAreaElement prototypes: `'selectionStart' in div`
+  // stays false.  Getters return null for input types to which selection does
+  // not apply; setters and methods throw InvalidStateError.
+  const auto define_text_selection = [context = ctx](JSValue proto) {
+    DefineAccessor(context,
+                   proto,
+                   "selectionStart",
+                   MakeGetter(context, "selectionStart", ElementGetSelectionStart),
+                   MakeSetter(context, "selectionStart", ElementSetSelectionStart));
+    DefineAccessor(context,
+                   proto,
+                   "selectionEnd",
+                   MakeGetter(context, "selectionEnd", ElementGetSelectionEnd),
+                   MakeSetter(context, "selectionEnd", ElementSetSelectionEnd));
+    DefineAccessor(context,
+                   proto,
+                   "selectionDirection",
+                   MakeGetter(context, "selectionDirection", ElementGetSelectionDirection),
+                   MakeSetter(context, "selectionDirection", ElementSetSelectionDirection));
+    JS_SetPropertyStr(context,
+                      proto,
+                      "setSelectionRange",
+                      JS_NewCFunction(context, ElementSetSelectionRange, "setSelectionRange", 3));
+    JS_SetPropertyStr(context,
+                      proto,
+                      "setRangeText",
+                      JS_NewCFunction(context, ElementSetRangeText, "setRangeText", 4));
+    JS_SetPropertyStr(
+        context, proto, "select", JS_NewCFunction(context, ElementSelect, "select", 0));
+  };
+  define_text_selection(html_input_element_proto);
+  define_text_selection(html_text_area_element_proto);
   // Constraint validation surface shared by HTMLInputElement,
   // HTMLTextAreaElement and HTMLSelectElement (WHATWG HTML §4.10.21).
   const auto define_control_validity = [context = ctx](JSValue proto) {

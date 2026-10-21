@@ -2331,6 +2331,236 @@ TEST_F(DomBinderTest, TextareaValueKeepsOldChildWrappersAlive)
                        "    && child !== null && child.nodeType === 3; })()"));
 }
 
+TEST_F(DomBinderTest, TextControlSelectionGettersSettersAndClamping)
+{
+  // setSelectionRange stores UTF-16 code unit offsets and the direction, and
+  // the accessors round-trip them.
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.value = 'abcdef'; i.setSelectionRange(1, 4, 'forward'); "
+                       "return i.selectionStart + ',' + i.selectionEnd + ',' + "
+                       "i.selectionDirection; })()"),
+            "1,4,forward");
+  // A backwards selection keeps its ordered extent and reports the direction.
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.value = 'abcdef'; i.setSelectionRange(1, 4, 'backward'); "
+                       "return i.selectionStart + ',' + i.selectionEnd + ',' + "
+                       "i.selectionDirection; })()"),
+            "1,4,backward");
+  // selectionStart pushes selectionEnd forward when it was behind the new start.
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.value = 'abcdef'; i.setSelectionRange(1, 3); i.selectionStart = 5; "
+                       "return i.selectionStart + ',' + i.selectionEnd + ',' + "
+                       "i.selectionDirection; })()"),
+            "5,5,none");
+  // An end before the current start collapses the range at that end.
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.value = 'abcdef'; i.setSelectionRange(3, 5, 'backward'); "
+                       "i.selectionEnd = 1; "
+                       "return i.selectionStart + ',' + i.selectionEnd + ',' + "
+                       "i.selectionDirection; })()"),
+            "1,1,backward");
+  // Offsets clamp to [0, length]; an unknown direction becomes "none".
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.value = 'abcdef'; i.setSelectionRange(-4, 99, 'sideways'); "
+                       "return i.selectionStart + ',' + i.selectionEnd + ',' + "
+                       "i.selectionDirection; })()"),
+            "0,6,none");
+  // direction setter keeps the extent.
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.value = 'abcdef'; i.setSelectionRange(1, 2, 'forward'); "
+                       "i.selectionDirection = 'backward'; "
+                       "return i.selectionStart + ',' + i.selectionEnd + ',' + "
+                       "i.selectionDirection; })()"),
+            "1,2,backward");
+  // Default state per §4.10.20 is a collapsed cursor at the beginning.
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.value = 'abc'; return i.selectionStart + ',' + i.selectionEnd + ',' + "
+                       "i.selectionDirection; })()"),
+            "0,0,none");
+  // A value setter clamps an existing selection to the new length.
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.value = 'abcdef'; i.setSelectionRange(2, 5); i.value = 'ab'; "
+                       "return i.selectionStart + ',' + i.selectionEnd; })()"),
+            "2,2");
+}
+
+TEST_F(DomBinderTest, TextControlSelectSelectsEverything)
+{
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.value = 'abcdef'; i.setSelectionRange(2, 3, 'backward'); i.select(); "
+                       "return i.selectionStart + ',' + i.selectionEnd + ',' + "
+                       "i.selectionDirection; })()"),
+            "0,6,none");
+  EXPECT_EQ(EvalString("(function(){ var t = document.createElement('textarea'); "
+                       "t.value = 'hello'; t.select(); "
+                       "return t.selectionStart + ',' + t.selectionEnd + ',' + "
+                       "t.selectionDirection; })()"),
+            "0,5,none");
+  // The APIs live only on the input/textarea prototypes.
+  EXPECT_FALSE(EvalBool("'selectionStart' in document.createElement('div')"));
+  EXPECT_FALSE(EvalBool("'setRangeText' in document.createElement('div')"));
+  EXPECT_TRUE(EvalBool("'selectionStart' in document.createElement('input')"));
+  EXPECT_TRUE(EvalBool("'selectionStart' in document.createElement('textarea')"));
+}
+
+TEST_F(DomBinderTest, TextControlSetRangeTextSelectionModes)
+{
+  // select: the inserted text becomes the selection.
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.value = 'abcdef'; i.setRangeText('XY', 1, 4, 'select'); "
+                       "return i.value + '|' + i.selectionStart + ',' + i.selectionEnd; })()"),
+            "aXYef|1,3");
+  // start: collapsed before the inserted text.
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.value = 'abcdef'; i.setRangeText('XY', 1, 4, 'start'); "
+                       "return i.value + '|' + i.selectionStart + ',' + i.selectionEnd; })()"),
+            "aXYef|1,1");
+  // end: collapsed after the inserted text.
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.value = 'abcdef'; i.setRangeText('XY', 1, 4, 'end'); "
+                       "return i.value + '|' + i.selectionStart + ',' + i.selectionEnd; })()"),
+            "aXYef|3,3");
+  // Default mode is preserve.  With the 3-argument form the selection is left
+  // where it was (clamped to the new value).
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.value = 'abcdef'; i.setSelectionRange(2, 4); "
+                       "i.setRangeText('ZZ', 0, 1); "
+                       "return i.value + '|' + i.selectionStart + ',' + i.selectionEnd; })()"),
+            "ZZbcdef|2,4");
+  // The one-argument form replaces the current selection; preserve keeps the
+  // selection over the replacement (caret after it for a non-empty range).
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.value = 'abcdef'; i.setSelectionRange(4, 5); "
+                       "i.setRangeText('XYZ'); "
+                       "return i.value + '|' + i.selectionStart + ',' + i.selectionEnd; })()"),
+            "abcdXYZf|4,7");
+  // A collapsed caret is preserved before the inserted text (spec's preserve
+  // rules do not move it past the insertion).
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.value = 'ab'; i.setSelectionRange(1, 1); i.setRangeText('XY'); "
+                       "return i.value + '|' + i.selectionStart + ',' + i.selectionEnd; })()"),
+            "aXYb|1,1");
+  // The 3-argument form also accepts setRangeText(replacement, start, end).
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.value = 'abcdef'; i.setRangeText('Q', 2, 3, 'select'); "
+                       "return i.value + '|' + i.selectionStart + ',' + i.selectionEnd; })()"),
+            "abQdef|2,3");
+  // maxlength is a user-input limit; setRangeText is allowed to exceed it.
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.setAttribute('maxlength', '2'); i.value = 'abc'; "
+                       "i.setRangeText('XYZ', 0, 3, 'select'); "
+                       "return i.value + '|' + i.value.length; })()"),
+            "XYZ|3");
+  // start > end is an IndexSizeError.
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.value = 'abc'; try { i.setRangeText('x', 2, 1); } "
+                       "catch (e) { return e.name; } return 'no error'; })()"),
+            "IndexSizeError");
+}
+
+TEST_F(DomBinderTest, TextControlSelectionRejectsUnsupportedInputTypes)
+{
+  EXPECT_EQ(
+      EvalString(
+          "(function(){ var types = ['number','date','checkbox','radio','file','range',"
+          "'color','hidden','submit','reset','button','image','time','month','week',"
+          "'datetime-local']; "
+          "for (var n = 0; n < types.length; ++n) { "
+          "  var i = document.createElement('input'); i.type = types[n]; "
+          "  if (i.selectionStart !== null || i.selectionEnd !== null || "
+          "      i.selectionDirection !== null) return 'getter:' + types[n]; "
+          "  try { i.selectionStart = 0; return 'start:' + types[n]; } "
+          "  catch (e) { if (e.name !== 'InvalidStateError') return 'start-name:' + e.name; } "
+          "  try { i.selectionEnd = 0; return 'end:' + types[n]; } "
+          "  catch (e) { if (e.name !== 'InvalidStateError') return 'end-name:' + e.name; } "
+          "  try { i.selectionDirection = 'forward'; return 'dir:' + types[n]; } "
+          "  catch (e) { if (e.name !== 'InvalidStateError') return 'dir-name:' + e.name; } "
+          "  try { i.setSelectionRange(0, 0); return 'range:' + types[n]; } "
+          "  catch (e) { if (e.name !== 'InvalidStateError') return 'range-name:' + e.name; } "
+          "  try { i.setRangeText('x'); return 'text:' + types[n]; } "
+          "  catch (e) { if (e.name !== 'InvalidStateError') return 'text-name:' + e.name; } "
+          "  i.select(); " // returns early, no throw
+          "} return 'ok'; })()"),
+      "ok");
+  // Password and email do support selection.
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.type = 'password'; i.value = 'secret'; i.setSelectionRange(1, 3); "
+                       "return i.selectionStart + ',' + i.selectionEnd; })()"),
+            "1,3");
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.type = 'email'; i.value = 'a@b.c'; i.select(); "
+                       "return i.selectionStart + ',' + i.selectionEnd; })()"),
+            "0,5");
+  // Uppercase type names are ASCII case-insensitive.
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.setAttribute('type', 'TEXT'); i.value = 'ab'; i.select(); "
+                       "return i.selectionStart + ',' + i.selectionEnd; })()"),
+            "0,2");
+  // A missing or unknown type value is the Text state (invalid value default).
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.setAttribute('type', 'not-a-real-type'); i.value = 'ab'; "
+                       "i.setSelectionRange(0, 1); "
+                       "return i.selectionStart + ',' + i.selectionEnd; })()"),
+            "0,1");
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.setAttribute('type', ''); i.value = 'ab'; i.setSelectionRange(1, 2); "
+                       "return i.selectionStart + ',' + i.selectionEnd; })()"),
+            "1,2");
+}
+
+TEST_F(DomBinderTest, TextareaSelectionAndSetRangeText)
+{
+  EXPECT_EQ(EvalString("(function(){ var t = document.createElement('textarea'); "
+                       "t.value = 'abc'; t.setSelectionRange(1, 2, 'backward'); "
+                       "return t.selectionStart + ',' + t.selectionEnd + ',' + "
+                       "t.selectionDirection; })()"),
+            "1,2,backward");
+  EXPECT_EQ(EvalString("(function(){ var t = document.createElement('textarea'); "
+                       "t.value = 'abc'; t.setRangeText('X', 0, 3, 'select'); "
+                       "return t.value + '|' + t.selectionStart + ',' + t.selectionEnd; })()"),
+            "X|0,1");
+  EXPECT_EQ(EvalString("(function(){ var t = document.createElement('textarea'); "
+                       "t.value = 'line1\\nline2'; t.setSelectionRange(5, 6); "
+                       "return t.selectionStart + ',' + t.selectionEnd; })()"),
+            "5,6");
+}
+
+TEST_F(DomBinderTest, TextControlSelectionUsesUtf16CodeUnitOffsets)
+{
+  // U+1F600 is a surrogate pair: two UTF-16 code units, one code point.
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.value = 'a' + String.fromCodePoint(0x1F600) + 'b'; "
+                       "return i.value.length; })()"),
+            "4");
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.value = 'a' + String.fromCodePoint(0x1F600) + 'b'; "
+                       "i.setSelectionRange(1, 3, 'forward'); "
+                       "return i.selectionStart + ',' + i.selectionEnd; })()"),
+            "1,3");
+  // setRangeText removes the whole surrogate pair.
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.value = 'a' + String.fromCodePoint(0x1F600) + 'b'; "
+                       "i.setRangeText('X', 1, 3, 'select'); "
+                       "return i.value + '|' + i.value.length + '|' + i.selectionStart + ',' + "
+                       "i.selectionEnd; })()"),
+            "aXb|3|1,2");
+  // A collapsed selection after the pair stays at code unit offset 2.
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.value = String.fromCodePoint(0x1F600); i.setSelectionRange(2, 2); "
+                       "return i.selectionStart + ',' + i.selectionEnd; })()"),
+            "2,2");
+}
+
+TEST_F(DomBinderTest, TextControlSelectionFiresSelectEvent)
+{
+  EXPECT_EQ(EvalString("(function(){ var i = document.createElement('input'); "
+                       "i.value = 'abc'; var fired = 0; "
+                       "i.addEventListener('select', function(){ fired++; }); "
+                       "i.setSelectionRange(0, 2); i.setSelectionRange(0, 2); "
+                       "i.select(); return fired; })()"),
+            "2");
+}
+
 TEST_F(DomBinderTest, LinkHrefAndImageSrc)
 {
   EXPECT_TRUE(EvalBool("(function(){ var d = document; "
