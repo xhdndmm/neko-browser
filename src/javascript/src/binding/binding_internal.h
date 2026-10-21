@@ -407,6 +407,51 @@ JSValue MakeRangeObject(JSContext* ctx,
                         JSValueConst prototype);
 void DefineRangePrototype(JSContext* ctx, Impl& impl);
 
+// Boundary-point helpers from range_binding.cpp, reused by the Selection
+// binding (selection_binding.cpp) so the DOM §5.5 rules have one
+// implementation instead of a second, subtly different copy:
+//   * RangeRootNode       — the root of |node|'s tree (nullptr for nullptr).
+//   * RangeNodeLength     — DOM "node length": UTF-16 code units for
+//                           character data, the child count otherwise, 0 for a
+//                           doctype.
+//   * CompareRangeBoundaryPoints — -1/0/1 in tree order; both points must be
+//                           in the same tree (callers check the roots).
+//   * StringifyRangeBoundaries — the Range stringifier for an arbitrary
+//                           boundary pair ("" when collapsed or cross-tree).
+//   * DeleteRangeContentsBetween — runs Range.deleteContents() on the pair
+//                           (offsets clamped, points ordered) and reports the
+//                           collapsed point, so Selection.deleteFromDocument()
+//                           mutates the DOM exactly like Range does.
+dom::Node* RangeRootNode(dom::Node* node);
+std::size_t RangeNodeLength(const dom::Node& node);
+int CompareRangeBoundaryPoints(const dom::Node* a,
+                               std::size_t a_offset,
+                               const dom::Node* b,
+                               std::size_t b_offset);
+std::string StringifyRangeBoundaries(dom::Node* start,
+                                     std::size_t start_offset,
+                                     dom::Node* end,
+                                     std::size_t end_offset);
+bool DeleteRangeContentsBetween(Impl& impl,
+                                dom::Node* start,
+                                std::size_t start_offset,
+                                dom::Node* end,
+                                std::size_t end_offset,
+                                dom::Node** collapsed_node,
+                                std::size_t* collapsed_offset);
+
+// selection_binding.cpp — the Selection interface (Selection API,
+// https://w3c.github.io/selection-api/).  Each document has at most one
+// Selection object; it is created lazily by document.getSelection() /
+// window.getSelection() and cached on Impl::selection for the binder's
+// lifetime, so both entry points (and repeated calls) return the same object.
+void EnsureSelectionClassRegistered(JSRuntime* rt);
+void DefineSelectionPrototype(JSContext* ctx, Impl& impl);
+// document.getSelection() (Selection API §Extensions to Document).  Returns
+// null for documents without a browsing context (anything but the binder's
+// main document).
+JSValue DocGetSelection(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+
 // element_binding.cpp — ParentNode.children implementation shared by Element
 // and DocumentFragment prototypes.
 JSValue ElementGetChildren(JSContext* ctx, JSValueConst this_val);
@@ -810,6 +855,12 @@ struct Impl
   JSValue attr_proto = JS_UNDEFINED;
   JSValue tree_walker_proto = JS_UNDEFINED;
   JSValue range_proto = JS_UNDEFINED;
+  JSValue selection_proto = JS_UNDEFINED;
+  // The document's Selection singleton (Selection API).  Created lazily by
+  // getSelection() and owned here for the binder's lifetime: the stable
+  // identity is what makes window.getSelection() === document.getSelection().
+  // The wrapper behind it stores the anchor/focus and range snapshots.
+  JSValue selection = JS_UNDEFINED;
   JSValue mutation_observer_proto = JS_UNDEFINED;
   JSValue dom_parser_proto = JS_UNDEFINED;
   JSValue xml_serializer_proto = JS_UNDEFINED;
@@ -1003,6 +1054,11 @@ struct Impl
   };
   std::vector<MutationObserver> mutation_observers;
   bool delivering_mutation_observers = false;
+  // Set while a selectionchange event is being dispatched.  The Selection API
+  // queues the event as a task and coalesces changes; this synchronous
+  // approximation (see selection_binding.cpp) uses the flag to keep a listener
+  // that mutates the selection from re-entering the dispatch.
+  bool dispatching_selection_change = false;
 
   void RecordChildListMutation(dom::Node* target,
                                std::vector<dom::Node*> added,

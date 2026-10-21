@@ -1235,7 +1235,7 @@ void DefineStyleSheetPrototype(JSContext* ctx, Impl& impl)
 
 void DefineDocumentPrototype(JSContext* ctx, Impl& impl)
 {
-  static const std::array<JSCFunctionListEntry, 16> kMethods = {{
+  static const std::array<JSCFunctionListEntry, 17> kMethods = {{
       JS_CFUNC_DEF("getElementById", 1, DocGetElementById),
       JS_CFUNC_DEF("createElement", 1, DocCreateElement),
       JS_CFUNC_DEF("createElementNS", 2, DocCreateElementNS),
@@ -1245,6 +1245,7 @@ void DefineDocumentPrototype(JSContext* ctx, Impl& impl)
       JS_CFUNC_DEF("createRange", 0, DocCreateRange),
       JS_CFUNC_DEF("createComment", 1, DocCreateComment),
       JS_CFUNC_DEF("createEvent", 1, DocCreateEvent),
+      JS_CFUNC_DEF("getSelection", 0, DocGetSelection),
       JS_CFUNC_DEF("querySelector", 1, DocQuerySelector),
       JS_CFUNC_DEF("querySelectorAll", 1, DocQuerySelectorAll),
       JS_CFUNC_DEF("getElementsByTagName", 1, DocGetElementsByTagName),

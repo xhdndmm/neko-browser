@@ -497,6 +497,7 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   EnsureNodeClassRegistered(rt);
   EnsureAttrClassRegistered(rt);
   EnsureRangeClassRegistered(rt);
+  EnsureSelectionClassRegistered(rt);
   EnsureEventClassRegistered(rt);
   EnsureDatasetClassRegistered(rt);
   EnsureXhrClassRegistered(rt);
@@ -567,6 +568,7 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   DefineCanvasPrototype(ctx, *this);
   DefineDocumentPrototype(ctx, *this);
   DefineRangePrototype(ctx, *this);
+  DefineSelectionPrototype(ctx, *this);
   DefineStylePrototype(ctx, *this);
   DefineStyleSheetPrototype(ctx, *this);
   DefineEventPrototype(ctx, *this);
@@ -1652,6 +1654,8 @@ Impl::~Impl()
                            "Event",
                            "UIEvent",
                            "CustomEvent",
+                           "Selection",
+                           "getSelection",
                            "CSSStyleSheet",
                            "CSSRule",
                            "AbortController",
@@ -1712,6 +1716,13 @@ Impl::~Impl()
   JS_FreeValue(ctx, attr_proto);
   JS_FreeValue(ctx, tree_walker_proto);
   JS_FreeValue(ctx, range_proto);
+  JS_FreeValue(ctx, selection_proto);
+  if (!JS_IsUndefined(selection)) {
+    // The Document's Selection singleton (owned by the binder, not by the
+    // global object); releasing it lets the GC finalize the wrapper.
+    JS_FreeValue(ctx, selection);
+    selection = JS_UNDEFINED;
+  }
   JS_FreeValue(ctx, mutation_observer_proto);
   JS_FreeValue(ctx, dom_parser_proto);
   JS_FreeValue(ctx, xml_serializer_proto);

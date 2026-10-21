@@ -318,6 +318,22 @@ struct PageApis
 //               they need the layout tree) and live-range mutation adjustment
 //               (the DOM has no document back-pointer/mutation hook, so a
 //               range is a static snapshot; see range_binding.cpp).
+//   Selection: window.getSelection()/document.getSelection() (one Selection per
+//               document, shared by both entry points; null for a document
+//               without a browsing context); anchorNode/anchorOffset/
+//               focusNode/focusOffset/isCollapsed/rangeCount/type; getRangeAt,
+//               addRange, removeRange, removeAllRanges/empty, collapse,
+//               collapseToStart/collapseToEnd, extend, setBaseAndExtent,
+//               selectAllChildren, deleteFromDocument, containsNode and the
+//               stringifier; a synchronously dispatched non-bubbling
+//               "selectionchange" event at the document.  The selection stores
+//               anchor/focus boundary points and builds Range objects on
+//               demand, so getRangeAt(0) reads the current selection but range
+//               identity/liveness is not provided (the engine's Range has no
+//               live adjustment; see selection_binding.cpp).  NOT IMPLEMENTED:
+//               text-control (<input>/<textarea>) selections through
+//               getSelection, Selection.direction, modify(), getComposedRanges,
+//               and selectstart.
 //   Node:       nodeType, nodeName, textContent (get/set), parentNode,
 //               parentElement, firstChild, lastChild, childNodes,
 //               nextSibling, previousSibling, ownerDocument, isConnected,

@@ -3733,6 +3733,360 @@ TEST_F(DomBinderTest, RangeGeometryIsExplicitlyNotImplemented)
             "function|function|NotSupportedError,NotSupportedError");
 }
 
+// ---------------------------------------------------------------------------
+// Selection (Selection API, https://w3c.github.io/selection-api/).
+// ---------------------------------------------------------------------------
+
+TEST_F(DomBinderTest, SelectionGetSelectionIdentityAndInitialState)
+{
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var first = window.getSelection();
+      var second = document.getSelection();
+      var third = getSelection();
+      return [first === second, second === third, first === window.getSelection(),
+              first.rangeCount, first.isCollapsed,
+              first.anchorNode === null, first.focusNode === null,
+              first.anchorOffset, first.focusOffset, first.type,
+              String(first) === '',
+              first instanceof Selection,
+              typeof Selection, typeof getSelection, Selection.length,
+              Object.getOwnPropertyDescriptor(Selection.prototype, 'anchorNode').set === undefined,
+              Object.getOwnPropertyDescriptor(Selection.prototype, 'rangeCount').set === undefined,
+              Object.getOwnPropertyDescriptor(Selection.prototype, 'type').set === undefined,
+              document.implementation.createHTMLDocument('x').getSelection() === null
+             ].join(',');
+    })()
+  )js"),
+            "true,true,true,0,true,true,true,0,0,None,true,true,function,function,0,true,true,true,"
+            "true");
+
+  // A Selection keeps a stable object identity: repeated reads, including reads
+  // after other script has run, return the same object (the per-document
+  // singleton).
+  EXPECT_TRUE(EvalBool("(function(){ var a = document.getSelection();"
+                       " window._selectionIdentity = a; return true; })()"));
+  EXPECT_TRUE(EvalBool("window._selectionIdentity === getSelection()"));
+}
+
+TEST_F(DomBinderTest, SelectionSelectAllChildrenAndStringifier)
+{
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.getElementById('first');
+      var selection = document.getSelection();
+      selection.selectAllChildren(p);
+      var range = selection.getRangeAt(0);
+      var element = [selection.rangeCount, selection.type, selection.isCollapsed,
+                     selection.anchorNode === p, selection.anchorOffset,
+                     selection.focusNode === p, selection.focusOffset,
+                     range.startContainer === p, range.startOffset,
+                     range.endContainer === p, range.endOffset,
+                     selection.toString(), range.toString()].join(',');
+      selection.selectAllChildren(p.firstChild);
+      var text = [selection.anchorNode === p.firstChild, selection.anchorOffset,
+                  selection.focusOffset, selection.toString()].join(',');
+      return element + '|' + text;
+    })()
+  )js"),
+            "1,Range,false,true,0,true,2,true,0,true,2,Hello world,Hello world|"
+            "true,0,6,Hello ");
+}
+
+TEST_F(DomBinderTest, SelectionCollapseVariants)
+{
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.getElementById('first');
+      var t = p.firstChild;
+      var selection = document.getSelection();
+      selection.collapse(t, 2);
+      var caret = [selection.type, selection.isCollapsed, selection.anchorNode === t,
+                   selection.anchorOffset, selection.focusOffset, selection.rangeCount,
+                   selection.toString(), selection.getRangeAt(0).collapsed].join(',');
+      selection.selectAllChildren(p);
+      selection.collapseToStart();
+      var start = [selection.type, selection.anchorNode === p, selection.anchorOffset,
+                   selection.focusOffset].join(',');
+      selection.selectAllChildren(p);
+      selection.collapseToEnd();
+      var end = [selection.anchorNode === p, selection.anchorOffset,
+                 selection.focusOffset, selection.isCollapsed].join(',');
+      // The historical no-argument collapse() collapses to the end.
+      selection.selectAllChildren(p);
+      selection.collapse();
+      var legacy = [selection.anchorNode === p, selection.anchorOffset,
+                    selection.focusOffset].join(',');
+      // collapse(null) removes all ranges.
+      selection.collapse(null);
+      var cleared = [selection.rangeCount, selection.type, selection.anchorNode === null,
+                     selection.isCollapsed].join(',');
+      // collapse() on an empty selection is a no-op.
+      selection.collapse();
+      var noop = [selection.rangeCount, selection.type].join(',');
+      return [caret, start, end, legacy, cleared, noop].join('|');
+    })()
+  )js"),
+            "Caret,true,true,2,2,1,,true|Caret,true,0,0|true,2,2,true|true,2,2|0,None,true,true|"
+            "0,None");
+}
+
+TEST_F(DomBinderTest, SelectionExtendAndSetBaseAndExtent)
+{
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.createElement('p');
+      var t = document.createTextNode('abcdef');
+      p.appendChild(t);
+      document.body.appendChild(p);
+      var selection = document.getSelection();
+      selection.collapse(t, 4);
+      selection.extend(t, 1);
+      var backward = [selection.anchorNode === t, selection.anchorOffset,
+                      selection.focusNode === t, selection.focusOffset,
+                      selection.isCollapsed, selection.type, selection.toString(),
+                      selection.getRangeAt(0).startOffset,
+                      selection.getRangeAt(0).endOffset,
+                      selection.getRangeAt(0).collapsed].join(',');
+      selection.extend(t, 6);
+      var forward = [selection.anchorOffset, selection.focusOffset, selection.type,
+                     selection.toString()].join(',');
+      selection.setBaseAndExtent(t, 5, t, 2);
+      var base = [selection.anchorOffset, selection.focusOffset, selection.type,
+                  selection.toString(), selection.getRangeAt(0).startOffset,
+                  selection.getRangeAt(0).endOffset].join(',');
+      selection.setBaseAndExtent(t, 1, t, 4);
+      var baseForward = [selection.anchorOffset, selection.focusOffset,
+                         selection.toString()].join(',');
+      return [backward, forward, base, baseForward].join('|');
+    })()
+  )js"),
+            "true,4,true,1,false,Range,bcd,1,4,false|4,6,Range,ef|"
+            "5,2,Range,cde,2,5|1,4,bcd");
+}
+
+TEST_F(DomBinderTest, SelectionContainsNode)
+{
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.getElementById('first');
+      var hello = p.firstChild;
+      var bold = p.querySelector('b');
+      var world = bold.firstChild;
+      var selection = document.getSelection();
+      selection.setBaseAndExtent(hello, 2, world, 3);
+      return [selection.containsNode(p),
+              selection.containsNode(hello), selection.containsNode(hello, true),
+              selection.containsNode(bold), selection.containsNode(bold, true),
+              selection.containsNode(world), selection.containsNode(world, true),
+              selection.containsNode(document.body),
+              selection.containsNode(document.implementation.createHTMLDocument('x').body)
+             ].join(',');
+    })()
+  )js"),
+            "false,false,true,false,true,false,true,false,false");
+
+  // An empty selection contains nothing, not even the document.
+  EXPECT_EQ(EvalString("(function(){ var s = document.getSelection();"
+                       " s.removeAllRanges();"
+                       " return [s.containsNode(document), s.containsNode(document.body, true)]"
+                       ".join(','); })()"),
+            "false,false");
+}
+
+TEST_F(DomBinderTest, SelectionRangeListManagement)
+{
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.createElement('p');
+      var t = document.createTextNode('abcdef');
+      p.appendChild(t);
+      document.body.appendChild(p);
+      var selection = document.getSelection();
+      var first = document.createRange();
+      first.setStart(t, 1); first.setEnd(t, 3);
+      var second = document.createRange();
+      second.setStart(t, 4); second.setEnd(t, 5);
+      selection.addRange(first);
+      var initial = [selection.rangeCount, selection.type, selection.anchorNode === t,
+                     selection.anchorOffset, selection.focusOffset, selection.toString(),
+                     selection.getRangeAt(0).toString(),
+                     selection.getRangeAt(0) === first].join(',');
+      selection.addRange(first); // already in the range list: ignored
+      var deduped = selection.rangeCount;
+      selection.addRange(second); // appended (multi-range extension)
+      var multi = [selection.rangeCount, selection.getRangeAt(1).toString(),
+                   selection.toString(), selection.anchorOffset,
+                   selection.focusOffset].join(',');
+      selection.removeRange(second);
+      var removed = [selection.rangeCount, selection.toString()].join(',');
+      var notFound = '';
+      try { selection.removeRange(document.createRange()); } catch (e) { notFound = e.name; }
+      var badIndex = '';
+      try { selection.getRangeAt(1); } catch (e) { badIndex = e.name; }
+      var negativeIndex = '';
+      try { selection.getRangeAt(-1); } catch (e) { negativeIndex = e.name; }
+      selection.removeAllRanges();
+      var cleared = [selection.rangeCount, selection.type].join(',');
+      selection.addRange(first);
+      selection.empty();
+      var emptied = selection.rangeCount;
+      var emptyGet = '';
+      try { selection.getRangeAt(0); } catch (e) { emptyGet = e.name; }
+      var foreign = '';
+      var other = document.implementation.createHTMLDocument('x');
+      try { selection.addRange(other.createRange()); } catch (e) { foreign = e.name; }
+      return [initial, deduped, multi, removed, notFound, badIndex, negativeIndex,
+              cleared, emptied, emptyGet, foreign].join('|');
+    })()
+  )js"),
+            // getRangeAt() builds a new Range on demand (the engine has no live
+            // ranges), so the identity check is deliberately false.
+            "1,Range,true,1,3,bc,bc,false|1|2,e,bc,1,3|1,bc|NotFoundError|IndexSizeError|"
+            "IndexSizeError|0,None|0|IndexSizeError|WrongDocumentError");
+}
+
+TEST_F(DomBinderTest, SelectionBoundaryValidation)
+{
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.getElementById('first');
+      var t = p.firstChild;
+      var selection = document.getSelection();
+      var other = document.implementation.createHTMLDocument('x');
+      function failure(fn) {
+        try { fn(); return 'no'; } catch (e) { return e.name; }
+      }
+      var names = [];
+      names.push(failure(function(){ selection.collapse(p, 3); }));
+      names.push(failure(function(){ selection.collapse(document.doctype, 0); }));
+      names.push(failure(function(){ selection.collapse(other.body, 0); }));
+      names.push(failure(function(){ selection.selectAllChildren(document.doctype); }));
+      names.push(failure(function(){ selection.selectAllChildren(other.body); }));
+      names.push(failure(function(){ selection.setBaseAndExtent(t, 0, other.body, 0); }));
+      names.push(failure(function(){ selection.setBaseAndExtent(t, 99, t, 0); }));
+      names.push(failure(function(){ selection.collapseToStart(); }));
+      names.push(failure(function(){ selection.collapseToEnd(); }));
+      names.push(failure(function(){ selection.extend(t, 0); }));
+      selection.collapse(t, 1);
+      // A rejected call leaves the selection untouched.
+      names.push(failure(function(){ selection.collapse(t, 99); }));
+      var unchanged = [selection.anchorNode === t, selection.anchorOffset].join(',');
+      names.push(failure(function(){ selection.extend(t, 99); }));
+      names.push(failure(function(){ selection.extend(other.body, 0); }));
+      names.push(failure(function(){ selection.extend(document.doctype, 0); }));
+      names.push(failure(function(){ selection.setBaseAndExtent(document.doctype, 0, t, 0); }));
+      return names.join(',') + '|' + unchanged;
+    })()
+  )js"),
+            "IndexSizeError,InvalidNodeTypeError,WrongDocumentError,InvalidNodeTypeError,"
+            "WrongDocumentError,WrongDocumentError,IndexSizeError,InvalidStateError,"
+            "InvalidStateError,InvalidStateError,IndexSizeError,IndexSizeError,"
+            "WrongDocumentError,InvalidNodeTypeError,InvalidNodeTypeError|true,1");
+}
+
+TEST_F(DomBinderTest, SelectionDeleteFromDocument)
+{
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.createElement('p');
+      var t = document.createTextNode('abcdef');
+      p.appendChild(t);
+      document.body.appendChild(p);
+      var selection = document.getSelection();
+      selection.setBaseAndExtent(t, 1, t, 4);
+      var before = selection.toString();
+      selection.deleteFromDocument();
+      var same = [before, t.data, selection.isCollapsed, selection.type,
+                  selection.anchorNode === t, selection.anchorOffset,
+                  selection.focusOffset, selection.rangeCount,
+                  selection.toString()].join(',');
+      // Cross-node deletion removes the fully contained element too.
+      var host = document.createElement('div');
+      var head = document.createTextNode('ab');
+      var bold = document.createElement('b');
+      bold.appendChild(document.createTextNode('cd'));
+      var tail = document.createTextNode('ef');
+      host.appendChild(head); host.appendChild(bold); host.appendChild(tail);
+      document.body.appendChild(host);
+      selection.setBaseAndExtent(head, 1, tail, 1);
+      selection.deleteFromDocument();
+      var cross = [host.textContent, host.children.length, selection.anchorNode === host,
+                   selection.anchorOffset, selection.rangeCount,
+                   selection.type].join(',');
+      return same + '|' + cross;
+    })()
+  )js"),
+            "bcd,aef,true,Caret,true,1,1,1,|af,0,true,1,1,Caret");
+}
+
+TEST_F(DomBinderTest, SelectionChangeEvent)
+{
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.getElementById('first');
+      var t = p.firstChild;
+      var seen = [];
+      document.addEventListener('selectionchange', function(event) {
+        seen.push(event.type + ':' + event.bubbles + ':' + (event.target === document));
+      });
+      window.addEventListener('selectionchange', function() { seen.push('window'); });
+      var selection = document.getSelection();
+      selection.collapse(t, 1);        // change: event
+      selection.collapse(t, 1);        // same state: no event
+      selection.extend(t, 3);          // change: event
+      selection.selectAllChildren(p);  // change: event
+      selection.removeAllRanges();     // change: event
+      selection.removeAllRanges();     // already empty: no event
+      var events = seen.length;
+      selection.empty();               // already empty alias: no event
+      var afterEmpty = seen.length;
+      return [events, afterEmpty, seen.join(',')].join('|');
+    })()
+  )js"),
+            "8|8|selectionchange:false:true,window,selectionchange:false:true,window,"
+            "selectionchange:false:true,window,selectionchange:false:true,window");
+}
+
+TEST_F(DomBinderTest, SelectionSurvivesBoundaryNodeRemovalAndTextShrinking)
+{
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var host = document.createElement('div');
+      var t = document.createTextNode('abcdef');
+      host.appendChild(t);
+      document.body.appendChild(host);
+      var selection = document.getSelection();
+      selection.setBaseAndExtent(t, 1, t, 4);
+      var before = [selection.toString(), selection.rangeCount, selection.type].join(',');
+      host.removeChild(t);
+      // The removed node is still retained by the binder (so the pointer stays
+      // valid), but it is outside the document tree: the selection reports
+      // itself empty instead of crashing or rebasing onto another point.
+      var after = [selection.rangeCount, selection.type,
+                   selection.anchorNode === null, selection.focusNode === null,
+                   selection.anchorOffset, selection.focusOffset,
+                   selection.isCollapsed, String(selection),
+                   selection.containsNode(t)].join(',');
+      var getRange = '';
+      try { selection.getRangeAt(0); } catch (e) { getRange = e.name; }
+      host.appendChild(t);
+      var restored = [selection.rangeCount, selection.type, selection.toString()].join(',');
+      // A shortened Text node clamps the stored offsets on read.
+      selection.setBaseAndExtent(t, 1, t, 5);
+      t.data = 'xy';
+      var clamped = [selection.anchorOffset, selection.focusOffset, selection.type,
+                     selection.toString(), selection.getRangeAt(0).startOffset,
+                     selection.getRangeAt(0).endOffset].join(',');
+      var live = '';
+      try { selection.getRangeAt(0); live = 'ok'; } catch (e) { live = e.name; }
+      return [before, after, getRange, restored, clamped, live].join('|');
+    })()
+  )js"),
+            "bcd,1,Range|0,None,true,true,0,0,false,,false|IndexSizeError|1,Range,bcd|"
+            "1,2,Range,y,1,2|ok");
+}
+
 TEST_F(DomBinderTest, MessageEventConstructorAndMessagePortDispatch)
 {
   EXPECT_TRUE(

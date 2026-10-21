@@ -1441,6 +1441,86 @@ RangeConstructor(JSContext* ctx, JSValueConst new_target, int /*argc*/, JSValueC
 
 } // namespace
 
+// --- Boundary-point helpers shared with Selection ---------------------------
+//
+// The Selection binding (selection_binding.cpp) stores anchor/focus boundary
+// points and materializes Range objects on demand, so it needs the same node
+// length / comparison / stringification / delete algorithms this file uses.
+// Exporting them keeps one implementation of the DOM §5.5 rules.
+
+dom::Node* RangeRootNode(dom::Node* node)
+{
+  return node != nullptr ? RootOf(node) : nullptr;
+}
+
+std::size_t RangeNodeLength(const dom::Node& node)
+{
+  return NodeLength(node);
+}
+
+int CompareRangeBoundaryPoints(const dom::Node* a,
+                               std::size_t a_offset,
+                               const dom::Node* b,
+                               std::size_t b_offset)
+{
+  if (a == nullptr || b == nullptr) {
+    return 0;
+  }
+  return ComparePoints(a, a_offset, b, b_offset);
+}
+
+std::string StringifyRangeBoundaries(dom::Node* start,
+                                     std::size_t start_offset,
+                                     dom::Node* end,
+                                     std::size_t end_offset)
+{
+  if (start == nullptr || end == nullptr || RootOf(start) != RootOf(end)) {
+    return {};
+  }
+  const RangeState range{start,
+                         std::min(start_offset, NodeLength(*start)),
+                         end,
+                         std::min(end_offset, NodeLength(*end))};
+  if (IsCollapsed(range)) {
+    return {};
+  }
+  return StringifyRange(range);
+}
+
+bool DeleteRangeContentsBetween(Impl& impl,
+                                dom::Node* start,
+                                std::size_t start_offset,
+                                dom::Node* end,
+                                std::size_t end_offset,
+                                dom::Node** collapsed_node,
+                                std::size_t* collapsed_offset)
+{
+  if (start == nullptr || end == nullptr || collapsed_node == nullptr ||
+      collapsed_offset == nullptr) {
+    return false;
+  }
+  // The two points can only be ordered (and their content deleted) inside one
+  // tree; a caller that broke that invariant gets a no-op instead of undefined
+  // behaviour from the range algorithms.
+  if (RootOf(start) != RootOf(end)) {
+    return false;
+  }
+  RangeState range{start,
+                   std::min(start_offset, NodeLength(*start)),
+                   end,
+                   std::min(end_offset, NodeLength(*end))};
+  // Boundary points can be reversed after a DOM mutation shrank one of the
+  // containers; the selection's range is the ordered pair, so order it here.
+  if (ComparePoints(range.start_node, range.start_offset, range.end_node, range.end_offset) > 0) {
+    std::swap(range.start_node, range.end_node);
+    std::swap(range.start_offset, range.end_offset);
+  }
+  DeleteRangeContents(impl, range);
+  *collapsed_node = range.start_node;
+  *collapsed_offset = range.start_offset;
+  return true;
+}
+
 void EnsureRangeClassRegistered(JSRuntime* rt)
 {
   std::lock_guard<std::mutex> lock(g_range_class_mutex);
