@@ -151,6 +151,32 @@ void PaintWidget(const layout::LayoutBox& box, DisplayList& list)
   }
 }
 
+// Disclosure triangle of a <details> summary (WHATWG HTML §4.11.1).  The
+// marker gutter was reserved by layout (summary padding-left); the triangle is
+// built from one axis-aligned fill per row so it rasterizes deterministically,
+// independent of fonts and platforms -- the browser UA's ::marker glyph is not
+// used.  Collapsed points right (4x7), open points down (7x4); both are
+// pixel-snapped and centred on the summary's first line.
+void PaintDetailsMarker(const layout::LayoutBox& box, DisplayList& list)
+{
+  const css::Color ink = box.style.color.value_or(css::Color{0, 0, 0, 255});
+  const auto snap = [](float v) { return std::round(v); };
+  const float line_height = !box.lines.empty() ? box.lines.front().height : box.style.line_height;
+  const float gap = 16.0f; // keep in sync with kDisclosureMarkerGap in layout.cpp
+  const float center_x = box.content_x() - gap / 2.0f;
+  const int rows = box.details_open ? 4 : 7;
+  const float width = static_cast<float>(box.details_open ? 7 : 4);
+  const float left = snap(center_x - width / 2.0f);
+  const float top = snap(box.content_y() + (line_height - static_cast<float>(rows)) / 2.0f);
+  for (int row = 0; row < rows; ++row) {
+    // Collapsed: 1,2,3,4,3,2,1 wide.  Open: 7,5,3,1 wide.
+    const float run = box.details_open ? 7.0f - 2.0f * static_cast<float>(row)
+                                       : static_cast<float>(row < 4 ? row + 1 : 7 - row);
+    const float run_left = box.details_open ? left + static_cast<float>(row) : left;
+    list.FillRect(run_left, top + static_cast<float>(row), run, 1, ink);
+  }
+}
+
 // Fills a box's border box with its background color, honouring border-radius.
 void FillBackground(const layout::LayoutBox& box, css::Color color, DisplayList& list)
 {
@@ -579,6 +605,12 @@ void Painter::PaintBoxSelf(const layout::LayoutBox& box, DisplayList& list) cons
   // Native widget innards (checkbox tick, radio dot, drop-down arrow) sit on
   // top of the chrome and under the content.
   PaintWidget(box, list);
+
+  // A <summary> disclosure control draws its triangle in the gutter layout
+  // reserved for it.
+  if (box.details_summary) {
+    PaintDetailsMarker(box, list);
+  }
 
   // Replaced content: the decoded image drawn into the content box per
   // object-fit.

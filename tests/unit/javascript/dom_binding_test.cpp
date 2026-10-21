@@ -6747,5 +6747,52 @@ TEST(FocusBindingTest, TabIndexAndInertReflectTheirAttributes)
             "false|true|true|false");
 }
 
+// HTMLDetailsElement.open (WHATWG HTML §4.11.1): reflects the `open` content
+// attribute; changing whether the attribute is present fires the plain,
+// non-bubbling `toggle` event on the details element (this engine dispatches
+// it synchronously instead of queueing a task -- documented approximation).
+TEST(DetailsBindingTest, OpenReflectsAndFiresToggle)
+{
+  std::unique_ptr<dom::Document> document =
+      html::Parser(R"(<!doctype html><html><body><details id="d">)"
+                   R"(<summary>Title</summary><p>Body</p></details></body></html>)")
+          .Parse();
+  PageApis apis;
+  apis.location_href = []() { return "https://www.example.com/"; };
+  DomBinder binder(*document, apis);
+  const auto run = [&binder](const std::string& code) {
+    const auto result = binder.Evaluate(code);
+    EXPECT_TRUE(result.has_value());
+    return result.has_value() ? result.value().ToString().value_or("<none>")
+                              : std::string("<error>");
+  };
+
+  // The interface exists and open only lives on details elements.
+  EXPECT_EQ(run("(document.getElementById('d') instanceof HTMLDetailsElement) ? 'yes' : 'no'"),
+            "yes");
+  EXPECT_EQ(run("('open' in document.createElement('div')) ? 'yes' : 'no'"), "no");
+
+  EXPECT_EQ(run("String(document.getElementById('d').open)"), "false");
+  // Property setter writes the attribute (empty value) and fires toggle once.
+  EXPECT_EQ(run("(function() { var d = document.getElementById('d');"
+                "  var n = 0, bubbles = null, target = null;"
+                "  d.addEventListener('toggle', function(e) {"
+                "    n++; bubbles = e.bubbles; target = e.target === d; });"
+                "  d.open = true;"
+                "  var a = d.open + '|' + d.getAttribute('open') + '|' + n + '|'"
+                "      + bubbles + '|' + target;"
+                "  d.open = true;" // no state change: no second event
+                "  var b = n;"
+                "  d.setAttribute('open', 'open');" // still open: no event
+                "  var c = n;"
+                "  d.removeAttribute('open');" // closes: event #2
+                "  var e = n + '|' + d.open;"
+                "  d.toggleAttribute('open');" // opens: event #3
+                "  var f = n + '|' + d.open;"
+                "  d.open = false;" // closes without the attribute present
+                "  return [a, b, c, e, f, n + '|' + d.open].join(';'); })()"),
+            "true||1|false|true;1;1;2|false;3|true;4|false");
+}
+
 } // namespace
 } // namespace neko::javascript

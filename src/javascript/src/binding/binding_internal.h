@@ -878,6 +878,7 @@ struct Impl
   JSValue html_media_element_proto = JS_UNDEFINED;
   JSValue html_video_element_proto = JS_UNDEFINED;
   JSValue html_template_element_proto = JS_UNDEFINED;
+  JSValue html_details_element_proto = JS_UNDEFINED;
   JSValue html_canvas_element_proto = JS_UNDEFINED;
   JSValue canvas_2d_proto = JS_UNDEFINED;
   JSValue svg_element_proto = JS_UNDEFINED;

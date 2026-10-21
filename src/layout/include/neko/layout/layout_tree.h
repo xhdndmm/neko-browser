@@ -122,6 +122,15 @@ struct LayoutBox
   bool form_control_checked = false;
   bool form_control_disabled = false;
 
+  // <details> disclosure control (WHATWG HTML §4.11.1): true when this box is
+  // the first <summary> element child of a <details> and layout reserved a
+  // disclosure-marker gutter for it (the marker is suppressed when the author
+  // sets `list-style-type: none`, see the UA sheet).  |details_open| records
+  // whether that <details> carried the `open` attribute when this box was
+  // built; the paint layer draws a right/down pointing triangle from it.
+  bool details_summary = false;
+  bool details_open = false;
+
   // CSS background-image (resolved URL from ComputedStyle) and its decoded
   // image, fetched by the browser keyed by the element (like <img>).  Empty
   // url = no background image.  Paint draws it over the box's background.

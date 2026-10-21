@@ -560,6 +560,7 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   html_media_element_proto = JS_NewObjectProto(ctx, element_proto);
   html_video_element_proto = JS_NewObjectProto(ctx, html_media_element_proto);
   html_template_element_proto = JS_NewObjectProto(ctx, element_proto);
+  html_details_element_proto = JS_NewObjectProto(ctx, element_proto);
   html_canvas_element_proto = JS_NewObjectProto(ctx, element_proto);
   svg_element_proto = JS_NewObjectProto(ctx, element_proto);
 
@@ -977,6 +978,7 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   DefineInterface(ctx, global, "HTMLVideoElement", html_video_element_proto);
   DefineInterface(ctx, global, "HTMLCanvasElement", html_canvas_element_proto);
   DefineInterface(ctx, global, "HTMLTemplateElement", html_template_element_proto);
+  DefineInterface(ctx, global, "HTMLDetailsElement", html_details_element_proto);
   DefineInterface(ctx, global, "CanvasRenderingContext2D", canvas_2d_proto);
   DefineInterface(ctx, global, "SVGElement", svg_element_proto);
   DefineInterface(ctx, global, "NodeList", node_list_proto);
@@ -1741,6 +1743,7 @@ Impl::~Impl()
   JS_FreeValue(ctx, html_video_element_proto);
   JS_FreeValue(ctx, html_canvas_element_proto);
   JS_FreeValue(ctx, html_template_element_proto);
+  JS_FreeValue(ctx, html_details_element_proto);
   JS_FreeValue(ctx, canvas_2d_proto);
   JS_FreeValue(ctx, svg_element_proto);
   JS_FreeValue(ctx, xhr_proto);
@@ -1891,6 +1894,9 @@ JSValue Impl::PrototypeFor(const dom::Node* node) const
     }
     if (element->tag_name() == "template") {
       return html_template_element_proto;
+    }
+    if (element->tag_name() == "details") {
+      return html_details_element_proto;
     }
     return element_proto;
   }

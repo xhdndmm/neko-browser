@@ -5713,5 +5713,232 @@ TEST(BrowserControllerTest, PasswordManagerSkipsOriginlessDocuments)
   EXPECT_TRUE(controller.SavedLogins().empty());
 }
 
+// ---------------------------------------------------------------------------
+// <details>/<summary> disclosure widget (WHATWG HTML §4.11.1).
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Click point at the centre of |element|'s first laid-out box.
+std::pair<float, float> BoxCenter(renderer::Page& page, dom::Element& element)
+{
+  const auto geometry = page.ElementBoxGeometry(element);
+  EXPECT_TRUE(geometry.has_value());
+  if (!geometry.has_value()) {
+    return {0.0f, 0.0f};
+  }
+  return {geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f};
+}
+
+} // namespace
+
+// Clicking the first <summary> toggles the details, fires toggle, and the
+// content appears/disappears from the layout tree.
+TEST(BrowserControllerTest, SummaryClickTogglesDetailsAndFiresToggle)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body><details id=\"d\"><summary id=\"s\">Title</summary>"
+                               "<p id=\"body\">Body</p></details>"
+                               "<script>window.__toggles=0;"
+                               "document.getElementById('d').addEventListener('toggle',"
+                               "  function(){ window.__toggles++; });"
+                               "</script></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* details = dom::QuerySelector(*tab->page->document(), "#d");
+  dom::Element* summary = dom::QuerySelector(*tab->page->document(), "#s");
+  dom::Element* body = dom::QuerySelector(*tab->page->document(), "#body");
+  ASSERT_NE(details, nullptr);
+  ASSERT_NE(summary, nullptr);
+  ASSERT_NE(body, nullptr);
+
+  EXPECT_FALSE(details->HasAttribute("open"));
+  EXPECT_FALSE(tab->page->ElementBoxGeometry(*body).has_value());
+
+  const auto [x, y] = BoxCenter(*tab->page, *summary);
+  EXPECT_TRUE(controller.DispatchPointerClick(tab->id, x, y));
+  EXPECT_TRUE(details->HasAttribute("open"));
+  EXPECT_TRUE(tab->page->ElementBoxGeometry(*body).has_value());
+  ASSERT_TRUE(tab->script_runtime != nullptr);
+  EXPECT_EQ(tab->script_runtime->Evaluate("window.__toggles").value().ToNumber().value_or(-1), 1.0);
+  // Clicking the summary focuses it (it is a focusable area).
+  EXPECT_EQ(tab->focused_element, summary);
+
+  const auto [x2, y2] = BoxCenter(*tab->page, *summary);
+  EXPECT_TRUE(controller.DispatchPointerClick(tab->id, x2, y2));
+  EXPECT_FALSE(details->HasAttribute("open"));
+  EXPECT_FALSE(tab->page->ElementBoxGeometry(*body).has_value());
+  EXPECT_EQ(tab->script_runtime->Evaluate("window.__toggles").value().ToNumber().value_or(-1), 2.0);
+}
+
+// preventDefault() on the click cancels the summary's activation: no toggle,
+// no toggle event.
+TEST(BrowserControllerTest, PreventDefaultSummaryClickDoesNotToggle)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body><details id=\"d\"><summary id=\"s\">Title</summary>"
+                               "<p id=\"body\">Body</p></details>"
+                               "<script>window.__toggles=0;"
+                               "document.getElementById('d').addEventListener('toggle',"
+                               "  function(){ window.__toggles++; });"
+                               "document.getElementById('s').addEventListener('click',"
+                               "  function(e){ e.preventDefault(); });"
+                               "</script></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* details = dom::QuerySelector(*tab->page->document(), "#d");
+  dom::Element* summary = dom::QuerySelector(*tab->page->document(), "#s");
+  ASSERT_NE(details, nullptr);
+  ASSERT_NE(summary, nullptr);
+
+  const auto [x, y] = BoxCenter(*tab->page, *summary);
+  EXPECT_TRUE(controller.DispatchPointerClick(tab->id, x, y));
+  EXPECT_FALSE(details->HasAttribute("open"));
+  ASSERT_TRUE(tab->script_runtime != nullptr);
+  EXPECT_EQ(tab->script_runtime->Evaluate("window.__toggles").value().ToNumber().value_or(-1), 0.0);
+}
+
+// The summary is in the sequential focus order; Enter and Space on the focused
+// summary toggle the details.
+TEST(BrowserControllerTest, KeyboardEnterAndSpaceToggleFocusedSummary)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body><details id=\"d\"><summary id=\"s\">Title</summary>"
+                               "<p id=\"body\">Body</p></details></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* details = dom::QuerySelector(*tab->page->document(), "#d");
+  dom::Element* summary = dom::QuerySelector(*tab->page->document(), "#s");
+  ASSERT_NE(details, nullptr);
+  ASSERT_NE(summary, nullptr);
+
+  // The only focusable area in the document is the summary.
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Tab", "Tab"));
+  EXPECT_EQ(tab->focused_element, summary);
+
+  EXPECT_FALSE(details->HasAttribute("open"));
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Enter", "Enter"));
+  EXPECT_TRUE(details->HasAttribute("open"));
+  EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", " ", "Space"));
+  EXPECT_FALSE(details->HasAttribute("open"));
+}
+
+// Clicking the content inside an open details does not toggle.
+TEST(BrowserControllerTest, ClickOnDetailsBodyDoesNotToggle)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body><details id=\"d\" open>"
+                               "<summary id=\"s\">Title</summary>"
+                               "<p id=\"body\">Body</p></details></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* details = dom::QuerySelector(*tab->page->document(), "#d");
+  dom::Element* body = dom::QuerySelector(*tab->page->document(), "#body");
+  ASSERT_NE(details, nullptr);
+  ASSERT_NE(body, nullptr);
+
+  const auto [x, y] = BoxCenter(*tab->page, *body);
+  controller.DispatchPointerClick(tab->id, x, y);
+  EXPECT_TRUE(details->HasAttribute("open"));
+}
+
+// Clicking where a hidden child would be (inside a closed details) hits the
+// document, not the un-rendered child, and does not toggle anything.
+TEST(BrowserControllerTest, ClickOnHiddenChildInsideClosedDetailsDoesNothing)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body><details id=\"d\" open>"
+                               "<summary id=\"s\">Title</summary>"
+                               "<p id=\"body\">Body</p></details></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* details = dom::QuerySelector(*tab->page->document(), "#d");
+  dom::Element* body = dom::QuerySelector(*tab->page->document(), "#body");
+  ASSERT_NE(details, nullptr);
+  ASSERT_NE(body, nullptr);
+  const auto [x, y] = BoxCenter(*tab->page, *body);
+
+  // Fold it: the body now has no box, so its previous position is page
+  // background (the details is only as tall as its summary).
+  details->RemoveAttribute("open");
+  tab->page->ReapplyStyles();
+  EXPECT_FALSE(tab->page->ElementBoxGeometry(*body).has_value());
+
+  controller.DispatchPointerClick(tab->id, x, y);
+  EXPECT_FALSE(details->HasAttribute("open"));
+}
+
+// Setting `open` from page script triggers a restyle/relayout on the next pump
+// (the attribute is not style-only, so the full restyle path runs).
+TEST(BrowserControllerTest, ScriptSetOpenRelayoutsDetails)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body><details id=\"d\"><summary id=\"s\">Title</summary>"
+                               "<p id=\"body\">Body</p></details>"
+                               "<script>setTimeout(function(){"
+                               "  document.getElementById('d').open = true; }, 0);"
+                               "</script></body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  tab->page->Layout(800, 600);
+  dom::Element* details = dom::QuerySelector(*tab->page->document(), "#d");
+  dom::Element* body = dom::QuerySelector(*tab->page->document(), "#body");
+  ASSERT_NE(details, nullptr);
+  ASSERT_NE(body, nullptr);
+  EXPECT_FALSE(details->HasAttribute("open"));
+  EXPECT_FALSE(tab->page->ElementBoxGeometry(*body).has_value());
+
+  controller.PumpScriptTimers();
+  EXPECT_TRUE(details->HasAttribute("open"));
+  EXPECT_TRUE(tab->page->ElementBoxGeometry(*body).has_value());
+}
+
 } // namespace
 } // namespace neko::browser

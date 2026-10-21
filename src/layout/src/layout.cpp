@@ -71,6 +71,75 @@ constexpr int kDefaultListBoxRows = 4;
 // same way.
 constexpr int kMaxFieldSizeChars = 1000;
 
+// Width of the disclosure-marker gutter reserved on the left of a <summary>
+// that is the disclosure control of a <details> (WHATWG HTML §4.11.1).  The
+// triangle itself is painted by the paint layer, not by a font glyph, so the
+// gutter only has to fit 7x7 css px plus breathing room.
+constexpr float kDisclosureMarkerGap = 16.0f;
+
+// The <details> element whose disclosure control is |summary|, or nullptr.
+// Per §4.11.1 the disclosure control is the first <summary> element child of a
+// <details>; a second <summary> is never one.
+const dom::Element* DetailsOfSummaryControl(const dom::Element& summary)
+{
+  if (summary.tag_name() != "summary") {
+    return nullptr;
+  }
+  const dom::Node* parent = summary.parent();
+  if (parent == nullptr || parent->node_type() != dom::NodeType::kElement) {
+    return nullptr;
+  }
+  const auto& details = static_cast<const dom::Element&>(*parent);
+  if (details.tag_name() != "details") {
+    return nullptr;
+  }
+  for (const dom::Node* child : details.ChildNodes()) {
+    if (child->node_type() != dom::NodeType::kElement) {
+      continue;
+    }
+    const auto& element = static_cast<const dom::Element&>(*child);
+    if (element.tag_name() != "summary") {
+      continue;
+    }
+    return &element == &summary ? &details : nullptr;
+  }
+  return nullptr;
+}
+
+// True when |child| of |parent| generates a box.  WHATWG HTML §4.11.1: a
+// <details> without the open attribute renders only its disclosure control
+// (its first <summary> element child) -- every other child, text nodes
+// included, is not rendered.  Without a <summary> a closed <details> renders
+// nothing at all.  This is the engine's rendering rule for details (the UA
+// sheet cannot express it: the real sheet uses a ::details-content slot and
+// content-visibility, neither of which this style engine has), so it is
+// applied by every place that walks a box's children: block flow, flex, grid
+// items and intrinsic-width measurement.
+bool RendersChild(const dom::Element& parent, const dom::Node& child)
+{
+  if (parent.tag_name() != "details" || parent.HasAttribute("open")) {
+    return true;
+  }
+  for (const dom::Node* candidate : parent.ChildNodes()) {
+    if (candidate->node_type() != dom::NodeType::kElement) {
+      continue;
+    }
+    const auto& element = static_cast<const dom::Element&>(*candidate);
+    if (element.tag_name() == "summary") {
+      return candidate == &child;
+    }
+  }
+  return false; // no summary: nothing is rendered while closed
+}
+
+// The disclosure-marker gutter a summary box reserves.  Always reserved for a
+// disclosure control: marker customization (`list-style-type`, `::marker`) is
+// NOT IMPLEMENTED (see the UA sheet comment).
+float DisclosureMarkerGutter(const dom::Element& element)
+{
+  return DetailsOfSummaryControl(element) != nullptr ? kDisclosureMarkerGap : 0.0f;
+}
+
 // A unit of inline content (a text chunk with its style).
 struct InlineItem
 {
@@ -933,6 +1002,9 @@ IntrinsicWidths MeasureContent(const dom::Element& element,
     auto add_max = [&sum_max](float value) { sum_max += static_cast<double>(value); };
     bool first = true;
     for (const dom::Node* child : element.ChildNodes()) {
+      if (!RendersChild(element, *child)) {
+        continue;
+      }
       if (child->node_type() == dom::NodeType::kText) {
         const std::string& text = static_cast<const dom::Text&>(*child).data();
         const std::string collapsed = MeasuredText(text, style.white_space);
@@ -997,6 +1069,9 @@ IntrinsicWidths MeasureContent(const dom::Element& element,
     double sum_max = 0;
     bool first = true;
     for (const dom::Node* child : element.ChildNodes()) {
+      if (!RendersChild(element, *child)) {
+        continue;
+      }
       if (child->node_type() == dom::NodeType::kText) {
         const std::string& text = static_cast<const dom::Text&>(*child).data();
         const std::string collapsed = MeasuredText(text, style.white_space);
@@ -1063,9 +1138,9 @@ IntrinsicWidths MeasureContent(const dom::Element& element,
                 ResolveSize(child_style.border_left, 0) + ResolveSize(child_style.border_right, 0),
             child_style.box_sizing);
       }
-      const float outer_extra = HorizontalBoxExtras(child_style) +
-                                ResolveSize(child_style.margin_left, 0) +
-                                ResolveSize(child_style.margin_right, 0);
+      const float outer_extra =
+          HorizontalBoxExtras(child_style) + DisclosureMarkerGutter(child_el) +
+          ResolveSize(child_style.margin_left, 0) + ResolveSize(child_style.margin_right, 0);
       if (!first) {
         sum_max += static_cast<double>(row ? style.column_gap : 0.0f);
       }
@@ -1091,6 +1166,9 @@ IntrinsicWidths MeasureContent(const dom::Element& element,
   };
 
   for (const dom::Node* child : element.ChildNodes()) {
+    if (!RendersChild(element, *child)) {
+      continue;
+    }
     if (child->node_type() == dom::NodeType::kText) {
       const std::string& text = static_cast<const dom::Text&>(*child).data();
       line_min = std::max(line_min,
@@ -1151,7 +1229,7 @@ IntrinsicWidths MeasureContent(const dom::Element& element,
                              child_style.display == style::Display::kTableRow ||
                              child_style.display == style::Display::kTableCell ||
                              child_style.display == style::Display::kTableCaption;
-    const float child_extras = HorizontalBoxExtras(child_style);
+    const float child_extras = HorizontalBoxExtras(child_style) + DisclosureMarkerGutter(child_el);
     if (block_level) {
       // Block-level content starts a new line.
       flush_line();
@@ -2308,6 +2386,12 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         return;
       }
       for (dom::Node* child : node.ChildNodes()) {
+        // A closed <details> renders only its disclosure control even when an
+        // author turns it into an inline box (the block/flex/grid paths apply
+        // the same rule).
+        if (!RendersChild(child_element, *child)) {
+          continue;
+        }
         CollectInline(
             *child, child_style, &child_element, containing_width, items, percent_base_height);
       }
@@ -2392,6 +2476,12 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         block_children.push_back(bc);
       };
       for (dom::Node* child : element.ChildNodes()) {
+        // A closed <details> renders only its first <summary> child; the rest
+        // of the subtree (text included) contributes no box, no line and no
+        // hit-test target.
+        if (!RendersChild(element, *child)) {
+          continue;
+        }
         if (child->node_type() == dom::NodeType::kText) {
           CollectText(
               static_cast<dom::Text*>(child)->data(), box.style, &element, current_inline_items());
@@ -2687,6 +2777,17 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         }
       }
       ResolveBoxEdges(*box, containing_width);
+
+      // A <summary> that is the disclosure control of a <details> reserves a
+      // gutter for the disclosure triangle, which the paint layer draws from
+      // the box's details flags (§4.11.1).  The real UA rule makes the summary
+      // a list item with a disclosure-* marker; this engine keeps it a block
+      // box and models the marker as a fixed left gutter, like a list marker.
+      if (const dom::Element* details = DetailsOfSummaryControl(element); details != nullptr) {
+        box->details_summary = true;
+        box->details_open = details->HasAttribute("open");
+        box->padding_left += kDisclosureMarkerGap;
+      }
 
       // A list item reserves space for its marker on the left: the marker box
       // is placed in the gap between the list's padding and the item content.
@@ -3193,6 +3294,11 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
                           std::vector<FlexItemData>& items)
     {
       for (dom::Node* child : element.ChildNodes()) {
+        // A closed <details> renders only its disclosure control (§4.11.1),
+        // even when an author turns it into a flex container.
+        if (!RendersChild(element, *child)) {
+          continue;
+        }
         // A bare text node inside a flex container becomes an anonymous flex
         // item (CSS Flexbox 1 §4) carrying the container's computed style.
         // Whitespace-only text between flex items is dropped.
@@ -4055,6 +4161,9 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       std::vector<GridItem> items;
 
       for (dom::Node* child : element.ChildNodes()) {
+        if (!RendersChild(element, *child)) {
+          continue;
+        }
         if (child->node_type() != dom::NodeType::kElement) {
           continue;
         }

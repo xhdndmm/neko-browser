@@ -338,6 +338,102 @@ void DispatchToggleEvents(javascript::DomBinder* runtime, dom::Element& element)
   }
 }
 
+// ---- <details>/<summary> disclosure widget (WHATWG HTML §4.11.1) ---------
+
+// The nearest <summary> ancestor-or-self of |element|, or nullptr.
+dom::Element* NearestSummary(dom::Element& element)
+{
+  for (dom::Node* node = &element; node != nullptr; node = node->parent()) {
+    if (node->node_type() != dom::NodeType::kElement) {
+      continue;
+    }
+    auto& candidate = static_cast<dom::Element&>(*node);
+    if (candidate.tag_name() == "summary") {
+      return &candidate;
+    }
+  }
+  return nullptr;
+}
+
+// The <details> whose disclosure control is |summary|, or nullptr.  The
+// disclosure control is the *first* <summary> element child (§4.11.1); a
+// second summary is not one.
+dom::Element* DetailsOfSummary(const dom::Element& summary)
+{
+  if (summary.tag_name() != "summary") {
+    return nullptr;
+  }
+  dom::Node* parent = summary.parent();
+  if (parent == nullptr || parent->node_type() != dom::NodeType::kElement) {
+    return nullptr;
+  }
+  auto& details = static_cast<dom::Element&>(*parent);
+  if (details.tag_name() != "details") {
+    return nullptr;
+  }
+  for (dom::Node* child : details.ChildNodes()) {
+    if (child->node_type() != dom::NodeType::kElement) {
+      continue;
+    }
+    auto& element = static_cast<dom::Element&>(*child);
+    if (element.tag_name() != "summary") {
+      continue;
+    }
+    return &element == &summary ? &details : nullptr;
+  }
+  return nullptr;
+}
+
+// True when |element| is interactive content with its own activation
+// behaviour (HTML §3.2.5.2.7, the kinds this engine implements).  A click on
+// such an element inside a <summary> must not also toggle the details.
+bool IsInteractiveContent(const dom::Element& element)
+{
+  const std::string_view tag = element.tag_name();
+  if (tag == "a" || tag == "area") {
+    return element.HasAttribute("href");
+  }
+  return tag == "button" || tag == "input" || tag == "select" || tag == "textarea" ||
+         tag == "iframe" || tag == "embed" || tag == "object" || tag == "label" || tag == "audio" ||
+         tag == "video";
+}
+
+// The <details> that a click on |target| activates, or nullptr.  A click on
+// the summary or a non-interactive descendant toggles; inside an interactive
+// descendant the descendant's own default action wins (HTML §4.11.1: "if the
+// target is interactive content, do nothing").
+dom::Element* DetailsForClick(const dom::Element& target)
+{
+  dom::Element* summary = NearestSummary(const_cast<dom::Element&>(target));
+  if (summary == nullptr) {
+    return nullptr;
+  }
+  for (const dom::Node* node = &target; node != nullptr && node != summary; node = node->parent()) {
+    if (node->node_type() == dom::NodeType::kElement &&
+        IsInteractiveContent(static_cast<const dom::Element&>(*node))) {
+      return nullptr;
+    }
+  }
+  return DetailsOfSummary(*summary);
+}
+
+// Toggles a <details> open state.  The caller re-lays out and then fires the
+// plain (non-bubbling) "toggle" event; the spec queues that event as a task, so
+// dispatching it synchronously after the relayout is a documented
+// approximation (handlers observe the new state, though not a later frame).
+bool ToggleDetails(dom::Element& details)
+{
+  if (details.tag_name() != "details") {
+    return false;
+  }
+  if (details.HasAttribute("open")) {
+    details.RemoveAttribute("open");
+  } else {
+    details.SetAttribute("open", "");
+  }
+  return true;
+}
+
 // ---- Focus (WHATWG HTML §6.6) ---------------------------------------------
 
 bool IsAsciiSpace(char c)
@@ -425,6 +521,11 @@ bool IsFocusable(const dom::Element& element)
   }
   if (tag == "textarea" || tag == "select" || tag == "button") {
     return true;
+  }
+  // A summary is focusable only when it is the disclosure control of a
+  // <details> (HTML §4.11.1); a second summary is not.
+  if (tag == "summary") {
+    return DetailsOfSummary(element) != nullptr;
   }
   if ((tag == "a" || tag == "area") && element.HasAttribute("href")) {
     return true;
@@ -1449,12 +1550,20 @@ bool BrowserController::DispatchPointerClick(int tab_id, float doc_x, float doc_
   // painting (read across threads under the page lock).  Focus changes run the
   // blur/focusout/focus/focusin sequence.
   if (!inert) {
-    if (IsFocusable(*element)) {
+    dom::Element* focus_target = const_cast<dom::Element*>(element);
+    if (!IsFocusable(*focus_target)) {
+      // A click on the non-focusable content of a disclosure control focuses
+      // the summary itself (HTML §4.11.1 makes the summary a focusable area).
+      dom::Element* summary = NearestSummary(*focus_target);
+      if (summary != nullptr && IsFocusable(*summary)) {
+        focus_target = summary;
+      }
+    }
+    if (IsFocusable(*focus_target)) {
       // Pointer focus leaves a caret at the end rather than selecting the
       // whole value (click-position hit testing is not modelled; keyboard and
       // script focus do select the contents).
-      FocusControl(
-          tab, const_cast<dom::Element*>(element), nullptr, nullptr, /*select_contents=*/false);
+      FocusControl(tab, focus_target, nullptr, nullptr, /*select_contents=*/false);
     } else if (tab->focused_element != nullptr) {
       FocusControl(tab, nullptr);
     }
@@ -1517,6 +1626,21 @@ bool BrowserController::DispatchPointerClick(int tab_id, float doc_x, float doc_
       SubmitForm(tab_id, form, submitter);
       return true;
     }
+  }
+  // Default action: clicking the disclosure control (the first <summary>
+  // child) toggles its <details> and fires the non-bubbling "toggle" event
+  // (HTML §4.11.1).  A canceled click returned above, so preventDefault keeps
+  // the widget closed/open.
+  if (dom::Element* details = DetailsForClick(*element)) {
+    ToggleDetails(*details);
+    // Re-lay out before the toggle listener runs so it observes the opened or
+    // collapsed box tree (the spec's task is queued after the rendering update
+    // opportunity; this is the documented synchronous approximation).
+    tab->page->ReapplyStyles();
+    if (tab->script_runtime != nullptr) {
+      tab->script_runtime->DispatchNonBubblingEvent(*details, "toggle");
+    }
+    return true;
   }
   return false;
 }
@@ -1772,6 +1896,21 @@ bool BrowserController::DispatchKeyboard(int tab_id,
     DispatchToggleEvents(tab->script_runtime.get(), *control);
     tab->page->ReapplyStyles();
     return not_canceled;
+  }
+  // Keyboard activation of a focused <summary> disclosure control: Enter and
+  // Space toggle its <details> (HTML §4.11.1).  The focused element must be
+  // the summary itself; interactive descendants (links/controls) have their
+  // own key handling above/below.
+  if (control != nullptr && control->tag_name() == "summary" &&
+      (key == " " || key == "Space" || key == "Spacebar" || key == "Enter")) {
+    if (dom::Element* details = DetailsOfSummary(*control)) {
+      ToggleDetails(*details);
+      tab->page->ReapplyStyles();
+      if (tab->script_runtime != nullptr) {
+        tab->script_runtime->DispatchNonBubblingEvent(*details, "toggle");
+      }
+      return not_canceled;
+    }
   }
   const bool input_is_text = control != nullptr && control->tag_name() == "input";
   bool value_changed = false;

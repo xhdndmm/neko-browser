@@ -844,6 +844,57 @@ JSValue ElementSetDir(JSContext* ctx, JSValueConst this_val, JSValueConst value)
   return JS_UNDEFINED;
 }
 
+// Fires the <details> "toggle" event when an attribute write changed whether
+// the `open` content attribute is present (HTML §4.11.1).  The spec queues the
+// event as a task; this engine dispatches it synchronously, a documented
+// approximation.  Only a state *change* fires (setting open="" on an already
+// open element is silent).
+void FireDetailsToggleOnAttributeChange(Impl* impl, dom::Element& element, bool was_open)
+{
+  if (impl == nullptr || element.tag_name() != "details" ||
+      element.HasAttribute("open") == was_open) {
+    return;
+  }
+  impl->DispatchNonBubblingToNode(&element, "toggle");
+}
+
+// HTMLDetailsElement.open: reflects the `open` content attribute.  Setting it
+// toggles the details' rendered state (layout reads the attribute) and fires
+// "toggle" like any other attribute change would.
+JSValue ElementGetOpen(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  return JS_NewBool(ctx, element->HasAttribute("open"));
+}
+
+JSValue ElementSetOpen(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const int open = JS_ToBool(ctx, value);
+  if (open < 0) {
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return JS_EXCEPTION;
+  }
+  Impl* impl = ImplFor(ctx, this_val);
+  const bool was_open = element->HasAttribute("open");
+  if (open != 0) {
+    element->SetAttribute("open", "");
+  } else {
+    element->RemoveAttribute("open");
+  }
+  // `open` is read directly by layout, not through the cascade: the full
+  // restyle path (any non-style-only attribute does this) rebuilds the tree.
+  impl->MarkAttrDirty(element, "open");
+  FireDetailsToggleOnAttributeChange(impl, *element, was_open);
+  return JS_UNDEFINED;
+}
+
 JSValue ElementGetOuterHTML(JSContext* ctx, JSValueConst this_val)
 {
   dom::Node* node = UnwrapNode(ctx, this_val);
@@ -1495,13 +1546,17 @@ JSValue ElementSetAttribute(JSContext* ctx, JSValueConst this_val, int argc, JSV
   if (!ok) {
     return JS_EXCEPTION;
   }
-  element->SetAttribute(name, value);
   Impl* impl = ImplFor(ctx, this_val);
+  const bool was_open = element->HasAttribute("open");
+  element->SetAttribute(name, value);
   impl->RecordAttributeMutation(element, name);
   // Media-loading attributes (src/srcset/...) only need the late-fetch pass;
   // style-only names take the scoped-restyle path; anything else can affect
   // geometry outside the cascade and takes the full restyle path.
   impl->MarkAttrDirty(element, name);
+  if (name == "open") {
+    FireDetailsToggleOnAttributeChange(impl, *element, was_open);
+  }
   return JS_UNDEFINED;
 }
 
@@ -1519,10 +1574,14 @@ JSValue ElementRemoveAttribute(JSContext* ctx, JSValueConst this_val, int argc, 
   if (!ok) {
     return JS_EXCEPTION;
   }
-  element->RemoveAttribute(name);
   Impl* impl = ImplFor(ctx, this_val);
+  const bool was_open = element->HasAttribute("open");
+  element->RemoveAttribute(name);
   impl->RecordAttributeMutation(element, name);
   impl->MarkAttrDirty(element, name);
+  if (name == "open") {
+    FireDetailsToggleOnAttributeChange(impl, *element, was_open);
+  }
   return JS_UNDEFINED;
 }
 
@@ -1563,14 +1622,18 @@ JSValue ElementToggleAttribute(JSContext* ctx, JSValueConst this_val, int argc, 
   if (force == present) {
     return JS_NewBool(ctx, present);
   }
+  Impl* impl = ImplFor(ctx, this_val);
+  const bool was_open = element->HasAttribute("open");
   if (force) {
     element->SetAttribute(name, "");
   } else {
     element->RemoveAttribute(name);
   }
-  Impl* impl = ImplFor(ctx, this_val);
   impl->RecordAttributeMutation(element, name);
   impl->MarkDomDirty(element);
+  if (name == "open") {
+    FireDetailsToggleOnAttributeChange(impl, *element, was_open);
+  }
   return JS_NewBool(ctx, force);
 }
 
@@ -1878,6 +1941,13 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
                impl.html_template_element_proto,
                "content",
                MakeGetter(ctx, "content", ElementGetTemplateContent));
+  // HTMLDetailsElement.open (HTML 4.11.1): only <details> elements get the
+  // accessor, so `'open' in div` stays false.
+  DefineAccessor(ctx,
+                 impl.html_details_element_proto,
+                 "open",
+                 MakeGetter(ctx, "open", ElementGetOpen),
+                 MakeSetter(ctx, "open", ElementSetOpen));
   DefineAccessor(ctx,
                  impl.element_proto,
                  "hidden",

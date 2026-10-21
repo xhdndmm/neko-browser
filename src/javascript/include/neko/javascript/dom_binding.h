@@ -347,7 +347,8 @@ struct PageApis
 //               nextElementSibling, previousElementSibling, querySelector(All),
 //               getElementsByTagName, getElementsByClassName, matches, closest,
 //               remove, innerHTML (get/set), outerHTML, style
-//               (CSSStyleDeclaration), hidden/title/lang, layout geometry
+//               (CSSStyleDeclaration), hidden/title/lang, tabIndex/inert,
+//               layout geometry
 //               (getBoundingClientRect / offsetWidth/Height/Left/Top /
 //               offsetParent / clientWidth/Height/Top/Left, backed by the
 //               browser layer's layout tree via PageApis::element_geometry),
@@ -359,6 +360,8 @@ struct PageApis
 //               a.href (resolved absolute)/target/rel;
 //               img.src (resolved)/currentSrc/alt/width/height/
 //               naturalWidth/naturalHeight/complete
+//   details:    HTMLDetailsElement.open (get/set, reflects the `open` content
+//               attribute; changing it fires the non-bubbling toggle event).
 //   Style:      setProperty/getPropertyValue/removeProperty plus direct
 //               accessors for a documented subset of properties
 //   Events:     new Event(type, {bubbles, cancelable}) with type/target/

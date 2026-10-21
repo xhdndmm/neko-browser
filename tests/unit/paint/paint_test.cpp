@@ -601,6 +601,68 @@ TEST(PainterTest, SelectPaintsDropArrow)
   EXPECT_EQ(CountInkRuns("<body></body>", black), 0);
 }
 
+namespace {
+
+const layout::LayoutBox* FindBoxByTag(const layout::LayoutBox& box, std::string_view tag)
+{
+  if (box.element != nullptr && box.element->tag_name() == tag) {
+    return &box;
+  }
+  for (const auto& child : box.children) {
+    if (const layout::LayoutBox* found = FindBoxByTag(*child, tag)) {
+      return found;
+    }
+  }
+  return nullptr;
+}
+
+} // namespace
+
+// A <summary> disclosure control paints its triangle in the reserved gutter:
+// 7 one-pixel rows when collapsed (right-pointing) and 4 when open
+// (down-pointing).
+TEST(PainterTest, DetailsSummaryPaintsDisclosureTriangle)
+{
+  const css::Color black{0, 0, 0, 255};
+  EXPECT_EQ(CountInkRuns("<body><details><summary>Title</summary></details></body>", black), 7);
+  EXPECT_EQ(CountInkRuns("<body><details open><summary>Title</summary></details></body>", black),
+            4);
+  EXPECT_EQ(CountInkRuns("<body><details><summary>T</summary></details></body>", black), 7);
+}
+
+// Pixel-level companion: the triangle ink actually lands left of the summary's
+// content (in the gutter), not on the text.
+TEST(PainterTest, DetailsMarkerPixelsSitInTheGutter)
+{
+  auto doc = html::Parser("<body><details><summary>Title</summary></details></body>").Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine layout(styles);
+  std::unique_ptr<layout::LayoutBox> root = layout.BuildLayoutTree(*doc, 400);
+  ASSERT_NE(root, nullptr);
+  const layout::LayoutBox* summary = FindBoxByTag(*root, "summary");
+  ASSERT_NE(summary, nullptr);
+  ASSERT_TRUE(summary->details_summary);
+
+  Rasterizer image(400, 80);
+  image.Clear(css::Color{255, 255, 255, 255});
+  Painter painter(root.get());
+  image.Rasterize(painter.Paint());
+
+  bool marker_ink = false;
+  for (int y = 0; y < 80; ++y) {
+    for (int x = 0; x < 400; ++x) {
+      if (static_cast<float>(x) >= summary->content_x()) {
+        continue;
+      }
+      if (Pixel(image, x, y) == (css::Color{0, 0, 0, 255})) {
+        marker_ink = true;
+      }
+    }
+  }
+  EXPECT_TRUE(marker_ink);
+}
+
 // The disabled control draws its marks in gray (faded ink), not black.
 TEST(PainterTest, DisabledWidgetDrawsGrayInk)
 {

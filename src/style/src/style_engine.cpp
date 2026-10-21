@@ -70,12 +70,18 @@ div, p, section, article, aside, header, footer, nav, main, hgroup,
 h1, h2, h3, h4, h5, h6,
 address, blockquote, pre, figure, figcaption, form, fieldset, legend, details,
 summary, hr, dl, dt, dd, ul, ol { display: block; }
-/* <details>/<summary> are block boxes (see the list above), but §15.5.5 also
-expected `details > summary:first-of-type` to become a display:list-item with
-a disclosure-closed marker (disclosure-open when [open]).  This engine has no
-:first-of-type, no disclosure-* list-style keywords and no ::marker box, so the
-disclosure triangle is NOT IMPLEMENTED and a closed <details> still lays out
-its content. */
+/* <details>/<summary> are block boxes (see the list above).  WHATWG HTML
+   §15.5.5 describes the disclosure control as `details > summary:first-of-type
+   { display: list-item; list-style-type: disclosure-closed }` (disclosure-open
+   when [open]).  This engine has no :first-of-type, no disclosure-* keywords
+   and no ::marker box, so the marker is implemented differently (documented in
+   the compatibility matrix): layout applies the spec's closed-<details>
+   rendering rule (only the first <summary> child renders) and reserves a
+   marker gutter on that summary; the paint layer always draws a
+   right/down-pointing triangle in it.  Marker customisation is NOT IMPLEMENTED:
+   `list-style-type` cannot suppress or restyle it because summary stays
+   `display: block` here (its computed list-style-type is the initial `none`,
+   which is indistinguishable from an author's explicit `none`). */
 table { display: table; }
 caption { display: table-caption; text-align: center; }
 thead, tbody, tfoot { display: table-row-group; }

@@ -2694,6 +2694,94 @@ TEST(LayoutTest, DlDtDdLayout)
   EXPECT_GT(dd3->y, dd2->y);
 }
 
+// ---------------------------------------------------------------------------
+// <details>/<summary> disclosure widget (WHATWG HTML §4.11.1).
+// ---------------------------------------------------------------------------
+
+// A closed <details> lays out only its disclosure control (the first
+// <summary> child); the rest of its children get no box at all (so they are
+// neither painted nor hit-testable -- hit-testing walks the layout tree).
+TEST(LayoutTest, ClosedDetailsLaysOutOnlyTheSummary)
+{
+  Page page = Build("<body><details id=\"d\"><summary>Title</summary>"
+                    "<p id=\"content\">Body</p></details></body>");
+  const LayoutBox* details = FindBox(*page.root, "#d", *page.doc);
+  ASSERT_NE(details, nullptr);
+  ASSERT_EQ(details->children.size(), 1u);
+  EXPECT_EQ(details->children[0]->element->tag_name(), "summary");
+  EXPECT_EQ(FindBox(*page.root, "#content", *page.doc), nullptr);
+
+  // The summary box is the disclosure control: a marker gutter is reserved and
+  // the collapsed state is recorded for the paint layer.
+  const LayoutBox* summary = details->children[0].get();
+  EXPECT_TRUE(summary->details_summary);
+  EXPECT_FALSE(summary->details_open);
+  EXPECT_GE(summary->padding_left, 16.0f);
+  // The closed details is exactly as tall as its summary.
+  EXPECT_NEAR(details->height, summary->height, 0.01f);
+}
+
+// An open <details> lays out every child normally.
+TEST(LayoutTest, OpenDetailsLaysOutAllChildren)
+{
+  Page page = Build("<body><details id=\"d\" open><summary>Title</summary>"
+                    "<p id=\"content\">Body</p></details></body>");
+  const LayoutBox* details = FindBox(*page.root, "#d", *page.doc);
+  ASSERT_NE(details, nullptr);
+  ASSERT_EQ(details->children.size(), 2u);
+  EXPECT_EQ(details->children[0]->element->tag_name(), "summary");
+  EXPECT_EQ(details->children[1]->element->tag_name(), "p");
+  EXPECT_TRUE(details->children[0]->details_summary);
+  EXPECT_TRUE(details->children[0]->details_open);
+  const LayoutBox* content = FindBox(*page.root, "#content", *page.doc);
+  ASSERT_NE(content, nullptr);
+  EXPECT_GE(content->y, details->children[0]->y);
+}
+
+// Adding the `open` attribute changes the box tree on the next layout pass
+// (the browser layer triggers ReapplyStyles on the attribute change).
+TEST(LayoutTest, TogglingOpenAttributeChangesLayout)
+{
+  Page page = Build("<body><details id=\"d\"><summary>Title</summary>"
+                    "<p id=\"content\">Body</p></details></body>");
+  const LayoutBox* closed = FindBox(*page.root, "#d", *page.doc);
+  ASSERT_NE(closed, nullptr);
+  const float closed_height = closed->height;
+  ASSERT_EQ(FindBox(*page.root, "#content", *page.doc), nullptr);
+
+  dom::Element* details = dom::QuerySelector(*page.doc, "#d");
+  ASSERT_NE(details, nullptr);
+  details->SetAttribute("open", "");
+  page.styles.ApplyStyles(*page.doc);
+  LayoutEngine engine(page.styles);
+  page.root = engine.BuildLayoutTree(*page.doc, 800.0f);
+
+  const LayoutBox* opened = FindBox(*page.root, "#d", *page.doc);
+  ASSERT_NE(opened, nullptr);
+  EXPECT_NE(FindBox(*page.root, "#content", *page.doc), nullptr);
+  EXPECT_TRUE(opened->children[0]->details_open);
+  EXPECT_GT(opened->height, closed_height);
+
+  // Removing it folds the content again.
+  details->RemoveAttribute("open");
+  page.styles.ApplyStyles(*page.doc);
+  LayoutEngine second(page.styles);
+  page.root = second.BuildLayoutTree(*page.doc, 800.0f);
+  EXPECT_EQ(FindBox(*page.root, "#content", *page.doc), nullptr);
+}
+
+// With no <summary> child, a closed <details> renders nothing (§4.11.1: the
+// engine has no UA-generated "Details" summary).
+TEST(LayoutTest, ClosedDetailsWithoutSummaryRendersNothing)
+{
+  Page page = Build("<body><details id=\"d\"><p id=\"content\">Body</p></details></body>");
+  const LayoutBox* details = FindBox(*page.root, "#d", *page.doc);
+  ASSERT_NE(details, nullptr);
+  EXPECT_TRUE(details->children.empty());
+  EXPECT_EQ(FindBox(*page.root, "#content", *page.doc), nullptr);
+  EXPECT_FLOAT_EQ(details->height, 0.0f);
+}
+
 // text-align: center / right shift the line's content within the available
 // width (CSS Text 3 §5).  Used by the UA rule caption { text-align: center }.
 TEST(LayoutTest, TextAlignCenterAndRight)
