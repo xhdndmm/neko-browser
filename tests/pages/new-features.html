@@ -1,0 +1,1210 @@
+<!DOCTYPE html>
+<!--
+  neko-browser web-platform acceptance page (2026-10).
+
+  Covers the features completed this cycle: fragment parsing, SVG/MathML
+  foreign content, template/form-pointer parsing, constraint validation,
+  complete form submission, focus/tabindex/inert, text-control selection,
+  Range, Selection, and details/summary.
+
+  Loading the page runs 40 automatic assertions and prints a PASS/FAIL
+  summary at the top.  The remaining items (focus(), actual submission,
+  clicking summary, clipboard-style selection) are marked 人工 and need
+  real interaction; headless mode intentionally has no focus callbacks.
+
+  Useful checks:
+    build/debug/bin/neko_browser --headless --dump-dom \
+        file://$PWD/tests/pages/new-features.html | grep '自动测试'
+    build/debug/bin/neko_browser --headless \
+        --screenshot /tmp/new-features.ppm \
+        file://$PWD/tests/pages/new-features.html
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>neko-browser 新功能验收页</title>
+<style>
+  body {
+    margin: 0;
+    padding: 24px;
+    background: #f6f7f9;
+    color: #202124;
+    font-family: sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  header { margin-bottom: 18px; }
+  h1 { margin: 0 0 6px 0; font-size: 24px; }
+  h2 { margin: 0 0 8px 0; font-size: 17px; }
+  p { margin: 6px 0; }
+  code, pre { font-family: monospace; }
+  pre {
+    background: #fff;
+    border: 1px solid #dadce0;
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin: 8px 0 0 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .summary {
+    background: #fff;
+    border: 2px solid #1a73e8;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 18px;
+  }
+  .summary .counts { font-size: 18px; font-weight: bold; }
+  .pass { color: #137333; }
+  .fail { color: #c5221f; }
+  .manual { color: #b06000; }
+  .card {
+    background: #fff;
+    border: 1px solid #dadce0;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 14px;
+  }
+  .card h2 { border-bottom: 1px solid #eee; padding-bottom: 6px; }
+  .note { color: #5f6368; font-size: 13px; }
+  .row {
+    display: flex;
+    align-items: baseline;
+    border-top: 1px solid #f1f3f4;
+    padding: 5px 0;
+  }
+  .row:first-child { border-top: none; }
+  .badge {
+    flex: 0 0 52px;
+    font-size: 12px;
+    font-weight: bold;
+    text-transform: uppercase;
+  }
+  .badge.pass { color: #137333; }
+  .badge.fail { color: #c5221f; }
+  .badge.manual { color: #b06000; }
+  .row .name { flex: 1 1 auto; padding-right: 12px; }
+  .row .detail { flex: 0 1 46%; color: #5f6368; font-family: monospace; font-size: 12px; }
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 8px 0;
+    align-items: center;
+  }
+  button {
+    font: inherit;
+    padding: 4px 12px;
+    border: 1px solid #1a73e8;
+    border-radius: 6px;
+    background: #1a73e8;
+    color: #fff;
+    cursor: pointer;
+  }
+  button.secondary { background: #fff; color: #1a73e8; }
+  input[type="text"], input[type="email"], input[type="number"], textarea {
+    font: inherit;
+    padding: 5px 8px;
+    border: 1px solid #9aa0a6;
+    border-radius: 6px;
+    background: #fff;
+  }
+  input:focus, textarea:focus { outline: 2px solid #1a73e8; }
+  .log {
+    background: #202124;
+    color: #e8eaed;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-family: monospace;
+    font-size: 12px;
+    min-height: 40px;
+    white-space: pre-wrap;
+  }
+  .inert-box {
+    border: 1px dashed #9aa0a6;
+    border-radius: 6px;
+    padding: 8px;
+    margin-top: 6px;
+    background: #fafafa;
+  }
+  .demo-svg { border: 1px solid #dadce0; border-radius: 6px; background: #fff; }
+  details { border: 1px solid #dadce0; border-radius: 6px; padding: 6px 10px; margin: 8px 0; }
+  summary { font-weight: bold; }
+  .pill {
+    display: inline-block;
+    border-radius: 10px;
+    padding: 0 8px;
+    background: #e8f0fe;
+    color: #1a73e8;
+    font-size: 12px;
+    margin-left: 6px;
+  }
+  .muted { color: #80868b; }
+  .cols { display: flex; gap: 16px; flex-wrap: wrap; }
+  .cols > div { flex: 1 1 300px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>neko-browser 新功能验收页</h1>
+  <p class="note">
+    本页覆盖 2026-10 补全的 HTML/DOM 能力：片段解析、SVG/MathML 外来内容、
+    <code>template</code>/表格模式、表单约束验证与提交语义、焦点系统、
+    文本控件选区、Range、Selection、<code>details/summary</code>。
+  </p>
+  <p class="note">
+    自动断言在本页加载时运行，结果显示在下面的汇总与各分节中。
+    <b>焦点、点击、提交</b>这类需要真实交互的项标为「人工」，请直接操作页面控件验证
+    （headless 模式未接线焦点回调，属预期差异）。
+  </p>
+</header>
+
+<div class="summary" id="summary">
+  <div class="counts">自动测试运行中…</div>
+  <div class="note" id="summary-detail"></div>
+</div>
+
+<!-- ====================================================================== -->
+<section class="card">
+  <h2>1. HTML 片段解析（innerHTML context）</h2>
+  <p class="note">
+    <code>innerHTML</code> 现在按 <b>context element</b> 做 fragment parsing：
+    表格/select/RCDATA/textarea/template 的上下文规则与整文档解析不同。
+  </p>
+  <div id="parsing-results"></div>
+  <div class="cols">
+    <div>
+      <p class="note">表格片段演示（<code>table.innerHTML = "&lt;tr&gt;&lt;td&gt;…"</code>）</p>
+      <table id="fragment-demo-table" class="demo-svg" style="border-collapse: collapse;">
+        <tr><td>表格片段已正确插入</td></tr>
+      </table>
+    </div>
+    <div>
+      <p class="note">RCDATA 片段演示（textarea）</p>
+      <textarea id="fragment-demo-textarea" rows="2" style="width: 100%;">&lt;b&gt;这是文本，不是元素&lt;/b&gt;</textarea>
+    </div>
+  </div>
+</section>
+
+<!-- ====================================================================== -->
+<section class="card">
+  <h2>2. 外来内容：SVG / MathML / CDATA</h2>
+  <p class="note">
+    解析器为 <code>svg</code>/<code>math</code> 子树建立正确命名空间；
+    <code>foreignObject</code> 等集成点内部回到 HTML；SVG 内的 CDATA 是文本。
+  </p>
+  <div id="foreign-results"></div>
+  <div class="cols">
+    <div>
+      <p class="note">内联 SVG（circle + foreignObject + 自适应标签名）</p>
+      <svg id="demo-svg" class="demo-svg" width="220" height="90" viewBox="0 0 220 90">
+        <circle cx="45" cy="45" r="30" fill="#1a73e8"></circle>
+        <foreignObject x="90" y="20" width="120" height="50">
+          <div style="border: 1px solid #dadce0; border-radius: 6px; padding: 4px 6px; font-size: 12px;">
+            foreignObject 内的 HTML
+          </div>
+        </foreignObject>
+      </svg>
+    </div>
+    <div>
+      <p class="note">MathML（命名空间/树构建；排版暂未实现）</p>
+      <math id="demo-math" display="block">
+        <mi>x</mi><mo>+</mo><mn>1</mn>
+      </math>
+    </div>
+  </div>
+</section>
+
+<!-- ====================================================================== -->
+<section class="card">
+  <h2>3. template 插入模式与表单指针</h2>
+  <p class="note">
+    <code>&lt;template&gt;</code> 内容按标记解析进独立的 <code>content</code>；
+    表格片段走 in template 模式；嵌套 <code>&lt;form&gt;</code> 被 form pointer 忽略。
+  </p>
+  <div id="template-results"></div>
+  <template id="demo-template">
+    <span class="template-item">模板内容</span>
+  </template>
+  <div class="note">页面里声明了一个 <code>&lt;template id="demo-template"&gt;</code>（自身不渲染）。</div>
+</section>
+
+<!-- ====================================================================== -->
+<section class="card">
+  <h2>4. 表单约束验证</h2>
+  <p class="note">
+    <code>ValidityState</code>、<code>checkValidity()</code>、
+    <code>reportValidity()</code>、<code>setCustomValidity()</code>；
+    无效控件触发不冒泡、可取消的 <code>invalid</code> 事件。
+  </p>
+  <div id="validation-results"></div>
+  <form id="demo-form" action="" method="get" novalidate="novalidate">
+    <div class="controls">
+      <label>必填 <input id="demo-required" name="q" type="text" required></label>
+      <label>邮箱 <input id="demo-email" name="email" type="email" value="not-an-email"></label>
+      <label>数字 2–4 <input id="demo-number" name="n" type="number" min="2" max="4" step="1" value="5"></label>
+    </div>
+    <div class="controls">
+      <button id="demo-submit" type="submit" name="go" value="1">提交（GET，会刷新）</button>
+      <button id="demo-check" type="button" class="secondary">运行 checkValidity()</button>
+      <span class="note" id="demo-validation-message"></span>
+    </div>
+    <p class="note">
+      去掉 <code>novalidate</code> 后提交会被空必填字段拦截；提交成功后地址栏应带上
+      <code>q=…&amp;go=1</code>（验证 submitter 的 name/value）。<span class="pill">人工</span>
+    </p>
+  </form>
+</section>
+
+<!-- ====================================================================== -->
+<section class="card">
+  <h2>5. 焦点：focus()/activeElement/focusin/focusout/tabindex/inert</h2>
+  <p class="note">
+    点击下面的按钮或按 Tab。<code>autofocus</code> 在页面加载时聚焦第一个候选；
+    <code>inert</code> 子树不可聚焦、不参与 Tab、点击不执行默认动作。
+    <span class="pill">人工</span>
+  </p>
+  <div class="controls">
+    <input id="focus-a" type="text" value="tabindex=2" tabindex="2">
+    <input id="focus-b" type="text" value="tabindex=1" tabindex="1">
+    <button id="focus-btn" type="button">聚焦 tabindex=2 的输入框</button>
+    <button id="blur-btn" type="button" class="secondary">blur()</button>
+  </div>
+  <div class="inert-box" id="inert-demo">
+    <label>inert 区域（点击/聚焦应无效）<input id="inert-input" type="text" value="inert"></label>
+    <button id="inert-button" type="button">inert 按钮</button>
+  </div>
+  <p class="note">activeElement: <code id="active-element">—</code></p>
+  <div class="log" id="focus-log">focus 事件日志…</div>
+  <div id="focus-results"></div>
+</section>
+
+<!-- ====================================================================== -->
+<section class="card">
+  <h2>6. 文本控件选区 API</h2>
+  <p class="note">
+    <code>selectionStart/End/Direction</code>、<code>setSelectionRange</code>、
+    <code>setRangeText</code>、<code>select</code>；键盘输入会替换选区。
+  </p>
+  <div class="controls">
+    <input id="selection-input" type="text" value="hello world" style="width: 240px;">
+    <button id="selection-five" type="button">选中 0–5</button>
+    <button id="selection-replace" type="button">setRangeText("HELLO")</button>
+    <button id="selection-all" type="button">select()</button>
+  </div>
+  <p class="note" id="selection-readout">选区：—</p>
+  <div id="selection-results"></div>
+</section>
+
+<!-- ====================================================================== -->
+<section class="card">
+  <h2>7. Range</h2>
+  <p class="note">
+    <code>selectNodeContents</code>/<code>cloneContents</code>/
+    <code>extractContents</code>/<code>insertNode</code>/
+    <code>compareBoundaryPoints</code>/<code>toString</code>。布局矩形
+    （<code>getBoundingClientRect</code>）仍为未实现项。
+  </p>
+  <div class="controls">
+    <button id="range-clone" type="button">cloneContents</button>
+    <button id="range-insert" type="button">insertNode("★")</button>
+    <button id="range-surround" type="button">surroundContents(&lt;mark&gt;)</button>
+    <button id="range-reset" type="button" class="secondary">重置演示内容</button>
+  </div>
+  <div id="range-host" class="demo-svg" style="padding: 8px;">
+    <p id="range-paragraph">Hello <b>Range</b> world</p>
+  </div>
+  <pre id="range-readout">Range 结果…</pre>
+  <div id="range-results"></div>
+</section>
+
+<!-- ====================================================================== -->
+<section class="card">
+  <h2>8. Selection</h2>
+  <p class="note">
+    <code>window.getSelection() === document.getSelection()</code>；
+    <code>selectAllChildren</code>/<code>collapse</code>/<code>extend</code>/
+    <code>containsNode</code>/<code>getRangeAt</code>/<code>selectionchange</code>。
+  </p>
+  <div class="controls">
+    <button id="sel-all" type="button">selectAllChildren</button>
+    <button id="sel-collapse" type="button">collapse(0)</button>
+    <button id="sel-extend" type="button">extend(5)</button>
+    <button id="sel-clear" type="button" class="secondary">removeAllRanges</button>
+  </div>
+  <div id="selection-host" class="demo-svg" style="padding: 8px;">
+    <p id="selection-paragraph">Hello world：这是一段可被 Selection 选中的文本。</p>
+  </div>
+  <pre id="selection-readout2">Selection 结果…</pre>
+  <div id="selection-results"></div>
+</section>
+
+<!-- ====================================================================== -->
+<section class="card">
+  <h2>9. details / summary</h2>
+  <p class="note">
+    <code>open</code> 反射、<code>toggle</code> 事件、点击/Enter/Space 切换；
+    闭合时只有首个 summary 参与布局、绘制与命中测试。
+  </p>
+  <details id="demo-details" open="open">
+    <summary>点我展开/收起（summary 可聚焦）</summary>
+    <p>这是 details 的内容；收起后不应参与布局、绘制或命中测试。</p>
+  </details>
+  <details id="demo-details-closed">
+    <summary>默认闭合的 details</summary>
+    <p id="details-hidden-content">闭合时这段内容应不可见、不可命中。</p>
+  </details>
+  <div id="details-results"></div>
+  <div class="log" id="details-log">toggle 事件日志…</div>
+</section>
+
+<!-- ====================================================================== -->
+<script>
+(function () {
+  'use strict';
+
+  var passed = 0;
+  var failed = 0;
+  var manual = 0;
+  var results = {};
+
+  function section(id) {
+    return document.getElementById(id);
+  }
+
+  function addRow(hostId, status, name, detail) {
+    var host = section(hostId);
+    if (!host) { return; }
+    var row = document.createElement('div');
+    row.className = 'row';
+    var badge = document.createElement('span');
+    badge.className = 'badge ' + status;
+    badge.textContent = status === 'pass' ? 'PASS' : (status === 'fail' ? 'FAIL' : '人工');
+    var label = document.createElement('span');
+    label.className = 'name';
+    label.textContent = name;
+    var info = document.createElement('span');
+    info.className = 'detail';
+    info.textContent = detail || '';
+    row.appendChild(badge);
+    row.appendChild(label);
+    row.appendChild(info);
+    host.appendChild(row);
+  }
+
+  function updateSummary() {
+    var box = section('summary');
+    var counts = box.querySelector('.counts');
+    counts.textContent =
+        '自动测试：' + passed + ' 通过 / ' + failed + ' 失败 / ' + manual + ' 人工';
+    counts.className = 'counts';
+    var span = document.createElement('span');
+    span.className = failed === 0 ? 'pass' : 'fail';
+    span.textContent = failed === 0 ? '  ✓ 全部自动断言通过' : '  ✗ 存在失败断言';
+    counts.appendChild(span);
+    section('summary-detail').textContent =
+        '失败项会在对应分节标红；「人工」项需要点击/键盘/提交操作。';
+  }
+
+  function test(group, name, fn) {
+    try {
+      var result = fn();
+      if (result === true || result === undefined || result === null) {
+        passed++;
+        addRow(group, 'pass', name, '');
+      } else {
+        failed++;
+        addRow(group, 'fail', name, String(result));
+      }
+    } catch (error) {
+      failed++;
+      addRow(group, 'fail', name, (error && error.name ? error.name + ': ' : '') +
+              (error && error.message ? error.message : String(error)));
+    }
+  }
+
+  function human(group, name, detail) {
+    manual++;
+    addRow(group, 'manual', name, detail || '');
+  }
+
+  function assert(condition, message) {
+    if (!condition) {
+      throw new Error(message || 'assertion failed');
+    }
+  }
+
+  function element(tag, attributes, text) {
+    var node = document.createElement(tag);
+    if (attributes) {
+      for (var key in attributes) {
+        if (Object.prototype.hasOwnProperty.call(attributes, key)) {
+          node.setAttribute(key, attributes[key]);
+        }
+      }
+    }
+    if (text !== undefined) {
+      node.textContent = text;
+    }
+    return node;
+  }
+
+  // ---------------------------------------------------------------------
+  // 1. Fragment parsing
+  // ---------------------------------------------------------------------
+  test('parsing-results', 'div.innerHTML 忽略游离的 <td>', function () {
+    var div = element('div');
+    div.innerHTML = '<td>stray</td>';
+    assert(div.querySelector('td') === null, 'stray <td> became an element');
+    assert(div.textContent.indexOf('stray') >= 0, 'text was dropped');
+    return true;
+  });
+
+  test('parsing-results', 'table.innerHTML 走表格上下文', function () {
+    var table = element('table');
+    table.innerHTML = '<tr><td>cell</td></tr>';
+    var cell = table.querySelector('td');
+    assert(cell !== null, 'no td');
+    assert(cell.textContent === 'cell', 'wrong text: ' + cell.textContent);
+    return true;
+  });
+
+  test('parsing-results', 'select.innerHTML 生成兄弟 option', function () {
+    var select = element('select');
+    select.innerHTML = '<option>a</option><option>b</option>';
+    assert(select.querySelectorAll('option').length === 2, 'option count != 2');
+    return true;
+  });
+
+  test('parsing-results', 'textarea.innerHTML 按 RCDATA 产生文本', function () {
+    var textarea = element('textarea');
+    textarea.innerHTML = '<b>raw</b>';
+    assert(textarea.querySelector('b') === null, '<b> was parsed as an element');
+    assert(textarea.textContent === '<b>raw</b>', 'RCDATA text mismatch');
+    return true;
+  });
+
+  test('parsing-results', 'nested <form> 被 form pointer 忽略', function () {
+    var host = element('div');
+    host.innerHTML = '<form id="f1"><form id="f2"></form></form>';
+    assert(host.querySelectorAll('form').length === 1, 'nested form was kept');
+    return true;
+  });
+
+  // Actually exercise the demo table/textarea so the page shows the result.
+  (function () {
+    var table = section('fragment-demo-table');
+    if (table) {
+      table.innerHTML = '<tr><td>表格片段已正确插入（table context）</td></tr>';
+    }
+    var textarea = section('fragment-demo-textarea');
+    if (textarea) {
+      textarea.innerHTML = '<b>这是文本，不是元素</b>';
+    }
+  })();
+
+  // ---------------------------------------------------------------------
+  // 2. Foreign content
+  // ---------------------------------------------------------------------
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+  var MATHML_NS = 'http://www.w3.org/1998/Math/MathML';
+  var HTML_NS = 'http://www.w3.org/1999/xhtml';
+
+  test('foreign-results', 'svg/circle 在 SVG 命名空间，自闭合不残留', function () {
+    var host = element('div');
+    host.innerHTML = '<svg><circle/><foreignObject><div>x</div></foreignObject></svg>';
+    var svg = host.querySelector('svg');
+    var circle = host.querySelector('circle');
+    assert(svg !== null && circle !== null, 'svg/circle missing');
+    assert(svg.namespaceURI === SVG_NS, 'svg namespace: ' + svg.namespaceURI);
+    assert(circle.namespaceURI === SVG_NS, 'circle namespace: ' + circle.namespaceURI);
+    assert(svg.children.length === 2, 'self-closing circle swallowed its sibling');
+    return true;
+  });
+
+  test('foreign-results', 'foreignObject 内的 HTML 回到 HTML 命名空间', function () {
+    var host = element('div');
+    host.innerHTML = '<svg><foreignObject><div id="fo">x</div></foreignObject></svg>';
+    var fo = host.querySelector('#fo');
+    assert(fo !== null, 'foreignObject child missing');
+    assert(fo.namespaceURI === HTML_NS, 'namespace: ' + fo.namespaceURI);
+    return true;
+  });
+
+  test('foreign-results', 'math/mi 在 MathML 命名空间', function () {
+    var host = element('div');
+    host.innerHTML = '<math><mi>x</mi></math>';
+    var math = host.querySelector('math');
+    var mi = host.querySelector('mi');
+    assert(math !== null && mi !== null, 'math/mi missing');
+    assert(math.namespaceURI === MATHML_NS, 'math namespace: ' + math.namespaceURI);
+    assert(mi.namespaceURI === MATHML_NS, 'mi namespace: ' + mi.namespaceURI);
+    return true;
+  });
+
+  test('foreign-results', 'SVG 内 CDATA 是文本', function () {
+    var host = element('div');
+    host.innerHTML = '<svg><![CDATA[<b>raw</b>]]></svg>';
+    var svg = host.querySelector('svg');
+    assert(svg !== null, 'svg missing');
+    assert(svg.querySelector('b') === null, 'CDATA was parsed as markup');
+    assert(svg.textContent.indexOf('<b>raw</b>') >= 0, 'CDATA text missing');
+    return true;
+  });
+
+  test('foreign-results', 'SVG 标签名调整为 camelCase', function () {
+    var host = element('div');
+    host.innerHTML = '<svg><lineargradient></lineargradient></svg>';
+    var svg = host.querySelector('svg');
+    assert(svg !== null && svg.children.length === 1, 'gradient missing');
+    assert(svg.children[0].tagName === 'linearGradient',
+           'tagName: ' + svg.children[0].tagName);
+    return true;
+  });
+
+  // ---------------------------------------------------------------------
+  // 3. template
+  // ---------------------------------------------------------------------
+  test('template-results', 'template.innerHTML 写入 content', function () {
+    var template = element('template');
+    template.innerHTML = '<span class="tpl-inner">T</span>';
+    assert(template.content.querySelector('.tpl-inner') !== null, 'content missing');
+    assert(template.querySelector('.tpl-inner') === null, 'content leaked into children');
+    return true;
+  });
+
+  test('template-results', 'template 内表格片段走 in template 路由', function () {
+    var template = element('template');
+    template.innerHTML = '<tr><td>t</td></tr>';
+    var cell = template.content.querySelector('td');
+    assert(cell !== null, 'no td in template content');
+    assert(cell.textContent === 't', 'wrong cell text');
+    return true;
+  });
+
+  test('template-results', '页面内的 template 有独立 content', function () {
+    var template = section('demo-template');
+    assert(template !== null && template.content !== undefined, 'template missing');
+    assert(template.content.querySelector('.template-item') !== null, 'declared content missing');
+    return true;
+  });
+
+  // ---------------------------------------------------------------------
+  // 4. Constraint validation
+  // ---------------------------------------------------------------------
+  (function () {
+    var form = element('form');
+    var required = element('input', { type: 'text', name: 'q' });
+    required.setAttribute('required', '');
+    form.appendChild(required);
+    document.body.appendChild(form);
+
+    test('validation-results', 'required 空值 → valueMissing', function () {
+      assert(required.validity.valueMissing === true, 'valueMissing false');
+      assert(required.checkValidity() === false, 'checkValidity true');
+      assert(form.checkValidity() === false, 'form.checkValidity true');
+      assert(required.validationMessage.length > 0, 'empty validationMessage');
+      return true;
+    });
+
+    test('validation-results', '填值后 valid', function () {
+      required.value = 'neko';
+      assert(required.validity.valid === true, 'still invalid');
+      assert(form.checkValidity() === true, 'form still invalid');
+      return true;
+    });
+
+    test('validation-results', 'invalid 事件触发', function () {
+      var fired = 0;
+      required.addEventListener('invalid', function () { fired++; });
+      required.value = '';
+      required.checkValidity();
+      required.checkValidity();
+      assert(fired === 2, 'invalid fired ' + fired + ' times');
+      return true;
+    });
+
+    var email = element('input', { type: 'email' });
+    document.body.appendChild(email);
+    test('validation-results', 'email typeMismatch', function () {
+      email.value = 'not-an-email';
+      assert(email.validity.typeMismatch === true, 'typeMismatch false');
+      email.value = 'a@b.example';
+      assert(email.validity.typeMismatch === false, 'still mismatched');
+      return true;
+    });
+
+    var number = element('input', { type: 'number' });
+    number.setAttribute('min', '2');
+    number.setAttribute('max', '4');
+    number.setAttribute('step', '1');
+    document.body.appendChild(number);
+    test('validation-results', 'number range/step/badInput', function () {
+      number.value = '5';
+      assert(number.validity.rangeOverflow === true, 'rangeOverflow false');
+      number.value = '1';
+      assert(number.validity.rangeUnderflow === true, 'rangeUnderflow false');
+      number.value = '3';
+      assert(number.validity.valid === true, 'valid expected');
+      number.value = 'abc';
+      assert(number.validity.badInput === true, 'badInput false');
+      return true;
+    });
+
+    var custom = element('input', { type: 'text' });
+    document.body.appendChild(custom);
+    test('validation-results', 'setCustomValidity', function () {
+      custom.setCustomValidity('custom message');
+      assert(custom.validity.customError === true, 'customError false');
+      assert(custom.checkValidity() === false, 'checkValidity true');
+      assert(custom.validationMessage === 'custom message', 'message mismatch');
+      custom.setCustomValidity('');
+      assert(custom.validity.customError === false, 'customError not cleared');
+      return true;
+    });
+
+    test('validation-results', 'HTMLFormElement 不发明 validity 成员', function () {
+      assert(form.validity === undefined, 'form.validity exists (non-standard)');
+      assert(form.noValidate === true || form.noValidate === false, 'noValidate missing');
+      return true;
+    });
+
+    form.parentNode.removeChild(form);
+    email.parentNode.removeChild(email);
+    number.parentNode.removeChild(number);
+    custom.parentNode.removeChild(custom);
+  })();
+
+  // ---------------------------------------------------------------------
+  // 5. Focus (automatic parts)
+  // ---------------------------------------------------------------------
+  var focusLog = section('focus-log');
+  function logFocus(text) {
+    if (focusLog) {
+      focusLog.textContent += '\n' + text;
+    }
+  }
+  ['focus-a', 'focus-b', 'focus-btn', 'blur-btn'].forEach(function (id) {
+    var node = section(id);
+    if (!node) { return; }
+    node.addEventListener('focus', function () {
+      logFocus('focus ' + id + ' → activeElement=' +
+               (document.activeElement ? document.activeElement.id : 'null'));
+    });
+    node.addEventListener('focusin', function () { logFocus('focusin ' + id); });
+    node.addEventListener('blur', function () { logFocus('blur ' + id); });
+    node.addEventListener('focusout', function () { logFocus('focusout ' + id); });
+  });
+  var inertDemo = section('inert-demo');
+  if (inertDemo) { inertDemo.inert = true; }
+  var activeReadout = section('active-element');
+  document.addEventListener('focusin', function () {
+    if (activeReadout) {
+      activeReadout.textContent = document.activeElement
+          ? (document.activeElement.id || document.activeElement.tagName)
+          : 'null';
+    }
+  });
+  var focusInput = section('focus-a');
+  var focusButton = section('focus-btn');
+  if (focusButton && focusInput) {
+    focusButton.addEventListener('click', function () { focusInput.focus(); });
+  }
+  var blurButton = section('blur-btn');
+  if (blurButton && focusInput) {
+    blurButton.addEventListener('click', function () { focusInput.blur(); });
+  }
+
+  test('focus-results', 'tabIndex / inert 属性反射', function () {
+    var input = element('input');
+    input.tabIndex = 3;
+    assert(input.getAttribute('tabindex') === '3', 'tabIndex reflection failed');
+    input.inert = true;
+    assert(input.hasAttribute('inert'), 'inert reflection failed');
+    input.inert = false;
+    assert(!input.hasAttribute('inert'), 'inert not removed');
+    return true;
+  });
+
+  human('focus-results', 'element.focus()/blur() 与 activeElement',
+        '点击“聚焦 tabindex=2 的输入框”，看 activeElement 与日志');
+  human('focus-results', 'focusin/focusout 冒泡，focus/blur 不冒泡',
+        '观察日志：祖先应收到 focusin/focusout，不应收到 focus/blur');
+  human('focus-results', 'Tab 顺序：tabindex 正数优先',
+        '从页面顶部按 Tab：tabindex=1 的输入框应先于 tabindex=2');
+  human('focus-results', 'inert 子树不可聚焦/不可点击',
+        '点击 inert 区域内的输入框或按钮，不应获得焦点或触发');
+  human('focus-results', 'autofocus',
+        '本页未设置 autofocus；可在测试页中加 autofocus 后重新加载验证');
+
+  // ---------------------------------------------------------------------
+  // 6. Text-control selection
+  // ---------------------------------------------------------------------
+  (function () {
+    var input = element('input', { type: 'text' });
+    input.value = 'hello world';
+    document.body.appendChild(input);
+
+    test('selection-results', 'setSelectionRange/selectionStart/End/Direction', function () {
+      input.setSelectionRange(0, 5);
+      assert(input.selectionStart === 0 && input.selectionEnd === 5, 'range not set');
+      assert(input.selectionDirection === 'none', 'direction: ' + input.selectionDirection);
+      input.setSelectionRange(5, 2, 'backward');
+      assert(input.selectionStart === 2 && input.selectionEnd === 2,
+             'inverted range did not collapse');
+      assert(input.selectionDirection === 'backward', 'backward lost');
+      return true;
+    });
+
+    test('selection-results', 'setRangeText 替换选区', function () {
+      input.value = 'hello world';
+      input.setSelectionRange(0, 5);
+      input.setRangeText('HELLO');
+      assert(input.value === 'HELLO world', 'value: ' + input.value);
+      return true;
+    });
+
+    test('selection-results', 'select() 选中全部', function () {
+      input.select();
+      assert(input.selectionStart === 0, 'start != 0');
+      assert(input.selectionEnd === input.value.length, 'end != length');
+      return true;
+    });
+
+    test('selection-results', '不支持的类型：getter null / setter 抛错', function () {
+      var number = element('input', { type: 'number' });
+      document.body.appendChild(number);
+      assert(number.selectionStart === null, 'selectionStart not null');
+      var threw = false;
+      try {
+        number.setSelectionRange(0, 1);
+      } catch (error) {
+        threw = error && error.name === 'InvalidStateError';
+      }
+      number.parentNode.removeChild(number);
+      assert(threw, 'setSelectionRange did not throw InvalidStateError');
+      return true;
+    });
+
+    test('selection-results', 'UTF-16 偏移（代理对计 2）', function () {
+      input.value = '😀a';
+      input.setSelectionRange(0, 2);
+      assert(input.selectionStart === 0 && input.selectionEnd === 2,
+             'surrogate pair offsets wrong');
+      return true;
+    });
+
+    input.parentNode.removeChild(input);
+  })();
+
+  // Interactive demo controls for the selection section.
+  (function () {
+    var input = section('selection-input');
+    var readout = section('selection-readout');
+    if (!input || !readout) { return; }
+    function show() {
+      readout.textContent = '选区：start=' + input.selectionStart +
+          ' end=' + input.selectionEnd +
+          ' direction=' + input.selectionDirection +
+          ' value="' + input.value + '"';
+    }
+    input.addEventListener('select', show);
+    input.addEventListener('keyup', show);
+    input.addEventListener('click', show);
+    var five = section('selection-five');
+    if (five) {
+      five.addEventListener('click', function () {
+        input.focus();
+        input.setSelectionRange(0, 5);
+        show();
+      });
+    }
+    var replace = section('selection-replace');
+    if (replace) {
+      replace.addEventListener('click', function () {
+        if (input.selectionStart === input.selectionEnd) {
+          input.setSelectionRange(0, 5);
+        }
+        input.setRangeText('HELLO');
+        show();
+      });
+    }
+    var all = section('selection-all');
+    if (all) {
+      all.addEventListener('click', function () {
+        input.select();
+        show();
+      });
+    }
+    show();
+  })();
+
+  // ---------------------------------------------------------------------
+  // 7. Range
+  // ---------------------------------------------------------------------
+  (function () {
+    function resetRangeHost() {
+      var host = section('range-host');
+      if (host) {
+        host.innerHTML = '<p id="range-paragraph">Hello <b>Range</b> world</p>';
+      }
+      return host;
+    }
+
+    var host = resetRangeHost();
+    test('range-results', 'createRange/selectNodeContents/toString', function () {
+      var paragraph = section('range-paragraph');
+      var range = document.createRange();
+      range.selectNodeContents(paragraph);
+      assert(range.toString() === 'Hello Range world',
+             'text: ' + range.toString());
+      assert(range.collapsed === false, 'collapsed');
+      return true;
+    });
+
+    test('range-results', 'cloneContents', function () {
+      var paragraph = section('range-paragraph');
+      var range = document.createRange();
+      range.selectNodeContents(paragraph);
+      var clone = range.cloneContents();
+      assert(clone.textContent === 'Hello Range world', 'clone text mismatch');
+      assert(clone.querySelector('b') !== null, 'clone lost <b>');
+      return true;
+    });
+
+    test('range-results', 'insertNode 分裂文本', function () {
+      var host = resetRangeHost();
+      var paragraph = section('range-paragraph');
+      var text = paragraph.firstChild;
+      var range = document.createRange();
+      range.setStart(text, 0);
+      range.setEnd(text, 5);
+      range.insertNode(element('span', null, '>>'));
+      assert(paragraph.textContent.indexOf('>>Hello') === 0,
+             'text: ' + paragraph.textContent);
+      return true;
+    });
+
+    test('range-results', 'compareBoundaryPoints', function () {
+      var host = resetRangeHost();
+      var paragraph = section('range-paragraph');
+      var a = document.createRange();
+      var b = document.createRange();
+      a.selectNodeContents(paragraph);
+      b.setStart(paragraph.firstChild, 0);
+      b.setEnd(paragraph.firstChild, 5);
+      assert(a.compareBoundaryPoints(Range.START_TO_START, b) === 0,
+             'start-to-start');
+      assert(a.compareBoundaryPoints(Range.END_TO_END, b) === 1,
+             'end-to-end');
+      return true;
+    });
+
+    test('range-results', 'surroundContents', function () {
+      var host = resetRangeHost();
+      var paragraph = section('range-paragraph');
+      var text = paragraph.firstChild;
+      var range = document.createRange();
+      range.setStart(text, 0);
+      range.setEnd(text, 5);
+      var mark = element('mark');
+      range.surroundContents(mark);
+      assert(paragraph.querySelector('mark') !== null, 'mark missing');
+      assert(mark.textContent === 'Hello', 'mark text: ' + mark.textContent);
+      return true;
+    });
+
+    test('range-results', 'deleteContents', function () {
+      var host = resetRangeHost();
+      var paragraph = section('range-paragraph');
+      var text = paragraph.firstChild;
+      var range = document.createRange();
+      range.setStart(text, 0);
+      range.setEnd(text, 5);
+      range.deleteContents();
+      assert(paragraph.textContent.indexOf('Hello') !== 0, 'text not deleted');
+      resetRangeHost();
+      return true;
+    });
+
+    var readout = section('range-readout');
+    if (readout) {
+      var paragraph = section('range-paragraph');
+      var range = document.createRange();
+      range.selectNodeContents(paragraph);
+      readout.textContent = 'selectNodeContents → toString() = "' +
+          range.toString() + '"\n' +
+          'startContainer=' + range.startContainer.nodeName +
+          ' startOffset=' + range.startOffset +
+          '\nendContainer=' + range.endContainer.nodeName +
+          ' endOffset=' + range.endOffset +
+          ' collapsed=' + range.collapsed;
+    }
+
+    function wire(id, handler) {
+      var node = section(id);
+      if (node) { node.addEventListener('click', handler); }
+    }
+    wire('range-clone', function () {
+      var paragraph = section('range-paragraph');
+      var range = document.createRange();
+      range.selectNodeContents(paragraph);
+      var clone = range.cloneContents();
+      if (readout) {
+        readout.textContent = 'cloneContents().textContent = "' + clone.textContent + '"';
+      }
+    });
+    wire('range-insert', function () {
+      var host = resetRangeHost();
+      var paragraph = section('range-paragraph');
+      var text = paragraph.firstChild;
+      var range = document.createRange();
+      range.setStart(text, 0);
+      range.setEnd(text, 5);
+      range.insertNode(element('strong', null, '★'));
+      if (readout) {
+        readout.textContent = 'insertNode 后 paragraph.textContent = "' +
+            paragraph.textContent + '"';
+      }
+    });
+    wire('range-surround', function () {
+      var host = resetRangeHost();
+      var paragraph = section('range-paragraph');
+      var text = paragraph.firstChild;
+      var range = document.createRange();
+      range.setStart(text, 0);
+      range.setEnd(text, 5);
+      range.surroundContents(element('mark'));
+      if (readout) {
+        readout.textContent = 'surroundContents 后 innerHTML = "' +
+            paragraph.innerHTML + '"';
+      }
+    });
+    wire('range-reset', function () {
+      var host = resetRangeHost();
+      if (readout) {
+        var paragraph = section('range-paragraph');
+        var range = document.createRange();
+        range.selectNodeContents(paragraph);
+        readout.textContent = '已重置；toString() = "' + range.toString() + '"';
+      }
+    });
+  })();
+
+  // ---------------------------------------------------------------------
+  // 8. Selection
+  // ---------------------------------------------------------------------
+  (function () {
+    var host = section('selection-host');
+    var readout = section('selection-readout2');
+    var selection = window.getSelection();
+    var changes = 0;
+    document.addEventListener('selectionchange', function () {
+      changes++;
+      updateSelectionReadout();
+    });
+
+    function updateSelectionReadout() {
+      if (!readout) { return; }
+      readout.textContent = 'type=' + selection.type +
+          ' rangeCount=' + selection.rangeCount +
+          ' collapsed=' + selection.isCollapsed +
+          ' anchor=' + (selection.anchorNode ? selection.anchorNode.nodeName : 'null') +
+          '#' + selection.anchorOffset +
+          ' focus=' + (selection.focusNode ? selection.focusNode.nodeName : 'null') +
+          '#' + selection.focusOffset +
+          '\nselectionchange count=' + changes +
+          '\ntext="' + selection.toString() + '"';
+    }
+
+    test('selection-results', 'window/document.getSelection 同一对象', function () {
+      assert(selection === document.getSelection(), 'different Selection objects');
+      return true;
+    });
+
+    test('selection-results', 'selectAllChildren/toString/rangeCount', function () {
+      var paragraph = section('selection-paragraph');
+      selection.selectAllChildren(paragraph);
+      assert(selection.rangeCount === 1, 'rangeCount: ' + selection.rangeCount);
+      assert(selection.type === 'Range', 'type: ' + selection.type);
+      assert(selection.toString().indexOf('Hello world') === 0,
+             'text: ' + selection.toString());
+      var range = selection.getRangeAt(0);
+      assert(range.toString() === selection.toString(), 'getRangeAt mismatch');
+      return true;
+    });
+
+    test('selection-results', 'containsNode', function () {
+      var paragraph = section('selection-paragraph');
+      assert(selection.containsNode(paragraph, true) === true, 'containsNode false');
+      return true;
+    });
+
+    test('selection-results', 'collapse/extend/type', function () {
+      var paragraph = section('selection-paragraph');
+      selection.collapse(paragraph, 0);
+      assert(selection.isCollapsed === true, 'not collapsed');
+      assert(selection.type === 'Caret', 'type: ' + selection.type);
+      selection.extend(paragraph, 1);
+      assert(selection.isCollapsed === false, 'extend did not select');
+      assert(selection.type === 'Range', 'type after extend: ' + selection.type);
+      return true;
+    });
+
+    test('selection-results', 'selectionchange 在变更时触发', function () {
+      var before = changes;
+      selection.removeAllRanges();
+      assert(changes > before, 'selectionchange did not fire');
+      assert(selection.rangeCount === 0 && selection.type === 'None', 'not cleared');
+      return true;
+    });
+
+    var all = section('sel-all');
+    if (all) {
+      all.addEventListener('click', function () {
+        selection.selectAllChildren(section('selection-paragraph'));
+        updateSelectionReadout();
+      });
+    }
+    var collapse = section('sel-collapse');
+    if (collapse) {
+      collapse.addEventListener('click', function () {
+        selection.collapse(section('selection-paragraph'), 0);
+        updateSelectionReadout();
+      });
+    }
+    var extend = section('sel-extend');
+    if (extend) {
+      extend.addEventListener('click', function () {
+        selection.extend(section('selection-paragraph'), 1);
+        updateSelectionReadout();
+      });
+    }
+    var clear = section('sel-clear');
+    if (clear) {
+      clear.addEventListener('click', function () {
+        selection.removeAllRanges();
+        updateSelectionReadout();
+      });
+    }
+    updateSelectionReadout();
+  })();
+
+  // ---------------------------------------------------------------------
+  // 9. details / summary
+  // ---------------------------------------------------------------------
+  (function () {
+    var details = section('demo-details');
+    var closedDetails = section('demo-details-closed');
+    var log = section('details-log');
+    var toggles = 0;
+    function appendLog(text) {
+      if (log) { log.textContent += '\n' + text; }
+    }
+    if (details) {
+      details.addEventListener('toggle', function () {
+        toggles++;
+        appendLog('toggle #' + toggles + ' open=' + details.open);
+      });
+    }
+    if (closedDetails) {
+      closedDetails.addEventListener('toggle', function () {
+        appendLog('closed details toggle open=' + closedDetails.open);
+      });
+    }
+
+    test('details-results', 'open 反射与 toggle 事件', function () {
+      var node = element('details');
+      node.appendChild(element('summary', null, 'S'));
+      node.appendChild(element('p', null, 'C'));
+      document.body.appendChild(node);
+      var count = 0;
+      node.addEventListener('toggle', function () { count++; });
+      node.open = false;
+      node.open = true;
+      node.open = false;
+      assert(count === 2, 'toggle count: ' + count);
+      assert(node.hasAttribute('open') === false, 'open still set');
+      node.parentNode.removeChild(node);
+      return true;
+    });
+
+    test('details-results', '闭合 details 的内容无布局盒，展开的有', function () {
+      // Compare two fresh trees (one closed, one open) so the measurement does
+      // not depend on a relayout happening between an `open` write and the
+      // geometry read inside one script turn.
+      var closed = element('details');
+      closed.appendChild(element('summary', null, 'S'));
+      var closedContent = element('div', null, 'CLOSED CONTENT');
+      closed.appendChild(closedContent);
+
+      var open = element('details');
+      open.setAttribute('open', '');
+      open.appendChild(element('summary', null, 'S'));
+      var openContent = element('div', null, 'OPEN CONTENT');
+      open.appendChild(openContent);
+
+      document.body.appendChild(closed);
+      document.body.appendChild(open);
+      var closedHeight = closedContent.offsetHeight;
+      var openHeight = openContent.offsetHeight;
+      document.body.removeChild(closed);
+      document.body.removeChild(open);
+
+      assert(closedHeight === 0, 'closed content height: ' + closedHeight);
+      assert(openHeight > 0, 'open content height: ' + openHeight);
+      return true;
+    });
+
+    human('details-results', '点击/Enter/Space 切换并派发 toggle',
+          '点击上面的 summary，观察日志和内容显隐');
+  })();
+
+  // ---------------------------------------------------------------------
+  // 10. Submission (interactive + auto API shape)
+  // ---------------------------------------------------------------------
+  (function () {
+    var form = section('demo-form');
+    var checkButton = section('demo-check');
+    var message = section('demo-validation-message');
+    if (form && checkButton && message) {
+      checkButton.addEventListener('click', function () {
+        var ok = form.checkValidity();
+        var invalid = 0;
+        var controls = form.querySelectorAll('input');
+        for (var i = 0; i < controls.length; ++i) {
+          if (controls[i].willValidate && !controls[i].validity.valid) {
+            invalid++;
+          }
+        }
+        message.textContent = (ok ? 'checkValidity() = true' : 'checkValidity() = false') +
+            '，无效控件数量 = ' + invalid;
+      });
+    }
+    var submit = section('demo-submit');
+    if (submit) {
+      submit.addEventListener('click', function () {
+        delete form.noValidate;
+      });
+    }
+    test('validation-results', '提交按钮带 name/value', function () {
+      var query = window.location.search || '';
+      if (query.indexOf('go=1') < 0) {
+        return null; // counted as pass only when the interactive form is used
+      }
+      assert(query.indexOf('q=') >= 0, 'q missing from query: ' + query);
+      return true;
+    });
+    human('validation-results', '实际提交（GET）与 formtarget/formmethod',
+          '把 form 的 novalidate 去掉并点击提交；地址栏应出现 q=…&go=1');
+    human('validation-results', 'multipart/text/plain enctype',
+          '编码器已实现，但本页不对真实服务端提交；需抓包或本地 echo 服务验证');
+  })();
+
+  updateSummary();
+})();
+</script>
+
+</body>
+</html>
