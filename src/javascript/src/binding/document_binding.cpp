@@ -526,69 +526,6 @@ JSValue DocCreateTreeWalker(JSContext* ctx, JSValueConst this_val, int argc, JSV
   return walker;
 }
 
-JSValue RangeGetBoundaryContainer(JSContext* ctx, JSValueConst this_val, const char* property)
-{
-  JSValue container = JS_GetPropertyStr(ctx, this_val, property);
-  if (JS_IsUndefined(container)) {
-    JS_FreeValue(ctx, container);
-    return JS_ThrowTypeError(ctx, "not a Range");
-  }
-  return container;
-}
-
-JSValue RangeGetStartContainer(JSContext* ctx, JSValueConst this_val)
-{
-  return RangeGetBoundaryContainer(ctx, this_val, "__nekoRangeStartContainer");
-}
-
-JSValue RangeGetEndContainer(JSContext* ctx, JSValueConst this_val)
-{
-  return RangeGetBoundaryContainer(ctx, this_val, "__nekoRangeEndContainer");
-}
-
-JSValue RangeGetBoundaryOffset(JSContext* ctx, JSValueConst this_val, const char* property)
-{
-  JSValue offset = JS_GetPropertyStr(ctx, this_val, property);
-  if (JS_IsUndefined(offset)) {
-    JS_FreeValue(ctx, offset);
-    return JS_ThrowTypeError(ctx, "not a Range");
-  }
-  return offset;
-}
-
-JSValue RangeGetStartOffset(JSContext* ctx, JSValueConst this_val)
-{
-  return RangeGetBoundaryOffset(ctx, this_val, "__nekoRangeStartOffset");
-}
-
-JSValue RangeGetEndOffset(JSContext* ctx, JSValueConst this_val)
-{
-  return RangeGetBoundaryOffset(ctx, this_val, "__nekoRangeEndOffset");
-}
-
-JSValue RangeGetCommonAncestorContainer(JSContext* ctx, JSValueConst this_val)
-{
-  Impl* impl = ImplFor(ctx, this_val);
-  JSValue start_value = JS_GetPropertyStr(ctx, this_val, "__nekoRangeStartContainer");
-  JSValue end_value = JS_GetPropertyStr(ctx, this_val, "__nekoRangeEndContainer");
-  dom::Node* start = UnwrapNode(ctx, start_value);
-  dom::Node* end = UnwrapNode(ctx, end_value);
-  JS_FreeValue(ctx, start_value);
-  JS_FreeValue(ctx, end_value);
-  if (impl == nullptr || start == nullptr || end == nullptr) {
-    return JS_ThrowTypeError(ctx, "not a Range");
-  }
-
-  for (dom::Node* ancestor = start; ancestor != nullptr; ancestor = ancestor->parent()) {
-    for (dom::Node* candidate = end; candidate != nullptr; candidate = candidate->parent()) {
-      if (ancestor == candidate) {
-        return impl->WrapNode(ancestor);
-      }
-    }
-  }
-  return JS_ThrowTypeError(ctx, "Range boundary containers have no common ancestor");
-}
-
 JSValue DocCreateRange(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/)
 {
   Impl* impl = ImplFor(ctx, this_val);
@@ -596,16 +533,15 @@ JSValue DocCreateRange(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSVa
   if (impl == nullptr || document == nullptr || document->node_type() != dom::NodeType::kDocument) {
     return JS_ThrowTypeError(ctx, "not a document");
   }
-  JSValue range = JS_NewObjectProto(ctx, impl->range_proto);
-  JS_DefinePropertyValueStr(
-      ctx, range, "__nekoRangeStartContainer", JS_DupValue(ctx, this_val), JS_PROP_CONFIGURABLE);
-  JS_DefinePropertyValueStr(
-      ctx, range, "__nekoRangeEndContainer", JS_DupValue(ctx, this_val), JS_PROP_CONFIGURABLE);
-  JS_DefinePropertyValueStr(
-      ctx, range, "__nekoRangeStartOffset", JS_NewInt32(ctx, 0), JS_PROP_CONFIGURABLE);
-  JS_DefinePropertyValueStr(
-      ctx, range, "__nekoRangeEndOffset", JS_NewInt32(ctx, 0), JS_PROP_CONFIGURABLE);
-  return range;
+  // DOM §5.5: a new live range starts and ends at (this document, 0).
+  return MakeRangeObject(ctx,
+                         *impl,
+                         static_cast<dom::Document*>(document),
+                         document,
+                         0,
+                         document,
+                         0,
+                         impl->range_proto);
 }
 
 JSValue
@@ -1319,20 +1255,6 @@ void DefineDocumentPrototype(JSContext* ctx, Impl& impl)
   }};
   JS_SetPropertyFunctionList(
       ctx, impl.document_proto, kMethods.data(), static_cast<int>(kMethods.size()));
-
-  DefineGetter(ctx,
-               impl.range_proto,
-               "startContainer",
-               MakeGetter(ctx, "startContainer", RangeGetStartContainer));
-  DefineGetter(
-      ctx, impl.range_proto, "startOffset", MakeGetter(ctx, "startOffset", RangeGetStartOffset));
-  DefineGetter(
-      ctx, impl.range_proto, "endContainer", MakeGetter(ctx, "endContainer", RangeGetEndContainer));
-  DefineGetter(ctx, impl.range_proto, "endOffset", MakeGetter(ctx, "endOffset", RangeGetEndOffset));
-  DefineGetter(ctx,
-               impl.range_proto,
-               "commonAncestorContainer",
-               MakeGetter(ctx, "commonAncestorContainer", RangeGetCommonAncestorContainer));
 
   DefineGetter(ctx,
                impl.document_proto,

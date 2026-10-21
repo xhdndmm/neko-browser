@@ -14,6 +14,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -62,6 +63,30 @@ extern JSClassID g_attr_class_id;
 extern std::mutex g_attr_class_mutex;
 extern std::unordered_set<JSRuntime*> g_attr_class_registered;
 void EnsureAttrClassRegistered(JSRuntime* rt);
+
+// Opaque state attached to every Range object: the owning binder plus the two
+// boundary points (start/end node + offset).  Offsets are in the DOM "node
+// length" (UTF-16 code units for character data, child count otherwise).
+//
+// This is a static snapshot range: the DOM has no document back-pointer or
+// mutation hook, so the live-range adjustment algorithms of DOM §5.5 are NOT
+// IMPLEMENTED (see range_binding.cpp).  Nodes are kept alive for the binder's
+// lifetime, so a stored node pointer never dangles.
+struct RangeWrapper
+{
+  Impl* impl = nullptr;
+  // The document this range belongs to (document.createRange() uses the
+  // receiver document; new Range() uses the current global's document).
+  dom::Document* document = nullptr;
+  dom::Node* start = nullptr;
+  std::size_t start_offset = 0;
+  dom::Node* end = nullptr;
+  std::size_t end_offset = 0;
+};
+
+extern JSClassID g_range_class_id;
+void EnsureRangeClassRegistered(JSRuntime* rt);
+RangeWrapper* UnwrapRange(JSValueConst value);
 
 // Opaque state attached to every Event object (new Event(...) or the fresh
 // event created by a dispatch).  target/currentTarget are owned JSValues
@@ -368,7 +393,19 @@ const char* OnHandlerForType(std::string_view type);
 dom::Element* FindElementByTag(const dom::Node& root, std::string_view tag);
 JSValue DocCreateTreeWalker(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue TreeWalkerNextNode(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
-JSValue DocCreateRange(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+
+// range_binding.cpp — the Range interface (DOM §5.5).  MakeRangeObject creates
+// a Range with the given boundary points; |prototype| may be JS_UNDEFINED to
+// use the document's Range.prototype (document.createRange()).
+JSValue MakeRangeObject(JSContext* ctx,
+                        Impl& impl,
+                        dom::Document* document,
+                        dom::Node* start,
+                        std::size_t start_offset,
+                        dom::Node* end,
+                        std::size_t end_offset,
+                        JSValueConst prototype);
+void DefineRangePrototype(JSContext* ctx, Impl& impl);
 
 // element_binding.cpp — ParentNode.children implementation shared by Element
 // and DocumentFragment prototypes.

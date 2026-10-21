@@ -496,6 +496,7 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   JSRuntime* rt = JS_GetRuntime(ctx);
   EnsureNodeClassRegistered(rt);
   EnsureAttrClassRegistered(rt);
+  EnsureRangeClassRegistered(rt);
   EnsureEventClassRegistered(rt);
   EnsureDatasetClassRegistered(rt);
   EnsureXhrClassRegistered(rt);
@@ -529,7 +530,6 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   named_node_map_proto = JS_NewObjectProto(ctx, array_proto);
   attr_proto = JS_NewObject(ctx);
   tree_walker_proto = JS_NewObject(ctx);
-  range_proto = JS_NewObject(ctx);
   mutation_observer_proto = JS_NewObject(ctx);
   dom_parser_proto = JS_NewObject(ctx);
   xml_serializer_proto = JS_NewObject(ctx);
@@ -566,6 +566,7 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   DefineElementPrototype(ctx, *this);
   DefineCanvasPrototype(ctx, *this);
   DefineDocumentPrototype(ctx, *this);
+  DefineRangePrototype(ctx, *this);
   DefineStylePrototype(ctx, *this);
   DefineStyleSheetPrototype(ctx, *this);
   DefineEventPrototype(ctx, *this);
@@ -992,7 +993,6 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   DefineGetter(
       ctx, attr_proto, "ownerElement", MakeGetter(ctx, "ownerElement", AttrGetOwnerElement));
   DefineInterface(ctx, global, "Attr", attr_proto);
-  DefineInterface(ctx, global, "Range", range_proto);
   static const std::array<JSCFunctionListEntry, 2> kNamedNodeMap = {{
       JS_CFUNC_DEF("item", 1, NamedNodeMapItem),
       JS_CFUNC_DEF("getNamedItem", 1, NamedNodeMapGetNamedItem),

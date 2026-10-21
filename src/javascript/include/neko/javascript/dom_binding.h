@@ -303,7 +303,21 @@ struct PageApis
 //               createElement, createElementNS, createTextNode,
 //               createDocumentFragment, createComment, URL, baseURI,
 //               documentURI, characterSet, contentType, referrer,
-//               forms/images/links/scripts (collections)
+//               createRange, forms/images/links/scripts (collections)
+//   Range:      new Range() and document.createRange(); startContainer/
+//               startOffset/endContainer/endOffset/collapsed/
+//               commonAncestorContainer; setStart/setEnd and the
+//               *Before/*After helpers, collapse, selectNode,
+//               selectNodeContents, cloneRange, cloneContents,
+//               extractContents, deleteContents, insertNode,
+//               surroundContents, compareBoundaryPoints (all four modes),
+//               comparePoint, isPointInRange, intersectsNode and toString.
+//               Boundary offsets are UTF-16 code units for character data and
+//               child counts otherwise.  NOT IMPLEMENTED: range geometry
+//               (getBoundingClientRect/getClientRects throw NotSupportedError:
+//               they need the layout tree) and live-range mutation adjustment
+//               (the DOM has no document back-pointer/mutation hook, so a
+//               range is a static snapshot; see range_binding.cpp).
 //   Node:       nodeType, nodeName, textContent (get/set), parentNode,
 //               parentElement, firstChild, lastChild, childNodes,
 //               nextSibling, previousSibling, ownerDocument, isConnected,

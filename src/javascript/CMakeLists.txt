@@ -16,6 +16,7 @@ add_library(neko_javascript
   src/binding/node_binding.cpp
   src/binding/element_binding.cpp
   src/binding/document_binding.cpp
+  src/binding/range_binding.cpp
   src/binding/style_binding.cpp
   src/binding/event_binding.cpp
   src/binding/event_target_binding.cpp

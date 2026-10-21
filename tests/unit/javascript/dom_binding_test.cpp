@@ -3074,6 +3074,665 @@ TEST_F(DomBinderTest, DocumentCreateRangeHasDocumentBoundary)
       "    && typeof descriptor.get === 'function' && descriptor.set === undefined; })()"));
 }
 
+// ---------------------------------------------------------------------------
+// Range (DOM Standard §5.5).
+// ---------------------------------------------------------------------------
+
+TEST_F(DomBinderTest, RangeCreationAndConstants)
+{
+  EXPECT_TRUE(EvalBool(R"js(
+    (function(){
+      var range = document.createRange();
+      var constructed = new Range();
+      return range instanceof Range && constructed instanceof Range
+          && Object.getPrototypeOf(range) === Range.prototype
+          && Object.getPrototypeOf(constructed) === Range.prototype
+          && range.startContainer === document && range.endContainer === document
+          && range.startOffset === 0 && range.endOffset === 0
+          && range.collapsed === true
+          && range.commonAncestorContainer === document
+          && constructed.startContainer === document
+          && constructed.endContainer === document
+          && constructed.startOffset === 0 && constructed.endOffset === 0
+          && constructed.collapsed === true
+          && String(range) === ''
+          && Range.START_TO_START === 0 && Range.START_TO_END === 1
+          && Range.END_TO_END === 2 && Range.END_TO_START === 3
+          && Range.prototype.START_TO_START === 0
+          && Range.prototype.START_TO_END === 1
+          && Range.prototype.END_TO_END === 2
+          && Range.prototype.END_TO_START === 3
+          && Object.getOwnPropertyDescriptor(Range.prototype, 'collapsed').set === undefined
+          && Object.getOwnPropertyDescriptor(Range.prototype, 'startOffset').set === undefined
+          && Range.length === 0;
+    })()
+  )js"));
+}
+
+TEST_F(DomBinderTest, RangeSetStartEndCollapseAndValidation)
+{
+  const auto run = [this](const std::string& body) {
+    return EvalString("(function(){ var p = document.createElement('p');"
+                      " var t = document.createTextNode('abcdef'); p.appendChild(t);"
+                      " document.body.appendChild(p);" +
+                      body + "})()");
+  };
+
+  // start/end getters, collapsed, commonAncestorContainer and stringifier.
+  EXPECT_EQ(run("var r = document.createRange(); r.setStart(t, 1); r.setEnd(t, 4);"
+                "return [r.startContainer === t, r.startOffset, r.endOffset, r.collapsed,"
+                " r.commonAncestorContainer === t, String(r)].join(',');"),
+            "true,1,4,false,true,bcd");
+
+  // Setting the start past the end collapses the end onto the new start.
+  EXPECT_EQ(run("var r = document.createRange(); r.setEnd(t, 2); r.setStart(t, 4);"
+                "return [r.startOffset, r.endOffset, r.collapsed].join(',');"),
+            "4,4,true");
+
+  // Setting the end before the start collapses the start onto the new end.
+  EXPECT_EQ(run("var r = document.createRange(); r.setStart(t, 4); r.setEnd(t, 2);"
+                "return [r.startOffset, r.endOffset, r.collapsed].join(',');"),
+            "2,2,true");
+
+  // collapse(true) keeps the start, collapse() keeps the end.
+  EXPECT_EQ(run("var r = document.createRange(); r.setStart(t, 1); r.setEnd(t, 4);"
+                "r.collapse(true); var a = [r.startOffset, r.endOffset].join(',');"
+                "r.setStart(t, 1); r.setEnd(t, 4); r.collapse();"
+                "return a + '|' + [r.startOffset, r.endOffset].join(',');"),
+            "1,1|4,4");
+
+  // Offset beyond the character-data length and doctype boundaries.
+  EXPECT_EQ(run("var r = document.createRange();"
+                "try { r.setStart(t, 7); } catch (e) { return e.name; } return 'no';"),
+            "IndexSizeError");
+  EXPECT_EQ(run("var r = document.createRange();"
+                "try { r.setEnd(t, 7); } catch (e) { return e.name; } return 'no';"),
+            "IndexSizeError");
+  EXPECT_EQ(run("var r = document.createRange();"
+                "try { r.setStart(document.doctype, 0); } catch (e) { return e.name; }"
+                "return 'no';"),
+            "InvalidNodeTypeError");
+  EXPECT_EQ(run("var r = document.createRange();"
+                "try { r.setEnd(document.doctype, 0); } catch (e) { return e.name; }"
+                "return 'no';"),
+            "InvalidNodeTypeError");
+
+  // A node owned by another Document is rejected (the parsed body's root is
+  // that other Document, not the page's).
+  EXPECT_EQ(
+      EvalString(
+          "(function(){ var other = document.implementation.createHTMLDocument('x');"
+          " var r = document.createRange();"
+          " try { r.setStart(other.body, 0); } catch (e) { return e.name; } return 'no'; })()"),
+      "WrongDocumentError");
+
+  // A range created by another Document belongs to that document, so its own
+  // tree is accepted even though it is not the binder's main document.
+  EXPECT_EQ(EvalString("(function(){ var other = document.implementation.createHTMLDocument('x');"
+                       " var r = other.createRange(); r.setStart(other.body, 0);"
+                       " return [r.startContainer === other.body, r.startOffset,"
+                       " r.startContainer === document.body].join(','); })()"),
+            "true,0,false");
+
+  // Non-character-data node lengths are child counts.
+  EXPECT_EQ(run("var r = document.createRange(); r.setStart(p, 1); r.setEnd(p, 1);"
+                "return [r.startContainer === p, r.startOffset, r.collapsed].join(',');"),
+            "true,1,true");
+  EXPECT_EQ(run("var r = document.createRange();"
+                "try { r.setStart(p, 2); } catch (e) { return e.name; } return 'no';"),
+            "IndexSizeError");
+}
+
+TEST_F(DomBinderTest, RangeRelativeBoundarySetters)
+{
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.createElement('p');
+      var t1 = document.createTextNode('a');
+      var b = document.createElement('b');
+      b.appendChild(document.createTextNode('X'));
+      var t2 = document.createTextNode('c');
+      p.appendChild(t1); p.appendChild(b); p.appendChild(t2);
+      document.body.appendChild(p);
+      var r = document.createRange();
+      r.setStartBefore(b); r.setEndAfter(b);
+      var selected = [r.startContainer === p, r.startOffset, r.endOffset, String(r)].join(',');
+      r.setStartAfter(t1);
+      var afterStart = [r.startOffset].join(',');
+      r.setStartBefore(t1);
+      var beforeStart = [r.startOffset].join(',');
+      r.setEndBefore(b);
+      var beforeEnd = [r.endOffset].join(',');
+      r.setEndAfter(b);
+      var afterEnd = [r.endOffset].join(',');
+      return selected + '|' + afterStart + '|' + beforeStart + '|' + beforeEnd + '|' + afterEnd;
+    })()
+  )js"),
+            "true,1,2,X|1|0|1|2");
+
+  // A detached node has no parent: the spec throws InvalidNodeTypeError.
+  EXPECT_EQ(EvalString(
+                "(function(){ var t = document.createTextNode('x'); var r = document.createRange();"
+                " try { r.setStartBefore(t); } catch (e) { return e.name; } return 'no'; })()"),
+            "InvalidNodeTypeError");
+}
+
+TEST_F(DomBinderTest, RangeSelectNodeAndSelectNodeContents)
+{
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var host = document.createElement('div');
+      var a = document.createElement('span');
+      var b = document.createElement('span');
+      a.appendChild(document.createTextNode('A'));
+      b.appendChild(document.createTextNode('B'));
+      host.appendChild(a); host.appendChild(b);
+      document.body.appendChild(host);
+      var r = document.createRange();
+      r.selectNode(b);
+      var node = [r.startContainer === host, r.startOffset, r.endOffset, r.collapsed,
+                  r.commonAncestorContainer === host].join(',');
+      r.selectNodeContents(host);
+      var contents = [r.startContainer === host, r.startOffset, r.endOffset, String(r)].join(',');
+      r.selectNodeContents(b.firstChild);
+      var text = [r.startContainer === b.firstChild, r.startOffset, r.endOffset, String(r)].join(',');
+      return node + '|' + contents + '|' + text;
+    })()
+  )js"),
+            "true,1,2,false,true|true,0,2,AB|true,0,1,B");
+
+  EXPECT_EQ(
+      EvalString(
+          "(function(){ var span = document.createElement('span'); var r = document.createRange();"
+          " try { r.selectNode(span); } catch (e) { return e.name; } return 'no'; })()"),
+      "InvalidNodeTypeError");
+  EXPECT_EQ(EvalString("(function(){ var r = document.createRange();"
+                       " try { r.selectNodeContents(document.doctype); } catch (e) {"
+                       " return e.name; } return 'no'; })()"),
+            "InvalidNodeTypeError");
+}
+
+TEST_F(DomBinderTest, RangeCloneContentsMixedTextAndElements)
+{
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var host = document.createElement('div');
+      var p = document.createElement('p');
+      var t1 = document.createTextNode('ab');
+      var b = document.createElement('b');
+      b.appendChild(document.createTextNode('cd'));
+      var t3 = document.createTextNode('ef');
+      p.appendChild(t1); p.appendChild(b); p.appendChild(t3);
+      host.appendChild(p); document.body.appendChild(host);
+      var r = document.createRange();
+      r.setStart(t1, 1); r.setEnd(t3, 1);
+      var f = r.cloneContents();
+      return [f.childNodes.length, f.firstChild.nodeValue, f.childNodes[1].tagName,
+              f.childNodes[1].textContent, f.lastChild.nodeValue,
+              p.childNodes.length, t1.nodeValue, t3.nodeValue,
+              String(r)].join('|');
+    })()
+  )js"),
+            "3|b|B|cd|e|3|ab|ef|bcde");
+
+  // Collapsed ranges clone to an empty fragment; same-node character data is
+  // substringed and does not mutate the original.
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.createElement('p');
+      var t = document.createTextNode('abcdef');
+      p.appendChild(t); document.body.appendChild(p);
+      var r = document.createRange();
+      var empty = r.cloneContents();
+      r.setStart(t, 2); r.setEnd(t, 4);
+      var f = r.cloneContents();
+      return [empty.childNodes.length, f.childNodes.length, f.firstChild.nodeValue,
+              t.nodeValue].join('|');
+    })()
+  )js"),
+            "0|1|cd|abcdef");
+}
+
+TEST_F(DomBinderTest, RangeExtractContentsMixedTextAndElements)
+{
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var host = document.createElement('div');
+      var p = document.createElement('p');
+      var t1 = document.createTextNode('ab');
+      var b = document.createElement('b');
+      b.appendChild(document.createTextNode('cd'));
+      var t3 = document.createTextNode('ef');
+      p.appendChild(t1); p.appendChild(b); p.appendChild(t3);
+      host.appendChild(p); document.body.appendChild(host);
+      var r = document.createRange();
+      r.setStart(t1, 1); r.setEnd(t3, 1);
+      var f = r.extractContents();
+      return [f.childNodes.length, f.firstChild.nodeValue, f.childNodes[1].tagName,
+              f.childNodes[1].textContent, f.lastChild.nodeValue,
+              p.childNodes.length, p.firstChild.nodeValue, p.lastChild.nodeValue,
+              r.collapsed, r.startContainer === p, r.startOffset, String(r)].join('|');
+    })()
+  )js"),
+            "3|b|B|cd|e|2|a|f|true|true|1|");
+
+  // Same-node extraction: fragment gets the substring, the text loses it and
+  // the range collapses at the old start offset.
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.createElement('p');
+      var t = document.createTextNode('abcdef');
+      p.appendChild(t); document.body.appendChild(p);
+      var r = document.createRange();
+      r.setStart(t, 2); r.setEnd(t, 4);
+      var f = r.extractContents();
+      return [f.childNodes.length, f.firstChild.nodeValue, t.nodeValue,
+              r.collapsed, r.startOffset].join('|');
+    })()
+  )js"),
+            "1|cd|abef|true|2");
+}
+
+TEST_F(DomBinderTest, RangeDeleteContentsMixedTextAndElements)
+{
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var host = document.createElement('div');
+      var p = document.createElement('p');
+      var t1 = document.createTextNode('ab');
+      var b = document.createElement('b');
+      b.appendChild(document.createTextNode('cd'));
+      var t3 = document.createTextNode('ef');
+      p.appendChild(t1); p.appendChild(b); p.appendChild(t3);
+      host.appendChild(p); document.body.appendChild(host);
+      var r = document.createRange();
+      r.setStart(t1, 1); r.setEnd(t3, 1);
+      r.deleteContents();
+      return [p.childNodes.length, p.firstChild.nodeValue, p.lastChild.nodeValue,
+              r.collapsed, r.startContainer === p, r.startOffset, String(r)].join('|');
+    })()
+  )js"),
+            "2|a|f|true|true|1|");
+
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.createElement('p');
+      var t = document.createTextNode('abc');
+      p.appendChild(t); document.body.appendChild(p);
+      var r = document.createRange();
+      r.setStart(t, 1); r.setEnd(t, 2);
+      r.deleteContents();
+      return [t.nodeValue, r.collapsed, r.startOffset, String(r)].join('|');
+    })()
+  )js"),
+            "ac|true|1|");
+
+  // Deleting a collapsed range is a no-op.
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.createElement('p');
+      var t = document.createTextNode('abc');
+      p.appendChild(t); document.body.appendChild(p);
+      var r = document.createRange();
+      r.setStart(t, 1); r.collapse(true);
+      r.deleteContents();
+      return [t.nodeValue, r.startOffset, r.endOffset].join('|');
+    })()
+  )js"),
+            "abc|1|1");
+}
+
+TEST_F(DomBinderTest, RangeInsertNodeSplitsTextAndValidates)
+{
+  // A collapsed range inside a Text node splits it and inserts between the two
+  // halves; the range end expands to cover the inserted node (spec step 13).
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.createElement('p');
+      var t = document.createTextNode('ab');
+      p.appendChild(t); document.body.appendChild(p);
+      var i = document.createElement('i');
+      i.textContent = 'x';
+      var r = document.createRange();
+      r.setStart(t, 1); r.collapse(true);
+      r.insertNode(i);
+      return [p.childNodes.length, p.childNodes[0].nodeValue, p.childNodes[1].tagName,
+              p.childNodes[1].textContent, p.childNodes[2].nodeValue,
+              r.collapsed, r.startContainer === p.childNodes[0], r.startOffset,
+              r.endOffset, String(r)].join('|');
+    })()
+  )js"),
+            "3|a|I|x|b|false|true|1|2|x");
+
+  // Inserting at an element offset 1 goes before that child.
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var host = document.createElement('div');
+      var a = document.createElement('span');
+      var b = document.createElement('span');
+      host.appendChild(a); host.appendChild(b);
+      document.body.appendChild(host);
+      var inserted = document.createElement('em');
+      var r = document.createRange();
+      r.setStart(host, 1); r.collapse(true);
+      r.insertNode(inserted);
+      return [host.childNodes.length, host.childNodes[0] === a,
+              host.childNodes[1] === inserted, host.childNodes[2] === b,
+              r.startOffset, r.endOffset].join('|');
+    })()
+  )js"),
+            "3|true|true|true|1|2");
+
+  // DocumentFragment insertion adds all of its children and expands the end by
+  // the fragment's length.
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.createElement('p');
+      p.appendChild(document.createTextNode('x'));
+      document.body.appendChild(p);
+      var fragment = document.createDocumentFragment();
+      var a = document.createElement('span');
+      var b = document.createElement('span');
+      fragment.appendChild(a); fragment.appendChild(b);
+      var r = document.createRange();
+      r.selectNodeContents(p); r.collapse(true);
+      r.insertNode(fragment);
+      return [p.childNodes.length, p.childNodes[0] === a, p.childNodes[1] === b,
+              fragment.childNodes.length, r.startOffset, r.endOffset].join('|');
+    })()
+  )js"),
+            "3|true|true|0|0|2");
+
+  // Invalid start nodes throw HierarchyRequestError.
+  EXPECT_EQ(
+      EvalString("(function(){ var t = document.createTextNode('x');"
+                 " var span = document.createElement('span');"
+                 " var r = document.createRange(); r.setStart(t, 0);"
+                 " try { r.insertNode(span); } catch (e) { return e.name; } return 'no'; })()"),
+      "HierarchyRequestError");
+  EXPECT_EQ(
+      EvalString("(function(){ var p = document.createElement('p');"
+                 " var c = document.createComment('x'); p.appendChild(c);"
+                 " document.body.appendChild(p); var span = document.createElement('span');"
+                 " var r = document.createRange(); r.setStart(c, 0);"
+                 " try { r.insertNode(span); } catch (e) { return e.name; } return 'no'; })()"),
+      "HierarchyRequestError");
+  EXPECT_EQ(EvalString("(function(){ var p = document.createElement('p');"
+                       " p.appendChild(document.createTextNode('x')); document.body.appendChild(p);"
+                       " var r = document.createRange(); r.selectNodeContents(p);"
+                       " try { r.insertNode(p); } catch (e) { return e.name; } return 'no'; })()"),
+            "HierarchyRequestError");
+  EXPECT_EQ(EvalString("(function(){ var p = document.createElement('p');"
+                       " p.appendChild(document.createTextNode('x')); document.body.appendChild(p);"
+                       " var r = document.createRange(); r.selectNodeContents(document);"
+                       " try { r.insertNode(document.createTextNode('y')); } catch (e) {"
+                       " return e.name; } return 'no'; })()"),
+            "HierarchyRequestError");
+}
+
+TEST_F(DomBinderTest, RangeSurroundContents)
+{
+  // The wrapper's existing children are replaced; the selected contents move
+  // inside it and the range selects the wrapper.
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var host = document.createElement('div');
+      var p = document.createElement('p');
+      p.appendChild(document.createTextNode('ab'));
+      host.appendChild(p); document.body.appendChild(host);
+      var span = document.createElement('span');
+      span.textContent = 'old';
+      var r = document.createRange();
+      r.selectNodeContents(p);
+      r.surroundContents(span);
+      return [p.childNodes.length, p.firstChild === span, span.textContent,
+              r.startContainer === p, r.startOffset, r.endOffset, r.collapsed,
+              String(r)].join('|');
+    })()
+  )js"),
+            "1|true|ab|true|0|1|false|ab");
+
+  // Partially selecting a non-Text node is an InvalidStateError.
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.createElement('p');
+      var t1 = document.createTextNode('a');
+      var b = document.createElement('b');
+      b.appendChild(document.createTextNode('B'));
+      var t2 = document.createTextNode('c');
+      p.appendChild(t1); p.appendChild(b); p.appendChild(t2);
+      document.body.appendChild(p);
+      var r = document.createRange();
+      r.setStart(b.firstChild, 0); r.setEnd(t2, 1);
+      try { r.surroundContents(document.createElement('span')); }
+      catch (e) { return e.name; }
+      return 'no';
+    })()
+  )js"),
+            "InvalidStateError");
+
+  // Document/DocumentType/DocumentFragment wrappers are rejected up front.
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.createElement('p');
+      p.appendChild(document.createTextNode('ab'));
+      document.body.appendChild(p);
+      var r = document.createRange(); r.selectNodeContents(p);
+      var names = [];
+      [document, document.doctype, document.createDocumentFragment()].forEach(function(node) {
+        try { r.surroundContents(node); names.push('no'); }
+        catch (e) { names.push(e.name); }
+      });
+      return names.join(',');
+    })()
+  )js"),
+            "InvalidNodeTypeError,InvalidNodeTypeError,InvalidNodeTypeError");
+}
+
+TEST_F(DomBinderTest, RangeCompareBoundaryPoints)
+{
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.createElement('p');
+      var t = document.createTextNode('abcdef');
+      p.appendChild(t); document.body.appendChild(p);
+      var r1 = document.createRange(); r1.setStart(t, 1); r1.setEnd(t, 4);
+      var r2 = document.createRange(); r2.setStart(t, 2); r2.setEnd(t, 5);
+      return [
+        r1.compareBoundaryPoints(Range.START_TO_START, r2),
+        r1.compareBoundaryPoints(Range.START_TO_END, r2),
+        r1.compareBoundaryPoints(Range.END_TO_END, r2),
+        r1.compareBoundaryPoints(Range.END_TO_START, r2),
+        r1.compareBoundaryPoints(Range.START_TO_START, r1)
+      ].join(',');
+    })()
+  )js"),
+            "-1,1,-1,-1,0");
+
+  EXPECT_EQ(EvalString("(function(){ var p = document.createElement('p');"
+                       " var t = document.createTextNode('a'); p.appendChild(t);"
+                       " var r = document.createRange(); r.setStart(t, 0);"
+                       " try { r.compareBoundaryPoints(4, r); } catch (e) { return e.name; }"
+                       " return 'no'; })()"),
+            "NotSupportedError");
+
+  // Ranges in different trees (here a detached element) are a WrongDocumentError.
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.createElement('p');
+      var t = document.createTextNode('abcdef');
+      p.appendChild(t); document.body.appendChild(p);
+      var r1 = document.createRange(); r1.setStart(t, 1); r1.setEnd(t, 3);
+      var detached = document.createElement('div');
+      var t2 = document.createTextNode('x');
+      detached.appendChild(t2);
+      var r2 = document.createRange(); r2.selectNodeContents(t2);
+      try { r1.compareBoundaryPoints(Range.START_TO_START, r2); }
+      catch (e) { return e.name; }
+      return 'no';
+    })()
+  )js"),
+            "WrongDocumentError");
+}
+
+TEST_F(DomBinderTest, RangeComparePointIsPointInRangeAndIntersectsNode)
+{
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.createElement('p');
+      var t = document.createTextNode('abcdef');
+      p.appendChild(t); document.body.appendChild(p);
+      var r = document.createRange(); r.setStart(t, 2); r.setEnd(t, 4);
+      return [
+        r.comparePoint(t, 1), r.comparePoint(t, 2), r.comparePoint(t, 3),
+        r.comparePoint(t, 4), r.comparePoint(t, 5),
+        r.isPointInRange(t, 1), r.isPointInRange(t, 2),
+        r.isPointInRange(t, 3), r.isPointInRange(t, 4), r.isPointInRange(t, 5)
+      ].join(',');
+    })()
+  )js"),
+            "-1,0,0,0,1,false,true,true,true,false");
+
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.createElement('p');
+      var t = document.createTextNode('abc');
+      p.appendChild(t); document.body.appendChild(p);
+      var r = document.createRange(); r.setStart(t, 0); r.setEnd(t, 1);
+      try { r.comparePoint(t, 4); } catch (e) { return e.name; }
+      return 'no';
+    })()
+  )js"),
+            "IndexSizeError");
+  EXPECT_EQ(EvalString("(function(){ var r = document.createRange();"
+                       " try { r.comparePoint(document.doctype, 0); } catch (e) {"
+                       " return e.name; } return 'no'; })()"),
+            "InvalidNodeTypeError");
+
+  // intersectsNode: the selected element intersects, its siblings do not; a
+  // node from another tree never intersects.
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.createElement('p');
+      var t1 = document.createTextNode('a');
+      var b = document.createElement('b');
+      b.appendChild(document.createTextNode('B'));
+      var t2 = document.createTextNode('c');
+      p.appendChild(t1); p.appendChild(b); p.appendChild(t2);
+      document.body.appendChild(p);
+      var r = document.createRange(); r.selectNode(b);
+      var detached = document.createElement('div');
+      return [r.intersectsNode(b), r.intersectsNode(t1), r.intersectsNode(t2),
+              r.intersectsNode(p), r.intersectsNode(detached)].join(',');
+    })()
+  )js"),
+            "true,false,false,true,false");
+}
+
+TEST_F(DomBinderTest, RangeToStringConcatenatesTextNodesOnly)
+{
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.createElement('p');
+      var t1 = document.createTextNode('Hello ');
+      var b = document.createElement('b');
+      b.appendChild(document.createTextNode('world'));
+      var t2 = document.createTextNode('!');
+      p.appendChild(t1); p.appendChild(b); p.appendChild(t2);
+      document.body.appendChild(p);
+      var r = document.createRange();
+      r.setStart(t1, 0); r.setEnd(t2, 1);
+      var whole = String(r);
+      r.setStart(b.firstChild, 1); r.setEnd(t2, 1);
+      return whole + '|' + String(r);
+    })()
+  )js"),
+            "Hello world!|orld!");
+
+  // Comments are not character data for the stringifier.
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.createElement('p');
+      p.appendChild(document.createTextNode('a'));
+      p.appendChild(document.createComment('SECRET'));
+      p.appendChild(document.createTextNode('b'));
+      document.body.appendChild(p);
+      var r = document.createRange(); r.selectNodeContents(p);
+      return String(r);
+    })()
+  )js"),
+            "ab");
+
+  // Substrings inside one Text node.
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.createElement('p');
+      var t = document.createTextNode('abcdef');
+      p.appendChild(t); document.body.appendChild(p);
+      var r = document.createRange(); r.setStart(t, 1); r.setEnd(t, 3);
+      return String(r);
+    })()
+  )js"),
+            "bc");
+
+  // Range offsets are UTF-16 code units: a surrogate pair counts as two, and
+  // a range may split around (but never inside) it.
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var emoji = String.fromCodePoint(0x1F600);
+      var p = document.createElement('p');
+      var t = document.createTextNode('a' + emoji + 'b');
+      p.appendChild(t); document.body.appendChild(p);
+      var r = document.createRange();
+      r.setStart(t, 1); r.setEnd(t, 3);
+      var selected = String(r) === emoji;
+      r.setEnd(t, 4);
+      var full = [r.startOffset, r.endOffset].join(',');
+      var tooLong = 'accepted';
+      try { r.setEnd(t, 5); } catch (e) { tooLong = e.name; }
+      return [selected, full, tooLong].join('|');
+    })()
+  )js"),
+            "true|1,4|IndexSizeError");
+}
+
+TEST_F(DomBinderTest, RangeCloneRangeIsIndependentAndDetachIsNoop)
+{
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var p = document.createElement('p');
+      var t = document.createTextNode('abcdef');
+      p.appendChild(t); document.body.appendChild(p);
+      var r = document.createRange(); r.setStart(t, 1); r.setEnd(t, 3);
+      var clone = r.cloneRange();
+      var before = [clone.startOffset, clone.endOffset].join(',');
+      r.setStart(t, 0);
+      var detached = r.detach();
+      return [before, clone.startOffset, clone.endOffset, r.startOffset,
+              detached === undefined].join('|');
+    })()
+  )js"),
+            "1,3|1|3|0|true");
+}
+
+TEST_F(DomBinderTest, RangeGeometryIsExplicitlyNotImplemented)
+{
+  // Range geometry needs the layout tree (CSSOM View); the bindings must not
+  // fabricate rectangles, so both methods throw NotSupportedError.
+  EXPECT_EQ(EvalString(R"js(
+    (function(){
+      var r = document.createRange();
+      var names = [];
+      ['getBoundingClientRect', 'getClientRects'].forEach(function(name) {
+        try { r[name](); names.push('no'); } catch (e) { names.push(e.name); }
+      });
+      return [typeof r.getBoundingClientRect, typeof r.getClientRects,
+              names.join(',')].join('|');
+    })()
+  )js"),
+            "function|function|NotSupportedError,NotSupportedError");
+}
+
 TEST_F(DomBinderTest, MessageEventConstructorAndMessagePortDispatch)
 {
   EXPECT_TRUE(
