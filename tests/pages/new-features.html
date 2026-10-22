@@ -7,7 +7,7 @@
   complete form submission, focus/tabindex/inert, text-control selection,
   Range, Selection, and details/summary.
 
-  Loading the page runs 40 automatic assertions and prints a PASS/FAIL
+  Loading the page runs 41 automatic assertions and prints a PASS/FAIL
   summary at the top.  The remaining items (focus(), actual submission,
   clicking summary, clipboard-style selection) are marked 人工 and need
   real interaction; headless mode intentionally has no focus callbacks.
@@ -403,8 +403,9 @@
     span.className = failed === 0 ? 'pass' : 'fail';
     span.textContent = failed === 0 ? '  ✓ 全部自动断言通过' : '  ✗ 存在失败断言';
     counts.appendChild(span);
-    section('summary-detail').textContent =
-        '失败项会在对应分节标红；「人工」项需要点击/键盘/提交操作。';
+    section('summary-detail').textContent = deferred > 0
+        ? '等待 ' + deferred + ' 条排队任务（toggle/selectionchange）…'
+        : '失败项会在对应分节标红；「人工」项需要点击/键盘/提交操作。';
   }
 
   function test(group, name, fn) {
@@ -427,6 +428,19 @@
   function human(group, name, detail) {
     manual++;
     addRow(group, 'manual', name, detail || '');
+  }
+
+  // Some spec events are queued as tasks (toggle, selectionchange).  Run
+  // those assertions after a task and refresh the summary, so the page is
+  // honest in Chrome (queued) and in engines that dispatch synchronously.
+  var deferred = 0;
+  function defer(group, name, fn) {
+    deferred++;
+    setTimeout(function () {
+      deferred--;
+      test(group, name, fn);
+      updateSummary();
+    }, 30);
   }
 
   function assert(condition, message) {
@@ -640,15 +654,15 @@
     number.setAttribute('max', '4');
     number.setAttribute('step', '1');
     document.body.appendChild(number);
-    test('validation-results', 'number range/step/badInput', function () {
+    test('validation-results', 'number range/step', function () {
       number.value = '5';
       assert(number.validity.rangeOverflow === true, 'rangeOverflow false');
       number.value = '1';
       assert(number.validity.rangeUnderflow === true, 'rangeUnderflow false');
       number.value = '3';
       assert(number.validity.valid === true, 'valid expected');
-      number.value = 'abc';
-      assert(number.validity.badInput === true, 'badInput false');
+      // badInput reflects raw user input, which a page cannot synthesize; it
+      // is exercised manually in the GUI instead of asserting it here.
       return true;
     });
 
@@ -749,7 +763,10 @@
     test('selection-results', 'setSelectionRange/selectionStart/End/Direction', function () {
       input.setSelectionRange(0, 5);
       assert(input.selectionStart === 0 && input.selectionEnd === 5, 'range not set');
-      assert(input.selectionDirection === 'none', 'direction: ' + input.selectionDirection);
+      // The API allows the platform default direction to be "none" or
+      // "forward" when the direction argument is omitted.
+      assert(input.selectionDirection === 'none' || input.selectionDirection === 'forward',
+             'direction: ' + input.selectionDirection);
       input.setSelectionRange(5, 2, 'backward');
       assert(input.selectionStart === 2 && input.selectionEnd === 2,
              'inverted range did not collapse');
@@ -894,10 +911,14 @@
       a.selectNodeContents(paragraph);
       b.setStart(paragraph.firstChild, 0);
       b.setEnd(paragraph.firstChild, 5);
-      assert(a.compareBoundaryPoints(Range.START_TO_START, b) === 0,
+      assert(a.compareBoundaryPoints(Range.START_TO_START, b) === -1,
              'start-to-start');
+      assert(a.compareBoundaryPoints(Range.START_TO_END, b) === 1,
+             'start-to-end');
       assert(a.compareBoundaryPoints(Range.END_TO_END, b) === 1,
              'end-to-end');
+      assert(a.compareBoundaryPoints(Range.END_TO_START, b) === -1,
+             'end-to-start');
       return true;
     });
 
@@ -1052,10 +1073,12 @@
       return true;
     });
 
-    test('selection-results', 'selectionchange 在变更时触发', function () {
-      var before = changes;
-      selection.removeAllRanges();
-      assert(changes > before, 'selectionchange did not fire');
+    // selectionchange is queued as a task by the spec/Chrome; this engine
+    // dispatches it synchronously.  Check after a task so both pass.
+    var selectionChangeBefore = changes;
+    selection.removeAllRanges();
+    defer('selection-results', 'selectionchange 在变更时触发（异步）', function () {
+      assert(changes > selectionChangeBefore, 'selectionchange did not fire');
       assert(selection.rangeCount === 0 && selection.type === 'None', 'not cleared');
       return true;
     });
@@ -1114,7 +1137,7 @@
       });
     }
 
-    test('details-results', 'open 反射与 toggle 事件', function () {
+    (function () {
       var node = element('details');
       node.appendChild(element('summary', null, 'S'));
       node.appendChild(element('p', null, 'C'));
@@ -1124,11 +1147,19 @@
       node.open = false;
       node.open = true;
       node.open = false;
-      assert(count === 2, 'toggle count: ' + count);
-      assert(node.hasAttribute('open') === false, 'open still set');
-      node.parentNode.removeChild(node);
-      return true;
-    });
+      test('details-results', 'open 反射（同步）', function () {
+        assert(node.hasAttribute('open') === false, 'open still set');
+        return true;
+      });
+      // The spec queues toggle; Chrome may coalesce the three changes into
+      // one event, this engine fires synchronously.  Only require >= 1.
+      defer('details-results', 'toggle 事件（异步）', function () {
+        assert(count >= 1, 'toggle count: ' + count);
+        assert(node.hasAttribute('open') === false, 'open still set');
+        node.parentNode.removeChild(node);
+        return true;
+      });
+    })();
 
     test('details-results', '闭合 details 的内容无布局盒，展开的有', function () {
       // Compare two fresh trees (one closed, one open) so the measurement does
@@ -1147,13 +1178,19 @@
 
       document.body.appendChild(closed);
       document.body.appendChild(open);
-      var closedHeight = closedContent.offsetHeight;
-      var openHeight = openContent.offsetHeight;
+      var hidden = function (node) {
+        if (typeof node.checkVisibility === 'function') {
+          return node.checkVisibility() === false;
+        }
+        return node.offsetHeight === 0;
+      };
+      var closedHidden = hidden(closedContent);
+      var openVisible = hidden(openContent) === false;
       document.body.removeChild(closed);
       document.body.removeChild(open);
 
-      assert(closedHeight === 0, 'closed content height: ' + closedHeight);
-      assert(openHeight > 0, 'open content height: ' + openHeight);
+      assert(closedHidden, 'closed content is visible');
+      assert(openVisible, 'open content is hidden');
       return true;
     });
 
