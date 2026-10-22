@@ -3547,7 +3547,7 @@ TEST_F(DomBinderTest, RangeCompareBoundaryPoints)
       ].join(',');
     })()
   )js"),
-            "-1,-1,-1,1,0");
+            "-1,1,-1,-1,0");
 
   EXPECT_EQ(EvalString("(function(){ var p = document.createElement('p');"
                        " var t = document.createTextNode('a'); p.appendChild(t);"
@@ -3595,7 +3595,7 @@ TEST_F(DomBinderTest, RangeCompareBoundaryPointsAcrossAncestorDescendant)
       ].join(',');
     })()
   )js"),
-            "0,-1,1,1");
+            "-1,1,1,-1");
 }
 
 TEST_F(DomBinderTest, RangeComparePointIsPointInRangeAndIntersectsNode)

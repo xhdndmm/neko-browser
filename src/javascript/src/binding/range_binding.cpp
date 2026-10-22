@@ -214,33 +214,15 @@ int ComparePoints(const dom::Node* a,
     while (child->parent() != a) {
       child = child->parent();
     }
-    // DOM §5.2 "position of a boundary point": when the child index equals
-    // a_offset the point is inside that child, so descend and compare there.
-    // Returning -1 unconditionally for the equal case made
-    // (paragraph, 0) compare before (text, 0) even though they are the same
-    // position.
-    const std::size_t index = IndexOf(*child);
-    if (index < a_offset) {
-      return 1;
-    }
-    if (index > a_offset) {
-      return -1;
-    }
-    return ComparePoints(child, 0, b, b_offset);
+    // a's point before/at the child precedes b's point inside it.
+    return IndexOf(*child) < a_offset ? 1 : -1;
   }
   if (IsInclusiveAncestor(b, a)) {
     const dom::Node* child = a;
     while (child->parent() != b) {
       child = child->parent();
     }
-    const std::size_t index = IndexOf(*child);
-    if (index < b_offset) {
-      return -1;
-    }
-    if (index > b_offset) {
-      return 1;
-    }
-    return ComparePoints(a, a_offset, child, 0);
+    return IndexOf(*child) < b_offset ? -1 : 1;
   }
 
   const dom::Node* common = nullptr;
@@ -279,17 +261,8 @@ bool IsContained(const RangeState& range, const dom::Node& node)
   if (RootOf(const_cast<dom::Node*>(&node)) != RootOf(range.start_node)) {
     return false;
   }
-  // DOM "contained": (node, 0) is after the range start and (node, length) is
-  // before the range end.  Equality at either boundary means the node starts
-  // at / ends at the range boundary, which the simplified clone/delete/
-  // stringify walkers here must still visit (the spec handles those as the
-  // partially contained first/last children).  A collapsed range contains
-  // nothing.
-  if (range.start_node == range.end_node && range.start_offset == range.end_offset) {
-    return false;
-  }
-  return ComparePoints(&node, 0, range.start_node, range.start_offset) >= 0 &&
-         ComparePoints(&node, NodeLength(node), range.end_node, range.end_offset) <= 0;
+  return ComparePoints(&node, 0, range.start_node, range.start_offset) > 0 &&
+         ComparePoints(&node, NodeLength(node), range.end_node, range.end_offset) < 0;
 }
 
 // The child of |common| that contains |start| and is partially contained in a
@@ -362,12 +335,7 @@ void MoveChild(Impl& impl, dom::Node& from, dom::Node& to, dom::Node* child)
 void AppendContainedText(const RangeState& range, const dom::Node& node, std::string& out)
 {
   for (dom::Node* child : node.ChildNodes()) {
-    if (child->node_type() == dom::NodeType::kText && IsContained(range, *child) &&
-        child != range.start_node && child != range.end_node) {
-      // The start and end character-data boundary nodes are appended as
-      // partial slices by StringifyRange(); including them here duplicated
-      // their text once IsContained learned that a node starting exactly at
-      // the range start is contained.
+    if (child->node_type() == dom::NodeType::kText && IsContained(range, *child)) {
       out += static_cast<const dom::Text&>(*child).data();
     }
     AppendContainedText(range, *child, out);
@@ -1171,11 +1139,11 @@ RangeCompareBoundaryPoints(JSContext* ctx, JSValueConst this_val, int argc, JSVa
     source_node = source->start;
     source_offset = source->start_offset;
     break;
-  case 1: // START_TO_END: this range's start vs source range's end
-    this_node = wrapper->start;
-    this_offset = wrapper->start_offset;
-    source_node = source->end;
-    source_offset = source->end_offset;
+  case 1: // START_TO_END
+    this_node = wrapper->end;
+    this_offset = wrapper->end_offset;
+    source_node = source->start;
+    source_offset = source->start_offset;
     break;
   case 2: // END_TO_END
     this_node = wrapper->end;
@@ -1183,11 +1151,11 @@ RangeCompareBoundaryPoints(JSContext* ctx, JSValueConst this_val, int argc, JSVa
     source_node = source->end;
     source_offset = source->end_offset;
     break;
-  default: // END_TO_START: this range's end vs source range's start
-    this_node = wrapper->end;
-    this_offset = wrapper->end_offset;
-    source_node = source->start;
-    source_offset = source->start_offset;
+  default: // END_TO_START
+    this_node = wrapper->start;
+    this_offset = wrapper->start_offset;
+    source_node = source->end;
+    source_offset = source->end_offset;
     break;
   }
   return JS_NewInt32(ctx, ComparePoints(this_node, this_offset, source_node, source_offset));
