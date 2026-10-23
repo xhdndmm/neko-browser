@@ -145,13 +145,74 @@ bool CollectFragmentRect(const layout::LayoutBox& box,
   return found;
 }
 
-bool FindCaretGeometry(
-    const layout::LayoutBox& box, const dom::Element* target, float& x, float& y, float& height)
+// True when |element| is a text-editing control whose caret the UI should
+// draw and whose presence enables the input method.  <textarea> was excluded
+// before, and range/color/checkbox/etc. generate no editable text caret.
+bool IsTextCaretControl(const dom::Element& element)
+{
+  const std::string_view tag = element.tag_name();
+  if (tag == "textarea") {
+    return true;
+  }
+  if (tag != "input") {
+    return false;
+  }
+  std::string type = std::string(element.GetAttribute("type").value_or("text"));
+  for (char& c : type) {
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  if (type.empty()) {
+    type = "text";
+  }
+  // <input type=number> is keyboard-editable in this engine (see the browser
+  // layer's IsKeyboardEditableControl), so it keeps a caret too.
+  static constexpr std::string_view kNonTextTypes[] = {"hidden",
+                                                       "date",
+                                                       "month",
+                                                       "week",
+                                                       "time",
+                                                       "datetime-local",
+                                                       "range",
+                                                       "color",
+                                                       "checkbox",
+                                                       "radio",
+                                                       "file",
+                                                       "submit",
+                                                       "reset",
+                                                       "button",
+                                                       "image"};
+  for (const std::string_view non_text : kNonTextTypes) {
+    if (type == non_text) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool FindCaretGeometry(const layout::LayoutBox& box,
+                       const dom::Element* target,
+                       const graphics::FontRegistry& fonts,
+                       float& x,
+                       float& y,
+                       float& height)
 {
   for (const layout::Line& line : box.lines) {
     for (const layout::TextRun& run : line.runs) {
       if (run.element == target) {
-        x = run.x + run.width;
+        // The caret sits at the control's selection offset, not always at the
+        // end of the run (the old behaviour ignored clicks/arrow keys/IME).
+        // The state is owned by the element and shared with the JS selection
+        // API; fall back to the end when it has never been initialized.
+        std::size_t caret = dom::Utf16Length(run.text);
+        if (const dom::TextControlState* state = target->text_control_state(); state != nullptr) {
+          caret = std::min(state->selection_start, caret);
+        }
+        const std::size_t prefix_bytes = dom::Utf8OffsetForUtf16Offset(run.text, caret);
+        const std::string_view prefix(run.text.data(), prefix_bytes);
+        const float prefix_width =
+            fonts.SelectorFor(run.font_family, run.font_weight, run.font_italic)
+                ->TextWidth(prefix, run.font_size);
+        x = run.x + prefix_width;
         y = run.y;
         height = line.height;
         return true;
@@ -159,23 +220,23 @@ bool FindCaretGeometry(
     }
     for (const layout::InlineBox& inline_box : line.boxes) {
       if (inline_box.block_box != nullptr &&
-          FindCaretGeometry(*inline_box.block_box, target, x, y, height)) {
+          FindCaretGeometry(*inline_box.block_box, target, fonts, x, y, height)) {
         return true;
       }
     }
   }
   for (const auto& child : box.children) {
-    if (FindCaretGeometry(*child, target, x, y, height)) {
+    if (FindCaretGeometry(*child, target, fonts, x, y, height)) {
       return true;
     }
   }
   for (const auto& child : box.positioned_children) {
-    if (FindCaretGeometry(*child, target, x, y, height)) {
+    if (FindCaretGeometry(*child, target, fonts, x, y, height)) {
       return true;
     }
   }
   for (const auto& floating : box.floats) {
-    if (FindCaretGeometry(*floating, target, x, y, height)) {
+    if (FindCaretGeometry(*floating, target, fonts, x, y, height)) {
       return true;
     }
   }
@@ -485,11 +546,12 @@ const dom::Element* Page::FocusedElement() const
 std::optional<CaretGeometry> Page::FocusedCaretGeometry() const
 {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
-  if (focused_element_ == nullptr || focused_element_->tag_name() != "input" || root_ == nullptr) {
+  if (focused_element_ == nullptr || root_ == nullptr || !IsTextCaretControl(*focused_element_)) {
     return std::nullopt;
   }
   CaretGeometry geometry;
-  if (!FindCaretGeometry(*root_, focused_element_, geometry.x, geometry.y, geometry.height)) {
+  if (!FindCaretGeometry(
+          *root_, focused_element_, fonts_, geometry.x, geometry.y, geometry.height)) {
     return std::nullopt;
   }
   geometry.x *= frame_scale();

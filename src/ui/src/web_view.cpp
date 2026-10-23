@@ -254,8 +254,14 @@ void WebView::keyPressEvent(QKeyEvent* event)
   std::string key;
   std::string code;
   bool dispatch = QtKeyToDomKey(event->key(), key, code);
-  if (!event->text().isEmpty() && !event->text().at(0).isNull()) {
-    key = event->text().toUtf8().toStdString();
+  // Qt reports control characters in text() for named keys: "\b" for
+  // Backspace, "\r" for Return, "\t" for Tab and "\x7f" for Delete.
+  // Overriding the mapped DOM key with them made Backspace/Enter/Tab no-ops
+  // (the input never saw a "Backspace" key).  Only printable text is a
+  // character input.
+  const QString text = event->text();
+  if (!text.isEmpty() && text.at(0).isPrint()) {
+    key = text.toUtf8().toStdString();
     if (code.empty()) {
       code = "Unidentified";
     }

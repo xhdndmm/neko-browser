@@ -2081,7 +2081,14 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         text = PlaceholderFor(element);
         is_placeholder = !text.empty();
       }
-      if (!text.empty()) {
+      // Text and textarea controls always get a run -- an empty value has a
+      // zero-width run -- so the focused caret geometry (and therefore the
+      // input method) exists before the first character is typed.  Without
+      // the empty run an empty field had no caret and Qt kept the IME
+      // disabled, making Chinese/Japanese/Korean input impossible.
+      const bool caret_control =
+          kind == FormControlKind::kText || kind == FormControlKind::kTextArea;
+      if (!text.empty() || caret_control) {
         TextRun run;
         run.text = text;
         run.font_family = box->style.font_family;

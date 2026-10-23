@@ -392,6 +392,167 @@ TEST(UiSmokeTest, ImeCommitEditsTheFocusedTextInput)
   ASSERT_TRUE(WaitFor([&] { return worker.SnapshotActiveTab().title == "水語"; }));
 }
 
+// Empty text controls must still expose a caret so Qt enables the input
+// method: the caret geometry used to require a non-empty text run, which made
+// it impossible to start a Chinese composition in an empty field.
+TEST(UiSmokeTest, ImeCommitEditsAnEmptyTextInput)
+{
+  TempProfile tp;
+  const std::string html_file = tp.path() + "/ime-empty.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(
+                  html_file,
+                  "<html><head><meta charset=\"utf-8\"><title>ime-empty</title></head><body>"
+                  "<input id=\"w\" type=\"text\" style=\"width: 200px\""
+                  " oninput=\"document.title=this.value || 'empty-value'\">"
+                  "</body></html>")
+                  .has_value());
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.show();
+  worker.NavigateActive(QString::fromStdString(html_file));
+  ASSERT_TRUE(WaitFor([&] { return worker.SnapshotActiveTab().title == "ime-empty"; }));
+
+  neko::ui::WebView* view = window.ActiveView();
+  ASSERT_NE(view, nullptr);
+  ASSERT_TRUE(WaitFor([&] {
+    const neko::browser::TabSnapshot snapshot = worker.SnapshotActiveTab();
+    return snapshot.frame != nullptr;
+  }));
+  const neko::browser::TabSnapshot framed = worker.SnapshotActiveTab();
+
+  neko::renderer::Page probe;
+  ASSERT_TRUE(probe.LoadHtml(neko::storage::ReadFile(html_file).value()).has_value());
+  probe.Layout(static_cast<float>(framed.frame->width), static_cast<float>(framed.frame->height));
+  neko::dom::Element* input = neko::dom::QuerySelector(*probe.document(), "#w");
+  ASSERT_NE(input, nullptr);
+  const auto geometry = probe.ElementBoxGeometry(*input);
+  ASSERT_TRUE(geometry.has_value());
+  const QPointF point(static_cast<qreal>(geometry->x + geometry->width / 2.0F),
+                      static_cast<qreal>(geometry->y + geometry->height / 2.0F));
+  QMouseEvent press(QEvent::MouseButtonPress,
+                    point,
+                    view->viewport()->mapToGlobal(point.toPoint()),
+                    Qt::LeftButton,
+                    Qt::LeftButton,
+                    Qt::NoModifier);
+  QApplication::sendEvent(view->viewport(), &press);
+
+  ASSERT_TRUE(WaitFor([&] { return view->inputMethodQuery(Qt::ImEnabled).toBool(); }));
+  QInputMethodEvent commit;
+  commit.setCommitString(QString::fromUtf8("語"));
+  QApplication::sendEvent(view, &commit);
+  ASSERT_TRUE(WaitFor([&] { return worker.SnapshotActiveTab().title == "語"; }));
+
+  // Deleting a committed multi-byte character is a code-point deletion, and
+  // Backspace must still be a named key after the IME commit.
+  QKeyEvent backspace(QEvent::KeyPress, Qt::Key_Backspace, Qt::NoModifier, QStringLiteral("\b"));
+  QApplication::sendEvent(view, &backspace);
+  ASSERT_TRUE(WaitFor([&] { return worker.SnapshotActiveTab().title == "empty-value"; }));
+}
+
+TEST(UiSmokeTest, ImeCommitEditsAnEmptyTextarea)
+{
+  TempProfile tp;
+  const std::string html_file = tp.path() + "/ime-textarea.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(
+                  html_file,
+                  "<html><head><meta charset=\"utf-8\"><title>ime-textarea</title></head><body>"
+                  "<textarea id=\"w\" style=\"width: 200px\""
+                  " oninput=\"document.title=this.value\"></textarea>"
+                  "</body></html>")
+                  .has_value());
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.show();
+  worker.NavigateActive(QString::fromStdString(html_file));
+  ASSERT_TRUE(WaitFor([&] { return worker.SnapshotActiveTab().title == "ime-textarea"; }));
+
+  neko::ui::WebView* view = window.ActiveView();
+  ASSERT_NE(view, nullptr);
+  ASSERT_TRUE(WaitFor([&] {
+    const neko::browser::TabSnapshot snapshot = worker.SnapshotActiveTab();
+    return snapshot.frame != nullptr;
+  }));
+  const neko::browser::TabSnapshot framed = worker.SnapshotActiveTab();
+
+  neko::renderer::Page probe;
+  ASSERT_TRUE(probe.LoadHtml(neko::storage::ReadFile(html_file).value()).has_value());
+  probe.Layout(static_cast<float>(framed.frame->width), static_cast<float>(framed.frame->height));
+  neko::dom::Element* input = neko::dom::QuerySelector(*probe.document(), "#w");
+  ASSERT_NE(input, nullptr);
+  const auto geometry = probe.ElementBoxGeometry(*input);
+  ASSERT_TRUE(geometry.has_value());
+  const QPointF point(static_cast<qreal>(geometry->x + geometry->width / 2.0F),
+                      static_cast<qreal>(geometry->y + geometry->height / 2.0F));
+  QMouseEvent press(QEvent::MouseButtonPress,
+                    point,
+                    view->viewport()->mapToGlobal(point.toPoint()),
+                    Qt::LeftButton,
+                    Qt::LeftButton,
+                    Qt::NoModifier);
+  QApplication::sendEvent(view->viewport(), &press);
+
+  ASSERT_TRUE(WaitFor([&] { return view->inputMethodQuery(Qt::ImEnabled).toBool(); }));
+  QInputMethodEvent commit;
+  commit.setCommitString(QString::fromUtf8("語"));
+  QApplication::sendEvent(view, &commit);
+  ASSERT_TRUE(WaitFor([&] { return worker.SnapshotActiveTab().title == "語"; }));
+}
+
+// Qt reports Backspace's text as "\b"; the web view must not let that control
+// character replace the mapped "Backspace" key (it used to, so deletion never
+// reached the engine).
+TEST(UiSmokeTest, BackspaceKeyDeletesInFocusedTextInput)
+{
+  TempProfile tp;
+  const std::string html_file = tp.path() + "/backspace.html";
+  ASSERT_TRUE(neko::storage::WriteFileAtomic(
+                  html_file,
+                  "<html><head><meta charset=\"utf-8\"><title>backspace</title></head><body>"
+                  "<input id=\"w\" type=\"text\" value=\"水ab\" style=\"width: 200px\""
+                  " oninput=\"document.title=this.value\">"
+                  "</body></html>")
+                  .has_value());
+
+  neko::ui::BrowserWorker worker(QString::fromStdString(tp.path()));
+  neko::ui::MainWindow window(&worker);
+  window.show();
+  worker.NavigateActive(QString::fromStdString(html_file));
+  ASSERT_TRUE(WaitFor([&] { return worker.SnapshotActiveTab().title == "backspace"; }));
+
+  neko::ui::WebView* view = window.ActiveView();
+  ASSERT_NE(view, nullptr);
+  ASSERT_TRUE(WaitFor([&] {
+    const neko::browser::TabSnapshot snapshot = worker.SnapshotActiveTab();
+    return snapshot.frame != nullptr;
+  }));
+  const neko::browser::TabSnapshot framed = worker.SnapshotActiveTab();
+
+  neko::renderer::Page probe;
+  ASSERT_TRUE(probe.LoadHtml(neko::storage::ReadFile(html_file).value()).has_value());
+  probe.Layout(static_cast<float>(framed.frame->width), static_cast<float>(framed.frame->height));
+  neko::dom::Element* input = neko::dom::QuerySelector(*probe.document(), "#w");
+  ASSERT_NE(input, nullptr);
+  const auto geometry = probe.ElementBoxGeometry(*input);
+  ASSERT_TRUE(geometry.has_value());
+  const QPointF point(static_cast<qreal>(geometry->x + geometry->width / 2.0F),
+                      static_cast<qreal>(geometry->y + geometry->height / 2.0F));
+  QMouseEvent press(QEvent::MouseButtonPress,
+                    point,
+                    view->viewport()->mapToGlobal(point.toPoint()),
+                    Qt::LeftButton,
+                    Qt::LeftButton,
+                    Qt::NoModifier);
+  QApplication::sendEvent(view->viewport(), &press);
+  ASSERT_TRUE(WaitFor([&] { return view->inputMethodQuery(Qt::ImEnabled).toBool(); }));
+
+  QKeyEvent backspace(QEvent::KeyPress, Qt::Key_Backspace, Qt::NoModifier, QStringLiteral("\b"));
+  QApplication::sendEvent(view, &backspace);
+  ASSERT_TRUE(WaitFor([&] { return worker.SnapshotActiveTab().title == "水a"; }));
+}
+
 TEST(UiSmokeTest, AddressBarBackspaceDeletesCharacter)
 {
   TempProfile tp;

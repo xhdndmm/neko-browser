@@ -341,6 +341,54 @@ TEST(PageTest, FocusedCaretGeometryIsThreadSafeAndInputOnly)
   EXPECT_FALSE(page.FocusedCaretGeometry().has_value());
 }
 
+// The caret is drawn at the control's selection offset, not always at the
+// end of the value; empty controls and <textarea> have a caret too (the input
+// method is gated on this geometry).
+TEST(PageTest, CaretFollowsTheSelectionAndSupportsEmptyControls)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body><input id=\"empty\">"
+                            "<textarea id=\"area\"></textarea>"
+                            "<input id=\"value\" value=\"abcd\"></body>")
+                  .has_value());
+  page.Layout(400, 300);
+  dom::Element* empty = dom::QuerySelector(*page.document(), "#empty");
+  dom::Element* area = dom::QuerySelector(*page.document(), "#area");
+  dom::Element* value = dom::QuerySelector(*page.document(), "#value");
+  ASSERT_NE(empty, nullptr);
+  ASSERT_NE(area, nullptr);
+  ASSERT_NE(value, nullptr);
+
+  page.SetFocusedElement(empty);
+  const auto empty_caret = page.FocusedCaretGeometry();
+  ASSERT_TRUE(empty_caret.has_value());
+  EXPECT_GT(empty_caret->height, 0);
+
+  page.SetFocusedElement(area);
+  const auto area_caret = page.FocusedCaretGeometry();
+  ASSERT_TRUE(area_caret.has_value());
+  EXPECT_GT(area_caret->height, 0);
+
+  page.SetFocusedElement(value);
+  value->EnsureTextControlState().selection_start = 4;
+  value->EnsureTextControlState().selection_end = 4;
+  const auto end_caret = page.FocusedCaretGeometry();
+  ASSERT_TRUE(end_caret.has_value());
+
+  value->EnsureTextControlState().selection_start = 0;
+  value->EnsureTextControlState().selection_end = 0;
+  const auto start_caret = page.FocusedCaretGeometry();
+  ASSERT_TRUE(start_caret.has_value());
+  EXPECT_LT(start_caret->x, end_caret->x);
+
+  value->EnsureTextControlState().selection_start = 2;
+  value->EnsureTextControlState().selection_end = 2;
+  const auto middle_caret = page.FocusedCaretGeometry();
+  ASSERT_TRUE(middle_caret.has_value());
+  EXPECT_GT(middle_caret->x, start_caret->x);
+  EXPECT_LT(middle_caret->x, end_caret->x);
+}
+
 TEST(PageTest, HoverStyleInvalidatesCachedRaster)
 {
   Page page;
