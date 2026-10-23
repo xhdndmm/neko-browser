@@ -5,6 +5,7 @@
 
 #include "neko/browser/browser_controller.h"
 #include "neko/dom/query.h"
+#include "neko/html/input_value.h"
 #include "neko/layout/layout_tree.h"
 #include "neko/storage/file_util.h"
 #include "neko/storage/password_store.h"
@@ -1264,7 +1265,7 @@ TEST(UiSmokeTest, ClickInputAndTypeUpdatesValue)
       return false;
     }
     neko::dom::Element* input = neko::dom::QuerySelector(*snap.page->document(), "#q");
-    return input != nullptr && input->GetAttribute("value").value_or("") == "hia";
+    return input != nullptr && neko::html::InputValue(*input) == "hia";
   }));
 }
 
@@ -1318,7 +1319,7 @@ TEST(UiSmokeTest, TextInputPreservesPrintableUnicodeCharacters)
       return false;
     }
     auto* current_input = neko::dom::QuerySelector(*current.page->document(), "#q");
-    return current_input != nullptr && current_input->GetAttribute("value").value_or("") == "x@中";
+    return current_input != nullptr && neko::html::InputValue(*current_input) == "x@中";
   }));
 }
 
@@ -1469,7 +1470,7 @@ TEST(UiSmokeTest, FocusedInputDrawsCaret)
       return false;
     }
     neko::dom::Element* q = neko::dom::QuerySelector(*snap2.page->document(), "#q");
-    return q != nullptr && q->GetAttribute("value").value_or("") == "abc";
+    return q != nullptr && neko::html::InputValue(*q) == "abc";
   }));
   float cx2 = 0;
   float cy2 = 0;

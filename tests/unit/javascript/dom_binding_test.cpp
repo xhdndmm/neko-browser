@@ -664,14 +664,207 @@ TEST_F(DomBinderTest, NumberRangeLimitsAndStep)
     var stepMismatch = number.validity.stepMismatch && !number.validity.valid;
     number.setAttribute('step', 'any');
     var any = number.validity.valid;
+    // The value setter runs the Number state's value sanitization algorithm:
+    // invalid text is not a valid floating-point number, so the current value
+    // becomes the empty string.  badInput tracks raw *user* input, which the
+    // engine does not store (documented limitation), so it stays false.
     number.value = 'not-a-number';
-    var badInput = number.validity.badInput && !number.validity.valid;
+    var sanitizedBadInput = number.value === '' && number.validity.badInput === false &&
+        number.validity.valid;
+    number.value = '3.5';
+    var fractional = number.validity.valid;
     var range = document.createElement('input');
     range.type = 'range';
     range.setAttribute('min', '0');
     range.setAttribute('max', '10');
     range.setAttribute('step', '1');
-    return underflow && overflow && stepMismatch && any && badInput && range.validity.valid;
+    return underflow && overflow && stepMismatch && any && sanitizedBadInput && fractional &&
+           range.validity.valid;
+  })())JS"));
+}
+
+TEST_F(DomBinderTest, InputValueSanitizationPerType)
+{
+  EXPECT_TRUE(EvalBool(R"JS((function() {
+    function input(type, attrs) {
+      var el = document.createElement('input');
+      el.setAttribute('type', type);
+      for (var name in attrs) { el.setAttribute(name, attrs[name]); }
+      return el;
+    }
+    function valueOf(type, value) { return input(type, { value: value }).value; }
+    var checks = [];
+    // Text family: strip CR/LF only (spaces are kept).
+    checks.push(valueOf('text', ' a\r\nb ') === ' ab ');
+    checks.push(valueOf('search', 'a\nb') === 'ab');
+    checks.push(valueOf('tel', '1\r\n2') === '12');
+    checks.push(valueOf('password', 'p\nw') === 'pw');
+    checks.push(valueOf('hidden', 'h\r\ni') === 'hi');
+    // URL / email: strip newlines, then leading/trailing ASCII whitespace.
+    checks.push(valueOf('url', '  https://x.test/a  ') === 'https://x.test/a');
+    checks.push(valueOf('email', ' a@b.com \n') === 'a@b.com');
+    var multiple = input('email', { multiple: '', value: ' a@b.com , c@d.com ' });
+    checks.push(multiple.value === 'a@b.com,c@d.com');
+    // Number: a valid floating-point number or the empty string.
+    checks.push(valueOf('number', 'abc') === '');
+    checks.push(valueOf('number', '1e3') === '1e3');
+    checks.push(valueOf('number', '01') === '01');
+    checks.push(valueOf('number', ' 7 ') === '');
+    checks.push(valueOf('number', '+7') === '');
+    checks.push(valueOf('number', '1.') === '');
+    checks.push(valueOf('number', '-0') === '-0');
+    // Range: invalid -> default halfway value, otherwise clamp to min/max.
+    var range = input('range', { min: '10', max: '20', value: '99' });
+    checks.push(range.value === '20');
+    var defaultRange = document.createElement('input');
+    defaultRange.setAttribute('min', '10');
+    defaultRange.setAttribute('max', '20');
+    defaultRange.setAttribute('type', 'range');
+    checks.push(defaultRange.value === '15');
+    var stepped = input('range', { min: '0', max: '1', step: '0.1', value: '0.35' });
+    checks.push(stepped.value === '0.4');
+    // Date/time family: valid string form, otherwise empty.
+    checks.push(valueOf('date', '2020-01-02') === '2020-01-02');
+    checks.push(valueOf('date', '2020-1-2') === '');
+    checks.push(valueOf('date', '2020-02-30') === '');
+    checks.push(valueOf('month', '2020-01') === '2020-01');
+    checks.push(valueOf('month', '2020-1') === '');
+    checks.push(valueOf('week', '2020-W53') === '2020-W53');
+    checks.push(valueOf('week', '2020-W54') === '');
+    checks.push(valueOf('time', '09:05') === '09:05');
+    checks.push(valueOf('time', '9:5') === '');
+    checks.push(valueOf('time', '24:00') === '');
+    checks.push(valueOf('datetime-local', '2020-1-2T3:4') === '');
+    checks.push(valueOf('datetime-local', '2020-01-02T03:04:05.000') ===
+                '2020-01-02T03:04:05');
+    // Colour: parsed and serialized lowercase; invalid becomes black.
+    checks.push(valueOf('color', 'RED') === '#ff0000');
+    checks.push(valueOf('color', '#ABC') === '#aabbcc');
+    checks.push(valueOf('color', 'invalid') === '#000000');
+    // Checkbox/radio: value IDL is the content attribute, "on" when absent.
+    checks.push(input('checkbox', {}).value === 'on');
+    checks.push(input('checkbox', { value: '' }).value === '');
+    checks.push(input('radio', {}).value === 'on');
+    return checks.indexOf(false) === -1;
+  })())JS"));
+}
+
+TEST_F(DomBinderTest, InputValueDefaultValueAndDirtyValueFlag)
+{
+  EXPECT_TRUE(EvalBool(R"JS((function() {
+    var input = document.createElement('input');
+    input.type = 'number';
+    input.setAttribute('value', 'abc');
+    var initial = input.value === '' && input.defaultValue === 'abc' &&
+        input.getAttribute('value') === 'abc';
+    input.value = '7';
+    var set = input.value === '7' && input.defaultValue === 'abc' &&
+        input.getAttribute('value') === 'abc';
+    input.value = 'xyz';
+    var rejected = input.value === '' && input.getAttribute('value') === 'abc';
+    // A dirty value ignores later default-value changes.
+    input.defaultValue = '42';
+    var dirtyDefault = input.value === '' && input.defaultValue === '42' &&
+        input.getAttribute('value') === '42';
+    input.removeAttribute('value');
+    var removed = input.defaultValue === '' && input.value === '';
+
+    // While not dirty, the current value follows the attribute.
+    var clean = document.createElement('input');
+    clean.type = 'number';
+    clean.defaultValue = '5';
+    var fromDefault = clean.value === '5';
+    clean.setAttribute('value', '6');
+    var fromAttribute = clean.value === '6';
+    clean.defaultValue = '7';
+    var fromDefaultAgain = clean.value === '7';
+    return initial && set && rejected && dirtyDefault && removed && fromDefault &&
+        fromAttribute && fromDefaultAgain;
+  })())JS"));
+}
+
+TEST_F(DomBinderTest, InputTypeChangeReSanitizesTheCurrentValue)
+{
+  EXPECT_TRUE(EvalBool(R"JS((function() {
+    // Number -> Text: the current value (sanitized to "") survives; it is not
+    // re-derived from the raw "abc" attribute.
+    var number = document.createElement('input');
+    number.type = 'number';
+    number.setAttribute('value', 'abc');
+    number.type = 'text';
+    var numberToText = number.value === '' && number.getAttribute('value') === 'abc';
+
+    // Dirty Number -> Text: the dirty value survives.
+    var dirty = document.createElement('input');
+    dirty.type = 'number';
+    dirty.setAttribute('value', 'abc');
+    dirty.value = '7';
+    dirty.type = 'text';
+    var dirtyKept = dirty.value === '7' && dirty.getAttribute('value') === 'abc';
+
+    // Text -> Checkbox: a non-empty value-mode value is written to the
+    // content attribute (the default/on mode) and read back.
+    var text = document.createElement('input');
+    text.type = 'text';
+    text.value = '9';
+    text.type = 'checkbox';
+    var toCheckbox = text.value === '9' && text.getAttribute('value') === '9' &&
+        text.defaultValue === '9';
+
+    // Nothing -> Range: the current value is sanitized with the new state's
+    // algorithm and min/max.
+    var range = document.createElement('input');
+    range.setAttribute('min', '10');
+    range.setAttribute('max', '20');
+    range.type = 'range';
+    var toRange = range.value === '15';
+
+    // Type keyword reflection: missing/invalid defaults to "text".
+    var reflected = document.createElement('input');
+    var defaultText = reflected.type === 'text';
+    reflected.setAttribute('type', 'TEXT');
+    var lowercased = reflected.type === 'text';
+    reflected.setAttribute('type', 'bogus');
+    var invalidDefault = reflected.type === 'text';
+    return numberToText && dirtyKept && toCheckbox && toRange && defaultText && lowercased &&
+        invalidDefault;
+  })())JS"));
+}
+
+TEST_F(DomBinderTest, FileInputValueIsAlwaysEmptyAndRejectsNonEmptySetter)
+{
+  EXPECT_TRUE(EvalBool(R"JS((function() {
+    var file = document.createElement('input');
+    file.type = 'file';
+    file.setAttribute('value', 'ignored.txt');
+    var empty = file.value === '';
+    var threw = false;
+    try {
+      file.value = 'x.txt';
+    } catch (error) {
+      threw = error && error.name === 'InvalidStateError';
+    }
+    file.value = '';
+    return empty && threw && file.value === '';
+  })())JS"));
+}
+
+TEST_F(DomBinderTest, SetRangeTextUsesTheSanitizedCurrentValue)
+{
+  EXPECT_TRUE(EvalBool(R"JS((function() {
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.value = 'hello';
+    input.setSelectionRange(0, 5);
+    input.setRangeText('a\nb');
+    // setRangeText goes through the same current-value store: the newline is
+    // stripped by the Text state's sanitization, and the content attribute is
+    // not rewritten.
+    var replaced = input.value === 'ab' && input.getAttribute('value') === null;
+    input.setAttribute('value', 'zzz');
+    // setRangeText set the dirty value flag, so the attribute change does not
+    // overwrite the current value.
+    return replaced && input.value === 'ab' && input.defaultValue === 'zzz';
   })())JS"));
 }
 

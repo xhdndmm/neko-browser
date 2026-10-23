@@ -3,6 +3,7 @@
 #include "neko/dom/element.h"
 #include "neko/graphics/font_registry.h"
 #include "neko/graphics/font_selector.h"
+#include "neko/html/input_value.h"
 #include "neko/image/image.h"
 #include "neko/layout/form_control.h"
 #include "neko/layout/layout_tree.h"
@@ -1935,8 +1936,10 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
       float content_width = 0;
       float content_height = line_h;
       // The text the control shows.  A widget that is drawn rather than written
-      // in (checkbox, radio, range, colour well, file control) shows no text
-      // run: its content belongs to the paint layer.
+      // in (checkbox, radio, file control) shows no text run: its content
+      // belongs to the paint layer.  Range and colour well have no drawn
+      // innards in this engine yet, so they show the sanitized value as a text
+      // run (the slider/colour well chrome itself is still NOT IMPLEMENTED).
       std::string text;
       switch (kind) {
       case FormControlKind::kCheckbox:
@@ -1950,11 +1953,17 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         // §15.5.8: an inline-block slider; the track and thumb are painted.
         content_width = std::max(0.0f, kRangeWidthEm * box->style.font_size - border_padding_w);
         content_height = std::max(0.0f, kRangeHeightEm * box->style.font_size - border_padding_h);
+        // The value is clamped and step-aligned by the value sanitization
+        // algorithm, so e.g. min=10 max=20 value=99 shows "20".
+        text = html::InputValue(element);
         break;
       case FormControlKind::kColor:
         // §15.5.9: a colour well, painted from the element's value.
         content_width = std::max(0.0f, kColorWellWidth - border_padding_w);
         content_height = std::max(0.0f, kColorWellHeight - border_padding_h);
+        // The sanitized simple colour ("#rrggbb", lowercase) is the visible
+        // value until the colour well is painted.
+        text = html::InputValue(element);
         break;
       case FormControlKind::kText: {
         float average = 0;
@@ -1963,7 +1972,9 @@ LayoutEngine::BuildLayoutTree(dom::Document& document, float viewport_width, flo
         // §15.5.6: (size - 1) * avg + max, with `size` defaulting to 20.
         const int characters = FieldSizeAttribute(element, "size").value_or(kDefaultFieldSizeChars);
         content_width = static_cast<float>(characters - 1) * average + widest;
-        text = std::string(element.GetAttribute("value").value_or(""));
+        // The current (sanitized) value: an <input type=number value=abc>
+        // reads as empty, a URL is trimmed, and so on.
+        text = html::InputValue(element);
         // §15.5.6: a password state shows bullets instead of the value.
         if (base::AsciiEqualsIgnoreCase(std::string(element.GetAttribute("type").value_or("")),
                                         "password")) {

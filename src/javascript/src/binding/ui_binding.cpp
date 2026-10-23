@@ -9,6 +9,7 @@
 #include "neko/dom/node.h"
 #include "neko/dom/query.h"
 #include "neko/html/form_validation.h"
+#include "neko/html/input_value.h"
 #include "neko/url/url.h"
 
 #include "binding_internal.h"
@@ -246,10 +247,12 @@ bool IsCheckableInput(const dom::Element& element)
 
 namespace {
 
-// Writes a text control's value through the single engine store: the `value`
-// content attribute for <input>, the text child for <textarea>.  Removed
-// textarea children are retained by the binder so live JS references to them
-// do not dangle.
+// Writes a text control's value.  <textarea> stores its text child; <input>
+// goes through neko::html::SetInputValue, which applies the per-state value
+// sanitization algorithm and sets the dirty value flag (the `value` content
+// attribute -- the default value -- is left untouched).  Removed textarea
+// children are retained by the binder so live JS references to them do not
+// dangle.
 void StoreTextControlValue(JSContext* ctx,
                            JSValueConst this_val,
                            dom::Element& element,
@@ -267,6 +270,8 @@ void StoreTextControlValue(JSContext* ctx,
     if (!text.empty()) {
       element.AppendChild(std::make_unique<dom::Text>(std::string(text)));
     }
+  } else if (element.tag_name() == "input") {
+    html::SetInputValue(element, text);
   } else {
     element.SetAttribute("value", text);
   }
@@ -283,7 +288,7 @@ void ClampTextControlSelection(dom::Element& element)
   if (state == nullptr) {
     return;
   }
-  const std::size_t length = dom::Utf16Length(dom::TextControlValue(element));
+  const std::size_t length = dom::Utf16Length(html::InputValue(element));
   state->selection_start = std::min(state->selection_start, length);
   state->selection_end = std::min(state->selection_end, length);
 }
@@ -311,8 +316,50 @@ JSValue ElementGetValue(JSContext* ctx, JSValueConst this_val)
     const std::string text = element->TextContent();
     return JS_NewStringLen(ctx, text.data(), text.size());
   }
+  if (tag == "input") {
+    // The value IDL attribute: the sanitized current value (per-state value
+    // sanitization algorithm), not the raw `value` content attribute.
+    const std::string value = html::InputValue(*element);
+    return JS_NewStringLen(ctx, value.data(), value.size());
+  }
   const std::string value = RawAttr(*element, "value");
   return JS_NewStringLen(ctx, value.data(), value.size());
+}
+
+JSValue ElementGetDefaultValue(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  // defaultValue is the raw `value` content attribute ("" when absent), as
+  // for every input type.
+  const std::string value = RawAttr(*element, "value");
+  return JS_NewStringLen(ctx, value.data(), value.size());
+}
+
+JSValue ElementSetDefaultValue(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  bool ok = false;
+  const std::string text = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  if (element->tag_name() == "input") {
+    // Sets the value content attribute; when the dirty value flag is false the
+    // current value follows it (HTML §4.10.5.5).
+    html::SetInputDefaultValue(*element, text);
+  } else {
+    element->SetAttribute("value", text);
+  }
+  if (Impl* impl = ImplFor(ctx, this_val)) {
+    impl->MarkDomDirty(element);
+  }
+  return JS_UNDEFINED;
 }
 
 JSValue ElementSetValue(JSContext* ctx, JSValueConst this_val, JSValueConst value)
@@ -325,6 +372,17 @@ JSValue ElementSetValue(JSContext* ctx, JSValueConst this_val, JSValueConst valu
   const std::string text = ArgString(ctx, value, &ok);
   if (!ok) {
     return JS_EXCEPTION;
+  }
+  if (element->tag_name() == "input" &&
+      html::InputValueModeFor(html::InputTypeKeyword(*element)) ==
+          html::InputValueMode::kFilename &&
+      !text.empty()) {
+    // HTML §4.10.5.1.7 File state: "On setting, if the new value is the empty
+    // string, empty the list of selected files; otherwise, throw an
+    // InvalidStateError exception."  The engine has no File API, so only the
+    // empty value is ever accepted.
+    return ThrowDomException(
+        ctx, "InvalidStateError", "a file input's value can only be set to the empty string");
   }
   StoreTextControlValue(ctx, this_val, *element, text);
   if (dom::TextControlState* state = element->text_control_state()) {
@@ -437,7 +495,7 @@ bool ApplySelection(dom::Element& element,
                     std::size_t end,
                     dom::SelectionDirection direction)
 {
-  const std::size_t length = dom::Utf16Length(dom::TextControlValue(element));
+  const std::size_t length = dom::Utf16Length(html::InputValue(element));
   start = std::min(start, length);
   end = std::min(end, length);
   if (end <= start) {
@@ -473,7 +531,7 @@ JSValue ElementGetSelectionStart(JSContext* ctx, JSValueConst this_val)
   if (!dom::SupportsTextControlSelection(*element)) {
     return JS_NULL;
   }
-  const std::size_t length = dom::Utf16Length(dom::TextControlValue(*element));
+  const std::size_t length = dom::Utf16Length(html::InputValue(*element));
   return JS_NewInt64(ctx, static_cast<std::int64_t>(CurrentSelectionStart(*element, length)));
 }
 
@@ -490,7 +548,7 @@ JSValue ElementSetSelectionStart(JSContext* ctx, JSValueConst this_val, JSValueC
   if (!ToOffset(ctx, value, &start)) {
     return JS_EXCEPTION;
   }
-  const std::size_t length = dom::Utf16Length(dom::TextControlValue(*element));
+  const std::size_t length = dom::Utf16Length(html::InputValue(*element));
   const std::size_t current_end = CurrentSelectionEnd(*element, length);
   // "If end is less than the given value, set end to the given value."
   const double end =
@@ -514,7 +572,7 @@ JSValue ElementGetSelectionEnd(JSContext* ctx, JSValueConst this_val)
   if (!dom::SupportsTextControlSelection(*element)) {
     return JS_NULL;
   }
-  const std::size_t length = dom::Utf16Length(dom::TextControlValue(*element));
+  const std::size_t length = dom::Utf16Length(html::InputValue(*element));
   return JS_NewInt64(ctx, static_cast<std::int64_t>(CurrentSelectionEnd(*element, length)));
 }
 
@@ -531,7 +589,7 @@ JSValue ElementSetSelectionEnd(JSContext* ctx, JSValueConst this_val, JSValueCon
   if (!ToOffset(ctx, value, &end)) {
     return JS_EXCEPTION;
   }
-  const std::size_t length = dom::Utf16Length(dom::TextControlValue(*element));
+  const std::size_t length = dom::Utf16Length(html::InputValue(*element));
   const bool changed = ApplySelection(*element,
                                       CurrentSelectionStart(*element, length),
                                       ClampToLength(end, length),
@@ -568,7 +626,7 @@ JSValue ElementSetSelectionDirection(JSContext* ctx, JSValueConst this_val, JSVa
   if (!ok) {
     return JS_EXCEPTION;
   }
-  const std::size_t length = dom::Utf16Length(dom::TextControlValue(*element));
+  const std::size_t length = dom::Utf16Length(html::InputValue(*element));
   const bool changed = ApplySelection(*element,
                                       CurrentSelectionStart(*element, length),
                                       CurrentSelectionEnd(*element, length),
@@ -608,7 +666,7 @@ ElementSetSelectionRange(JSContext* ctx, JSValueConst this_val, int argc, JSValu
     // argument) means "none", per the spec's set-the-selection-range steps.
     direction = DirectionFromString(text);
   }
-  const std::size_t length = dom::Utf16Length(dom::TextControlValue(*element));
+  const std::size_t length = dom::Utf16Length(html::InputValue(*element));
   const bool changed =
       ApplySelection(*element, ClampToLength(start, length), ClampToLength(end, length), direction);
   if (changed) {
@@ -651,7 +709,7 @@ JSValue ElementSetRangeText(JSContext* ctx, JSValueConst this_val, int argc, JSV
     }
   }
 
-  std::string value = dom::TextControlValue(*element);
+  std::string value = html::InputValue(*element);
   const std::size_t length = dom::Utf16Length(value);
   const std::size_t selection_start = CurrentSelectionStart(*element, length);
   const std::size_t selection_end = CurrentSelectionEnd(*element, length);
@@ -724,7 +782,7 @@ JSValue ElementSelect(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSVal
   if (!dom::SupportsTextControlSelection(*element)) {
     return JS_UNDEFINED;
   }
-  const std::size_t length = dom::Utf16Length(dom::TextControlValue(*element));
+  const std::size_t length = dom::Utf16Length(html::InputValue(*element));
   const bool changed = ApplySelection(*element, 0, length, dom::SelectionDirection::kNone);
   if (changed) {
     FireSelectEvent(ctx, this_val, *element);
@@ -1087,7 +1145,9 @@ JSValue ElementGetType(JSContext* ctx, JSValueConst this_val)
   if (element->tag_name() != "input") {
     return JS_NewStringLen(ctx, "", 0);
   }
-  const std::string type = RawAttr(*element, "type");
+  // The type IDL attribute reflects the content attribute limited to known
+  // keywords; the missing and invalid value defaults are the Text state.
+  const std::string type = html::InputTypeKeyword(*element);
   return JS_NewStringLen(ctx, type.data(), type.size());
 }
 
@@ -1103,10 +1163,18 @@ JSValue ElementSetType(JSContext* ctx, JSValueConst this_val, JSValueConst value
     return JS_EXCEPTION;
   }
   if (element->tag_name() == "input") {
+    // Capture the previous state and value before the attribute changes: the
+    // type-change steps (HTML §4.10.5.3) compare the old and new value modes,
+    // and a value-mode state must be sanitized under the old type first.
+    const std::string old_type = html::InputTypeKeyword(*element);
+    const std::string old_value = html::InputValue(*element);
     element->SetAttribute("type", type);
+    html::InputTypeChanged(*element, old_type, old_value);
   }
   // Reflector setter: behaves like setAttribute (cascade may change).
-  ImplFor(ctx, this_val)->MarkDomDirty(element);
+  if (Impl* impl = ImplFor(ctx, this_val)) {
+    impl->MarkDomDirty(element);
+  }
   return JS_UNDEFINED;
 }
 
@@ -1144,6 +1212,128 @@ JSValue ElementGetDisabled(JSContext* ctx, JSValueConst this_val)
     return JS_ThrowTypeError(ctx, "not an element");
   }
   return JS_NewBool(ctx, element->HasAttribute("disabled"));
+}
+
+// input.multiple (HTML §4.10.5.3): a boolean content attribute.  It changes the
+// email value sanitization algorithm (single address vs address list), which
+// the shared implementation applies on every read.
+JSValue ElementGetMultiple(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  return JS_NewBool(ctx, element->HasAttribute("multiple"));
+}
+
+JSValue ElementSetMultiple(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const int enabled = JS_ToBool(ctx, value);
+  if (enabled < 0) {
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return JS_EXCEPTION;
+  }
+  if (enabled != 0) {
+    element->SetAttribute("multiple", "");
+  } else {
+    element->RemoveAttribute("multiple");
+  }
+  if (Impl* impl = ImplFor(ctx, this_val)) {
+    impl->MarkDomDirty(element);
+  }
+  return JS_UNDEFINED;
+}
+
+// input.min / input.max / input.step: string attribute reflectors.  Their
+// values feed the number/range/date value sanitization algorithms directly, so
+// the getters return the raw attribute ("" when absent) and the setters behave
+// like setAttribute.
+JSValue ElementGetMin(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const std::string value = RawAttr(*element, "min");
+  return JS_NewStringLen(ctx, value.data(), value.size());
+}
+
+JSValue ElementSetMin(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  bool ok = false;
+  const std::string text = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  element->SetAttribute("min", text);
+  if (Impl* impl = ImplFor(ctx, this_val)) {
+    impl->MarkDomDirty(element);
+  }
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetMax(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const std::string value = RawAttr(*element, "max");
+  return JS_NewStringLen(ctx, value.data(), value.size());
+}
+
+JSValue ElementSetMax(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  bool ok = false;
+  const std::string text = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  element->SetAttribute("max", text);
+  if (Impl* impl = ImplFor(ctx, this_val)) {
+    impl->MarkDomDirty(element);
+  }
+  return JS_UNDEFINED;
+}
+
+JSValue ElementGetStep(JSContext* ctx, JSValueConst this_val)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  const std::string value = RawAttr(*element, "step");
+  return JS_NewStringLen(ctx, value.data(), value.size());
+}
+
+JSValue ElementSetStep(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+{
+  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
+  if (element == nullptr) {
+    return JS_ThrowTypeError(ctx, "not an element");
+  }
+  bool ok = false;
+  const std::string text = ArgString(ctx, value, &ok);
+  if (!ok) {
+    return JS_EXCEPTION;
+  }
+  element->SetAttribute("step", text);
+  if (Impl* impl = ImplFor(ctx, this_val)) {
+    impl->MarkDomDirty(element);
+  }
+  return JS_UNDEFINED;
 }
 
 JSValue ElementSetDisabled(JSContext* ctx, JSValueConst this_val, JSValueConst value)

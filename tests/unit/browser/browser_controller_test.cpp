@@ -6,6 +6,7 @@
 #include "neko/browser/download_manager.h"
 #include "neko/dom/query.h"
 #include "neko/graphics/system_fonts.h"
+#include "neko/html/input_value.h"
 #include "neko/image/image.h"
 #include "neko/layout/layout_tree.h"
 #include "neko/network/http.h"
@@ -1014,8 +1015,120 @@ TEST(BrowserControllerTest, TextInputAcceptsTypedCharacters)
       tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f);
   // Pointer focus leaves the caret at the end, so typing extends the value.
   controller.DispatchKeyboard(tab->id, "keydown", "a", "KeyA");
-  EXPECT_EQ(input->GetAttribute("value").value_or(""), "水a")
-      << "typing must extend the input value";
+  EXPECT_EQ(html::InputValue(*input), "水a") << "typing must extend the input value";
+  // The current value lives beside the attribute: the default value is
+  // unchanged (the value setter never rewrites the content attribute).
+  EXPECT_EQ(input->GetAttribute("value").value_or(""), "水");
+}
+
+// Keyboard editing goes through the shared value sanitization algorithm: a
+// number control accepts digits but drops text the Number state rejects, and
+// the `value` content attribute (defaultValue) is never rewritten.  The engine
+// does not store rejected raw user text, so validity.badInput stays false
+// (documented limitation).
+TEST(BrowserControllerTest, NumberInputTypingKeepsTheSanitizedValue)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<input id='n' type='number' name='n'>"
+                               "<script>window.__inputs = 0;"
+                               "document.getElementById('n').addEventListener('input',"
+                               "function(){ window.__inputs += 1; });</script>"
+                               "</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  tab->page->Layout(800, 600);
+  dom::Element* input = dom::QuerySelector(*tab->page->document(), "input");
+  ASSERT_NE(input, nullptr);
+  const auto geometry = tab->page->ElementBoxGeometry(*input);
+  ASSERT_TRUE(geometry.has_value());
+  controller.DispatchPointerClick(
+      tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f);
+  ASSERT_TRUE(tab->script_runtime != nullptr);
+  const auto input_events = [&tab]() {
+    auto result = tab->script_runtime->Evaluate("window.__inputs");
+    if (!result.has_value()) {
+      return -1.0;
+    }
+    auto number = result.value().ToNumber();
+    return number.has_value() ? number.value() : -1.0;
+  };
+  EXPECT_EQ(input_events(), 0.0) << "value=" << html::InputValue(*input);
+
+  controller.DispatchKeyboard(tab->id, "keydown", "5", "Digit5");
+  EXPECT_EQ(html::InputValue(*input), "5");
+  EXPECT_FALSE(input->HasAttribute("value")) << "the value setter must not create the attribute";
+  EXPECT_EQ(input_events(), 1.0);
+
+  // The engine does not keep rejected raw user text: inserting into "5" makes
+  // the candidate value "5x", which is not a valid floating-point number, so
+  // the sanitizer empties the current value.  A browser would reject the
+  // keystroke and keep "5" (and flag validity.badInput); that requires
+  // tracking raw user input, which is documented as NOT IMPLEMENTED.
+  controller.DispatchKeyboard(tab->id, "keydown", "x", "KeyX");
+  EXPECT_EQ(html::InputValue(*input), "");
+  EXPECT_EQ(input_events(), 2.0);
+  auto bad_input =
+      tab->script_runtime->Evaluate("document.querySelector('input').validity.badInput");
+  ASSERT_TRUE(bad_input.has_value());
+  auto bad_input_value = bad_input.value().ToBoolean();
+  EXPECT_TRUE(bad_input_value.has_value() && !bad_input_value.value())
+      << "raw user input is not tracked, so badInput stays false";
+
+  controller.DispatchKeyboard(tab->id, "keydown", "5", "Digit5");
+  EXPECT_EQ(html::InputValue(*input), "5");
+  EXPECT_EQ(input_events(), 3.0);
+
+  controller.DispatchKeyboard(tab->id, "keydown", "Backspace", "Backspace");
+  EXPECT_EQ(html::InputValue(*input), "");
+  EXPECT_EQ(input_events(), 4.0);
+  EXPECT_FALSE(input->HasAttribute("value"));
+  EXPECT_EQ(input->GetAttribute("value").value_or(""), "");
+}
+
+// Submitting a form uses the entry list built from the sanitized current
+// values: an invalid number attribute contributes "", and a range contributes
+// its clamped value rather than the raw "99".
+TEST(BrowserControllerTest, FormSubmissionUsesSanitizedInputValues)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><body>"
+                               "<form action='submit.php' method='post'>"
+                               "<input type='number' name='n' value='abc'>"
+                               "<input type='range' name='r' min='10' max='20' value='99'>"
+                               "<input type='submit' value='go'>"
+                               "</form></body></html>"});
+  fetch.Add(
+      "http://example.com/submit.php",
+      FakeFetcher::Route{200, {{"content-type", "text/html"}}, "<html><body>ok</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  tab->page->Layout(800, 600);
+  dom::Element* submit = dom::QuerySelector(*tab->page->document(), "input[type=submit]");
+  ASSERT_NE(submit, nullptr);
+  const auto geometry = tab->page->ElementBoxGeometry(*submit);
+  ASSERT_TRUE(geometry.has_value());
+  controller.DispatchPointerClick(
+      tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f);
+
+  const std::vector<std::string> requests = fetch.Requests();
+  const auto it = std::find(requests.begin(), requests.end(), "http://example.com/submit.php");
+  ASSERT_NE(it, requests.end()) << "recorded: " << testing::PrintToString(requests);
+  const std::size_t index = static_cast<std::size_t>(std::distance(requests.begin(), it));
+  EXPECT_EQ(fetch.Methods()[index], "POST");
+  EXPECT_EQ(fetch.Bodies()[index], "n=&r=20");
 }
 
 // kaom.net min_z_sinotibetan.php triage: clicking the submit button of a
@@ -1142,7 +1255,9 @@ TEST(BrowserControllerTest, InputEventRunsOninputAndTitleFollows)
       tab->id, geometry->x + geometry->width / 2.0f, geometry->y + geometry->height / 2.0f);
   // Pointer focus leaves the caret at the end; typing appends there.
   controller.DispatchKeyboard(tab->id, "keydown", "a", "KeyA");
-  EXPECT_EQ(input->GetAttribute("value").value_or(""), "水a");
+  EXPECT_EQ(html::InputValue(*input), "水a");
+  EXPECT_EQ(input->GetAttribute("value").value_or(""), "水")
+      << "the keyboard must not rewrite the defaultValue attribute";
   EXPECT_EQ(tab->page->document()->Title(), "水a")
       << "the oninput content-attribute handler must run (no <script> on this page)";
   EXPECT_EQ(tab->title, "水a") << "the handler's document.title write must reach the tab";
@@ -4668,11 +4783,12 @@ TEST(BrowserControllerTest, FocusAndTypeIntoInput)
   // Pointer focus leaves the caret at the end, so typing extends the value.
   EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "a", "KeyA"));
   EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "b", "KeyB"));
-  EXPECT_EQ(std::string(input->GetAttribute("value").value_or("")), "hiab");
+  EXPECT_EQ(html::InputValue(*input), "hiab");
 
   // Backspace deletes the character before the collapsed caret.
   EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Backspace", "Backspace"));
-  EXPECT_EQ(std::string(input->GetAttribute("value").value_or("")), "hia");
+  EXPECT_EQ(html::InputValue(*input), "hia");
+  EXPECT_EQ(input->GetAttribute("value").value_or(""), "hi");
 }
 
 TEST(BrowserControllerTest, EnterInFocusedInputSubmitsForm)
@@ -4778,53 +4894,51 @@ TEST(BrowserControllerTest, TextControlSelectionKeyboardEditing)
   // A printable character replaces the selection and leaves the caret after
   // the inserted text; the next character appends there.
   EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "你", "KeyN"));
-  EXPECT_EQ(input->GetAttribute("value").value_or(""), "你");
+  EXPECT_EQ(html::InputValue(*input), "你");
   EXPECT_EQ(state->selection_start, 1u);
   EXPECT_EQ(state->selection_end, 1u);
   EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "a", "KeyA"));
-  EXPECT_EQ(input->GetAttribute("value").value_or(""), "你a");
+  EXPECT_EQ(html::InputValue(*input), "你a");
   EXPECT_EQ(state->selection_start, 2u);
   EXPECT_EQ(state->selection_end, 2u);
 
   // Backspace with a collapsed caret removes one code point (the previous
   // value "你a" ends with a BMP character).
   EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Backspace", "Backspace"));
-  EXPECT_EQ(input->GetAttribute("value").value_or(""), "你");
+  EXPECT_EQ(html::InputValue(*input), "你");
   EXPECT_EQ(state->selection_start, 1u);
 
   // Backspace over a selected range removes the whole selection.
   EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "a", "KeyA")); // "你a"
-  input->SetAttribute("value", "a😀");                                       // 1 + 2 code units
+  html::SetInputValue(*input, "a😀");                                        // 1 + 2 code units
   controller.DispatchKeyboard(tab->id, "keydown", "End", "End");
   EXPECT_EQ(state->selection_start, 3u);
   EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Backspace", "Backspace"));
-  EXPECT_EQ(input->GetAttribute("value").value_or(""), "a")
-      << "a surrogate pair is one code point for Backspace";
+  EXPECT_EQ(html::InputValue(*input), "a") << "a surrogate pair is one code point for Backspace";
 
   // Delete removes the next code point; with a selection it removes the
   // selection.
-  input->SetAttribute("value", "abc");
+  html::SetInputValue(*input, "abc");
   state->selection_start = 0;
   state->selection_end = 3;
   EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Delete", "Delete"));
-  EXPECT_EQ(input->GetAttribute("value").value_or(""), "")
-      << "Delete with a whole-value selection must remove it";
+  EXPECT_EQ(html::InputValue(*input), "") << "Delete with a whole-value selection must remove it";
 
   EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "a", "KeyA"));
   EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "b", "KeyB"));
   EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "c", "KeyC"));
-  EXPECT_EQ(input->GetAttribute("value").value_or(""), "abc");
+  EXPECT_EQ(html::InputValue(*input), "abc");
   controller.DispatchKeyboard(tab->id, "keydown", "Home", "Home");
   EXPECT_EQ(state->selection_start, 0u);
   EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Delete", "Delete"));
-  EXPECT_EQ(input->GetAttribute("value").value_or(""), "bc");
+  EXPECT_EQ(html::InputValue(*input), "bc");
   EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "Delete", "Delete"));
-  EXPECT_EQ(input->GetAttribute("value").value_or(""), "c");
+  EXPECT_EQ(html::InputValue(*input), "c");
 
   // Arrow keys collapse a selection and otherwise move one code point;
   // Home/End move to the value boundaries.  (Shift+Arrow extension is
   // deferred: the controller's key API carries no modifier state.)
-  input->SetAttribute("value", "abc");
+  html::SetInputValue(*input, "abc");
   controller.DispatchKeyboard(tab->id, "keydown", "End", "End");
   controller.DispatchKeyboard(tab->id, "keydown", "Home", "Home");
   controller.DispatchKeyboard(tab->id, "keydown", "ArrowLeft", "ArrowLeft");
@@ -4835,7 +4949,7 @@ TEST(BrowserControllerTest, TextControlSelectionKeyboardEditing)
   EXPECT_EQ(state->selection_start, 3u);
   // Named navigation keys must not be inserted as literal text.
   controller.DispatchKeyboard(tab->id, "keydown", "ArrowDown", "ArrowDown");
-  EXPECT_EQ(input->GetAttribute("value").value_or(""), "abc");
+  EXPECT_EQ(html::InputValue(*input), "abc");
 
   // Textarea editing uses the same shared state and keyboard rules.
   focus_with_tab(*textarea);
@@ -4876,7 +4990,7 @@ TEST(BrowserControllerTest, PointerFocusPlacesCaretAtEnd)
   EXPECT_EQ(state->selection_start, 5u);
   EXPECT_EQ(state->selection_end, 5u);
   EXPECT_TRUE(controller.DispatchKeyboard(tab->id, "keydown", "a", "KeyA"));
-  EXPECT_EQ(input->GetAttribute("value").value_or(""), "helloa");
+  EXPECT_EQ(html::InputValue(*input), "helloa");
 }
 
 TEST(BrowserControllerTest, ElementGeometryApisReflectLayout)
@@ -5595,8 +5709,8 @@ TEST(BrowserControllerTest, PasswordManagerCapturesAndFillsSavedLogin)
   ASSERT_NE(tab2, nullptr);
   const std::vector<dom::Element*> inputs = dom::QuerySelectorAll(*tab2->page->document(), "input");
   ASSERT_EQ(inputs.size(), 2u);
-  EXPECT_EQ(std::string(inputs[0]->GetAttribute("value").value_or("")), "alice");
-  EXPECT_EQ(std::string(inputs[1]->GetAttribute("value").value_or("")), "s3cret");
+  EXPECT_EQ(html::InputValue(*inputs[0]), "alice");
+  EXPECT_EQ(html::InputValue(*inputs[1]), "s3cret");
 }
 
 TEST(BrowserControllerTest, PasswordManagerPersistsAcrossControllers)
@@ -5691,8 +5805,8 @@ TEST(BrowserControllerTest, PasswordManagerDoesNotOverwriteExistingValue)
   const std::vector<dom::Element*> inputs =
       dom::QuerySelectorAll(*controller.ActiveTab()->page->document(), "input");
   ASSERT_EQ(inputs.size(), 2u);
-  EXPECT_EQ(std::string(inputs[0]->GetAttribute("value").value_or("")), "");
-  EXPECT_EQ(std::string(inputs[1]->GetAttribute("value").value_or("")), "typed-by-user");
+  EXPECT_EQ(html::InputValue(*inputs[0]), "");
+  EXPECT_EQ(html::InputValue(*inputs[1]), "typed-by-user");
 }
 
 TEST(BrowserControllerTest, PasswordManagerSkipsOriginlessDocuments)

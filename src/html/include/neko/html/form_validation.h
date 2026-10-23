@@ -25,9 +25,7 @@ namespace neko::html {
 //   * tooLong / tooShort from maxlength / minlength, measured in UTF-16 code
 //     units as the HTML standard defines the attributes.  The dirty-value flag
 //     and the "last changed by a user edit" condition are not modelled: the
-//     length constraints are evaluated whenever the attributes are present
-//     (the engine's value is the attribute/text content, not a separate
-//     user-edited value);
+//     length constraints are evaluated whenever the attributes are present;
 //   * rangeUnderflow / rangeOverflow / stepMismatch / badInput for number and
 //     range, from min / max / step (default step 1, "any" disables it);
 //   * customError from setCustomValidity (the message is supplied by the
@@ -38,14 +36,25 @@ namespace neko::html {
 // layer does not have.  patternMismatch therefore stays false; it is never
 // faked into a match or a mismatch.
 //
-// The engine models a control's value as its `value` content attribute
-// (textarea: its text content; select: its selected option), matching the
-// rest of the bindings and the form entry-list builder.  A single-select with
-// no explicitly `selected` option has its first option selected (the browser
-// default), so `required` on such a select is only missing when it has no
-// options at all.  File inputs are candidates but required file inputs are not
-// reported missing: the engine has no file picker, so treating them as missing
-// would block every submission of a page that uses them.
+// NOT IMPLEMENTED: badInput for invalid *user* text.  The current value is the
+// sanitized value, so raw user input that the sanitizer rejects (typing "x"
+// into a number control) is never stored; a number input cannot report
+// badInput from the DOM.  A `value` attribute that is not a valid
+// floating-point number sanitizes to the empty string, exactly as browsers
+// expose it through `.value`.
+//
+// The engine's control value model is the shared one from input_value.h: an
+// <input> has a current value (sanitized per type) plus the raw `value`
+// content attribute (the default value), while a <textarea> uses its text
+// content and a <select> its selected option.  This module never reads an
+// input's raw attribute as if it were the live value.
+//
+// A single-select with no explicitly `selected` option has its first option
+// selected (the browser default), so `required` on such a select is only
+// missing when it has no options at all.  File inputs are candidates but
+// required file inputs are not reported missing: the engine has no file
+// picker, so treating them as missing would block every submission of a page
+// that uses them.
 struct ValidityState
 {
   bool value_missing = false;

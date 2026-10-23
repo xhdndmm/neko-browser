@@ -30,11 +30,12 @@ enum class SelectionDirection
 };
 
 // Per-element state for the text control selection APIs (WHATWG HTML
-// §4.10.20).  Both the browser's keyboard editing and the JavaScript bindings
-// read and write this one object; there is no second copy in either layer.
+// §4.10.20) and for an <input>'s current value (WHATWG HTML §4.10.5.5).
+// Both the browser's keyboard editing and the JavaScript bindings read and
+// write this one object; there is no second copy in either layer.
 //
-// Offsets are UTF-16 code unit offsets into the control's relevant value (the
-// `value` content attribute for <input>, the text content for <textarea>),
+// Selection offsets are UTF-16 code unit offsets into the control's relevant
+// value (the current value for <input>, the text content for <textarea>),
 // because the HTML API is defined that way and a surrogate pair counts as two
 // code units.
 struct TextControlState
@@ -42,11 +43,21 @@ struct TextControlState
   std::size_t selection_start = 0;
   std::size_t selection_end = 0;
   SelectionDirection selection_direction = SelectionDirection::kNone;
-  // HTML's "dirty value flag": true once the value was changed by the user or
-  // by script.  The engine keeps a single value store (the input `value`
-  // content attribute / the textarea text child), so this is bookkeeping for
-  // the maxlength/minlength distinction, not a second value.
+
+  // HTML's "dirty value flag" (WHATWG HTML §4.10.5.5`: true once the value was
+  // changed by the user or by script.  A dirty value ignores later changes to
+  // the `value` content attribute (the "default value").
   bool dirty_value = false;
+
+  // The <input>'s current value when it is stored separately from the `value`
+  // content attribute: nullopt means "derive it from the content attribute".
+  // The browser's keyboard layer, the JavaScript value setter, setRangeText()
+  // and a type change store it here.  It is always the *sanitized* current
+  // value; the per-state sanitization algorithm itself lives in
+  // neko::html::InputValue (src/html/input_value.h) so every consumer shares
+  // one implementation.  <textarea> never uses this field: its value is its
+  // text content.
+  std::optional<std::string> current_value;
 };
 
 // --- UTF-16 offset helpers over UTF-8 text --------------------------------
@@ -75,9 +86,12 @@ std::string ReplaceUtf16Range(std::string_view value,
 // button and image).  A missing or unknown type value is the Text state.
 bool SupportsTextControlSelection(const Element& element);
 
-// The control's relevant value: the `value` content attribute for <input>,
-// the text content for <textarea>.  This is the one value store the browser
-// keyboard layer and the JavaScript bindings edit.
+// The control's raw current value: for <textarea> its text content; for
+// <input> the stored current value when one exists (the value setter, the
+// keyboard, setRangeText() or a type change), otherwise the `value` content
+// attribute.  This is not yet sanitized: call neko::html::InputValue for the
+// value the HTML value IDL attribute exposes (the per-state sanitization
+// algorithm is implemented once, in src/html/input_value.cpp).
 std::string TextControlValue(const Element& element);
 
 // A DOM element with a tag name and an ordered attribute list.

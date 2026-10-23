@@ -499,6 +499,23 @@ JSValue ElementGetScrollWidth(JSContext* ctx, JSValueConst this_val);
 JSValue ElementGetScrollHeight(JSContext* ctx, JSValueConst this_val);
 JSValue ElementGetValue(JSContext* ctx, JSValueConst this_val);
 JSValue ElementSetValue(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+// HTMLInputElement.defaultValue: the raw `value` content attribute.  Defined
+// on HTMLInputElement.prototype only.
+JSValue ElementGetDefaultValue(JSContext* ctx, JSValueConst this_val);
+JSValue ElementSetDefaultValue(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+// HTMLInputElement.multiple: a boolean attribute reflector (email address
+// lists).  Defined on HTMLInputElement.prototype only.
+JSValue ElementGetMultiple(JSContext* ctx, JSValueConst this_val);
+JSValue ElementSetMultiple(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+// HTMLInputElement.min/max/step: string attribute reflectors used by the
+// number/range/date value sanitization algorithms.  Defined on
+// HTMLInputElement.prototype only.
+JSValue ElementGetMin(JSContext* ctx, JSValueConst this_val);
+JSValue ElementSetMin(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+JSValue ElementGetMax(JSContext* ctx, JSValueConst this_val);
+JSValue ElementSetMax(JSContext* ctx, JSValueConst this_val, JSValueConst value);
+JSValue ElementGetStep(JSContext* ctx, JSValueConst this_val);
+JSValue ElementSetStep(JSContext* ctx, JSValueConst this_val, JSValueConst value);
 // Text control selection APIs (WHATWG HTML §4.10.20), defined on
 // HTMLInputElement.prototype and HTMLTextAreaElement.prototype only.
 JSValue ElementGetSelectionStart(JSContext* ctx, JSValueConst this_val);

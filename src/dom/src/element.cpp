@@ -204,6 +204,10 @@ std::string TextControlValue(const Element& element)
   if (element.tag_name() == "textarea") {
     return element.TextContent();
   }
+  if (const TextControlState* state = element.text_control_state();
+      state != nullptr && state->current_value.has_value()) {
+    return *state->current_value;
+  }
   return std::string(element.GetAttribute("value").value_or(""));
 }
 

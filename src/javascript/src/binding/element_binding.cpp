@@ -8,6 +8,7 @@
 #include "neko/dom/element.h"
 #include "neko/dom/node.h"
 #include "neko/dom/query.h"
+#include "neko/html/input_value.h"
 #include "neko/html/parser.h"
 
 #include "binding_internal.h"
@@ -1548,12 +1549,26 @@ JSValue ElementSetAttribute(JSContext* ctx, JSValueConst this_val, int argc, JSV
   }
   Impl* impl = ImplFor(ctx, this_val);
   const bool was_open = element->HasAttribute("open");
+  const bool is_input = element->tag_name() == "input";
+  const std::string old_type = is_input ? html::InputTypeKeyword(*element) : std::string();
+  const std::string old_value =
+      is_input && name == "type" ? html::InputValue(*element) : std::string();
   element->SetAttribute(name, value);
   impl->RecordAttributeMutation(element, name);
   // Media-loading attributes (src/srcset/...) only need the late-fetch pass;
   // style-only names take the scoped-restyle path; anything else can affect
   // geometry outside the cascade and takes the full restyle path.
   impl->MarkAttrDirty(element, name);
+  if (is_input) {
+    // The value/defaultValue model hooks (WHATWG HTML §4.10.5.5): a changed
+    // `value` content attribute moves a non-dirty current value, and a `type`
+    // change runs the type-change steps and re-sanitizes the current value.
+    if (name == "value") {
+      html::InputValueAttributeChanged(*element);
+    } else if (name == "type") {
+      html::InputTypeChanged(*element, old_type, old_value);
+    }
+  }
   if (name == "open") {
     FireDetailsToggleOnAttributeChange(impl, *element, was_open);
   }
@@ -1576,9 +1591,20 @@ JSValue ElementRemoveAttribute(JSContext* ctx, JSValueConst this_val, int argc, 
   }
   Impl* impl = ImplFor(ctx, this_val);
   const bool was_open = element->HasAttribute("open");
+  const bool is_input = element->tag_name() == "input";
+  const std::string old_type = is_input ? html::InputTypeKeyword(*element) : std::string();
+  const std::string old_value =
+      is_input && name == "type" ? html::InputValue(*element) : std::string();
   element->RemoveAttribute(name);
   impl->RecordAttributeMutation(element, name);
   impl->MarkAttrDirty(element, name);
+  if (is_input) {
+    if (name == "value") {
+      html::InputValueAttributeChanged(*element);
+    } else if (name == "type") {
+      html::InputTypeChanged(*element, old_type, old_value);
+    }
+  }
   if (name == "open") {
     FireDetailsToggleOnAttributeChange(impl, *element, was_open);
   }
@@ -1624,6 +1650,10 @@ JSValue ElementToggleAttribute(JSContext* ctx, JSValueConst this_val, int argc, 
   }
   Impl* impl = ImplFor(ctx, this_val);
   const bool was_open = element->HasAttribute("open");
+  const bool is_input = element->tag_name() == "input";
+  const std::string old_type = is_input ? html::InputTypeKeyword(*element) : std::string();
+  const std::string old_value =
+      is_input && name == "type" ? html::InputValue(*element) : std::string();
   if (force) {
     element->SetAttribute(name, "");
   } else {
@@ -1631,6 +1661,13 @@ JSValue ElementToggleAttribute(JSContext* ctx, JSValueConst this_val, int argc, 
   }
   impl->RecordAttributeMutation(element, name);
   impl->MarkDomDirty(element);
+  if (is_input && (name == "value" || name == "type")) {
+    if (name == "value") {
+      html::InputValueAttributeChanged(*element);
+    } else {
+      html::InputTypeChanged(*element, old_type, old_value);
+    }
+  }
   if (name == "open") {
     FireDetailsToggleOnAttributeChange(impl, *element, was_open);
   }

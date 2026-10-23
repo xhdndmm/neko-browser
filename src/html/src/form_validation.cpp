@@ -2,6 +2,7 @@
 
 #include "neko/base/string_util.h"
 #include "neko/dom/node.h"
+#include "neko/html/input_value.h"
 #include "neko/url/url.h"
 
 #include <algorithm>
@@ -327,20 +328,17 @@ std::string RawValue(const Element& element)
   return RawAttr(element, "value");
 }
 
-// Value sanitization relevant to validation: email/url strip line breaks and
-// leading/trailing ASCII whitespace (HTML §4.10.5.1.5/§4.10.5.1.6).
+// The control's live value.  Inputs go through neko::html::InputValue, the
+// single per-state value sanitization implementation shared with the
+// JavaScript value/defaultValue bindings, the keyboard editing path, layout
+// and the entry-list builder below; <textarea> and <select> keep the raw
+// access above.
 std::string SanitizedValue(const Element& element)
 {
-  std::string value = RawValue(element);
-  const Kind kind = KindOf(element);
-  if (kind == Kind::kEmail || kind == Kind::kUrl) {
-    value.erase(
-        std::remove_if(value.begin(), value.end(), [](char c) { return c == '\r' || c == '\n'; }),
-        value.end());
-    const std::string_view trimmed = base::Trim(value);
-    value.assign(trimmed);
+  if (element.tag_name() == "input") {
+    return InputValue(element);
   }
-  return value;
+  return RawValue(element);
 }
 
 bool HasValue(const Element& element)
@@ -625,7 +623,10 @@ struct RangeInfo
 RangeInfo ComputeRangeInfo(const Element& element, Kind kind)
 {
   RangeInfo info;
-  const std::string raw_value = RawAttr(element, "value");
+  // The current value, already sanitized: a number input whose `value`
+  // attribute is not a valid floating-point number reads as empty (and is
+  // therefore not bad input -- raw user input is not tracked yet).
+  const std::string raw_value = SanitizedValue(element);
   const std::optional<double> parsed_value = ParseFloatingPoint(raw_value);
   const std::optional<double> parsed_min = ParseFloatingPoint(RawAttr(element, "min"));
   const std::optional<double> parsed_max = ParseFloatingPoint(RawAttr(element, "max"));
@@ -1003,8 +1004,7 @@ std::vector<FormEntry> ConstructEntryList(const dom::Element& form, const dom::E
     }
     const std::string name(*name_attr);
     if (is_input && (type == "checkbox" || type == "radio")) {
-      const std::optional<std::string_view> value_attr = field->GetAttribute("value");
-      entries.push_back({name, value_attr.has_value() ? std::string(*value_attr) : "on", false});
+      entries.push_back({name, SanitizedValue(*field), false});
       continue;
     }
     if (is_input && type == "file") {
@@ -1016,7 +1016,7 @@ std::vector<FormEntry> ConstructEntryList(const dom::Element& form, const dom::E
     }
     if (tag == "button") {
       // A submit button's value is its `value` attribute (default empty).
-      entries.push_back({name, RawAttr(*field, "value"), false});
+      entries.push_back({name, SanitizedValue(*field), false});
       continue;
     }
     if (tag == "select") {

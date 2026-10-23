@@ -48,8 +48,9 @@ float ResolveBorderRadius(const style::SizeSpec& spec, float box_width)
 // chrome.  The marks are built from axis-aligned fills (plus one rounded
 // fill for the dot) so they are deterministic across fonts and platforms --
 // no glyph or platform widget is involved.  A disabled control draws them in
-// gray.  Still NOT IMPLEMENTED: range slider, colour well contents, file
-// button (the matrix lists them per control).
+// gray.  Still NOT IMPLEMENTED: the range slider track/thumb and the colour
+// well's swatch (the range and colour-well value text itself comes from the
+// layout text run).
 void PaintWidget(const layout::LayoutBox& box, DisplayList& list)
 {
   const css::Color ink = box.form_control_disabled ? css::Color{0x80, 0x80, 0x80, 255}

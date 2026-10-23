@@ -3150,8 +3150,9 @@ TEST(LayoutTest, SelectGeometryComesFromOptionLabelsAndSize)
 }
 
 // §15.5.8 / §15.5.9 / §15.5.11: the slider, the colour well and the file control
-// each get their own native geometry instead of the text field's.  Their
-// content is painted (Wave 2), so none of them shows a text run.
+// each get their own native geometry instead of the text field's.  The slider
+// and colour well still have no drawn innards, so they show the sanitized value
+// as a text run; the file control shows none (no file is selected).
 TEST(LayoutTest, RangeColorAndFileControlsHaveNativeGeometry)
 {
   Page page = Build("<body style=\"margin:0\"><input id=\"rg\" type=\"range\">"
@@ -3174,9 +3175,47 @@ TEST(LayoutTest, RangeColorAndFileControlsHaveNativeGeometry)
   EXPECT_FLOAT_EQ(color->height, 32.0f);
   EXPECT_EQ(file->form_control, FormControlKind::kFile);
   EXPECT_FLOAT_EQ(file->width, 17.7f * file->style.font_size);
-  EXPECT_TRUE(range->lines.empty());
-  EXPECT_TRUE(color->lines.empty());
+  // No `value` attribute: the sanitized values are the range default (50) and
+  // opaque black.
+  ASSERT_FALSE(range->lines.empty());
+  ASSERT_FALSE(range->lines.front().runs.empty());
+  EXPECT_EQ(range->lines.front().runs.front().text, "50");
+  ASSERT_FALSE(color->lines.empty());
+  ASSERT_FALSE(color->lines.front().runs.empty());
+  EXPECT_EQ(color->lines.front().runs.front().text, "#000000");
   EXPECT_TRUE(file->lines.empty());
+}
+
+// The control's text is the current (sanitized) value, not the raw `value`
+// content attribute: an invalid number shows nothing, a range shows its clamped
+// and step-aligned value, a colour well shows the normalized simple colour, and
+// a URL drops its surrounding whitespace.
+TEST(LayoutTest, FormControlTextUsesSanitizedInputValue)
+{
+  Page page = Build("<body style=\"margin:0\">"
+                    "<input id=\"num\" type=\"number\" value=\"abc\">"
+                    "<input id=\"rng\" type=\"range\" min=\"10\" max=\"20\" value=\"99\">"
+                    "<input id=\"colour\" type=\"color\" value=\"RED\">"
+                    "<input id=\"url\" type=\"url\" value=\"  https://x.test/a  \">"
+                    "</body>");
+  const LayoutBox* number = FindControl(page, "#num");
+  const LayoutBox* range = FindControl(page, "#rng");
+  const LayoutBox* colour = FindControl(page, "#colour");
+  const LayoutBox* url = FindControl(page, "#url");
+  ASSERT_NE(number, nullptr);
+  ASSERT_NE(range, nullptr);
+  ASSERT_NE(colour, nullptr);
+  ASSERT_NE(url, nullptr);
+  EXPECT_TRUE(number->lines.empty()) << "an invalid number must not render its raw attribute";
+  ASSERT_FALSE(range->lines.empty());
+  ASSERT_FALSE(range->lines.front().runs.empty());
+  EXPECT_EQ(range->lines.front().runs.front().text, "20");
+  ASSERT_FALSE(colour->lines.empty());
+  ASSERT_FALSE(colour->lines.front().runs.empty());
+  EXPECT_EQ(colour->lines.front().runs.front().text, "#ff0000");
+  ASSERT_FALSE(url->lines.empty());
+  ASSERT_FALSE(url->lines.front().runs.empty());
+  EXPECT_EQ(url->lines.front().runs.front().text, "https://x.test/a");
 }
 
 // §15.5.4 / §15.5.12: <button> and input[type=submit|reset|button] are buttons;

@@ -4,10 +4,11 @@
 
   Covers the features completed this cycle: fragment parsing, SVG/MathML
   foreign content, template/form-pointer parsing, constraint validation,
-  complete form submission, focus/tabindex/inert, text-control selection,
-  Range, Selection, and details/summary.
+  input value sanitization (value/defaultValue), complete form submission,
+  focus/tabindex/inert, text-control selection, Range, Selection, and
+  details/summary.
 
-  Loading the page runs 41 automatic assertions and prints a PASS/FAIL
+  Loading the page runs 51 automatic assertions and prints a PASS/FAIL
   summary at the top.  The remaining items (focus(), actual submission,
   clicking summary, clipboard-style selection) are marked 人工 and need
   real interaction; headless mode intentionally has no focus callbacks.
@@ -255,6 +256,17 @@
       <code>q=…&amp;go=1</code>（验证 submitter 的 name/value）。<span class="pill">人工</span>
     </p>
   </form>
+</section>
+
+<!-- ====================================================================== -->
+<section class="card">
+  <h2>4b. input 值与消毒算法（value / defaultValue / 属性）</h2>
+  <p class="note">
+    当前值按 <code>type</code> 的 value sanitization algorithm 消毒；
+    <code>defaultValue</code> 与 <code>getAttribute('value')</code> 始终是原始内容属性。
+    <code>value</code> setter 不写内容属性；dirty value 忽略之后的属性变化。
+  </p>
+  <div id="value-results"></div>
 </section>
 
 <!-- ====================================================================== -->
@@ -689,6 +701,135 @@
     number.parentNode.removeChild(number);
     custom.parentNode.removeChild(custom);
   })();
+
+  // ---------------------------------------------------------------------
+  // 4b. input value sanitization (value / defaultValue / content attribute)
+  // ---------------------------------------------------------------------
+  test('value-results', 'number: value 消毒，defaultValue/属性保持原样', function () {
+    var input = element('input', { type: 'number', value: 'abc' });
+    assert(input.value === '', 'value 应为空: ' + input.value);
+    assert(input.defaultValue === 'abc', 'defaultValue: ' + input.defaultValue);
+    assert(input.getAttribute('value') === 'abc', '属性被改写');
+    input.value = '7';
+    assert(input.value === '7', 'setter 未生效: ' + input.value);
+    assert(input.getAttribute('value') === 'abc', 'value setter 改写了内容属性');
+    assert(input.defaultValue === 'abc', 'value setter 改了 defaultValue');
+    input.value = 'xyz';
+    assert(input.value === '', '非法 number 应消毒为空: ' + input.value);
+    assert(input.getAttribute('value') === 'abc', '属性不应变化');
+    return true;
+  });
+
+  test('value-results', 'dirty value 不随 value 属性变化', function () {
+    var input = element('input', { type: 'number', value: 'abc' });
+    input.value = '7';
+    input.setAttribute('value', 'zzz');
+    assert(input.value === '7', 'dirty value 被属性覆盖: ' + input.value);
+    assert(input.defaultValue === 'zzz', 'defaultValue: ' + input.defaultValue);
+    input.removeAttribute('value');
+    assert(input.defaultValue === '', '删除属性后 defaultValue 非空');
+    assert(input.value === '7', '删除属性覆盖了 dirty value');
+    return true;
+  });
+
+  test('value-results', 'range 夹取到 min/max 并取默认中间值', function () {
+    var clamped = element('input', { type: 'range', value: '99', min: '10', max: '20' });
+    assert(clamped.value === '20', 'range 未夹取: ' + clamped.value);
+    var defaulted = element('input');
+    defaulted.setAttribute('min', '10');
+    defaulted.setAttribute('max', '20');
+    defaulted.setAttribute('type', 'range');
+    assert(defaulted.value === '15', 'range 默认中间值: ' + defaulted.value);
+    var stepped = element('input', { type: 'range', min: '0', max: '1', step: '0.1' });
+    stepped.value = '0.35';
+    assert(stepped.value === '0.4', 'range step 对齐: ' + stepped.value);
+    return true;
+  });
+
+  test('value-results', 'color 解析为小写 #rrggbb', function () {
+    var color = element('input', { type: 'color', value: 'RED' });
+    assert(color.value === '#ff0000', 'color RED: ' + color.value);
+    assert(color.getAttribute('value') === 'RED', 'color 属性被改写');
+    var invalid = element('input', { type: 'color', value: 'not-a-color' });
+    assert(invalid.value === '#000000', '非法 color: ' + invalid.value);
+    return true;
+  });
+
+  test('value-results', 'date/time/datetime-local 只接受规范形式', function () {
+    var date = element('input', { type: 'date', value: '2020-1-2' });
+    assert(date.value === '', '非法 date: ' + date.value);
+    var time = element('input', { type: 'time', value: '9:5' });
+    assert(time.value === '', '非法 time: ' + time.value);
+    var local = element('input', {
+      type: 'datetime-local', value: '2020-01-02T03:04:05.000'
+    });
+    assert(local.value === '2020-01-02T03:04:05', 'datetime-local 规范化: ' + local.value);
+    var valid = element('input', { type: 'date', value: '2020-01-02' });
+    assert(valid.value === '2020-01-02', '合法 date 被改写: ' + valid.value);
+    return true;
+  });
+
+  test('value-results', 'email/url/text 去除换行与首尾空白', function () {
+    var email = element('input', { type: 'email' });
+    email.value = ' a@b.com \n';
+    assert(email.value === 'a@b.com', 'email: ' + JSON.stringify(email.value));
+    var url = element('input', { type: 'url' });
+    url.value = '  https://x.test/a  ';
+    assert(url.value === 'https://x.test/a', 'url: ' + JSON.stringify(url.value));
+    var text = element('input', { type: 'text' });
+    text.value = ' a\r\nb ';
+    assert(text.value === ' ab ', 'text: ' + JSON.stringify(text.value));
+    return true;
+  });
+
+  test('value-results', 'checkbox/radio 的 value 默认 on', function () {
+    var checkbox = element('input', { type: 'checkbox' });
+    assert(checkbox.value === 'on', 'checkbox 默认: ' + checkbox.value);
+    checkbox.value = 'x';
+    assert(checkbox.getAttribute('value') === 'x', 'checkbox value 未反映到属性');
+    assert(checkbox.value === 'x', 'checkbox value: ' + checkbox.value);
+    var radio = element('input', { type: 'radio' });
+    assert(radio.value === 'on', 'radio 默认: ' + radio.value);
+    return true;
+  });
+
+  test('value-results', 'type 切换重新消毒当前值', function () {
+    var input = element('input', { type: 'number', value: 'abc' });
+    input.type = 'text';
+    assert(input.value === '', 'number→text 当前值: ' + JSON.stringify(input.value));
+    assert(input.getAttribute('value') === 'abc', 'type 切换改写了属性');
+    var dirty = element('input', { type: 'number', value: 'abc' });
+    dirty.value = '7';
+    dirty.type = 'text';
+    assert(dirty.value === '7', 'dirty number→text: ' + dirty.value);
+    return true;
+  });
+
+  test('value-results', 'defaultValue setter 仅在非 dirty 时同步当前值', function () {
+    var clean = element('input', { type: 'text', value: 'a' });
+    clean.defaultValue = 'b';
+    assert(clean.value === 'b', '非 dirty defaultValue: ' + clean.value);
+    assert(clean.getAttribute('value') === 'b', 'defaultValue 未写属性');
+    clean.value = 'c';
+    clean.defaultValue = 'd';
+    assert(clean.value === 'c', 'dirty value 被 defaultValue 覆盖: ' + clean.value);
+    assert(clean.getAttribute('value') === 'd', 'defaultValue 属性: ' + clean.getAttribute('value'));
+    return true;
+  });
+
+  test('value-results', 'file 的 value 只能为空，否则抛 InvalidStateError', function () {
+    var file = element('input', { type: 'file' });
+    assert(file.value === '', 'file value 非空: ' + file.value);
+    var threw = false;
+    try {
+      file.value = 'x.txt';
+    } catch (error) {
+      threw = error && error.name === 'InvalidStateError';
+    }
+    assert(threw, '非空 file value 未抛 InvalidStateError');
+    assert(file.value === '', 'file value 变化: ' + file.value);
+    return true;
+  });
 
   // ---------------------------------------------------------------------
   // 5. Focus (automatic parts)

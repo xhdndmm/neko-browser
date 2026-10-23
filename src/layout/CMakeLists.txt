@@ -17,5 +17,8 @@ target_compile_features(neko_layout PUBLIC cxx_std_20)
 target_include_directories(neko_layout PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
-target_link_libraries(neko_layout PUBLIC neko::style neko::dom neko::css neko::graphics neko::image neko::base)
+# layout reads an <input>'s current (sanitized) value for the control's text,
+# so it shares neko::html's value-sanitization implementation instead of
+# re-deriving the value from the content attribute.
+target_link_libraries(neko_layout PUBLIC neko::style neko::dom neko::css neko::graphics neko::image neko::html neko::base)
 apply_compiler_warnings(neko_layout)

@@ -864,6 +864,31 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
                  "value",
                  MakeGetter(ctx, "value", ElementGetValue),
                  MakeSetter(ctx, "value", ElementSetValue));
+  DefineAccessor(ctx,
+                 html_input_element_proto,
+                 "defaultValue",
+                 MakeGetter(ctx, "defaultValue", ElementGetDefaultValue),
+                 MakeSetter(ctx, "defaultValue", ElementSetDefaultValue));
+  DefineAccessor(ctx,
+                 html_input_element_proto,
+                 "multiple",
+                 MakeGetter(ctx, "multiple", ElementGetMultiple),
+                 MakeSetter(ctx, "multiple", ElementSetMultiple));
+  DefineAccessor(ctx,
+                 html_input_element_proto,
+                 "min",
+                 MakeGetter(ctx, "min", ElementGetMin),
+                 MakeSetter(ctx, "min", ElementSetMin));
+  DefineAccessor(ctx,
+                 html_input_element_proto,
+                 "max",
+                 MakeGetter(ctx, "max", ElementGetMax),
+                 MakeSetter(ctx, "max", ElementSetMax));
+  DefineAccessor(ctx,
+                 html_input_element_proto,
+                 "step",
+                 MakeGetter(ctx, "step", ElementGetStep),
+                 MakeSetter(ctx, "step", ElementSetStep));
   // Text control selection APIs (WHATWG HTML §4.10.20).  They exist only on
   // HTMLInputElement/HTMLTextAreaElement prototypes: `'selectionStart' in div`
   // stays false.  Getters return null for input types to which selection does

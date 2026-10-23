@@ -13,6 +13,7 @@
 #include "neko/dom/element.h"
 #include "neko/dom/query.h"
 #include "neko/html/form_validation.h"
+#include "neko/html/input_value.h"
 #include "neko/image/image.h"
 #include "neko/layout/form_control.h"
 #include "neko/network/http.h"
@@ -567,6 +568,19 @@ void SetFocusState(Tab* tab, dom::Element* element, renderer::Page* page)
   }
 }
 
+// True when the keyboard edits the focused control's value.  The text-entry
+// states support the full selection API; a number control accepts typed digits
+// too (each intermediate value is a valid number, and the sanitizer rejects the
+// rest).  The domain-specific date/time/colour widgets are segment-based in
+// browsers and are not keyboard-editable in this engine yet.
+bool IsKeyboardEditableControl(const dom::Element& element)
+{
+  if (dom::SupportsTextControlSelection(element)) {
+    return true;
+  }
+  return element.tag_name() == "input" && html::InputTypeKeyword(element) == "number";
+}
+
 // Initializes a newly focused text control's selection: keyboard/script focus
 // selects the whole value (browsers do this when tabbing into a field), while
 // a pointer click leaves a collapsed caret at the end.  Click-position caret
@@ -574,10 +588,10 @@ void SetFocusState(Tab* tab, dom::Element* element, renderer::Page* page)
 // end-of-value caret preserves the engine's long-standing typing behavior.
 void FocusTextControlSelection(dom::Element& element, bool select_contents)
 {
-  if (!dom::SupportsTextControlSelection(element)) {
+  if (!IsKeyboardEditableControl(element)) {
     return;
   }
-  const std::size_t length = dom::Utf16Length(dom::TextControlValue(element));
+  const std::size_t length = dom::Utf16Length(html::InputValue(element));
   dom::TextControlState& state = element.EnsureTextControlState();
   state.selection_start = select_contents ? 0 : length;
   state.selection_end = length;
@@ -1914,21 +1928,26 @@ bool BrowserController::DispatchKeyboard(int tab_id,
   }
   const bool input_is_text = control != nullptr && control->tag_name() == "input";
   bool value_changed = false;
-  if (control != nullptr && dom::SupportsTextControlSelection(*control)) {
+  if (control != nullptr && IsKeyboardEditableControl(*control)) {
     const bool is_input = input_is_text;
     // The keyboard and JavaScript layers share one value store and one
     // selection state (dom::Element::TextControlState).  A printable key
     // replaces the selected range (or inserts at the collapsed caret);
-    // Backspace/Delete remove the selection or the adjacent code point.
-    std::string value = dom::TextControlValue(*control);
+    // Backspace/Delete remove the selection or the adjacent code point.  Every
+    // edit is stored through the shared per-type value sanitization algorithm
+    // (html::InputValue / html::SetInputValue).  Rejected user text is not
+    // retained (documented badInput limitation), so an edit whose sanitized
+    // result differs can also shrink the value.
+    std::string value = html::InputValue(*control);
     std::size_t length = dom::Utf16Length(value);
     dom::TextControlState& state = control->EnsureTextControlState();
     state.selection_start = std::min(state.selection_start, length);
     state.selection_end = std::min(state.selection_end, length);
 
     const auto store_value = [&](const std::string& updated) {
+      const std::string previous = html::InputValue(*control);
       if (is_input) {
-        control->SetAttribute("value", updated);
+        html::SetInputValue(*control, updated);
       } else {
         while (control->first_child() != nullptr) {
           control->RemoveChild(control->first_child());
@@ -1936,7 +1955,11 @@ bool BrowserController::DispatchKeyboard(int tab_id,
         control->AppendChild(std::make_unique<dom::Text>(updated));
       }
       state.dirty_value = true;
-      value_changed = true;
+      // Compare the sanitized values: typing a character a state's sanitizer
+      // rejects (e.g. "x" into a number control) must not fire `input`.
+      if (html::InputValue(*control) != previous) {
+        value_changed = true;
+      }
     };
     const auto replace_selection = [&](std::string_view inserted) {
       const std::size_t caret = state.selection_start + dom::Utf16Length(inserted);
@@ -2004,9 +2027,16 @@ bool BrowserController::DispatchKeyboard(int tab_id,
       // Escape, function keys, ...) must not be inserted as literal text.
       return not_canceled;
     }
-    if (value_changed && tab->script_runtime != nullptr) {
-      // Fire the bubbling "input" event (oninput / addEventListener('input')).
-      tab->script_runtime->DispatchInputEvent(*control);
+    if (value_changed) {
+      // The sanitizer may have dropped the inserted text (a number control
+      // rejecting "x"); keep the caret inside the value it actually produced.
+      const std::size_t new_length = dom::Utf16Length(html::InputValue(*control));
+      state.selection_start = std::min(state.selection_start, new_length);
+      state.selection_end = std::min(state.selection_end, new_length);
+      if (tab->script_runtime != nullptr) {
+        // Fire the bubbling "input" event (oninput / addEventListener('input')).
+        tab->script_runtime->DispatchInputEvent(*control);
+      }
     }
   }
   // Reflect DOM changes from the keydown/input handlers or the value edit
@@ -4068,16 +4098,16 @@ void BrowserController::AutofillLoginForms(renderer::Page& page, const std::stri
     if (InputType(*input) != "password") {
       continue;
     }
-    const std::string existing = std::string(input->GetAttribute("value").value_or(""));
+    const std::string existing = html::InputValue(*input);
     if (!existing.empty()) {
       return; // the page (or the user) already filled this form: leave it alone
     }
     const storage::Credential& credential = saved.front();
-    input->SetAttribute("value", credential.password);
+    html::SetInputValue(*input, credential.password);
     if (dom::Element* username = FindUsernameInput(inputs, input); username != nullptr) {
-      const std::string existing_user = std::string(username->GetAttribute("value").value_or(""));
+      const std::string existing_user = html::InputValue(*username);
       if (existing_user.empty() && !credential.username.empty()) {
-        username->SetAttribute("value", credential.username);
+        html::SetInputValue(*username, credential.username);
       }
     }
     return; // first login form only
@@ -4094,7 +4124,7 @@ BrowserController::CredentialFromForm(const dom::Element& form) const
     if (InputType(*input) != "password") {
       continue;
     }
-    std::string value = std::string(input->GetAttribute("value").value_or(""));
+    std::string value = html::InputValue(*input);
     if (!value.empty()) {
       password = input;
       password_value = std::move(value);
@@ -4106,7 +4136,7 @@ BrowserController::CredentialFromForm(const dom::Element& form) const
   }
   PendingCredential credential;
   if (const dom::Element* username = FindUsernameInput(inputs, password); username != nullptr) {
-    credential.username = std::string(username->GetAttribute("value").value_or(""));
+    credential.username = html::InputValue(*username);
   }
   credential.password = std::move(password_value);
   return credential;
