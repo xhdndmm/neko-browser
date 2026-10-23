@@ -3206,7 +3206,13 @@ TEST(LayoutTest, FormControlTextUsesSanitizedInputValue)
   ASSERT_NE(range, nullptr);
   ASSERT_NE(colour, nullptr);
   ASSERT_NE(url, nullptr);
-  EXPECT_TRUE(number->lines.empty()) << "an invalid number must not render its raw attribute";
+  // Text controls always have a (possibly zero-width) run so the caret and
+  // input method exist; the sanitized value is empty, so the run must be empty
+  // and the raw attribute must not be rendered.
+  ASSERT_FALSE(number->lines.empty());
+  ASSERT_FALSE(number->lines.front().runs.empty());
+  EXPECT_TRUE(number->lines.front().runs.front().text.empty())
+      << "an invalid number must not render its raw attribute";
   ASSERT_FALSE(range->lines.empty());
   ASSERT_FALSE(range->lines.front().runs.empty());
   EXPECT_EQ(range->lines.front().runs.front().text, "20");
