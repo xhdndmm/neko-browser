@@ -189,14 +189,70 @@ void FillBackground(const layout::LayoutBox& box, css::Color color, DisplayList&
   }
 }
 
+// Paints every linear-gradient background layer, bottom-most first.  CSS
+// background layers are declared top-first, so the vector is walked in
+// reverse.  Each layer's background-clip box becomes its fill rect and the
+// gradient line is sized over that rect (background-origin is not modelled;
+// see ComputedStyle::LinearGradient).
+void PaintBackgroundGradients(const layout::LayoutBox& box, DisplayList& list)
+{
+  const std::vector<style::LinearGradient>& gradients = box.style.background_gradients;
+  if (gradients.empty()) {
+    return;
+  }
+  const float base_radius = box.style.border_radius.has_value()
+                                ? ResolveBorderRadius(box.style.border_radius.value(), box.width)
+                                : 0.0F;
+  for (auto it = gradients.rbegin(); it != gradients.rend(); ++it) {
+    const style::LinearGradient& gradient = *it;
+    float x = box.x;
+    float y = box.y;
+    float width = box.width;
+    float height = box.height;
+    float inset = 0.0F;
+    switch (gradient.clip) {
+    case style::LinearGradient::Clip::kBorderBox:
+      break;
+    case style::LinearGradient::Clip::kPaddingBox:
+      x += box.border_left;
+      y += box.border_top;
+      width -= box.border_left + box.border_right;
+      height -= box.border_top + box.border_bottom;
+      inset = std::max({box.border_left, box.border_top, box.border_right, box.border_bottom});
+      break;
+    case style::LinearGradient::Clip::kContentBox:
+      x = box.content_x();
+      y = box.content_y();
+      width = box.content_width();
+      height = box.content_height();
+      inset = std::max({box.border_left + box.padding_left,
+                        box.border_top + box.padding_top,
+                        box.border_right + box.padding_right,
+                        box.border_bottom + box.padding_bottom});
+      break;
+    }
+    if (width <= 0.0F || height <= 0.0F) {
+      continue;
+    }
+    const float radius = std::max(0.0F, base_radius - inset);
+    list.FillLinearGradient(x, y, width, height, radius, gradient.angle_deg, gradient.stops);
+  }
+}
+
 // Out-of-flow painting model (simplified CSS 2.1 Appendix E), see painter.h.
 //
-// True for a box taken out of normal flow (relative stays in flow and paints
-// at its tree position).
+// True for a box painted by the enclosing stacking context's unit pass rather
+// than at its in-flow tree position: absolute/fixed boxes (out of flow) and a
+// relative box with an explicit z-index (CSS 2.1 §9.9: it stays in flow for
+// layout but takes part in the parent's z-order).  A relative box without
+// z-index keeps painting at its tree position.
 bool IsPositioned(const layout::LayoutBox& box)
 {
-  return box.style.position == style::Position::kAbsolute ||
-         box.style.position == style::Position::kFixed;
+  if (box.style.position == style::Position::kAbsolute ||
+      box.style.position == style::Position::kFixed) {
+    return true;
+  }
+  return box.style.position == style::Position::kRelative && box.style.z_index.has_value();
 }
 
 // True when |box| establishes a stacking context (CSS 2.1 §9.9): `opacity`
@@ -349,8 +405,12 @@ void Painter::PaintInFlowContent(const layout::LayoutBox& box, DisplayList& list
     for (const layout::InlineBox& inline_box : line.boxes) {
       if (inline_box.block_box != nullptr) {
         // An inline-block: paint its inner block layout (background, border,
-        // content and children).  It carries the element's own style.
-        PaintInFlowNode(*inline_box.block_box, list);
+        // content and children).  It carries the element's own style.  A
+        // positioned one is painted by the stacking-context unit pass
+        // instead (otherwise it would paint twice).
+        if (!IsPositioned(*inline_box.block_box)) {
+          PaintInFlowNode(*inline_box.block_box, list);
+        }
       } else if (inline_box.image != nullptr && !inline_box.image->empty() &&
                  inline_box.style.visibility != style::Visibility::kHidden) {
         list.DrawImage(inline_box.x,
@@ -483,6 +543,10 @@ void Painter::PaintBoxSelf(const layout::LayoutBox& box, DisplayList& list) cons
     } else {
       FillBackground(box, kButtonFace, list);
     }
+    // Author gradient layers paint over the native face; without this a
+    // <button> styled with `background: linear-gradient(...)` would stay
+    // buttonface grey (baidu.com's blue search button).
+    PaintBackgroundGradients(box, list);
     if (box.style.border_color.has_value()) {
       list.BorderRect(box.x,
                       box.y,
@@ -586,6 +650,11 @@ void Painter::PaintBoxSelf(const layout::LayoutBox& box, DisplayList& list) cons
         list.PopClip();
       }
     }
+
+    // Linear-gradient background layers paint over the colour and any URL
+    // image, bottom-most first (CSS Backgrounds 3 §2.1: the first declared
+    // layer is painted last / on top).
+    PaintBackgroundGradients(box, list);
 
     // Border.
     if (box.border_top > 0 || box.border_right > 0 || box.border_bottom > 0 ||

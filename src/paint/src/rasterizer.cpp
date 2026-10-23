@@ -27,6 +27,52 @@ int Clamp(int value, int lo, int hi)
   return value < lo ? lo : (value > hi ? hi : value);
 }
 
+// Colour of a linear gradient at |t| (0..1 along the gradient line).
+// Interpolation is premultiplied sRGB (CSS Images 3 §3.1.1): channels are
+// weighted by alpha before mixing so a `transparent` stop does not drag the
+// neighbouring colour toward black, then un-premultiplied.
+css::Color SampleGradient(const std::vector<style::LinearGradientStop>& stops, float t)
+{
+  if (stops.empty()) {
+    return css::Color{0, 0, 0, 0};
+  }
+  if (t <= stops.front().position) {
+    return stops.front().color;
+  }
+  if (t >= stops.back().position) {
+    return stops.back().color;
+  }
+  for (std::size_t i = 0; i + 1 < stops.size(); ++i) {
+    const style::LinearGradientStop& a = stops[i];
+    const style::LinearGradientStop& b = stops[i + 1];
+    if (t > b.position) {
+      continue;
+    }
+    const float span = b.position - a.position;
+    if (span <= 0.0F) {
+      return b.color;
+    }
+    const float u = std::clamp((t - a.position) / span, 0.0F, 1.0F);
+    const float alpha_a = static_cast<float>(a.color.a) / 255.0F;
+    const float alpha_b = static_cast<float>(b.color.a) / 255.0F;
+    const float alpha = alpha_a + (alpha_b - alpha_a) * u;
+    if (alpha <= 0.0F) {
+      return css::Color{0, 0, 0, 0};
+    }
+    const auto channel = [u, alpha_a, alpha_b, alpha](uint8_t ca, uint8_t cb) {
+      const float premultiplied =
+          static_cast<float>(ca) * alpha_a +
+          (static_cast<float>(cb) * alpha_b - static_cast<float>(ca) * alpha_a) * u;
+      return static_cast<uint8_t>(std::clamp(std::lround(premultiplied / alpha), 0L, 255L));
+    };
+    return css::Color{channel(a.color.r, b.color.r),
+                      channel(a.color.g, b.color.g),
+                      channel(a.color.b, b.color.b),
+                      static_cast<uint8_t>(std::clamp(std::lround(alpha * 255.0F), 0L, 255L))};
+  }
+  return stops.back().color;
+}
+
 // Blends a source color onto a destination pixel using integer fixed-point
 // math (the floating-point reference algorithm produces the same result up to
 // rounding, without per-pixel float conversions).
@@ -309,6 +355,9 @@ void Rasterizer::ExecuteCommands(const std::vector<DrawCommand>& commands,
       FillRoundRect(
           command.x, command.y, command.width, command.height, command.radius, command.color);
       break;
+    case CommandType::kFillLinearGradient:
+      FillLinearGradient(command);
+      break;
     case CommandType::kBorderRect:
       DrawBorder(command);
       break;
@@ -543,6 +592,100 @@ void Rasterizer::FillRoundRect(
         inside = dx * dx + dy * dy <= radius * radius;
       }
       if (!inside) {
+        continue;
+      }
+      const std::size_t offset = BandOffset(px, py);
+      BlendPixel(pixels_data_[offset],
+                 pixels_data_[offset + 1],
+                 pixels_data_[offset + 2],
+                 pixels_data_[offset + 3],
+                 color);
+    }
+  }
+}
+
+void Rasterizer::FillLinearGradient(const DrawCommand& command)
+{
+  const std::vector<style::LinearGradientStop>& stops = command.gradient_stops;
+  if (stops.size() < 2 || command.width <= 0 || command.height <= 0) {
+    return;
+  }
+
+  // Gradient geometry is the unclipped fill box (the background-clip box).
+  // The CSS gradient line passes through the box centre; its length is
+  // |W*sin(angle)| + |H*cos(angle)| (CSS Images 3 §3.1.1), so a corner-to-
+  // corner direction reaches the far corner.
+  const float box_x = command.x;
+  const float box_y = command.y;
+  const float box_w = command.width;
+  const float box_h = command.height;
+  const float radians = command.gradient_angle_deg * 3.14159265358979323846F / 180.0F;
+  const float dir_x = std::sin(radians);  // screen x grows right
+  const float dir_y = -std::cos(radians); // screen y grows down; 0deg = up
+  const float line_length = std::abs(box_w * dir_x) + std::abs(box_h * dir_y);
+  if (line_length <= 0.0F) {
+    return;
+  }
+  const float start_x = box_x + box_w / 2.0F - dir_x * line_length / 2.0F;
+  const float start_y = box_y + box_h / 2.0F - dir_y * line_length / 2.0F;
+
+  float x = box_x;
+  float y = box_y;
+  float width = box_w;
+  float height = box_h;
+  if (!ApplyClip(x, y, width, height)) {
+    return;
+  }
+  y -= scroll_offset_;
+  const int x0 = std::max(0, static_cast<int>(std::floor(x)));
+  const int y0 = std::max(0, static_cast<int>(std::floor(y)));
+  const int x1 = std::min(width_, static_cast<int>(std::ceil(x + width)));
+  const int y1 = std::min(height_, static_cast<int>(std::ceil(y + height)));
+  if (x0 >= x1 || y0 >= y1) {
+    return;
+  }
+  int band_y0 = y0;
+  int band_y1 = y1;
+  ClampToBand(band_y0, band_y1);
+
+  const float radius = std::max(0.0F, std::min(command.radius, std::min(box_w, box_h) / 2.0F));
+  const float left = box_x + radius;
+  const float right = box_x + box_w - radius;
+  const float top = box_y + radius;
+  const float bottom = box_y + box_h - radius;
+
+  for (int py = band_y0; py < band_y1; ++py) {
+    // Document-space pixel centre; |py| is screen space, shifted by scroll.
+    const float doc_cy = static_cast<float>(py) + scroll_offset_ + 0.5F;
+    for (int px = x0; px < x1; ++px) {
+      const float doc_cx = static_cast<float>(px) + 0.5F;
+      if (radius > 0.0F) {
+        bool inside = true;
+        if (doc_cx < left && doc_cy < top) {
+          const float dx = doc_cx - left;
+          const float dy = doc_cy - top;
+          inside = dx * dx + dy * dy <= radius * radius;
+        } else if (doc_cx > right && doc_cy < top) {
+          const float dx = doc_cx - right;
+          const float dy = doc_cy - top;
+          inside = dx * dx + dy * dy <= radius * radius;
+        } else if (doc_cx < left && doc_cy > bottom) {
+          const float dx = doc_cx - left;
+          const float dy = doc_cy - bottom;
+          inside = dx * dx + dy * dy <= radius * radius;
+        } else if (doc_cx > right && doc_cy > bottom) {
+          const float dx = doc_cx - right;
+          const float dy = doc_cy - bottom;
+          inside = dx * dx + dy * dy <= radius * radius;
+        }
+        if (!inside) {
+          continue;
+        }
+      }
+      const float projection = (doc_cx - start_x) * dir_x + (doc_cy - start_y) * dir_y;
+      const css::Color color =
+          SampleGradient(stops, std::clamp(projection / line_length, 0.0F, 1.0F));
+      if (color.a == 0) {
         continue;
       }
       const std::size_t offset = BandOffset(px, py);

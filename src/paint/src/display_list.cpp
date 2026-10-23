@@ -33,6 +33,29 @@ void DisplayList::FillRoundRect(
   commands_.push_back(std::move(command));
 }
 
+void DisplayList::FillLinearGradient(float x,
+                                     float y,
+                                     float width,
+                                     float height,
+                                     float radius,
+                                     float angle_deg,
+                                     std::vector<style::LinearGradientStop> stops)
+{
+  if (stops.empty()) {
+    return;
+  }
+  DrawCommand command;
+  command.type = CommandType::kFillLinearGradient;
+  command.x = x;
+  command.y = y;
+  command.width = width;
+  command.height = height;
+  command.radius = radius;
+  command.gradient_angle_deg = angle_deg;
+  command.gradient_stops = std::move(stops);
+  commands_.push_back(std::move(command));
+}
+
 void DisplayList::BorderRect(float x,
                              float y,
                              float width,

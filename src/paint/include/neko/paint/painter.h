@@ -25,9 +25,9 @@ namespace neko::paint {
 // walk that finds units treats the containing-block attachment
 // (LayoutBox::positioned_children) as the ancestry.
 //
-// Known approximations: a relative-positioned box with an explicit z-index
-// establishes a context but paints at its in-flow tree position (it does not
-// join the parent's z-order); in-flow content paints per box (decoration and
+// A relative-positioned box with an explicit z-index stays in flow for layout
+// but joins the parent's z-order and establishes a stacking context (CSS 2.1
+// §9.9).  Known approximation: in-flow content paints per box (decoration and
 // content interleaved) rather than in the global E3/E4/E5 phases.
 class Painter
 {

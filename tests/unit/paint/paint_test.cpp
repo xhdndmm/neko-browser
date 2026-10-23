@@ -1253,5 +1253,220 @@ TEST(SvgTextShaperTest, MeasuresTheSameAdvanceTheFontReports)
   EXPECT_NEAR(total, static_cast<double>(selector->TextWidth("Hello", 20.0f)), 0.6);
 }
 
+// ---------------------------------------------------------------------------
+// CSS linear-gradient backgrounds.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::vector<style::LinearGradientStop> TwoStopGradient(const css::Color& start,
+                                                       const css::Color& end)
+{
+  return {style::LinearGradientStop{start, 0.0F}, style::LinearGradientStop{end, 1.0F}};
+}
+
+} // namespace
+
+TEST(RasterizerTest, LinearGradientAxisAndAngle)
+{
+  const css::Color red{255, 0, 0, 255};
+  const css::Color blue{0, 0, 255, 255};
+
+  // Horizontal (`to right` = 90deg): red at the left, blue at the right.
+  Rasterizer horizontal(100, 20);
+  horizontal.Clear(css::Color{255, 255, 255, 255});
+  DisplayList hlist;
+  hlist.FillLinearGradient(0, 0, 100, 20, 0, 90.0F, TwoStopGradient(red, blue));
+  horizontal.Rasterize(hlist);
+  EXPECT_GT(Pixel(horizontal, 2, 10).r, 240);
+  EXPECT_LT(Pixel(horizontal, 2, 10).b, 15);
+  EXPECT_LT(Pixel(horizontal, 97, 10).r, 15);
+  EXPECT_GT(Pixel(horizontal, 97, 10).b, 240);
+
+  // Default `to bottom` = 180deg: red at the top, blue at the bottom.
+  Rasterizer vertical(20, 100);
+  vertical.Clear(css::Color{255, 255, 255, 255});
+  DisplayList vlist;
+  vlist.FillLinearGradient(0, 0, 20, 100, 0, 180.0F, TwoStopGradient(red, blue));
+  vertical.Rasterize(vlist);
+  EXPECT_GT(Pixel(vertical, 10, 2).r, 240);
+  EXPECT_GT(Pixel(vertical, 10, 97).b, 240);
+
+  // 135deg points down-right: top-left red, bottom-right blue.
+  Rasterizer angled(20, 20);
+  angled.Clear(css::Color{255, 255, 255, 255});
+  DisplayList alist;
+  alist.FillLinearGradient(0, 0, 20, 20, 0, 135.0F, TwoStopGradient(red, blue));
+  angled.Rasterize(alist);
+  EXPECT_GT(Pixel(angled, 1, 1).r, 220);
+  EXPECT_GT(Pixel(angled, 18, 18).b, 220);
+}
+
+TEST(RasterizerTest, LinearGradientTransparentStopUsesPremultipliedAlpha)
+{
+  Rasterizer image(100, 20);
+  image.Clear(css::Color{255, 255, 255, 255});
+  DisplayList list;
+  // Fully transparent blue -> opaque blue over white.  Interpolating the RGB
+  // channels naively (without premultiplication) would darken the middle
+  // toward black; premultiplied interpolation keeps the middle a white-blue
+  // blend.
+  list.FillLinearGradient(0,
+                          0,
+                          100,
+                          20,
+                          0,
+                          90.0F,
+                          TwoStopGradient(css::Color{0, 0, 255, 0}, css::Color{0, 0, 255, 255}));
+  image.Rasterize(list);
+
+  const css::Color middle = Pixel(image, 50, 10);
+  EXPECT_GT(middle.r, 100); // white shows through
+  EXPECT_LT(middle.r, 160);
+  EXPECT_GT(middle.b, 240);
+  // The last pixel is almost opaque: a 1/255 white contribution from
+  // source-over blending is expected, not an exact opaque blue.
+  const css::Color end = Pixel(image, 99, 10);
+  EXPECT_GT(end.b, 250);
+  EXPECT_LT(end.r, 10);
+}
+
+TEST(RasterizerTest, LinearGradientHonorsRoundedCorners)
+{
+  Rasterizer image(20, 20);
+  image.Clear(css::Color{255, 255, 255, 255});
+  DisplayList list;
+  list.FillLinearGradient(0,
+                          0,
+                          20,
+                          20,
+                          8.0F,
+                          90.0F,
+                          TwoStopGradient(css::Color{255, 0, 0, 255}, css::Color{0, 0, 255, 255}));
+  image.Rasterize(list);
+
+  // The pixel centre at (0.5, 0.5) is outside the radius-8 quarter circle.
+  EXPECT_EQ(Pixel(image, 0, 0), (css::Color{255, 255, 255, 255}));
+  EXPECT_EQ(Pixel(image, 19, 19), (css::Color{255, 255, 255, 255}));
+  // The middle is painted.
+  const css::Color middle = Pixel(image, 10, 10);
+  EXPECT_GT(middle.b, 100);
+  EXPECT_GT(middle.r, 100);
+}
+
+TEST(PainterTest, GradientLayersPaintBottomToTopWithClips)
+{
+  // The baidu.com search-box trick: a white padding-box layer over a green
+  // border-box layer, with a transparent border revealing the border gradient
+  // and a border-radius rounding both.
+  auto doc = html::Parser("<html><body style=\"margin:0;background:#ffffff\">"
+                          "<div id=\"box\" style=\"width:200px;height:60px;"
+                          "border:6px solid transparent;border-radius:12px;"
+                          "box-sizing:border-box;"
+                          "background: linear-gradient(white, white) padding-box,"
+                          " linear-gradient(90deg, #00ff00, #00ff00) border-box\"></div>"
+                          "<button id=\"submit\" style=\"display:block;width:120px;"
+                          "height:40px;border:none;"
+                          "background: linear-gradient(90deg, #0000ff, #0000ff)\">go</button>"
+                          "</body></html>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine layout(styles);
+  std::unique_ptr<layout::LayoutBox> root = layout.BuildLayoutTree(*doc, 400);
+
+  Painter painter(root.get());
+  const DisplayList list = painter.Paint();
+
+  std::vector<const DrawCommand*> gradients;
+  for (const DrawCommand& command : list.commands()) {
+    if (command.type == CommandType::kFillLinearGradient) {
+      gradients.push_back(&command);
+    }
+  }
+  ASSERT_EQ(gradients.size(), 3u); // green + white for the box, blue button
+
+  // Bottom-most first: the border-box layer, then the white padding-box layer.
+  EXPECT_EQ(gradients[0]->gradient_stops[0].color, (css::Color{0, 255, 0, 255}));
+  EXPECT_FLOAT_EQ(gradients[0]->width, 200.0F);
+  EXPECT_FLOAT_EQ(gradients[0]->height, 60.0F);
+  EXPECT_FLOAT_EQ(gradients[0]->radius, 12.0F);
+  EXPECT_FLOAT_EQ(gradients[1]->x, 6.0F);
+  EXPECT_FLOAT_EQ(gradients[1]->y, 6.0F);
+  EXPECT_FLOAT_EQ(gradients[1]->width, 188.0F);
+  EXPECT_FLOAT_EQ(gradients[1]->height, 48.0F);
+  EXPECT_FLOAT_EQ(gradients[1]->radius, 6.0F);
+  EXPECT_EQ(gradients[1]->gradient_stops[0].color, (css::Color{255, 255, 255, 255}));
+  EXPECT_EQ(gradients[2]->gradient_stops[0].color, (css::Color{0, 0, 255, 255}));
+
+  Rasterizer raster(400, 120);
+  raster.Clear(css::Color{255, 255, 255, 255});
+  raster.Rasterize(list);
+
+  // White interior, green border ring, white outside the rounded corner.
+  EXPECT_EQ(Pixel(raster, 100, 30), (css::Color{255, 255, 255, 255}));
+  const css::Color border = Pixel(raster, 2, 30);
+  EXPECT_LT(border.r, 20);
+  EXPECT_GT(border.g, 230);
+  EXPECT_LT(border.b, 20);
+  EXPECT_EQ(Pixel(raster, 0, 0), (css::Color{255, 255, 255, 255}));
+  // The native-appearance <button> still honours the author gradient.
+  const css::Color button = Pixel(raster, 60, 80);
+  EXPECT_GT(button.b, 200);
+  EXPECT_LT(button.r, 80);
+}
+
+TEST(PainterTest, PaddingBoxGradientLeavesBorderAreaToBackgroundColor)
+{
+  auto doc = html::Parser("<html><body style=\"margin:0;background:#ffffff\">"
+                          "<div id=\"box\" style=\"width:40px;height:40px;"
+                          "border:4px solid transparent;background-color:#ff0000;"
+                          "background-image: linear-gradient(90deg, #0000ff, #0000ff);"
+                          "background-clip: padding-box;background-origin: padding-box\">"
+                          "</div></body></html>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine layout(styles);
+  std::unique_ptr<layout::LayoutBox> root = layout.BuildLayoutTree(*doc, 200);
+
+  Painter painter(root.get());
+  Rasterizer raster(100, 100);
+  raster.Clear(css::Color{255, 255, 255, 255});
+  raster.Rasterize(painter.Paint());
+
+  // The padding box is blue; the 4px border area keeps the red background
+  // colour and a transparent border is not painted (never black).
+  EXPECT_EQ(Pixel(raster, 20, 20), (css::Color{0, 0, 255, 255}));
+  EXPECT_EQ(Pixel(raster, 1, 20), (css::Color{255, 0, 0, 255}));
+  EXPECT_EQ(Pixel(raster, 20, 1), (css::Color{255, 0, 0, 255}));
+  EXPECT_EQ(Pixel(raster, 8, 20), (css::Color{0, 0, 255, 255}));
+}
+
+TEST(PainterTest, RelativeZIndexJoinsParentZOrder)
+{
+  // A relative-positioned box with an explicit z-index stays in flow for
+  // layout but paints in the parent's z-order (CSS 2.1 §9.9).  The later green
+  // box has a lower z-index, so the earlier red box remains on top where they
+  // overlap; painting at tree position would show green.
+  auto doc = html::Parser("<html><body style=\"margin:0\">"
+                          "<div style=\"position:relative;z-index:2;width:40px;"
+                          "height:40px;background:#ff0000\"></div>"
+                          "<div style=\"position:relative;z-index:1;width:40px;"
+                          "height:40px;background:#00ff00;margin-top:-40px\"></div>"
+                          "</body></html>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine layout(styles);
+  std::unique_ptr<layout::LayoutBox> root = layout.BuildLayoutTree(*doc, 100);
+
+  Painter painter(root.get());
+  Rasterizer raster(60, 60);
+  raster.Clear(css::Color{255, 255, 255, 255});
+  raster.Rasterize(painter.Paint());
+  EXPECT_EQ(Pixel(raster, 10, 10), (css::Color{255, 0, 0, 255}));
+}
+
 } // namespace
 } // namespace neko::paint

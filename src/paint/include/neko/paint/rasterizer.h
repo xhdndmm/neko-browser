@@ -138,6 +138,7 @@ private:
 
   void FillRect(float x, float y, float width, float height, css::Color color);
   void FillRoundRect(float x, float y, float width, float height, float radius, css::Color color);
+  void FillLinearGradient(const DrawCommand& command);
   void DrawBorder(const DrawCommand& command);
   void DrawText(const DrawCommand& command);
   void DrawText8x8(const DrawCommand& command);

@@ -312,6 +312,45 @@ enum class PointerEvents
   kNone,
 };
 
+// One resolved color stop of a CSS linear gradient (CSS Images 3 §3.1.1).
+// |position| is the stop's 0..1 position along the gradient line after the
+// auto-distribution algorithm has run; 0 = gradient start, 1 = end.
+struct LinearGradientStop
+{
+  css::Color color;
+  float position = 0.0F;
+
+  bool operator==(const LinearGradientStop&) const = default;
+};
+
+// A resolved CSS linear-gradient() background layer.
+//
+// The colour stops are interpolated in premultiplied sRGB by the rasterizer
+// (so `transparent` fades correctly).  |clip| is the layer's background-clip
+// box: the gradient is painted into (and its line sized over) that box.
+//
+// NOT MODELLED: background-origin (the gradient geometry is the clip box, a
+// documented approximation), color interpolation spaces/hints, length-valued
+// stop positions (percentage positions only), repeating/radial/conic
+// gradients.
+struct LinearGradient
+{
+  enum class Clip
+  {
+    kBorderBox,
+    kPaddingBox,
+    kContentBox,
+  };
+
+  // CSS angle in degrees: 0deg points up, 90deg right, 180deg down (default,
+  // `to bottom`), 270deg left.
+  float angle_deg = 180.0F;
+  std::vector<LinearGradientStop> stops;
+  Clip clip = Clip::kBorderBox;
+
+  bool operator==(const LinearGradient&) const = default;
+};
+
 // Fully resolved style for one element (px values unless noted).
 struct ComputedStyle
 {
@@ -386,6 +425,15 @@ struct ComputedStyle
   // keyword and percentage forms are modelled; lengths fall back to left/top.
   float background_position_x = 0.0F;
   float background_position_y = 0.0F;
+
+  // CSS background-image linear-gradient() layers, in declaration order:
+  // background_gradients[0] is the TOP layer (CSS Backgrounds 3 §2.1).  Only
+  // gradients are listed here; the single URL layer above stays in
+  // background_image.  Painters draw URL backgrounds first (bottom) and then
+  // these in reverse order (CSS: first image layer paints last); mixing a URL
+  // layer *above* a gradient layer is NOT modelled (the declaration order
+  // between the one URL and the gradients is lost).  Empty = none.
+  std::vector<LinearGradient> background_gradients;
 
   // aspect-ratio (CSS Box Sizing 4): width / height ratio (e.g. 1 for a
   // square, 16/9 for 16:9).  With a definite width (or height) and the other

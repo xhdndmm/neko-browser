@@ -1942,5 +1942,209 @@ TEST(StyleTest, TransparentColorWithoutClipStaysTransparent)
   ASSERT_TRUE(s.color.has_value());
   EXPECT_EQ(s.color->a, 0);
 }
+
+// ---------------------------------------------------------------------------
+// CSS linear-gradient backgrounds (CSS Images 3 §3.1.1).
+// ---------------------------------------------------------------------------
+
+TEST(StyleTest, LinearGradientBackgroundLayersParse)
+{
+  // The real baidu.com search-box rule: two layers, the white interior
+  // clipped to the padding box and the angled brand gradient clipped to the
+  // border box (so it shows through the 1.5px transparent border).
+  auto doc = MakeDoc("<body><div id=\"box\" style=\""
+                     "background: linear-gradient(white, white) padding-box,"
+                     " linear-gradient(160deg, #3377fe, #4c6fff, #8370ff, #ba59ff) border-box\">"
+                     "x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, "#box");
+
+  ASSERT_EQ(s.background_gradients.size(), 2u);
+  const LinearGradient& white = s.background_gradients[0];
+  EXPECT_FLOAT_EQ(white.angle_deg, 180.0F); // default `to bottom`
+  EXPECT_EQ(white.clip, LinearGradient::Clip::kPaddingBox);
+  ASSERT_EQ(white.stops.size(), 2u);
+  EXPECT_EQ(white.stops[0].color, (css::Color{255, 255, 255, 255}));
+  EXPECT_FLOAT_EQ(white.stops[0].position, 0.0F);
+  EXPECT_EQ(white.stops[1].color, (css::Color{255, 255, 255, 255}));
+  EXPECT_FLOAT_EQ(white.stops[1].position, 1.0F);
+
+  const LinearGradient& border = s.background_gradients[1];
+  EXPECT_FLOAT_EQ(border.angle_deg, 160.0F);
+  EXPECT_EQ(border.clip, LinearGradient::Clip::kBorderBox);
+  ASSERT_EQ(border.stops.size(), 4u);
+  EXPECT_EQ(border.stops[0].color, (css::Color{0x33, 0x77, 0xfe, 255}));
+  EXPECT_EQ(border.stops[1].color, (css::Color{0x4c, 0x6f, 0xff, 255}));
+  EXPECT_EQ(border.stops[2].color, (css::Color{0x83, 0x70, 0xff, 255}));
+  EXPECT_EQ(border.stops[3].color, (css::Color{0xba, 0x59, 0xff, 255}));
+  EXPECT_FLOAT_EQ(border.stops[0].position, 0.0F);
+  EXPECT_FLOAT_EQ(border.stops[1].position, 1.0F / 3.0F);
+  EXPECT_FLOAT_EQ(border.stops[2].position, 2.0F / 3.0F);
+  EXPECT_FLOAT_EQ(border.stops[3].position, 1.0F);
+}
+
+TEST(StyleTest, BackgroundShorthandParsesSingleGradient)
+{
+  // baidu.com's `百度一下` button.
+  auto doc = MakeDoc("<body><div id=\"submit\" style=\""
+                     "background: linear-gradient(136deg, #286aff, #4e6ef2, #7274f9, #9f66ff)"
+                     "\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, "#submit");
+  ASSERT_EQ(s.background_gradients.size(), 1u);
+  const LinearGradient& g = s.background_gradients[0];
+  EXPECT_FLOAT_EQ(g.angle_deg, 136.0F);
+  EXPECT_EQ(g.clip, LinearGradient::Clip::kBorderBox);
+  ASSERT_EQ(g.stops.size(), 4u);
+  EXPECT_EQ(g.stops[0].color, (css::Color{0x28, 0x6a, 0xff, 255}));
+  EXPECT_EQ(g.stops[3].color, (css::Color{0x9f, 0x66, 0xff, 255}));
+  EXPECT_FLOAT_EQ(g.stops[1].position, 1.0F / 3.0F);
+}
+
+TEST(StyleTest, LinearGradientToRightWithRgbaAndTransparentStops)
+{
+  // Commas inside rgba() must not split the layer; `to right` is 90deg; the
+  // alpha stops keep their alpha.
+  auto doc = MakeDoc("<body><div id=\"g\" style=\"background-image: "
+                     "linear-gradient(to right, rgba(255, 0, 0, 0.5) 0%, transparent 100%)\">"
+                     "x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, "#g");
+  ASSERT_EQ(s.background_gradients.size(), 1u);
+  const LinearGradient& g = s.background_gradients[0];
+  EXPECT_FLOAT_EQ(g.angle_deg, 90.0F);
+  ASSERT_EQ(g.stops.size(), 2u);
+  EXPECT_EQ(g.stops[0].color, (css::Color{255, 0, 0, 128}));
+  EXPECT_FLOAT_EQ(g.stops[0].position, 0.0F);
+  EXPECT_EQ(g.stops[1].color, (css::Color{0, 0, 0, 0}));
+  EXPECT_FLOAT_EQ(g.stops[1].position, 1.0F);
+}
+
+TEST(StyleTest, LinearGradientAutoDistributesMissingStopPositions)
+{
+  // Middle stop at 25%; the missing first/last default to 0/1.
+  auto doc = MakeDoc("<body><div id=\"g\" style=\"background-image: "
+                     "linear-gradient(red, green 25%, blue)\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, "#g");
+  ASSERT_EQ(s.background_gradients.size(), 1u);
+  const std::vector<LinearGradientStop>& stops = s.background_gradients[0].stops;
+  ASSERT_EQ(stops.size(), 3u);
+  EXPECT_FLOAT_EQ(stops[0].position, 0.0F);
+  EXPECT_FLOAT_EQ(stops[1].position, 0.25F);
+  EXPECT_FLOAT_EQ(stops[2].position, 1.0F);
+}
+
+TEST(StyleTest, LinearGradientAngleUnits)
+{
+  auto doc = MakeDoc("<body><style>"
+                     ".rad { background-image: linear-gradient(0.5turn, red, blue); }"
+                     ".deg { background-image: linear-gradient(270deg, red, blue); }"
+                     ".grad { background-image: linear-gradient(100grad, red, blue); }"
+                     ".left { background-image: linear-gradient(to left, red, blue); }"
+                     ".bottom { background-image: linear-gradient(to bottom, red, blue); }"
+                     "</style><div class=\"rad\"></div><div class=\"deg\"></div>"
+                     "<div class=\"grad\"></div><div class=\"left\"></div>"
+                     "<div class=\"bottom\"></div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  ASSERT_EQ(Style(engine, *doc, ".rad").background_gradients.size(), 1u);
+  EXPECT_FLOAT_EQ(Style(engine, *doc, ".rad").background_gradients[0].angle_deg, 180.0F);
+  EXPECT_FLOAT_EQ(Style(engine, *doc, ".deg").background_gradients[0].angle_deg, 270.0F);
+  EXPECT_FLOAT_EQ(Style(engine, *doc, ".grad").background_gradients[0].angle_deg, 90.0F);
+  EXPECT_FLOAT_EQ(Style(engine, *doc, ".left").background_gradients[0].angle_deg, 270.0F);
+  EXPECT_FLOAT_EQ(Style(engine, *doc, ".bottom").background_gradients[0].angle_deg, 180.0F);
+}
+
+TEST(StyleTest, BackgroundClipListMapsToGradientLayers)
+{
+  auto doc = MakeDoc("<body><div id=\"g\" style=\""
+                     "background-image: linear-gradient(red, blue),"
+                     " linear-gradient(lime, navy);"
+                     "background-clip: padding-box, content-box\">x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, "#g");
+  ASSERT_EQ(s.background_gradients.size(), 2u);
+  EXPECT_EQ(s.background_gradients[0].clip, LinearGradient::Clip::kPaddingBox);
+  EXPECT_EQ(s.background_gradients[1].clip, LinearGradient::Clip::kContentBox);
+}
+
+TEST(StyleTest, BackgroundShorthandResetsGradientList)
+{
+  // A shorthand without a gradient replaces the image list entirely.
+  auto doc = MakeDoc("<body><div id=\"reset\" style=\""
+                     "background-image: linear-gradient(red, blue); background: #fff\">"
+                     "x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, "#reset");
+  EXPECT_TRUE(s.background_gradients.empty());
+  ASSERT_TRUE(s.background_color.has_value());
+  EXPECT_EQ(*s.background_color, (css::Color{255, 255, 255, 255}));
+}
+
+TEST(StyleTest, BackgroundImageGradientReplacesEarlierGradient)
+{
+  // Declaration order inside the block is preserved by the cascade: the later
+  // background-image wins and replaces (not appends to) the earlier list.
+  auto doc = MakeDoc("<body><div id=\"replace\" style=\""
+                     "background-image: linear-gradient(red, blue);"
+                     "background-image: linear-gradient(lime, navy)\">"
+                     "x</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& s = Style(engine, *doc, "#replace");
+  ASSERT_EQ(s.background_gradients.size(), 1u);
+  ASSERT_EQ(s.background_gradients[0].stops.size(), 2u);
+  EXPECT_EQ(s.background_gradients[0].stops[0].color, (css::Color{0, 255, 0, 255}));
+}
+
+TEST(StyleTest, MalformedAndUnsupportedGradientsAreIgnored)
+{
+  // No crash, no background: malformed stop lists, a single stop, the
+  // unimplemented radial/repeating variants, and background-clip:text.
+  auto doc = MakeDoc("<body>"
+                     "<div id=\"one\" style=\"background-image: linear-gradient(red)\"></div>"
+                     "<div id=\"bad\" style=\"background-image: "
+                     "linear-gradient(red, banana, blue)\"></div>"
+                     "<div id=\"repeat\" style=\"background-image: "
+                     "repeating-linear-gradient(red, blue 20px)\"></div>"
+                     "<div id=\"radial\" style=\"background-image: "
+                     "radial-gradient(red, blue)\"></div>"
+                     "<div id=\"text\" style=\"background-image: "
+                     "linear-gradient(red, blue); background-clip: text\"></div>"
+                     "<div id=\"unclosed\" style=\"background-image: "
+                     "linear-gradient(red, blue\"></div>"
+                     "</body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  EXPECT_TRUE(Style(engine, *doc, "#one").background_gradients.empty());
+  EXPECT_TRUE(Style(engine, *doc, "#bad").background_gradients.empty());
+  EXPECT_TRUE(Style(engine, *doc, "#repeat").background_gradients.empty());
+  EXPECT_TRUE(Style(engine, *doc, "#radial").background_gradients.empty());
+  EXPECT_TRUE(Style(engine, *doc, "#text").background_gradients.empty());
+  EXPECT_TRUE(Style(engine, *doc, "#unclosed").background_gradients.empty());
+}
+
+TEST(StyleTest, BorderRadiusInheritCopiesParentComputedValue)
+{
+  // baidu.com's search-box gradient layer uses `border-radius: inherit`; the
+  // CSS-wide keyword pass only resolves inherited properties, so the
+  // border-radius handler must copy the parent computed radius itself.
+  auto doc = MakeDoc("<body><div style=\"border-radius:19px\">"
+                     "<span id=\"child\" style=\"border-radius:inherit\"></span>"
+                     "</div></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  const ComputedStyle& child = Style(engine, *doc, "#child");
+  ASSERT_TRUE(child.border_radius.has_value());
+  EXPECT_FLOAT_EQ(child.border_radius->value, 19.0F);
+  EXPECT_FALSE(child.border_radius->percent);
+}
 } // namespace
 } // namespace neko::style

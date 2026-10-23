@@ -18,6 +18,11 @@ enum class CommandType
 {
   kFillRect,
   kFillRoundRect,
+  // Linear-gradient fill (CSS Images 3 §3.1.1): |x|/|y|/|width|/|height| is
+  // the fill box (the background-clip box), |radius| rounds it, and the
+  // gradient line is computed over that same box.  Stops are interpolated in
+  // premultiplied sRGB by the rasterizer.
+  kFillLinearGradient,
   kBorderRect,
   kDrawText,
   kDrawImage,
@@ -47,8 +52,13 @@ struct DrawCommand
   float height = 0;
   css::Color color{0, 0, 0, 255};
 
-  // Corner radius (px) for kFillRoundRect.
+  // Corner radius (px) for kFillRoundRect / kFillLinearGradient.
   float radius = 0;
+
+  // Linear gradient for kFillLinearGradient.  Angle convention matches
+  // style::LinearGradient (0deg = up, 90deg = right, 180deg = down).
+  float gradient_angle_deg = 180.0F;
+  std::vector<style::LinearGradientStop> gradient_stops;
 
   // Group alpha in [0, 1] for kPushGroup.
   float alpha = 1.0f;
@@ -79,6 +89,13 @@ class DisplayList
 public:
   void FillRect(float x, float y, float width, float height, css::Color color);
   void FillRoundRect(float x, float y, float width, float height, float radius, css::Color color);
+  void FillLinearGradient(float x,
+                          float y,
+                          float width,
+                          float height,
+                          float radius,
+                          float angle_deg,
+                          std::vector<style::LinearGradientStop> stops);
   void BorderRect(float x,
                   float y,
                   float width,
