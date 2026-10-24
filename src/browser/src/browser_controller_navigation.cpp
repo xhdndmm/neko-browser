@@ -1,3 +1,8 @@
+// BrowserController implementation: navigation.
+#include "browser_controller_internal.h"
+
+namespace neko::browser {
+
 // ---------------------------------------------------------------------------
 // Navigation
 // ---------------------------------------------------------------------------
@@ -745,3 +750,5 @@ bool BrowserController::DispatchKeyboard(int tab_id,
   DrainPendingFormSubmission(*tab);
   return not_canceled;
 }
+
+} // namespace neko::browser

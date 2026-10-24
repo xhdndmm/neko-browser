@@ -1,3 +1,8 @@
+// BrowserController implementation: fetch.
+#include "browser_controller_internal.h"
+
+namespace neko::browser {
+
 // ---------------------------------------------------------------------------
 // Renderer-process mode (ADR 0016 M2)
 // ---------------------------------------------------------------------------
@@ -653,3 +658,4 @@ void BrowserController::RecordVisit(const std::string& url, const std::string& t
   history_.RecordVisit(url, title, NowUnix());
 }
 
+} // namespace neko::browser

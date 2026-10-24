@@ -1,3 +1,8 @@
+// BrowserController implementation: frames.
+#include "browser_controller_internal.h"
+
+namespace neko::browser {
+
 base::Result<void> BrowserController::NavigateActive(const std::string& input)
 {
   Tab* tab = ActiveTab();
@@ -578,3 +583,5 @@ void BrowserController::PumpScriptTimers()
     }
   }
 }
+
+} // namespace neko::browser

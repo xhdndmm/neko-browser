@@ -1,3 +1,8 @@
+// BrowserController implementation: tabs.
+#include "browser_controller_internal.h"
+
+namespace neko::browser {
+
 // ---------------------------------------------------------------------------
 // Tabs
 // ---------------------------------------------------------------------------
@@ -165,3 +170,4 @@ std::vector<ConsoleEntry> BrowserController::SnapshotConsoleLog() const
   return console_log_;
 }
 
+} // namespace neko::browser

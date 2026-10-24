@@ -20,6 +20,14 @@ apply_compiler_warnings(neko_browser_options)
 
 add_library(neko_browser_core
   src/browser_controller.cpp
+  src/browser_controller_helpers.cpp
+  src/browser_controller_tabs.cpp
+  src/browser_controller_navigation.cpp
+  src/browser_controller_forms.cpp
+  src/browser_controller_frames.cpp
+  src/browser_controller_view.cpp
+  src/browser_controller_fetch.cpp
+  src/browser_controller_storage.cpp
   src/download_manager.cpp
   src/hyperlink.cpp
   src/page_scripts.cpp

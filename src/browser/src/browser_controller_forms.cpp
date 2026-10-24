@@ -1,3 +1,8 @@
+// BrowserController implementation: forms.
+#include "browser_controller_internal.h"
+
+namespace neko::browser {
+
 void BrowserController::SubmitForm(int tab_id, dom::Element* form, dom::Element* submitter)
 {
   Tab* tab = FindTab(tab_id);
@@ -248,3 +253,5 @@ void BrowserController::DrainPendingFormSubmission(Tab& tab)
   }
   tab.pending_form_submission = {};
 }
+
+} // namespace neko::browser

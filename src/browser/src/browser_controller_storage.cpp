@@ -1,3 +1,8 @@
+// BrowserController implementation: storage.
+#include "browser_controller_internal.h"
+
+namespace neko::browser {
+
 // ---------------------------------------------------------------------------
 // Bookmarks / console
 // ---------------------------------------------------------------------------
@@ -869,3 +874,4 @@ void FetchPageVideos(renderer::Page& page,
   }
 }
 
+} // namespace neko::browser

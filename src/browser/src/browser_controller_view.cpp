@@ -1,3 +1,8 @@
+// BrowserController implementation: view.
+#include "browser_controller_internal.h"
+
+namespace neko::browser {
+
 void BrowserController::SetTabScrollOffset(int tab_id, float y)
 {
   Tab* tab = nullptr;
@@ -326,3 +331,5 @@ void BrowserController::SetTabScrollRequest(int tab_id, float y)
     }
   }
 }
+
+} // namespace neko::browser
