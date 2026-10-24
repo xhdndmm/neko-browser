@@ -31,6 +31,7 @@ neko-browser 的文档体系。文档是项目的一等公民 —— 改动架�
   - [0020：DOM 归 worker 线程独占 + GUI 消费不可变帧](architecture/adr/0020-worker-confined-dom.md)
   - [0021：表单控件渲染](architecture/adr/0021-form-control-rendering.md)
   - [0022：HTTP 连接复用（keep-alive 池）+ 脚本并行预取](architecture/adr/0022-http-connection-reuse.md)
+  - [0023：WebIDL 生成绑定（QuickJS）](architecture/adr/0023-webidl-generated-bindings.md)
 
 ## 开发
 

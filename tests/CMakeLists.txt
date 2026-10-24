@@ -16,6 +16,20 @@
 add_subdirectory(unit)
 
 # -----------------------------------------------------------------------------
+# The checked-in WebIDL-generated bindings must match their .webidl sources
+# (tools/webidl/gen.py).  The generator runs clang-format so the output also
+# satisfies the formatting gate; without clang-format the check cannot be
+# meaningful, so it is skipped rather than failed.
+# -----------------------------------------------------------------------------
+find_package(Python3 COMPONENTS Interpreter QUIET)
+find_program(NEKO_CLANG_FORMAT NAMES clang-format clang-format-18)
+if(Python3_Interpreter_FOUND AND NEKO_CLANG_FORMAT)
+  add_test(
+    NAME webidl.generated_sources_up_to_date
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/webidl/gen.py --check)
+endif()
+
+# -----------------------------------------------------------------------------
 # libFuzzer harnesses (Clang only, opt-in via NEKO_BUILD_FUZZERS).  The
 # deterministic corpus replay lives in tests/unit/fuzz and always builds.
 # -----------------------------------------------------------------------------

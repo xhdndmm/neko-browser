@@ -14,6 +14,7 @@ add_library(neko_javascript
   src/binding/impl.cpp
   src/import_map.cpp
   src/binding/node_binding.cpp
+  src/binding/generated/html_element_generated.cpp
   src/binding/element_binding.cpp
   src/binding/document_binding.cpp
   src/binding/range_binding.cpp

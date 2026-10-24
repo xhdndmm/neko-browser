@@ -336,6 +336,12 @@ JavaScript Engine → {Parser, AST, Bytecode, VM, GC} + Web IDL 绑定层
 
 - QuickJS 仅作 JS runtime，**不得**替代 DOM/CSS/布局/渲染/导航/安全/存储。
 
+## 绑定生成（WebIDL）
+
+手写绑定与 `tools/webidl/gen.py` 生成的绑定共存。哪些成员可以进生成器、
+如何新增、当前支持的子集与边界，见
+[WebIDL 生成绑定](webidl-bindings.md)（决策记录：[ADR 0023](../architecture/adr/0023-webidl-generated-bindings.md)）。
+
 ## 参考
 
 - ECMAScript Specification

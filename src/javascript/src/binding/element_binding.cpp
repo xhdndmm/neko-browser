@@ -12,6 +12,7 @@
 #include "neko/html/parser.h"
 
 #include "binding_internal.h"
+#include "generated/html_element_generated.h"
 
 #include <algorithm>
 #include <cstring>
@@ -677,131 +678,6 @@ JSValue ElementSetTabIndex(JSContext* ctx, JSValueConst this_val, JSValueConst v
   }
   element->SetAttribute("tabindex", std::to_string(index));
   impl->MarkAttrDirty(element, "tabindex");
-  return JS_UNDEFINED;
-}
-
-// HTMLElement.inert: reflects the content attribute (HTML §6.6.1).  Focusable
-// area and activation rules that read the attribute live in the browser's
-// focus controller/click path.
-JSValue ElementGetInert(JSContext* ctx, JSValueConst this_val)
-{
-  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
-  if (element == nullptr) {
-    return JS_ThrowTypeError(ctx, "not an element");
-  }
-  return JS_NewBool(ctx, element->HasAttribute("inert"));
-}
-
-JSValue ElementSetInert(JSContext* ctx, JSValueConst this_val, JSValueConst value)
-{
-  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
-  if (element == nullptr) {
-    return JS_ThrowTypeError(ctx, "not an element");
-  }
-  const int inert = JS_ToBool(ctx, value);
-  if (inert < 0) {
-    JS_FreeValue(ctx, JS_GetException(ctx));
-    return JS_EXCEPTION;
-  }
-  if (inert != 0) {
-    element->SetAttribute("inert", "");
-  } else {
-    element->RemoveAttribute("inert");
-  }
-  ImplFor(ctx, this_val)->MarkAttrDirty(element, "inert");
-  return JS_UNDEFINED;
-}
-
-// DOMRect.toJSON(): a plain object with the rect fields (numbers).
-
-JSValue ElementGetHidden(JSContext* ctx, JSValueConst this_val)
-{
-  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
-  if (element == nullptr) {
-    return JS_ThrowTypeError(ctx, "not an element");
-  }
-  return JS_NewBool(ctx, element->HasAttribute("hidden"));
-}
-
-JSValue ElementSetHidden(JSContext* ctx, JSValueConst this_val, JSValueConst value)
-{
-  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
-  if (element == nullptr) {
-    return JS_ThrowTypeError(ctx, "not an element");
-  }
-  const int v = JS_ToBool(ctx, value);
-  if (v < 0) {
-    JS_FreeValue(ctx, JS_GetException(ctx));
-    return JS_EXCEPTION;
-  }
-  if (v != 0) {
-    element->SetAttribute("hidden", "");
-  } else {
-    element->RemoveAttribute("hidden");
-  }
-  ImplFor(ctx, this_val)->MarkDomDirty(element);
-  return JS_UNDEFINED;
-}
-
-JSValue ElementGetTitle(JSContext* ctx, JSValueConst this_val)
-{
-  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
-  if (element == nullptr) {
-    return JS_ThrowTypeError(ctx, "not an element");
-  }
-  const std::optional<std::string_view> title = element->GetAttribute("title");
-  return title.has_value() ? JS_NewStringLen(ctx, title->data(), title->size())
-                           : JS_NewStringLen(ctx, "", 0);
-}
-
-JSValue ElementSetTitle(JSContext* ctx, JSValueConst this_val, JSValueConst value)
-{
-  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
-  if (element == nullptr) {
-    return JS_ThrowTypeError(ctx, "not an element");
-  }
-  bool ok = false;
-  const std::string title = ArgString(ctx, value, &ok);
-  if (!ok) {
-    return JS_EXCEPTION;
-  }
-  if (title.empty()) {
-    element->RemoveAttribute("title");
-  } else {
-    element->SetAttribute("title", title);
-  }
-  ImplFor(ctx, this_val)->MarkDomDirty(element);
-  return JS_UNDEFINED;
-}
-
-JSValue ElementGetLang(JSContext* ctx, JSValueConst this_val)
-{
-  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
-  if (element == nullptr) {
-    return JS_ThrowTypeError(ctx, "not an element");
-  }
-  const std::optional<std::string_view> lang = element->GetAttribute("lang");
-  return lang.has_value() ? JS_NewStringLen(ctx, lang->data(), lang->size())
-                          : JS_NewStringLen(ctx, "", 0);
-}
-
-JSValue ElementSetLang(JSContext* ctx, JSValueConst this_val, JSValueConst value)
-{
-  dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
-  if (element == nullptr) {
-    return JS_ThrowTypeError(ctx, "not an element");
-  }
-  bool ok = false;
-  const std::string lang = ArgString(ctx, value, &ok);
-  if (!ok) {
-    return JS_EXCEPTION;
-  }
-  if (lang.empty()) {
-    element->RemoveAttribute("lang");
-  } else {
-    element->SetAttribute("lang", lang);
-  }
-  ImplFor(ctx, this_val)->MarkDomDirty(element);
   return JS_UNDEFINED;
 }
 
@@ -1848,7 +1724,7 @@ void DefineClassListPrototype(JSContext* ctx, Impl& impl)
 
 void DefineElementPrototype(JSContext* ctx, Impl& impl)
 {
-  static const std::array<JSCFunctionListEntry, 22> kMethods = {{
+  static const std::array<JSCFunctionListEntry, 21> kMethods = {{
       JS_CFUNC_DEF("getAttribute", 1, ElementGetAttribute),
       JS_CFUNC_DEF("getAttributeNames", 0, ElementGetAttributeNames),
       JS_CFUNC_DEF("setAttribute", 2, ElementSetAttribute),
@@ -1863,7 +1739,6 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
       JS_CFUNC_DEF("matches", 1, ElementMatches),
       JS_CFUNC_DEF("closest", 1, ElementClosest),
       JS_CFUNC_DEF("remove", 0, ElementRemove),
-      JS_CFUNC_DEF("focus", 0, ElementFocus),
       JS_CFUNC_DEF("blur", 0, ElementBlur),
       JS_CFUNC_DEF("insertAdjacentHTML", 2, ElementInsertAdjacentHTML),
       JS_CFUNC_DEF("insertAdjacentElement", 2, ElementInsertAdjacentElement),
@@ -1994,21 +1869,9 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
                  "open",
                  MakeGetter(ctx, "open", ElementGetOpen),
                  MakeSetter(ctx, "open", ElementSetOpen));
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "hidden",
-                 MakeGetter(ctx, "hidden", ElementGetHidden),
-                 MakeSetter(ctx, "hidden", ElementSetHidden));
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "title",
-                 MakeGetter(ctx, "title", ElementGetTitle),
-                 MakeSetter(ctx, "title", ElementSetTitle));
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "lang",
-                 MakeGetter(ctx, "lang", ElementGetLang),
-                 MakeSetter(ctx, "lang", ElementSetLang));
+  // Reflected attributes generated from html_element.webidl: hidden, title,
+  // lang and inert (plus the focus() registration).
+  DefineGeneratedHTMLElement(ctx, impl.element_proto);
   DefineAccessor(ctx,
                  impl.element_proto,
                  "dir",
@@ -2021,11 +1884,6 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
                  "tabIndex",
                  MakeGetter(ctx, "tabIndex", ElementGetTabIndex),
                  MakeSetter(ctx, "tabIndex", ElementSetTabIndex));
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "inert",
-                 MakeGetter(ctx, "inert", ElementGetInert),
-                 MakeSetter(ctx, "inert", ElementSetInert));
 
   // Form controls (input/textarea/select/option/button).
   DefineAccessor(ctx,
