@@ -9,6 +9,7 @@ add_library(neko_dom
   src/node.cpp
   src/element.cpp
   src/query.cpp
+  src/selector.cpp
 )
 add_library(neko::dom ALIAS neko_dom)
 

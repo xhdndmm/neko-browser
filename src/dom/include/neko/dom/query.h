@@ -7,15 +7,15 @@
 
 namespace neko::dom {
 
-// Query helpers supporting a practical subset of CSS selectors:
+// Query helpers over the shared CSS selector engine (neko/dom/selector.h).
 //
-//   * <type>  #id  .class  .a.b  <compound>  <descendant>  <child>
-//
-// Full CSS selector matching (attribute selectors, pseudo-classes, ...) lives
-// in neko::css; this subset covers the common cases used by scripts and tests.
-// Malformed selectors yield no matches (never throw).  The one pseudo-class
-// supported here is `:checked` (via MatchesCheckedPseudo, which the css
-// matcher shares -- one source of truth for checkedness).
+// querySelector() is defined by the DOM standard, and the style engine must
+// agree with it, so both use the same parser/matcher: type/universal, #id,
+// .class, attribute selectors, pseudo-classes (`:first-child`, `:nth-child`,
+// `:checked`, ...) and the descendant/child/sibling combinators.
+// Malformed selectors yield no matches (never throw).  `:checked` is defined
+// by MatchesCheckedPseudo, which the matcher uses -- one source of truth for
+// checkedness.
 
 // First matching element in pre-order, or nullptr.
 Element* QuerySelector(Node& root, std::string_view selector);

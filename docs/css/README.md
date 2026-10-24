@@ -6,7 +6,7 @@
 
 - tokenizer（ident/at-keyword/hash/数字/尺寸/百分比/字符串/标点/注释）
 - parser：样式表（限定规则 + @media 嵌套）、声明块、!important
-- 选择器：type/id/class/属性（全部操作符）/伪类(:first-child/:last-child/
+- 选择器（实现位于 `neko::dom`，`querySelector` 与级联共用）：type/id/class/属性（全部操作符）/伪类(:first-child/:last-child/
   :nth-child/**:nth-of-type/:first-of-type/:last-of-type**/:root/:not(simple-selector))
   + 组合器（后代/子/相邻/后续兄弟），特异性计算；类型伪类按同类元素兄弟
   序号匹配（An+B 与 nth-child 同一算术）

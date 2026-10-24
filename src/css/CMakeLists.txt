@@ -9,7 +9,6 @@ add_library(neko_css
   src/color.cpp
   src/tokenizer.cpp
   src/parser.cpp
-  src/selector.cpp
   src/stylesheet.cpp
   src/value.cpp
 )

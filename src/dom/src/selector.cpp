@@ -1,4 +1,4 @@
-#include "neko/css/selector.h"
+#include "neko/dom/selector.h"
 
 #include "neko/base/string_util.h"
 #include "neko/base/utf8.h"
@@ -10,7 +10,7 @@
 #include <string_view>
 #include <vector>
 
-namespace neko::css {
+namespace neko::dom {
 namespace {
 
 bool IsNameStart(char c)
@@ -792,4 +792,4 @@ Specificity MatchingSpecificity(const dom::Element& element, std::string_view se
   return best;
 }
 
-} // namespace neko::css
+} // namespace neko::dom

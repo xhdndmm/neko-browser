@@ -311,4 +311,38 @@ TEST(DomTest, TextSetData)
 }
 
 } // namespace
+
+// querySelector() and the cascade share a single selector engine
+// (neko/dom/selector.h).  The old DOM-side subset rejected :nth-child and the
+// sibling combinators, so scripts and stylesheets disagreed about whether an
+// element matched.
+TEST(DomTest, QuerySelectorUsesTheSharedSelectorEngine)
+{
+  auto document = std::make_unique<Document>();
+  auto html = std::make_unique<Element>("html");
+  auto body = std::make_unique<Element>("body");
+
+  auto first = std::make_unique<Element>("p");
+  first->SetAttribute("class", "item");
+  auto second = std::make_unique<Element>("p");
+  second->SetAttribute("class", "item");
+  auto third = std::make_unique<Element>("p");
+  third->SetAttribute("class", "item");
+
+  Element* second_raw = second.get();
+  Element* third_raw = third.get();
+  body->AppendChild(std::move(first));
+  body->AppendChild(std::move(second));
+  body->AppendChild(std::move(third));
+  html->AppendChild(std::move(body));
+  document->AppendChild(std::move(html));
+
+  EXPECT_EQ(QuerySelector(*document, "p:nth-child(2)"), second_raw);
+  EXPECT_EQ(QuerySelector(*document, "p:first-child + p"), second_raw);
+  EXPECT_EQ(QuerySelector(*document, "p:last-child"), third_raw);
+  EXPECT_EQ(QuerySelectorAll(*document, "p ~ p").size(), 2u);
+  EXPECT_EQ(QuerySelectorAll(*document, "p:nth-child(odd)").size(), 2u);
+  EXPECT_EQ(QuerySelector(*document, "p:nth-child(4)"), nullptr);
+}
+
 } // namespace neko::dom
