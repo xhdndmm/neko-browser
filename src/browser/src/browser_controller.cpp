@@ -2,11 +2,11 @@
 //
 // The controller is one class but several responsibilities; the method bodies
 // live in .inc fragments included below so each subsystem is reviewable on its
-// own: tabs, navigation (user interaction, forms, focus), fetch/content
-// routing, and persistence/DevTools.  They stay in this translation unit
-// because member bodies call the file-local helpers in the anonymous
-// namespace above; promoting them to separate TUs requires externalising
-// those helpers first (same follow-up as layout.cpp).
+// own: tabs, navigation/input, form submission, frame/timer production, view
+// state (scroll/zoom/find), fetch/content routing, and persistence/DevTools.  They stay in this
+// translation unit because member bodies call the file-local helpers in the anonymous namespace
+// above; promoting them to separate TUs requires externalising those helpers first (same follow-up
+// as layout.cpp).
 #include "neko/browser/browser_controller.h"
 
 #include "neko/base/logging.h"
@@ -1002,6 +1002,25 @@ public:
   }
 };
 
+bool ContainsNode(const dom::Node& root, const dom::Node* target)
+{
+  if (target == nullptr) {
+    return false;
+  }
+  std::vector<const dom::Node*> stack{&root};
+  while (!stack.empty()) {
+    const dom::Node* node = stack.back();
+    stack.pop_back();
+    if (node == target) {
+      return true;
+    }
+    for (const dom::Node* child : node->ChildNodes()) {
+      stack.push_back(child);
+    }
+  }
+  return false;
+}
+
 } // namespace
 
 std::string_view ToString(ContentType type)
@@ -1142,7 +1161,10 @@ BrowserController::~BrowserController()
 }
 
 #include "browser_controller_fetch.inc"
+#include "browser_controller_forms.inc"
+#include "browser_controller_frames.inc"
 #include "browser_controller_navigation.inc"
 #include "browser_controller_storage.inc"
 #include "browser_controller_tabs.inc"
+#include "browser_controller_view.inc"
 } // namespace neko::browser
