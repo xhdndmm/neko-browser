@@ -78,12 +78,13 @@ DOM 绑定层（`src/javascript/src/binding/`）是 JavaScript 对象与 C++ 引
 
 - 生成器输出 `.inc` 而不是独立 `.cpp`：成员实现函数在绑定文件里是内部链接的，
   注册代码必须在同一翻译单元内；这也把"IDL 管表面、C++ 管行为"的分工固定下来。
-- `tools/webidl/migrate.py` 把原型注册自动迁移到 `.webidl`，累计 **257 个成员**：
-  `impl.<x>_proto` 目标与局部 `JSValue proto` 目标都支持，注册调用插在原型
-  创建之后（Headers 的 `entries` 查找、Abort 的两个原型都依赖这个顺序）。
-- 未迁移的 113 条（`impl.cpp` 构造器里的 window 注册 95 条、URLSearchParams
-  的非规则方法表 8 条、条件注册 7 条、WebSocket 1 条、`JS_SetPropertyStr`）
+- `tools/webidl/migrate.py` 把原型注册自动迁移到 `.webidl`，累计 **396 个成员**：
+  `impl.<x>_proto`、局部 `JSValue proto`、以及 `Impl::Impl` 构造函数里的
+  `window`/`global` 都支持；注册调用插在原型创建处（Headers 的 `entries`
+  查找、Abort 的两个原型都依赖这个顺序）；构造函数用 `*this` 传给生成函数。
+- 未迁移的 23 条（条件注册、`JS_UNDEFINED` setter、`JS_SetPropertyStr` 常量）
   由 `migrate.py` 逐条报告原因，保持手写，不静默丢失。
+- 手写绑定从 21,274 行降到 20,444 行；IDL 671 行，生成代码 1,741 行。
 
 ## 后续
 

@@ -47,32 +47,37 @@ python3 tools/webidl/migrate.py       # 从手写注册迁移到 .webidl（一�
 | 文件 | 迁移成员数 |
 | --- | --- |
 | element_binding | 83 |
+| impl（构造函数里的 window/global） | 80 |
 | document_binding | 43 |
 | node_binding | 31 |
 | range_binding | 29 |
 | event_binding | 28 |
 | selection_binding | 21 |
 | xhr_binding | 17 |
+| url_search_params_binding | 9 |
 | global_binding | 8 |
 | abort_binding | 7 |
 | form_data_binding | 6 |
 | headers_binding | 6 |
+| html_element（纯反射） | 5 |
 | message_channel_binding | 5 |
 | intersection_observer_binding | 4 |
 | event_target_binding | 3 |
 | style_binding | 3 |
-| storage_binding | 2 |
 | websocket_binding | 3 |
+| platform_binding | 2 |
+| storage_binding | 2 |
 | canvas_binding | 1 |
-| **合计** | **257** |
+| **合计** | **396** |
 
-仍未迁移（保持手写，`migrate.py` 会逐条打印原因）：
+仍未迁移的 **23 条**（保持手写，`migrate.py` 会逐条打印原因）：
 
-- `impl.cpp` 的构造器里对 `window`/`global` 的注册（95 条）：注册代码在
-  `Impl::Impl(...)` 构造函数内，当前的函数匹配只接受自由函数；
-- `url_search_params_binding` 的方法表（8 条）：表里混有非 `JS_CFUNC_DEF` 条目；
-- 条件注册（element/event/global/style/url/xhr 各 1–2 条）；
-- 直接 `JS_SetPropertyStr` 挂的属性/常量/对象（`ui_binding` 等）。
+- **条件注册**：只在特定元素/状态下才注册的访问器（`if (is_svg) ...`、
+  只给 `<details>` 的 `open`、只给 SVG 元素的属性、`impl.cpp` 里按
+  `apis.*` 是否存在决定是否注册的 10 条）；
+- **`JS_UNDEFINED` setter**：`DefineAccessor(..., JS_UNDEFINED)` 的只读
+  访问器（需要给生成器加 `[Readonly]` 表达）；
+- 直接 `JS_SetPropertyStr` 挂的常量/对象/`Symbol.iterator`（不是成员注册）。
 
 ## 支持的子集
 

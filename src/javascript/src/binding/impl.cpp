@@ -27,6 +27,30 @@
 #include <vector>
 
 namespace neko::javascript {
+void DefineGeneratedImplNodeListProto(JSContext* ctx, Impl& impl);
+void DefineGeneratedImplHtmlCollectionProto(JSContext* ctx, Impl& impl);
+void DefineGeneratedImplWindow(JSContext* ctx, Impl& impl);
+void DefineGeneratedImplCharacterDataProto(JSContext* ctx, Impl& impl);
+void DefineGeneratedImplFragmentProto(JSContext* ctx, Impl& impl);
+void DefineGeneratedImplDocumentTypeProto(JSContext* ctx, Impl& impl);
+void DefineGeneratedImplHtmlScriptElementProto(JSContext* ctx, Impl& impl);
+void DefineGeneratedImplHtmlBaseElementProto(JSContext* ctx, Impl& impl);
+void DefineGeneratedImplHtmlAnchorElementProto(JSContext* ctx, Impl& impl);
+void DefineGeneratedImplHtmlIframeElementProto(JSContext* ctx, Impl& impl);
+void DefineGeneratedImplHtmlFormElementProto(JSContext* ctx, Impl& impl);
+void DefineGeneratedImplHtmlButtonElementProto(JSContext* ctx, Impl& impl);
+void DefineGeneratedImplHtmlInputElementProto(JSContext* ctx, Impl& impl);
+void DefineGeneratedImplHtmlImageElementProto(JSContext* ctx, Impl& impl);
+void DefineGeneratedImplHtmlMediaElementProto(JSContext* ctx, Impl& impl);
+void DefineGeneratedImplAttrProto(JSContext* ctx, Impl& impl);
+void DefineGeneratedImplNavigatorProto(JSContext* ctx, JSValue navigator_proto);
+void DefineGeneratedImplHistoryProto(JSContext* ctx, JSValue history_proto);
+void DefineGeneratedImplPerformanceProto(JSContext* ctx, JSValue performance_proto);
+void DefineGeneratedImplNamedNodeMapProto(JSContext* ctx, Impl& impl);
+void DefineGeneratedImplTreeWalkerProto(JSContext* ctx, Impl& impl);
+void DefineGeneratedImplMutationObserverProto(JSContext* ctx, Impl& impl);
+void DefineGeneratedImplDomImplementationProto(JSContext* ctx, Impl& impl);
+void DefineGeneratedImplStorageProto(JSContext* ctx, JSValue storage_proto);
 
 // ---------------------------------------------------------------------------
 // Process-wide QuickJS plumbing.
@@ -542,14 +566,16 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   JS_FreeValue(ctx, array_ctor);
   JS_FreeValue(ctx, global_for_array);
   JS_SetPropertyStr(ctx, node_list_proto, "item", JS_NewCFunction(ctx, NodeListItem, "item", 1));
-  DefineGetter(ctx, node_list_proto, "length", MakeGetter(ctx, "length", NodeListLength));
+  DefineGeneratedImplNodeListProto(ctx, *this);
+
   JS_SetPropertyStr(
       ctx, html_collection_proto, "item", JS_NewCFunction(ctx, NodeListItem, "item", 1));
   JS_SetPropertyStr(ctx,
                     html_collection_proto,
                     "namedItem",
                     JS_NewCFunction(ctx, HTMLCollectionNamedItem, "namedItem", 1));
-  DefineGetter(ctx, html_collection_proto, "length", MakeGetter(ctx, "length", NodeListLength));
+  DefineGeneratedImplHtmlCollectionProto(ctx, *this);
+
   html_base_element_proto = JS_NewObjectProto(ctx, element_proto);
   html_script_element_proto = JS_NewObjectProto(ctx, element_proto);
   html_anchor_element_proto = JS_NewObjectProto(ctx, element_proto);
@@ -593,7 +619,7 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   JS_SetPropertyStr(ctx, doc_wrap, "visibilityState", JS_NewString(ctx, "visible"));
   JS_SetPropertyStr(ctx, global, "document", doc_wrap); // steals doc_wrap
   window = JS_DupValue(ctx, global);
-  DefineGetter(ctx, window, "closed", MakeGetter(ctx, "closed", WindowGetClosed));
+  DefineGeneratedImplWindow(ctx, *this);
 
   // Global event handler attributes (HTML spec §8.1.7.2).  In browsers these
   // are global properties (`window.onload === onload`), so scripts may read or
@@ -623,32 +649,14 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
 
   // Window-level event functions (and bare global aliases) forward to the
   // document, which owns the page's listener storage.
-  static const std::array<JSCFunctionListEntry, 3> kWindowEvents = {{
-      JS_CFUNC_DEF("addEventListener", 2, WindowAddEventListener),
-      JS_CFUNC_DEF("removeEventListener", 2, WindowRemoveEventListener),
-      JS_CFUNC_DEF("dispatchEvent", 1, WindowDispatchEvent),
-  }};
-  JS_SetPropertyFunctionList(
-      ctx, window, kWindowEvents.data(), static_cast<int>(kWindowEvents.size()));
+
   for (const char* name : {"addEventListener", "removeEventListener", "dispatchEvent"}) {
     JSValue fn = JS_GetPropertyStr(ctx, window, name);
     JS_SetPropertyStr(ctx, global, name, fn); // steals fn
   }
 
   // Window viewport/animations/history/services.
-  static const std::array<JSCFunctionListEntry, 9> kWindowExtensions = {{
-      JS_CFUNC_DEF("requestAnimationFrame", 1, WindowRequestAnimationFrame),
-      JS_CFUNC_DEF("cancelAnimationFrame", 1, WindowCancelAnimationFrame),
-      JS_CFUNC_DEF("scrollTo", 0, WindowScrollTo),
-      JS_CFUNC_DEF("scroll", 0, WindowScrollTo),
-      JS_CFUNC_DEF("scrollBy", 0, WindowScrollBy),
-      JS_CFUNC_DEF("getComputedStyle", 1, WindowGetComputedStyle),
-      JS_CFUNC_DEF("requestIdleCallback", 1, WindowRequestAnimationFrame),
-      JS_CFUNC_DEF("cancelIdleCallback", 1, WindowCancelAnimationFrame),
-      JS_CFUNC_DEF("matchMedia", 1, WindowMatchMedia),
-  }};
-  JS_SetPropertyFunctionList(
-      ctx, window, kWindowExtensions.data(), static_cast<int>(kWindowExtensions.size()));
+
   for (const char* name : {"requestAnimationFrame",
                            "cancelAnimationFrame",
                            "scrollTo",
@@ -678,15 +686,8 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   // and not script-exposed yet — documented).
   {
     JSValue history_proto = JS_NewObject(ctx);
-    static const std::array<JSCFunctionListEntry, 5> kHistory = {{
-        JS_CFUNC_DEF("back", 0, HistoryBack),
-        JS_CFUNC_DEF("forward", 0, HistoryForward),
-        JS_CFUNC_DEF("go", 1, HistoryGo),
-        JS_CFUNC_DEF("pushState", 3, HistoryPushState),
-        JS_CFUNC_DEF("replaceState", 3, HistoryReplaceState),
-    }};
-    JS_SetPropertyFunctionList(
-        ctx, history_proto, kHistory.data(), static_cast<int>(kHistory.size()));
+    DefineGeneratedImplHistoryProto(ctx, history_proto);
+
     DefineGetter(ctx, history_proto, "length", MakeGetter(ctx, "length", HistoryGetLength));
     DefineGetter(ctx, history_proto, "state", MakeGetter(ctx, "state", HistoryGetState));
     DefineInterface(ctx, global, "History", history_proto);
@@ -702,15 +703,8 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   // EventTarget.prototype.addEventListener.call(performance, ...).
   {
     JSValue performance_proto = JS_NewObjectProto(ctx, event_target_proto);
-    static const std::array<JSCFunctionListEntry, 5> kPerformance = {{
-        JS_CFUNC_DEF("now", 0, PerformanceNow),
-        JS_CFUNC_DEF("getEntries", 0, PerformanceGetEntries),
-        JS_CFUNC_DEF("getEntriesByType", 1, PerformanceGetEntriesByType),
-        JS_CFUNC_DEF("setResourceTimingBufferSize", 1, PerformanceSetResourceTimingBufferSize),
-        JS_CFUNC_DEF("clearResourceTimings", 0, PerformanceClearResourceTimings),
-    }};
-    JS_SetPropertyFunctionList(
-        ctx, performance_proto, kPerformance.data(), static_cast<int>(kPerformance.size()));
+    DefineGeneratedImplPerformanceProto(ctx, performance_proto);
+
     DefineInterface(ctx, global, "Performance", performance_proto);
     JSValue performance = CreateEventTargetInstance(ctx, performance_proto);
     JS_FreeValue(ctx, performance_proto);
@@ -736,12 +730,10 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   DefineInterface(ctx, global, "Node", node_proto);
   DefineInterface(ctx, global, "Document", document_proto);
   // CharacterData.data is shared by Text and Comment.
-  DefineAccessor(ctx,
-                 character_data_proto,
-                 "data",
-                 MakeGetter(ctx, "data", CharacterDataGetData),
-                 MakeSetter(ctx, "data", CharacterDataSetData));
-  DefineGetter(ctx, fragment_proto, "children", MakeGetter(ctx, "children", ElementGetChildren));
+  DefineGeneratedImplCharacterDataProto(ctx, *this);
+
+  DefineGeneratedImplFragmentProto(ctx, *this);
+
   // DocumentFragment implements ParentNode (DOM §4.2): its querySelector /
   // querySelectorAll search the fragment's subtree.  Scripts build detached
   // subtrees in fragments and query them before insertion.
@@ -754,11 +746,8 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
                     "querySelectorAll",
                     JS_NewCFunction(ctx, ElementQuerySelectorAll, "querySelectorAll", 1));
   // DocumentType.name/publicId/systemId (DOM §4.3.1).
-  DefineGetter(ctx, document_type_proto, "name", MakeGetter(ctx, "name", DocumentTypeGetName));
-  DefineGetter(
-      ctx, document_type_proto, "publicId", MakeGetter(ctx, "publicId", DocumentTypeGetPublicId));
-  DefineGetter(
-      ctx, document_type_proto, "systemId", MakeGetter(ctx, "systemId", DocumentTypeGetSystemId));
+  DefineGeneratedImplDocumentTypeProto(ctx, *this);
+
   DefineInterface(ctx, global, "CharacterData", character_data_proto);
   DefineInterface(ctx, global, "DocumentType", document_type_proto);
   DefineInterface(ctx, global, "Text", text_proto);
@@ -767,70 +756,20 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   DefineInterface(ctx, global, "CSSStyleDeclaration", style_proto);
   DefineInterface(ctx, global, "Element", element_proto);
   DefineInterface(ctx, global, "HTMLElement", element_proto, /*set_constructor=*/false);
-  DefineAccessor(ctx,
-                 html_script_element_proto,
-                 "src",
-                 MakeGetter(ctx, "src", ElementGetSrc),
-                 MakeSetter(ctx, "src", ElementSetSrc));
+  DefineGeneratedImplHtmlScriptElementProto(ctx, *this);
+
   DefineInterface(ctx, global, "HTMLScriptElement", html_script_element_proto);
-  DefineAccessor(ctx,
-                 html_base_element_proto,
-                 "href",
-                 MakeGetter(ctx, "href", ElementGetHref),
-                 MakeSetter(ctx, "href", ElementSetHref));
+  DefineGeneratedImplHtmlBaseElementProto(ctx, *this);
+
   DefineInterface(ctx, global, "HTMLBaseElement", html_base_element_proto);
-  DefineAccessor(ctx,
-                 html_anchor_element_proto,
-                 "href",
-                 MakeGetter(ctx, "href", ElementGetHref),
-                 MakeSetter(ctx, "href", ElementSetHref));
-  DefineAccessor(ctx,
-                 html_anchor_element_proto,
-                 "download",
-                 MakeGetter(ctx, "download", ElementGetDownload),
-                 MakeSetter(ctx, "download", ElementSetDownload));
-  DefineAccessor(ctx,
-                 html_anchor_element_proto,
-                 "ping",
-                 MakeGetter(ctx, "ping", ElementGetPing),
-                 MakeSetter(ctx, "ping", ElementSetPing));
+  DefineGeneratedImplHtmlAnchorElementProto(ctx, *this);
+
   DefineInterface(ctx, global, "HTMLAnchorElement", html_anchor_element_proto);
-  DefineAccessor(ctx,
-                 html_iframe_element_proto,
-                 "src",
-                 MakeGetter(ctx, "src", ElementGetSrc),
-                 MakeSetter(ctx, "src", ElementSetSrc));
-  DefineAccessor(ctx,
-                 html_iframe_element_proto,
-                 "srcdoc",
-                 MakeGetter(ctx, "srcdoc", ElementGetSrcDoc),
-                 MakeSetter(ctx, "srcdoc", ElementSetSrcDoc));
-  DefineAccessor(ctx,
-                 html_iframe_element_proto,
-                 "credentialless",
-                 MakeGetter(ctx, "credentialless", ElementGetCredentialless),
-                 MakeSetter(ctx, "credentialless", ElementSetCredentialless));
+  DefineGeneratedImplHtmlIframeElementProto(ctx, *this);
+
   DefineInterface(ctx, global, "HTMLIFrameElement", html_iframe_element_proto);
-  DefineAccessor(ctx,
-                 html_form_element_proto,
-                 "action",
-                 MakeGetter(ctx, "action", FormGetAction),
-                 MakeSetter(ctx, "action", FormSetAction));
-  DefineAccessor(ctx,
-                 html_form_element_proto,
-                 "enctype",
-                 MakeGetter(ctx, "enctype", FormGetEnctype),
-                 MakeSetter(ctx, "enctype", FormSetEnctype));
-  DefineAccessor(ctx,
-                 html_form_element_proto,
-                 "method",
-                 MakeGetter(ctx, "method", FormGetMethod),
-                 MakeSetter(ctx, "method", FormSetMethod));
-  DefineAccessor(ctx,
-                 html_form_element_proto,
-                 "noValidate",
-                 MakeGetter(ctx, "noValidate", FormGetNoValidate),
-                 MakeSetter(ctx, "noValidate", FormSetNoValidate));
+  DefineGeneratedImplHtmlFormElementProto(ctx, *this);
+
   JS_SetPropertyStr(
       ctx, html_form_element_proto, "submit", JS_NewCFunction(ctx, FormSubmit, "submit", 0));
   JS_SetPropertyStr(ctx,
@@ -846,47 +785,11 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
                     "reportValidity",
                     JS_NewCFunction(ctx, FormReportValidity, "reportValidity", 0));
   DefineInterface(ctx, global, "HTMLFormElement", html_form_element_proto);
-  DefineAccessor(ctx,
-                 html_button_element_proto,
-                 "formAction",
-                 MakeGetter(ctx, "formAction", ElementGetFormAction),
-                 MakeSetter(ctx, "formAction", ElementSetFormAction));
+  DefineGeneratedImplHtmlButtonElementProto(ctx, *this);
+
   DefineInterface(ctx, global, "HTMLButtonElement", html_button_element_proto);
-  DefineAccessor(ctx,
-                 html_input_element_proto,
-                 "formAction",
-                 MakeGetter(ctx, "formAction", ElementGetFormAction),
-                 MakeSetter(ctx, "formAction", ElementSetFormAction));
-  DefineAccessor(ctx,
-                 html_input_element_proto,
-                 "value",
-                 MakeGetter(ctx, "value", ElementGetValue),
-                 MakeSetter(ctx, "value", ElementSetValue));
-  DefineAccessor(ctx,
-                 html_input_element_proto,
-                 "defaultValue",
-                 MakeGetter(ctx, "defaultValue", ElementGetDefaultValue),
-                 MakeSetter(ctx, "defaultValue", ElementSetDefaultValue));
-  DefineAccessor(ctx,
-                 html_input_element_proto,
-                 "multiple",
-                 MakeGetter(ctx, "multiple", ElementGetMultiple),
-                 MakeSetter(ctx, "multiple", ElementSetMultiple));
-  DefineAccessor(ctx,
-                 html_input_element_proto,
-                 "min",
-                 MakeGetter(ctx, "min", ElementGetMin),
-                 MakeSetter(ctx, "min", ElementSetMin));
-  DefineAccessor(ctx,
-                 html_input_element_proto,
-                 "max",
-                 MakeGetter(ctx, "max", ElementGetMax),
-                 MakeSetter(ctx, "max", ElementSetMax));
-  DefineAccessor(ctx,
-                 html_input_element_proto,
-                 "step",
-                 MakeGetter(ctx, "step", ElementGetStep),
-                 MakeSetter(ctx, "step", ElementSetStep));
+  DefineGeneratedImplHtmlInputElementProto(ctx, *this);
+
   // Text control selection APIs (WHATWG HTML §4.10.20).  They exist only on
   // HTMLInputElement/HTMLTextAreaElement prototypes: `'selectionStart' in div`
   // stays false.  Getters return null for input types to which selection does
@@ -977,31 +880,17 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
     DefineInterface(ctx, global, "ValidityState", validity_state_proto);
     JS_FreeValue(ctx, validity_state_proto);
   }
-  DefineAccessor(ctx,
-                 html_image_element_proto,
-                 "src",
-                 MakeGetter(ctx, "src", ElementGetSrc),
-                 MakeSetter(ctx, "src", ElementSetSrc));
+  DefineGeneratedImplHtmlImageElementProto(ctx, *this);
+
   DefineAccessor(ctx,
                  html_image_element_proto,
                  "currentSrc",
                  MakeGetter(ctx, "currentSrc", ElementGetCurrentSrc),
                  JS_UNDEFINED);
-  DefineAccessor(ctx,
-                 html_image_element_proto,
-                 "srcset",
-                 MakeGetter(ctx, "srcset", ElementGetSrcSet),
-                 MakeSetter(ctx, "srcset", ElementSetSrcSet));
+
   DefineInterface(ctx, global, "HTMLImageElement", html_image_element_proto);
-  DefineAccessor(ctx,
-                 html_media_element_proto,
-                 "src",
-                 MakeGetter(ctx, "src", ElementGetSrc),
-                 MakeSetter(ctx, "src", ElementSetSrc));
-  DefineGetter(ctx,
-               html_media_element_proto,
-               "currentSrc",
-               MakeGetter(ctx, "currentSrc", ElementGetCurrentSrc));
+  DefineGeneratedImplHtmlMediaElementProto(ctx, *this);
+
   DefineInterface(ctx, global, "HTMLMediaElement", html_media_element_proto);
   DefineInterface(ctx, global, "HTMLVideoElement", html_video_element_proto);
   DefineInterface(ctx, global, "HTMLCanvasElement", html_canvas_element_proto);
@@ -1012,31 +901,14 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   DefineInterface(ctx, global, "NodeList", node_list_proto);
   DefineInterface(ctx, global, "HTMLCollection", html_collection_proto);
   DefineAccessor(ctx, attr_proto, "name", MakeGetter(ctx, "name", AttrGetName), JS_UNDEFINED);
-  DefineAccessor(ctx,
-                 attr_proto,
-                 "value",
-                 MakeGetter(ctx, "value", AttrGetValue),
-                 MakeSetter(ctx, "value", AttrSetValue));
-  DefineAccessor(ctx,
-                 attr_proto,
-                 "nodeValue",
-                 MakeGetter(ctx, "nodeValue", AttrGetNodeValue),
-                 MakeSetter(ctx, "nodeValue", AttrSetNodeValue));
-  DefineGetter(
-      ctx, attr_proto, "ownerElement", MakeGetter(ctx, "ownerElement", AttrGetOwnerElement));
+  DefineGeneratedImplAttrProto(ctx, *this);
+
   DefineInterface(ctx, global, "Attr", attr_proto);
-  static const std::array<JSCFunctionListEntry, 2> kNamedNodeMap = {{
-      JS_CFUNC_DEF("item", 1, NamedNodeMapItem),
-      JS_CFUNC_DEF("getNamedItem", 1, NamedNodeMapGetNamedItem),
-  }};
-  JS_SetPropertyFunctionList(
-      ctx, named_node_map_proto, kNamedNodeMap.data(), static_cast<int>(kNamedNodeMap.size()));
+  DefineGeneratedImplNamedNodeMapProto(ctx, *this);
+
   DefineInterface(ctx, global, "NamedNodeMap", named_node_map_proto);
-  static const std::array<JSCFunctionListEntry, 1> kTreeWalker = {{
-      JS_CFUNC_DEF("nextNode", 0, TreeWalkerNextNode),
-  }};
-  JS_SetPropertyFunctionList(
-      ctx, tree_walker_proto, kTreeWalker.data(), static_cast<int>(kTreeWalker.size()));
+  DefineGeneratedImplTreeWalkerProto(ctx, *this);
+
   DefineInterface(ctx, global, "TreeWalker", tree_walker_proto);
   JSValue node_filter = JS_NewObject(ctx);
   static constexpr std::array<std::pair<const char*, uint32_t>, 15> kNodeFilterConstants = {{
@@ -1061,15 +933,8 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   }
   JS_SetPropertyStr(ctx, global, "NodeFilter", node_filter);
   DefineInterface(ctx, global, "DOMTokenList", class_list_proto);
-  static const std::array<JSCFunctionListEntry, 3> kMutationObserver = {{
-      JS_CFUNC_DEF("observe", 2, MutationObserverObserve),
-      JS_CFUNC_DEF("disconnect", 0, MutationObserverDisconnect),
-      JS_CFUNC_DEF("takeRecords", 0, MutationObserverTakeRecords),
-  }};
-  JS_SetPropertyFunctionList(ctx,
-                             mutation_observer_proto,
-                             kMutationObserver.data(),
-                             static_cast<int>(kMutationObserver.size()));
+  DefineGeneratedImplMutationObserverProto(ctx, *this);
+
   JSValue mutation_observer_constructor = JS_NewCFunction2(
       ctx, MutationObserverConstructor, "MutationObserver", 1, JS_CFUNC_constructor, 0);
   JS_SetPropertyStr(
@@ -1097,14 +962,8 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   JS_SetPropertyStr(
       ctx, xml_serializer_proto, "constructor", JS_DupValue(ctx, xml_serializer_constructor));
   JS_SetPropertyStr(ctx, global, "XMLSerializer", xml_serializer_constructor);
-  static const std::array<JSCFunctionListEntry, 2> kDOMImplementation = {{
-      JS_CFUNC_DEF("hasFeature", 2, DocumentImplementationHasFeature),
-      JS_CFUNC_DEF("createHTMLDocument", 1, DocumentImplementationCreateHTMLDocument),
-  }};
-  JS_SetPropertyFunctionList(ctx,
-                             dom_implementation_proto,
-                             kDOMImplementation.data(),
-                             static_cast<int>(kDOMImplementation.size()));
+  DefineGeneratedImplDomImplementationProto(ctx, *this);
+
   DefineInterface(ctx, global, "DOMImplementation", dom_implementation_proto);
   // Event is constructable: new Event(type, {bubbles, cancelable}).
   {
@@ -1182,8 +1041,8 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   JSValue languages = JS_NewArray(ctx);
   JS_SetPropertyUint32(ctx, languages, 0, JS_NewString(ctx, "en-US")); // steals
   JS_SetPropertyStr(ctx, navigator_proto, "__nekoNavigatorLanguages", languages);
-  DefineGetter(
-      ctx, navigator_proto, "languages", MakeGetter(ctx, "languages", NavigatorGetLanguages));
+  DefineGeneratedImplNavigatorProto(ctx, navigator_proto);
+
   DefineInterface(ctx, global, "Navigator", navigator_proto);
   JSValue navigator_ctor = JS_GetPropertyStr(ctx, global, "Navigator");
   JS_SetPropertyStr(ctx, window, "Navigator", navigator_ctor);
@@ -1420,26 +1279,6 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   // offsets are live reads off the browser layer's scroll state (PageApis
   // scroll_offset), so window.scrollX/scrollY/pageXOffset/pageYOffset track the
   // GUI scrollbar; without the callback they report 0.
-  DefineGetter(
-      ctx, window, "innerWidth", MakeGetterMagic(ctx, "innerWidth", WindowViewportGetter, 0));
-  DefineGetter(
-      ctx, window, "innerHeight", MakeGetterMagic(ctx, "innerHeight", WindowViewportGetter, 1));
-  DefineGetter(
-      ctx, window, "outerWidth", MakeGetterMagic(ctx, "outerWidth", WindowViewportGetter, 0));
-  DefineGetter(
-      ctx, window, "outerHeight", MakeGetterMagic(ctx, "outerHeight", WindowViewportGetter, 2));
-  DefineGetter(ctx,
-               window,
-               "devicePixelRatio",
-               MakeGetterMagic(ctx, "devicePixelRatio", WindowViewportGetter, 3));
-  DefineGetter(
-      ctx, window, "pageXOffset", MakeGetterMagic(ctx, "pageXOffset", WindowScrollOffsetGetter, 0));
-  DefineGetter(
-      ctx, window, "pageYOffset", MakeGetterMagic(ctx, "pageYOffset", WindowScrollOffsetGetter, 1));
-  DefineGetter(
-      ctx, window, "scrollX", MakeGetterMagic(ctx, "scrollX", WindowScrollOffsetGetter, 2));
-  DefineGetter(
-      ctx, window, "scrollY", MakeGetterMagic(ctx, "scrollY", WindowScrollOffsetGetter, 3));
 
   // window.self/parent/top/frames: the engine has no frame tree, so each is a
   // self-reference (top-level browsing context semantics).  Because window IS
@@ -1491,15 +1330,8 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   // backing store while sessionStorage is isolated to this document runtime.
   {
     JSValue storage_proto = JS_NewObject(ctx);
-    static const std::array<JSCFunctionListEntry, 5> kStorage = {{
-        JS_CFUNC_DEF("getItem", 1, LocalStorageGetItem),
-        JS_CFUNC_DEF("setItem", 2, LocalStorageSetItem),
-        JS_CFUNC_DEF("removeItem", 1, LocalStorageRemoveItem),
-        JS_CFUNC_DEF("clear", 0, LocalStorageClear),
-        JS_CFUNC_DEF("key", 1, LocalStorageKey),
-    }};
-    JS_SetPropertyFunctionList(
-        ctx, storage_proto, kStorage.data(), static_cast<int>(kStorage.size()));
+    DefineGeneratedImplStorageProto(ctx, storage_proto);
+
     DefineGetter(ctx, storage_proto, "length", MakeGetter(ctx, "length", LocalStorageLength));
     DefineInterface(ctx, global, "Storage", storage_proto);
     JSValue storage_ctor = JS_GetPropertyStr(ctx, global, "Storage");
@@ -2913,5 +2745,7 @@ JSValue ImageConstructor(JSContext* ctx, JSValueConst /*new_target*/, int argc, 
   impl->created[raw] = std::move(element);
   return impl->WrapNode(raw);
 }
+
+#include "generated/impl_generated.inc"
 
 } // namespace neko::javascript

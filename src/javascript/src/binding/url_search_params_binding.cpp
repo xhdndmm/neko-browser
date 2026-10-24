@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace neko::javascript {
+void DefineGeneratedUrlSearchParamsBindingProto(JSContext* ctx, JSValue proto);
 
 namespace {
 
@@ -300,23 +301,15 @@ void InstallUrlSearchParamsGlobal(JSContext* ctx, JSValue global)
 {
   EnsureUrlSearchParamsClassRegistered(JS_GetRuntime(ctx));
   JSValue proto = JS_NewObject(ctx);
-  static const std::array<JSCFunctionListEntry, 9> methods = {{
-      JS_CFUNC_DEF("append", 2, Append),
-      JS_CFUNC_DEF("set", 2, Set),
-      JS_CFUNC_DEF("delete", 1, Delete),
-      JS_CFUNC_DEF("get", 1, Get),
-      JS_CFUNC_DEF("getAll", 1, GetAll),
-      JS_CFUNC_DEF("has", 1, Has),
-      JS_CFUNC_DEF("sort", 0, Sort),
-      JS_CFUNC_DEF("toString", 0, ToString),
-      JS_CGETSET_DEF("size", Size, nullptr),
-  }};
-  JS_SetPropertyFunctionList(ctx, proto, methods.data(), static_cast<int>(methods.size()));
+  DefineGeneratedUrlSearchParamsBindingProto(ctx, proto);
+
   JSValue ctor = JS_NewCFunction2(ctx, Constructor, "URLSearchParams", 1, JS_CFUNC_constructor, 0);
   JS_SetPropertyStr(ctx, ctor, "prototype", JS_DupValue(ctx, proto));
   JS_SetPropertyStr(ctx, proto, "constructor", JS_DupValue(ctx, ctor));
   JS_SetPropertyStr(ctx, global, "URLSearchParams", ctor);
   JS_FreeValue(ctx, proto);
 }
+
+#include "generated/url_search_params_binding_generated.inc"
 
 } // namespace neko::javascript

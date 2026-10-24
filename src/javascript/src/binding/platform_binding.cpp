@@ -38,6 +38,9 @@
 #include <vector>
 
 namespace neko::javascript {
+void DefineGeneratedPlatformBindingEncoderProto(JSContext* ctx, JSValue encoder_proto);
+void DefineGeneratedPlatformBindingDecoderProto(JSContext* ctx, JSValue decoder_proto);
+
 namespace {
 
 JSValue NewString(JSContext* ctx, std::string_view text)
@@ -812,7 +815,8 @@ void DefinePlatformGlobals(JSContext* ctx)
                     encoder_proto,
                     "encodeInto",
                     JS_NewCFunction(ctx, TextEncoderEncodeInto, "encodeInto", 2));
-  DefineGetter(ctx, encoder_proto, "encoding", MakeGetter(ctx, "encoding", &EncodingGetterImpl));
+  DefineGeneratedPlatformBindingEncoderProto(ctx, encoder_proto);
+
   JS_SetClassProto(ctx, g_text_encoder_class_id, encoder_proto);
   JSValue encoder_ctor =
       JS_NewCFunction2(ctx, TextEncoderConstructor, "TextEncoder", 0, JS_CFUNC_constructor, 0);
@@ -822,7 +826,8 @@ void DefinePlatformGlobals(JSContext* ctx)
   JSValue decoder_proto = JS_NewObject(ctx);
   JS_SetPropertyStr(
       ctx, decoder_proto, "decode", JS_NewCFunction(ctx, TextDecoderDecode, "decode", 1));
-  DefineGetter(ctx, decoder_proto, "encoding", MakeGetter(ctx, "encoding", &EncodingGetterImpl));
+  DefineGeneratedPlatformBindingDecoderProto(ctx, decoder_proto);
+
   JS_SetClassProto(ctx, g_text_decoder_class_id, decoder_proto);
   JSValue decoder_ctor =
       JS_NewCFunction2(ctx, TextDecoderConstructor, "TextDecoder", 0, JS_CFUNC_constructor, 0);
@@ -851,5 +856,7 @@ void ForgetPlatformRuntime(JSRuntime* rt)
   std::lock_guard<std::mutex> lock(g_platform_class_mutex);
   g_text_classes_registered.erase(rt);
 }
+
+#include "generated/platform_binding_generated.inc"
 
 } // namespace neko::javascript

@@ -40,12 +40,22 @@ FUNC_RE = re.compile(
     r"^[A-Za-z_][\w:<>\*&\s]*?\b(\w+)\s*\(\s*JSContext\*\s*ctx\b[^)]*\)\s*$",
     re.MULTILINE,
 )
-CALL_NAMES = ("DefineAccessor", "DefineGetter")
-GETTER_RE = re.compile(r'^MakeGetter\(\s*ctx\s*,\s*"([^"]*)"\s*,\s*(\w+)\s*\)$')
-GETTER_MAGIC_RE = re.compile(
-    r'^MakeGetterMagic\(\s*ctx\s*,\s*"([^"]*)"\s*,\s*(\w+)\s*,\s*(-?\d+)\s*\)$'
+# Impl's constructor registers the window/global surface; it has no
+# JSContext parameter (ctx is a member).
+CTOR_RE = re.compile(r"^Impl::Impl\s*\([^;]*\)\s*$", re.MULTILINE)
+IMPL_MEMBERS = set(
+    re.findall(
+        r"^\s+JSValue ([a-z][a-z0-9_]*)\s*=",
+        (BINDING_DIR / "binding_internal.h").read_text(),
+        re.MULTILINE,
+    )
 )
-SETTER_RE = re.compile(r'^MakeSetter\(\s*ctx\s*,\s*"([^"]*)"\s*,\s*(\w+)\s*\)$')
+CALL_NAMES = ("DefineAccessor", "DefineGetter")
+GETTER_RE = re.compile(r'^MakeGetter\(\s*ctx\s*,\s*"([^"]*)"\s*,\s*&?(\w+)\s*\)$')
+GETTER_MAGIC_RE = re.compile(
+    r'^MakeGetterMagic\(\s*ctx\s*,\s*"([^"]*)"\s*,\s*&?(\w+)\s*,\s*(-?\d+)\s*\)$'
+)
+SETTER_RE = re.compile(r'^MakeSetter\(\s*ctx\s*,\s*"([^"]*)"\s*,\s*&?(\w+)\s*\)$')
 SETTER_MAGIC_RE = re.compile(
     r'^MakeSetterMagic\(\s*ctx\s*,\s*"([^"]*)"\s*,\s*(\w+)\s*,\s*(-?\d+)\s*\)$'
 )
@@ -54,6 +64,9 @@ METHOD_ARRAY_RE = re.compile(
     r"|JSCFunctionListEntry\s+(\w+)\s*\[\]\s*=\s*\{)"
 )
 METHOD_ENTRY_RE = re.compile(r'JS_CFUNC_DEF\(\s*"([^"]+)"\s*,\s*(\d+)\s*,\s*(\w+)\s*\)')
+CGETSET_ENTRY_RE = re.compile(
+    r'JS_CGETSET_DEF\(\s*"([^"]+)"\s*,\s*(\w+)\s*,\s*(?:nullptr|NULL)\s*\)'
+)
 SET_PROPERTY_LIST_RE_TEMPLATE = (
     r"JS_SetPropertyFunctionList\(\s*ctx\s*,\s*([^,]+?)\s*,\s*"
     r"{name}(?:\.data\(\))?\s*,"
@@ -119,6 +132,35 @@ def match_paren(text: str, open_index: int) -> int:
                 return i
         i += 1
     return -1
+
+
+def find_calls(body: str, names: tuple[str, ...]):
+    """Yields (name, start, open_paren_index) for calls outside strings/comments."""
+    pattern = re.compile(r"\b(" + "|".join(names) + r")\s*\(")
+    i = 0
+    while i < len(body):
+        c = body[i]
+        if c == "/" and body[i : i + 2] == "//":
+            nl = body.find("\n", i)
+            i = len(body) if nl < 0 else nl + 1
+            continue
+        if c == "/" and body[i : i + 2] == "/*":
+            end = body.find("*/", i + 2)
+            i = len(body) if end < 0 else end + 2
+            continue
+        if c == '"' or c == "'":
+            quote = c
+            i += 1
+            while i < len(body) and body[i] != quote:
+                i += 2 if body[i] == "\\" else 1
+            i += 1
+            continue
+        m = pattern.match(body, i)
+        if m:
+            yield m.group(1), i, m.end() - 1
+            i = m.end()
+            continue
+        i += 1
 
 
 def split_args(text: str) -> list[str]:
@@ -188,7 +230,9 @@ class FilePlan:
             if not field.endswith("_proto"):
                 return None
             return field, False
-        if re.fullmatch(r"[A-Za-z_]\w*", target) and target not in ("ctx", "argv", "global"):
+        if re.fullmatch(r"[A-Za-z_]\w*", target) and target not in ("ctx", "argv"):
+            if target in IMPL_MEMBERS:
+                return target, False
             return target, True
         return None
 
@@ -198,19 +242,17 @@ class FilePlan:
         touched: list[str] = []
 
         # Accessors / getters.
-        for match in re.finditer(r"\b(DefineAccessor|DefineGetter)\s*\(", body):
-            call = match.group(1)
-            open_index = match.end() - 1
+        for call, call_start, open_index in find_calls(body, CALL_NAMES):
             close_index = match_paren(body, open_index)
             if close_index < 0:
                 continue
-            depth = body.count("{", 0, match.start()) - body.count("}", 0, match.start())
+            depth = body.count("{", 0, call_start) - body.count("}", 0, call_start)
             stmt_end = close_index + 1
             while stmt_end < len(body) and body[stmt_end] in " \t":
                 stmt_end += 1
             if stmt_end < len(body) and body[stmt_end] == ";":
                 stmt_end += 1
-            absolute = base + match.start()
+            absolute = base + call_start
             if depth != 0:
                 self.skipped.append(
                     f"{self.path.name}:{line_of(self.text, absolute)}: {call} inside a "
@@ -305,10 +347,12 @@ class FilePlan:
                 continue
             array_body = body[open_index + len(open_token) : close_index]
             entries = METHOD_ENTRY_RE.findall(array_body)
+            cgetset = CGETSET_ENTRY_RE.findall(array_body)
             residue = METHOD_ENTRY_RE.sub("", array_body)
+            residue = CGETSET_ENTRY_RE.sub("", residue)
             residue = re.sub(r"//[^\n]*", "", residue)
             residue = re.sub(r"[\s,]", "", residue)
-            if residue or (declared is not None and len(entries) != declared):
+            if residue or (declared is not None and len(entries) + len(cgetset) != declared):
                 self.skipped.append(
                     f"{self.path.name}:{line_of(self.text, base + array_match.start())}: "
                     "method table is not a regular JS_CFUNC_DEF list -- left hand-written"
@@ -340,18 +384,30 @@ class FilePlan:
                        argc=int(entry[1]))
                 for entry in entries
             )
+            self.groups.setdefault(proto, []).extend(
+                Member("attribute", entry[0], entry[1], None, None, readonly=True)
+                for entry in cgetset
+            )
             touched.append(proto)
 
         for proto in dict.fromkeys(touched):
             self.insertions.setdefault(name, []).append(proto)
 
     def plan(self) -> None:
-        for match in FUNC_RE.finditer(self.text):
+        matches = [(m.group(1), m) for m in FUNC_RE.finditer(self.text)]
+        matches += [("Impl::Impl", m) for m in CTOR_RE.finditer(self.text)]
+        for name, match in matches:
             open_index = self.text.find("{", match.end())
+            if open_index < 0:
+                continue
+            # The constructor's "{" is on the next line; make sure we did not
+            # jump into a later function.
+            if self.text[match.end() : open_index].count(";") > 0:
+                continue
             close_index = match_brace(self.text, open_index)
             if close_index < 0:
                 continue
-            self.extract_function(match.group(1), open_index + 1, close_index)
+            self.extract_function(name, open_index + 1, close_index)
 
     def write(self) -> None:
         # Delete the old registration statements, then register through the
@@ -359,12 +415,6 @@ class FilePlan:
         # created (not at the end: Headers looks up its own "entries", Abort
         # creates two prototypes at different points).
         text = self.text
-        for start, end, func, proto in sorted(self.removals, reverse=True):
-            line_start = text.rfind("\n", 0, start) + 1
-            if text[line_start:start].strip() == "":
-                start = line_start
-            text = text[:start] + text[end:]
-
         if not self.insertions:
             self.path.write_text(text, encoding="utf-8")
             return
@@ -372,33 +422,32 @@ class FilePlan:
         stem = self.path.stem
         text = text.replace(f'#include "generated/{stem}_generated.inc"\n', "")
 
-        for func, protos in self.insertions.items():
-            marker = re.search(
-                r"^[A-Za-z_][\w:<>\*&\s]*?\b" + re.escape(func) + r"\s*\([^)]*\)\s*\{",
-                text,
-                re.MULTILINE,
+        first: dict[tuple[str, tuple[str, bool]], int] = {}
+        for start, end, func, proto in self.removals:
+            key = (func, proto)
+            if key not in first or start < first[key]:
+                first[key] = start
+        calls = {}
+        for (func, proto), at in first.items():
+            name = migrated_interface(stem, proto[0])
+            receiver = "*this" if func == "Impl::Impl" else "impl"
+            calls[(func, proto)] = (
+                f"DefineGenerated{name}"
+                f"(ctx, {receiver if not proto[1] else proto[0]});"
             )
-            if marker is None:
-                continue
-            close_index = match_brace(text, marker.end() - 1)
-            body = text[marker.end() : close_index]
-            # Insert each interface's call after the last statement that
-            # creates/assigns its prototype.
-            for proto, local in reversed(list(dict.fromkeys(protos))):
-                call = (
-                    f"DefineGenerated{migrated_interface(stem, proto)}"
-                    f"(ctx, {'impl' if not local else proto});"
-                )
-                if call in text:
-                    continue
-                if local:
-                    pattern = rf"^[^\n]*\b{re.escape(proto)}\s*=[^;]*;"
-                else:
-                    pattern = rf"^[^\n]*\bimpl\.{re.escape(proto)}\s*=[^;]*;"
-                matches = list(re.finditer(pattern, body, re.MULTILINE))
-                offset = matches[-1].end() if matches else len(body)
-                body = body[:offset] + "\n  " + call + body[offset:]
-            text = text[: marker.end()] + body + text[close_index:]
+        for start, end, func, proto in sorted(self.removals, reverse=True):
+            key = (func, proto)
+            insert_here = first.get(key) == start
+            line_start = text.rfind("\n", 0, start) + 1
+            indent = text[line_start:start]
+            if indent.strip() == "":
+                start = line_start
+            else:
+                indent = "  "
+            replacement = ""
+            if insert_here and key in calls:
+                replacement = f"{indent}{calls.pop(key)}\n"
+            text = text[:start] + replacement + text[end:]
 
         declarations = []
         for protos in self.insertions.values():

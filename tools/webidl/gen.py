@@ -140,6 +140,7 @@ _TOKEN_RE = re.compile(
       (?P<space>\s+)
     | (?P<comment>//[^\n]*|/\*.*?\*/)
     | (?P<ident>[A-Za-z_][A-Za-z0-9_-]*)
+    | (?P<number>[0-9]+)
     | (?P<punct>[{}()\[\];:,?=<>])
     | (?P<other>.)
     """,
@@ -211,7 +212,7 @@ class Parser:
                 raise self.error("expected an extended attribute name")
             value = None
             if self.accept("="):
-                if self.peek()[0] == "ident":
+                if self.peek()[0] in ("ident", "number"):
                     value = self.next()[1]
                 else:
                     raise self.error("expected an extended attribute value")
