@@ -121,6 +121,11 @@ class Interface:
             )
         return attr.value
 
+    @property
+    def local_proto(self) -> bool:
+        """True when [Proto] names a local JSValue, not an Impl field."""
+        return "LocalProto" in self.extended
+
 
 class IdlError(Exception):
     pass
@@ -438,9 +443,15 @@ def emit_source(interfaces: list[Interface], source: str, stem: str) -> str:
             out.append("};\n")
             out.append("} // namespace\n")
 
-        out.append(f"void DefineGenerated{iface.name}(JSContext* ctx, Impl& impl)")
+        if iface.local_proto:
+            out.append(
+                f"void DefineGenerated{iface.name}(JSContext* ctx, JSValue {iface.proto})"
+            )
+            proto = iface.proto
+        else:
+            out.append(f"void DefineGenerated{iface.name}(JSContext* ctx, Impl& impl)")
+            proto = f"impl.{iface.proto}"
         out.append("{")
-        proto = f"impl.{iface.proto}"
         if methods:
             out.append(f"  JS_SetPropertyFunctionList(")
             out.append(f"      ctx, {proto}, k{iface.name}Methods,")

@@ -11,6 +11,8 @@
 #include <vector>
 
 namespace neko::javascript {
+void DefineGeneratedHeadersBindingPrototype(JSContext* ctx, JSValue prototype);
+
 namespace {
 
 struct HeadersWrapper
@@ -235,15 +237,8 @@ void InstallHeadersGlobal(JSContext* ctx, JSValue global)
 {
   EnsureClassRegistered(JS_GetRuntime(ctx));
   JSValue prototype = JS_NewObject(ctx);
-  static const std::array<JSCFunctionListEntry, 6> kMethods = {{
-      JS_CFUNC_DEF("append", 2, Append),
-      JS_CFUNC_DEF("set", 2, Set),
-      JS_CFUNC_DEF("get", 1, Get),
-      JS_CFUNC_DEF("has", 1, Has),
-      JS_CFUNC_DEF("delete", 1, Delete),
-      JS_CFUNC_DEF("entries", 0, Entries),
-  }};
-  JS_SetPropertyFunctionList(ctx, prototype, kMethods.data(), static_cast<int>(kMethods.size()));
+  DefineGeneratedHeadersBindingPrototype(ctx, prototype);
+
   JSValue entries = JS_GetPropertyStr(ctx, prototype, "entries");
   JSValue symbol = JS_GetPropertyStr(ctx, global, "Symbol");
   JSValue iterator_key = JS_GetPropertyStr(ctx, symbol, "iterator");
@@ -277,5 +272,7 @@ JSValue MakeHeaders(JSContext* ctx, const std::vector<std::pair<std::string, std
   JS_FreeValue(ctx, prototype);
   return object;
 }
+
+#include "generated/headers_binding_generated.inc"
 
 } // namespace neko::javascript

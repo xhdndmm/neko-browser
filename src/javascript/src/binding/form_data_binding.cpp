@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace neko::javascript {
+void DefineGeneratedFormDataBindingProto(JSContext* ctx, JSValue proto);
 
 namespace {
 
@@ -170,15 +171,7 @@ void InstallFormDataGlobal(JSContext* ctx, JSValue global)
   }
 
   JSValue proto = JS_NewObject(ctx);
-  static const std::array<JSCFunctionListEntry, 6> methods = {{
-      JS_CFUNC_DEF("append", 2, FormDataAppend),
-      JS_CFUNC_DEF("set", 2, FormDataSet),
-      JS_CFUNC_DEF("delete", 1, FormDataDelete),
-      JS_CFUNC_DEF("get", 1, FormDataGet),
-      JS_CFUNC_DEF("has", 1, FormDataHas),
-      JS_CFUNC_DEF("entries", 0, FormDataEntries),
-  }};
-  JS_SetPropertyFunctionList(ctx, proto, methods.data(), static_cast<int>(methods.size()));
+  DefineGeneratedFormDataBindingProto(ctx, proto);
 
   JSValue constructor =
       JS_NewCFunction2(ctx, FormDataConstructor, "FormData", 0, JS_CFUNC_constructor, 0);
@@ -187,5 +180,7 @@ void InstallFormDataGlobal(JSContext* ctx, JSValue global)
   JS_SetPropertyStr(ctx, global, "FormData", constructor);
   JS_FreeValue(ctx, proto);
 }
+
+#include "generated/form_data_binding_generated.inc"
 
 } // namespace neko::javascript

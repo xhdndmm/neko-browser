@@ -20,6 +20,8 @@
 #include <vector>
 
 namespace neko::javascript {
+void DefineGeneratedAbortBindingAbortSignalProto(JSContext* ctx, Impl& impl);
+void DefineGeneratedAbortBindingAbortControllerProto(JSContext* ctx, Impl& impl);
 
 JSClassID g_abort_signal_class_id = 0;
 std::mutex g_abort_signal_class_mutex;
@@ -304,16 +306,7 @@ void InstallAbortGlobals(JSContext* ctx, JSValue global, Impl& impl)
   EnsureAbortSignalClassRegistered(JS_GetRuntime(ctx));
 
   impl.abort_signal_proto = JS_NewObject(ctx);
-  static const std::array<JSCFunctionListEntry, 3> kSignalMethods = {{
-      JS_CFUNC_DEF("addEventListener", 2, SignalAddEventListener),
-      JS_CFUNC_DEF("removeEventListener", 2, SignalRemoveEventListener),
-      JS_CFUNC_DEF("throwIfAborted", 0, SignalThrowIfAborted),
-  }};
-  JS_SetPropertyFunctionList(
-      ctx, impl.abort_signal_proto, kSignalMethods.data(), static_cast<int>(kSignalMethods.size()));
-  DefineGetter(
-      ctx, impl.abort_signal_proto, "aborted", MakeGetter(ctx, "aborted", SignalGetAborted));
-  DefineGetter(ctx, impl.abort_signal_proto, "reason", MakeGetter(ctx, "reason", SignalGetReason));
+  DefineGeneratedAbortBindingAbortSignalProto(ctx, impl);
 
   JSValue signal_ctor =
       JS_NewCFunction2(ctx, AbortSignalConstructor, "AbortSignal", 0, JS_CFUNC_constructor, 0);
@@ -322,15 +315,7 @@ void InstallAbortGlobals(JSContext* ctx, JSValue global, Impl& impl)
   JS_SetPropertyStr(ctx, global, "AbortSignal", signal_ctor); // steals
 
   impl.abort_controller_proto = JS_NewObject(ctx);
-  static const std::array<JSCFunctionListEntry, 1> kControllerMethods = {{
-      JS_CFUNC_DEF("abort", 0, ControllerAbort),
-  }};
-  JS_SetPropertyFunctionList(ctx,
-                             impl.abort_controller_proto,
-                             kControllerMethods.data(),
-                             static_cast<int>(kControllerMethods.size()));
-  DefineGetter(
-      ctx, impl.abort_controller_proto, "signal", MakeGetter(ctx, "signal", ControllerGetSignal));
+  DefineGeneratedAbortBindingAbortControllerProto(ctx, impl);
 
   JSValue controller_ctor = JS_NewCFunction2(
       ctx, AbortControllerConstructor, "AbortController", 0, JS_CFUNC_constructor, 0);
@@ -346,5 +331,7 @@ void ForgetAbortRuntime(JSRuntime* rt)
   std::lock_guard<std::mutex> lock(g_abort_signal_class_mutex);
   g_abort_signal_class_registered.erase(rt);
 }
+
+#include "generated/abort_binding_generated.inc"
 
 } // namespace neko::javascript

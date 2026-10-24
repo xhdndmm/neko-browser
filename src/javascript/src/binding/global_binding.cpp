@@ -19,6 +19,8 @@
 #include <string_view>
 
 namespace neko::javascript {
+void DefineGeneratedGlobalBindingRegistry(JSContext* ctx, JSValue registry);
+void DefineGeneratedGlobalBindingList(JSContext* ctx, JSValue list);
 
 namespace {
 
@@ -203,15 +205,10 @@ CryptoGetRandomValues(JSContext* ctx, JSValueConst /*this_val*/, int argc, JSVal
 void InstallCustomElementRegistry(JSContext* ctx, JSValue global)
 {
   JSValue registry = JS_NewObject(ctx);
+  DefineGeneratedGlobalBindingRegistry(ctx, registry);
   JS_SetPropertyStr(ctx, registry, kCustomElementDefinitions, JS_NewObject(ctx));
   JS_SetPropertyStr(ctx, registry, kCustomElementPending, JS_NewObject(ctx));
-  static const std::array<JSCFunctionListEntry, 4> kMethods = {{
-      JS_CFUNC_DEF("define", 2, CustomElementsDefine),
-      JS_CFUNC_DEF("get", 1, CustomElementsGet),
-      JS_CFUNC_DEF("whenDefined", 1, CustomElementsWhenDefined),
-      JS_CFUNC_DEF("upgrade", 1, CustomElementsUpgrade),
-  }};
-  JS_SetPropertyFunctionList(ctx, registry, kMethods.data(), static_cast<int>(kMethods.size()));
+
   JS_SetPropertyStr(ctx, global, "customElements", registry);
 }
 
@@ -1136,19 +1133,14 @@ JSValue WindowMatchMedia(JSContext* ctx, JSValueConst /*this_val*/, int argc, JS
   }
 
   JSValue list = JS_NewObject(ctx);
+  DefineGeneratedGlobalBindingList(ctx, list);
   JS_SetPropertyStr(ctx, list, "matches", JS_NewBool(ctx, matches));
   JS_SetPropertyStr(ctx, list, "media", JS_NewStringLen(ctx, query.data(), query.size()));
   JS_SetPropertyStr(ctx, list, "onchange", JS_NULL);
   // Hidden state used by the listener registration/removal helpers.
   JS_SetPropertyStr(ctx, list, "__mediaQuery__", JS_NewStringLen(ctx, query.data(), query.size()));
   JS_SetPropertyStr(ctx, list, "__matches__", JS_NewBool(ctx, matches));
-  static const std::array<JSCFunctionListEntry, 4> kListeners = {{
-      JS_CFUNC_DEF("addEventListener", 2, MatchMediaAddListener),
-      JS_CFUNC_DEF("removeEventListener", 2, MatchMediaRemoveListener),
-      JS_CFUNC_DEF("addListener", 1, MatchMediaAddListener),
-      JS_CFUNC_DEF("removeListener", 1, MatchMediaRemoveListener),
-  }};
-  JS_SetPropertyFunctionList(ctx, list, kListeners.data(), static_cast<int>(kListeners.size()));
+
   return list;
 }
 
@@ -1291,5 +1283,7 @@ JSValue WindowGetComputedStyle(JSContext* ctx, JSValueConst this_val, int argc, 
   JS_FreeValue(ctx, map);
   return style;
 }
+
+#include "generated/global_binding_generated.inc"
 
 } // namespace neko::javascript

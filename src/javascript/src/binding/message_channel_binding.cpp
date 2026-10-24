@@ -5,6 +5,8 @@
 #include <utility>
 
 namespace neko::javascript {
+void DefineGeneratedMessageChannelBindingMessagePortProto(JSContext* ctx, Impl& impl);
+
 namespace {
 
 struct MessagePortEndpoint
@@ -217,19 +219,7 @@ void InstallMessageChannelGlobals(JSContext* ctx, JSValue global, Impl& impl)
 {
   EnsureClassRegistered(JS_GetRuntime(ctx));
   impl.message_port_proto = JS_NewObjectProto(ctx, impl.event_target_proto);
-  static const std::array<JSCFunctionListEntry, 4> methods = {{
-      JS_CFUNC_DEF("postMessage", 1, PostMessage),
-      JS_CFUNC_DEF("start", 0, Start),
-      JS_CFUNC_DEF("close", 0, Close),
-      JS_CFUNC_DEF("addEventListener", 2, AddEventListener),
-  }};
-  JS_SetPropertyFunctionList(
-      ctx, impl.message_port_proto, methods.data(), static_cast<int>(methods.size()));
-  DefineAccessor(ctx,
-                 impl.message_port_proto,
-                 "onmessage",
-                 MakeGetter(ctx, "onmessage", GetOnMessage),
-                 MakeSetter(ctx, "onmessage", SetOnMessage));
+  DefineGeneratedMessageChannelBindingMessagePortProto(ctx, impl);
 
   JSValue port_constructor =
       JS_NewCFunction2(ctx, PortConstructor, "MessagePort", 0, JS_CFUNC_constructor, 0);
@@ -322,5 +312,7 @@ int RunPendingMessagePortTasks(Impl& impl)
   }
   return ran;
 }
+
+#include "generated/message_channel_binding_generated.inc"
 
 } // namespace neko::javascript

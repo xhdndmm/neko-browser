@@ -32,6 +32,7 @@
 #include <vector>
 
 namespace neko::javascript {
+void DefineGeneratedXhrBindingProto(JSContext* ctx, JSValue proto);
 
 namespace {
 
@@ -582,48 +583,12 @@ void InstallXhrGlobal(JSContext* ctx, Impl& impl)
   // `xhr instanceof XMLHttpRequest` works.
   impl.xhr_proto = JS_NewObject(ctx);
   JSValue proto = JS_DupValue(ctx, impl.xhr_proto);
+  DefineGeneratedXhrBindingProto(ctx, proto);
   JSValue ctor =
       JS_NewCFunction2(ctx, XhrConstructor, "XMLHttpRequest", 0, JS_CFUNC_constructor, 0);
   JS_SetPropertyStr(ctx, ctor, "prototype", JS_DupValue(ctx, proto));   // steals dup
   JS_SetPropertyStr(ctx, proto, "constructor", JS_DupValue(ctx, ctor)); // steals dup
   JS_SetPropertyStr(ctx, global, "XMLHttpRequest", ctor);               // steals
-  static const std::array<JSCFunctionListEntry, 6> kMethods = {{
-      JS_CFUNC_DEF("open", 3, XhrOpen),
-      JS_CFUNC_DEF("setRequestHeader", 2, XhrSetRequestHeader),
-      JS_CFUNC_DEF("send", 1, XhrSend),
-      JS_CFUNC_DEF("abort", 0, XhrAbort),
-      JS_CFUNC_DEF("getResponseHeader", 1, XhrGetResponseHeader),
-      JS_CFUNC_DEF("getAllResponseHeaders", 0, XhrGetAllResponseHeaders),
-  }};
-  JS_SetPropertyFunctionList(ctx, proto, kMethods.data(), static_cast<int>(kMethods.size()));
-  static const std::array<JSCFunctionListEntry, 2> kListenerMethods = {{
-      JS_CFUNC_DEF("addEventListener", 2, XhrAddEventListener),
-      JS_CFUNC_DEF("removeEventListener", 2, XhrRemoveEventListener),
-  }};
-  JS_SetPropertyFunctionList(
-      ctx, proto, kListenerMethods.data(), static_cast<int>(kListenerMethods.size()));
-
-  DefineGetter(ctx, proto, "readyState", MakeGetter(ctx, "readyState", XhrGetReadyState));
-  DefineGetter(ctx, proto, "status", MakeGetter(ctx, "status", XhrGetStatus));
-  DefineGetter(ctx, proto, "statusText", MakeGetter(ctx, "statusText", XhrGetStatusText));
-  DefineGetter(ctx, proto, "responseText", MakeGetter(ctx, "responseText", XhrGetResponseText));
-  DefineGetter(ctx, proto, "response", MakeGetter(ctx, "response", XhrGetResponseText));
-  DefineGetter(ctx, proto, "responseURL", MakeGetter(ctx, "responseURL", XhrGetResponseUrl));
-  DefineAccessor(ctx,
-                 proto,
-                 "responseType",
-                 MakeGetter(ctx, "responseType", XhrGetResponseType),
-                 MakeSetter(ctx, "responseType", XhrSetResponseType));
-  DefineAccessor(ctx,
-                 proto,
-                 "withCredentials",
-                 MakeGetter(ctx, "withCredentials", XhrGetWithCredentials),
-                 MakeSetter(ctx, "withCredentials", XhrSetWithCredentials));
-  DefineAccessor(ctx,
-                 proto,
-                 "timeout",
-                 MakeGetter(ctx, "timeout", XhrGetTimeout),
-                 MakeSetter(ctx, "timeout", XhrSetTimeout));
 
   struct HandlerSlot
   {
@@ -689,5 +654,7 @@ int PumpXhrCompletions(Impl& impl)
   }
   return delivered;
 }
+
+#include "generated/xhr_binding_generated.inc"
 
 } // namespace neko::javascript

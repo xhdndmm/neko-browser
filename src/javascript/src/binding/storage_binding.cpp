@@ -14,6 +14,7 @@
 #include <string>
 
 namespace neko::javascript {
+void DefineGeneratedStorageBindingPrototype(JSContext* ctx, JSValue prototype);
 
 // ---------------------------------------------------------------------------
 // Page Web APIs: window.localStorage + window.fetch (Phase 8 M3 subset).
@@ -446,11 +447,8 @@ JSValue JsFetch(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* a
 void InstallResponseGlobal(JSContext* ctx, JSValue global)
 {
   JSValue prototype = JS_NewObject(ctx);
-  static const std::array<JSCFunctionListEntry, 2> kMethods = {{
-      JS_CFUNC_DEF("text", 0, ResponseText),
-      JS_CFUNC_DEF("json", 0, ResponseJson),
-  }};
-  JS_SetPropertyFunctionList(ctx, prototype, kMethods.data(), static_cast<int>(kMethods.size()));
+  DefineGeneratedStorageBindingPrototype(ctx, prototype);
+
   JSValue constructor =
       JS_NewCFunction2(ctx, ResponseConstructor, "Response", 0, JS_CFUNC_constructor, 0);
   JS_SetPropertyStr(ctx, constructor, "prototype", JS_DupValue(ctx, prototype));
@@ -1503,5 +1501,7 @@ WindowCancelAnimationFrame(JSContext* ctx, JSValueConst this_val, int argc, JSVa
   erase_by_id(impl->raf_pending);
   return JS_UNDEFINED;
 }
+
+#include "generated/storage_binding_generated.inc"
 
 } // namespace neko::javascript

@@ -49,6 +49,8 @@
 #include <vector>
 
 namespace neko::javascript {
+void DefineGeneratedIntersectionObserverBindingIntersectionObserverProto(JSContext* ctx,
+                                                                         Impl& impl);
 
 JSClassID g_intersection_observer_class_id = 0;
 std::mutex g_intersection_observer_class_mutex;
@@ -604,16 +606,7 @@ void InstallIntersectionObserverGlobal(JSContext* ctx, JSValue global, Impl& imp
   EnsureIntersectionObserverClassRegistered(JS_GetRuntime(ctx));
 
   impl.intersection_observer_proto = JS_NewObject(ctx);
-  static const std::array<JSCFunctionListEntry, 4> kIoMethods = {{
-      JS_CFUNC_DEF("observe", 1, IoObserverObserve),
-      JS_CFUNC_DEF("unobserve", 1, IoObserverUnobserve),
-      JS_CFUNC_DEF("disconnect", 0, IoObserverDisconnect),
-      JS_CFUNC_DEF("takeRecords", 0, IoObserverTakeRecords),
-  }};
-  JS_SetPropertyFunctionList(ctx,
-                             impl.intersection_observer_proto,
-                             kIoMethods.data(),
-                             static_cast<int>(kIoMethods.size()));
+  DefineGeneratedIntersectionObserverBindingIntersectionObserverProto(ctx, impl);
 
   JSValue ctor = JS_NewCFunction2(
       ctx, IntersectionObserverConstructor, "IntersectionObserver", 1, JS_CFUNC_constructor, 0);
@@ -627,5 +620,7 @@ void ForgetIntersectionObserverRuntime(JSRuntime* rt)
   std::lock_guard<std::mutex> lock(g_intersection_observer_class_mutex);
   g_intersection_observer_class_registered.erase(rt);
 }
+
+#include "generated/intersection_observer_binding_generated.inc"
 
 } // namespace neko::javascript

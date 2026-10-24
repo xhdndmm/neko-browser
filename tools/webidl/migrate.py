@@ -37,7 +37,8 @@ BINDING_DIR = ROOT / "src" / "javascript" / "src" / "binding"
 IDL_DIR = ROOT / "src" / "javascript" / "webidl"
 
 FUNC_RE = re.compile(
-    r"void\s+(Define\w+Prototype)\s*\(\s*JSContext\*\s*ctx\s*,\s*Impl&\s*impl\s*\)"
+    r"^[A-Za-z_][\w:<>\*&\s]*?\b(\w+)\s*\(\s*JSContext\*\s*ctx\b[^)]*\)\s*$",
+    re.MULTILINE,
 )
 CALL_NAMES = ("DefineAccessor", "DefineGetter")
 GETTER_RE = re.compile(r'^MakeGetter\(\s*ctx\s*,\s*"([^"]*)"\s*,\s*(\w+)\s*\)$')
@@ -49,11 +50,13 @@ SETTER_MAGIC_RE = re.compile(
     r'^MakeSetterMagic\(\s*ctx\s*,\s*"([^"]*)"\s*,\s*(\w+)\s*,\s*(-?\d+)\s*\)$'
 )
 METHOD_ARRAY_RE = re.compile(
-    r"static\s+const\s+std::array<JSCFunctionListEntry,\s*(\d+)>\s+kMethods\s*=\s*\{\{"
+    r"static\s+const\s+(?:std::array<JSCFunctionListEntry,\s*(\d+)>\s+(\w+)\s*=\s*\{\{"
+    r"|JSCFunctionListEntry\s+(\w+)\s*\[\]\s*=\s*\{)"
 )
 METHOD_ENTRY_RE = re.compile(r'JS_CFUNC_DEF\(\s*"([^"]+)"\s*,\s*(\d+)\s*,\s*(\w+)\s*\)')
-SET_PROPERTY_LIST_RE = re.compile(
-    r"JS_SetPropertyFunctionList\(\s*ctx\s*,\s*(impl\.\w+)\s*,\s*kMethods\.data\(\)\s*,"
+SET_PROPERTY_LIST_RE_TEMPLATE = (
+    r"JS_SetPropertyFunctionList\(\s*ctx\s*,\s*([^,]+?)\s*,\s*"
+    r"{name}(?:\.data\(\))?\s*,"
 )
 
 
@@ -178,13 +181,16 @@ class FilePlan:
         self.insertions: dict[str, list[str]] = {}  # function -> [proto]
         self.skipped: list[str] = []
 
-    def proto_of(self, target: str) -> str | None:
-        if not target.startswith("impl."):
-            return None
-        field = target[5:]
-        if not field.endswith("_proto"):
-            return None
-        return field
+    def proto_of(self, target: str) -> tuple[str, bool] | None:
+        """(name, is_local) for a registration target, or None when unsupported."""
+        if target.startswith("impl."):
+            field = target[5:]
+            if not field.endswith("_proto"):
+                return None
+            return field, False
+        if re.fullmatch(r"[A-Za-z_]\w*", target) and target not in ("ctx", "argv", "global"):
+            return target, True
+        return None
 
     def extract_function(self, name: str, body_start: int, body_end: int) -> None:
         body = self.text[body_start:body_end]
@@ -222,7 +228,8 @@ class FilePlan:
             if proto is None:
                 self.skipped.append(
                     f"{self.path.name}:{line_of(self.text, absolute)}: {call} target "
-                    f"{args[1]!r} is not impl.<x>_proto -- left hand-written"
+                    f"{args[1]!r} is not impl.<x>_proto or a local JSValue -- left "
+                    "hand-written"
                 )
                 continue
             name_match = re.fullmatch(r'"([^"]+)"', args[2])
@@ -274,7 +281,7 @@ class FilePlan:
                 )
                 continue
 
-            self.removals.append((absolute, base + stmt_end))
+            self.removals.append((absolute, base + stmt_end, name, proto))
             self.groups.setdefault(proto, []).append(
                 Member("attribute", member_name, getter_match.group(2), setter, magic,
                        readonly=setter is None)
@@ -283,24 +290,34 @@ class FilePlan:
 
         # Fully regular method tables.
         for array_match in METHOD_ARRAY_RE.finditer(body):
-            declared = int(array_match.group(1))
-            open_index = body.find("{{", array_match.start())
-            close_index = body.find("}};", open_index)
+            cxx_array = array_match.group(1) is not None
+            if cxx_array:
+                declared = int(array_match.group(1))
+                array_name = array_match.group(2)
+                open_token, close_token = "{{", "}};"
+            else:
+                declared = None
+                array_name = array_match.group(3)
+                open_token, close_token = "{", "};"
+            open_index = body.find(open_token, array_match.start())
+            close_index = body.find(close_token, open_index)
             if close_index < 0:
                 continue
-            array_body = body[open_index + 2 : close_index]
+            array_body = body[open_index + len(open_token) : close_index]
             entries = METHOD_ENTRY_RE.findall(array_body)
             residue = METHOD_ENTRY_RE.sub("", array_body)
             residue = re.sub(r"//[^\n]*", "", residue)
             residue = re.sub(r"[\s,]", "", residue)
-            if residue or len(entries) != declared:
+            if residue or (declared is not None and len(entries) != declared):
                 self.skipped.append(
                     f"{self.path.name}:{line_of(self.text, base + array_match.start())}: "
                     "method table is not a regular JS_CFUNC_DEF list -- left hand-written"
                 )
                 continue
             after = body.find(";", close_index) + 1
-            set_match = SET_PROPERTY_LIST_RE.search(body, after)
+            set_match = re.compile(
+                SET_PROPERTY_LIST_RE_TEMPLATE.format(name=re.escape(array_name))
+            ).search(body, after)
             if set_match is None:
                 self.skipped.append(
                     f"{self.path.name}:{line_of(self.text, base + array_match.start())}: "
@@ -317,7 +334,7 @@ class FilePlan:
                 )
                 continue
             stmt_end = body.find(";", set_match.end()) + 1
-            self.removals.append((base + array_match.start(), base + stmt_end))
+            self.removals.append((base + array_match.start(), base + stmt_end, name, proto))
             self.groups.setdefault(proto, []).extend(
                 Member("method", entry[0], entry[2], None, None, readonly=False,
                        argc=int(entry[1]))
@@ -337,34 +354,73 @@ class FilePlan:
             self.extract_function(match.group(1), open_index + 1, close_index)
 
     def write(self) -> None:
-        # Deletions first (reverse order), then insert the generated calls.
+        # Delete the old registration statements, then register through the
+        # generated functions immediately after the target prototype is
+        # created (not at the end: Headers looks up its own "entries", Abort
+        # creates two prototypes at different points).
         text = self.text
-        for start, end in sorted(self.removals, reverse=True):
+        for start, end, func, proto in sorted(self.removals, reverse=True):
             line_start = text.rfind("\n", 0, start) + 1
             if text[line_start:start].strip() == "":
                 start = line_start
             text = text[:start] + text[end:]
 
+        if not self.insertions:
+            self.path.write_text(text, encoding="utf-8")
+            return
+
+        stem = self.path.stem
+        text = text.replace(f'#include "generated/{stem}_generated.inc"\n', "")
+
         for func, protos in self.insertions.items():
-            marker = re.search(r"void\s+" + re.escape(func) + r"\s*\([^)]*\)\s*\{", text)
+            marker = re.search(
+                r"^[A-Za-z_][\w:<>\*&\s]*?\b" + re.escape(func) + r"\s*\([^)]*\)\s*\{",
+                text,
+                re.MULTILINE,
+            )
             if marker is None:
                 continue
             close_index = match_brace(text, marker.end() - 1)
-            calls = "".join(
-                f"  DefineGenerated{migrated_interface(self.path.stem, proto)}(ctx, impl);\n"
-                for proto in protos
-            )
-            text = text[:close_index] + calls + text[close_index:]
+            body = text[marker.end() : close_index]
+            # Insert each interface's call after the last statement that
+            # creates/assigns its prototype.
+            for proto, local in reversed(list(dict.fromkeys(protos))):
+                call = (
+                    f"DefineGenerated{migrated_interface(stem, proto)}"
+                    f"(ctx, {'impl' if not local else proto});"
+                )
+                if call in text:
+                    continue
+                if local:
+                    pattern = rf"^[^\n]*\b{re.escape(proto)}\s*=[^;]*;"
+                else:
+                    pattern = rf"^[^\n]*\bimpl\.{re.escape(proto)}\s*=[^;]*;"
+                matches = list(re.finditer(pattern, body, re.MULTILINE))
+                offset = matches[-1].end() if matches else len(body)
+                body = body[:offset] + "\n  " + call + body[offset:]
+            text = text[: marker.end()] + body + text[close_index:]
 
-        # Include the generated registration immediately before the first
-        # prototype function: the .inc references the file-local member
-        # implementations, so it must come after their definitions.
-        stem = self.path.stem
-        header = f'#include "generated/{stem}_generated.inc"'
-        if self.insertions and header not in text:
-            first = re.search(r"^void\s+Define\w+Prototype\s*\(", text, re.MULTILINE)
-            if first:
-                text = text[:first.start()] + header + "\n\n" + text[first.start():]
+        declarations = []
+        for protos in self.insertions.values():
+            for proto, local in protos:
+                name = migrated_interface(stem, proto)
+                if local:
+                    declarations.append(
+                        f"void DefineGenerated{name}(JSContext* ctx, JSValue {proto});"
+                    )
+                else:
+                    declarations.append(
+                        f"void DefineGenerated{name}(JSContext* ctx, Impl& impl);"
+                    )
+        ns = text.find("namespace neko::javascript {")
+        if ns != -1:
+            insert_at = text.find("\n", ns) + 1
+            text = text[:insert_at] + "\n".join(declarations) + "\n\n" + text[insert_at:]
+
+        close = text.rfind("} // namespace neko::javascript")
+        if close != -1:
+            include = f'#include "generated/{stem}_generated.inc"'
+            text = text[:close] + include + "\n\n" + text[close:]
         self.path.write_text(text, encoding="utf-8")
 
     def write_idl(self) -> None:
@@ -377,8 +433,8 @@ class FilePlan:
             "// Function bodies stay hand-written; this file owns the registration.",
             "",
         ]
-        for proto, members in self.groups.items():
-            blocks.append(f"[Proto={proto}]")
+        for (proto, local), members in self.groups.items():
+            blocks.append(f"[Proto={proto}, LocalProto]" if local else f"[Proto={proto}]")
             blocks.append(f"interface {migrated_interface(stem, proto)} {{")
             for member in members:
                 if member.kind == "method":

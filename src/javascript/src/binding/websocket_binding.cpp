@@ -51,6 +51,8 @@
 #include <vector>
 
 namespace neko::javascript {
+void DefineGeneratedWebsocketBindingProto(JSContext* ctx, JSValue proto);
+
 namespace {
 
 constexpr int kConnecting = 0;
@@ -747,12 +749,11 @@ JSValue WebSocketConstructor(JSContext* ctx, JSValueConst new_target, int argc, 
 void DefineWebSocketPrototype(JSContext* ctx, Impl& impl)
 {
   JSValue proto = JS_NewObject(ctx);
+  DefineGeneratedWebsocketBindingProto(ctx, proto);
   // Accessors (not data properties): `ws.readyState` must evaluate the
   // getter, and the codebase's MakeGetter/DefineGetter pair wires that
   // through QuickJS's JS_DefinePropertyGetSet.
-  DefineGetter(ctx, proto, "url", MakeGetter(ctx, "url", WebSocketGetUrl));
-  DefineGetter(ctx, proto, "readyState", MakeGetter(ctx, "readyState", WebSocketGetReadyState));
-  DefineGetter(ctx, proto, "protocol", MakeGetter(ctx, "protocol", WebSocketGetProtocol));
+
   JS_SetPropertyStr(ctx, proto, "send", JS_NewCFunction(ctx, WebSocketSend, "send", 1));
   JS_SetPropertyStr(ctx, proto, "close", JS_NewCFunction(ctx, WebSocketClose, "close", 2));
   JS_SetPropertyStr(ctx,
@@ -885,5 +886,7 @@ void ShutdownWebSockets(Impl& impl)
     }
   }
 }
+
+#include "generated/websocket_binding_generated.inc"
 
 } // namespace neko::javascript

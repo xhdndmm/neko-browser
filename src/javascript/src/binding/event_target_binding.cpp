@@ -9,6 +9,8 @@
 #include <vector>
 
 namespace neko::javascript {
+void DefineGeneratedEventTargetBindingEventTargetProto(JSContext* ctx, Impl& impl);
+
 namespace {
 
 struct EventTargetWrapper
@@ -210,12 +212,8 @@ void InstallEventTargetGlobal(JSContext* ctx, JSValue global, Impl& impl)
 {
   EnsureEventTargetClassRegistered(JS_GetRuntime(ctx));
   impl.event_target_proto = JS_NewObject(ctx);
-  static const JSCFunctionListEntry kMethods[] = {
-      JS_CFUNC_DEF("addEventListener", 2, EventTargetAddEventListener),
-      JS_CFUNC_DEF("removeEventListener", 2, EventTargetRemoveEventListener),
-      JS_CFUNC_DEF("dispatchEvent", 1, EventTargetDispatchEvent),
-  };
-  JS_SetPropertyFunctionList(ctx, impl.event_target_proto, kMethods, 3);
+  DefineGeneratedEventTargetBindingEventTargetProto(ctx, impl);
+
   JSValue constructor =
       JS_NewCFunction2(ctx, EventTargetConstructor, "EventTarget", 0, JS_CFUNC_constructor, 0);
   JS_SetPropertyStr(ctx, constructor, "prototype", JS_DupValue(ctx, impl.event_target_proto));
@@ -239,5 +237,7 @@ JSValue CreateEventTargetInstance(JSContext* ctx, JSValueConst prototype)
   JS_SetOpaque(object, new EventTargetWrapper());
   return object;
 }
+
+#include "generated/event_target_binding_generated.inc"
 
 } // namespace neko::javascript

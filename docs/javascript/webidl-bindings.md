@@ -52,17 +52,27 @@ python3 tools/webidl/migrate.py       # 从手写注册迁移到 .webidl（一�
 | range_binding | 29 |
 | event_binding | 28 |
 | selection_binding | 21 |
+| xhr_binding | 17 |
+| global_binding | 8 |
+| abort_binding | 7 |
+| form_data_binding | 6 |
+| headers_binding | 6 |
+| message_channel_binding | 5 |
+| intersection_observer_binding | 4 |
+| event_target_binding | 3 |
 | style_binding | 3 |
+| storage_binding | 2 |
+| websocket_binding | 3 |
 | canvas_binding | 1 |
-| **合计** | **196** |
+| **合计** | **257** |
 
 仍未迁移（保持手写，`migrate.py` 会逐条打印原因）：
 
-- 在 `Install<X>Global`/辅助函数里用**局部 `proto`** 注册的类（AbortSignal、
-  Headers、FormData、URLSearchParams、XHR、WebSocket、IDB request 等）；
-- 条件注册（例如只给 `<details>` 的 `open`、只给 `SVGElement` 的某些属性）；
-- 直接 `JS_SetPropertyStr` 挂的属性/常量/对象；
-- `impl.cpp` 里 window/global 对象上的注册。
+- `impl.cpp` 的构造器里对 `window`/`global` 的注册（95 条）：注册代码在
+  `Impl::Impl(...)` 构造函数内，当前的函数匹配只接受自由函数；
+- `url_search_params_binding` 的方法表（8 条）：表里混有非 `JS_CFUNC_DEF` 条目；
+- 条件注册（element/event/global/style/url/xhr 各 1–2 条）；
+- 直接 `JS_SetPropertyStr` 挂的属性/常量/对象（`ui_binding` 等）。
 
 ## 支持的子集
 
