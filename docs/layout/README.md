@@ -115,3 +115,22 @@
 ```text
 DOM → Style → Layout Tree → Layout → Paint Tree
 ```
+
+### 源文件组织
+
+`layout.cpp` 只保留入口编排（`BuildLayoutTree` 创建 `Builder` 并调用
+`BuildBlock`）。其余代码按子系统分文件：
+
+| 文件 | 内容 |
+| --- | --- |
+| `layout_helpers.inc` | 共享的自由函数与常量（文本测量、空白折叠、尺寸解析、替换元素、列表/披露组件辅助） |
+| `layout_builder_fields.inc` | `Builder` 的上下文字段 |
+| `layout_builder_block.inc` | 盒模型边、block 布局、float、绝对定位、行内块、行内收集 |
+| `layout_builder_flex.inc` | Flexbox（含 `FlexItemData`/`FlexLineData`） |
+| `layout_builder_grid.inc` | Grid |
+| `layout_builder_table.inc` | 表格与单元格 |
+| `layout_builder_form.inc` | 表单控件几何与字符宽度 |
+
+这些 `.inc` 目前仍在**同一个翻译单元**内 include：`Builder` 是函数内定义的
+局部类，成员实现引用同一 TU 的匿名命名空间 helper。下一步是把 `Builder` 提升
+到内部头文件、helper 外部化，让每个 `.inc` 变成独立 TU（可并行编译）。
