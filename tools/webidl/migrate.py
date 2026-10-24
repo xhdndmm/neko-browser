@@ -301,7 +301,9 @@ class FilePlan:
                 continue
 
             setter = None
-            if len(args) >= 5:
+            if len(args) >= 5 and args[4].strip() == "JS_UNDEFINED":
+                setter = None
+            elif len(args) >= 5:
                 setter_match = SETTER_RE.match(args[4]) or SETTER_MAGIC_RE.match(args[4])
                 if setter_match is None:
                     self.skipped.append(
@@ -505,7 +507,18 @@ class FilePlan:
                         )
             blocks.append("};\n")
         IDL_DIR.mkdir(parents=True, exist_ok=True)
-        (IDL_DIR / f"{stem}.webidl").write_text("\n".join(blocks), encoding="utf-8")
+        target = IDL_DIR / f"{stem}.webidl"
+        text = "\n".join(blocks)
+        if target.exists():
+            old_members = target.read_text(encoding="utf-8").count("\n  [")
+            new_members = text.count("\n  [")
+            if old_members > new_members:
+                raise SystemExit(
+                    f"webidl: refusing to overwrite {target} ({old_members} members) "
+                    f"with {new_members}; the source is already migrated. "
+                    "Re-run from a clean tree."
+                )
+        target.write_text(text, encoding="utf-8")
 
 
 def migrated_interface(stem: str, proto: str) -> str:
