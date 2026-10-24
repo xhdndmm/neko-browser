@@ -1,5 +1,6 @@
 #include "inline_svg.h"
 
+#include "neko/base/string_util.h"
 #include "neko/dom/element.h"
 #include "neko/dom/node.h"
 #include "neko/style/style_engine.h"
@@ -18,21 +19,12 @@ namespace {
 // substitutes it per element.
 constexpr std::string_view kCurrentColor = "currentcolor";
 
-std::string ToLowerCopy(std::string_view text)
-{
-  std::string lower(text);
-  for (char& c : lower) {
-    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  }
-  return lower;
-}
-
 std::string SubstituteCurrentColor(std::string_view value, std::string_view color_hex)
 {
   if (value.empty()) {
     return std::string(value);
   }
-  const std::string lower = ToLowerCopy(value);
+  const std::string lower = base::ToLower(value);
   if (lower.find(kCurrentColor) == std::string::npos) {
     return std::string(value);
   }

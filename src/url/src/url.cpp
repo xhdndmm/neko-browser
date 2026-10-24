@@ -1,5 +1,7 @@
 #include "neko/url/url.h"
 
+#include "neko/base/string_util.h"
+
 #include <algorithm>
 #include <string>
 #include <string_view>
@@ -17,21 +19,6 @@ bool IsAsciiAlpha(char c)
 bool IsAsciiDigit(char c)
 {
   return c >= '0' && c <= '9';
-}
-
-char ToLowerAscii(char c)
-{
-  return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c;
-}
-
-std::string ToLowerAscii(std::string_view s)
-{
-  std::string out;
-  out.reserve(s.size());
-  for (const char c : s) {
-    out.push_back(ToLowerAscii(c));
-  }
-  return out;
 }
 
 int HexValue(char c)
@@ -219,9 +206,9 @@ bool ParseAuthority(std::string_view authority, Url& url)
 
   const size_t colon = hostport.rfind(':');
   if (colon == std::string_view::npos) {
-    url.host_ = ToLowerAscii(hostport);
+    url.host_ = base::ToLower(hostport);
   } else {
-    url.host_ = ToLowerAscii(hostport.substr(0, colon));
+    url.host_ = base::ToLower(hostport.substr(0, colon));
     const std::string_view port = hostport.substr(colon + 1);
     if (!port.empty() && !ParsePort(port, url.port_)) {
       return false;
@@ -285,7 +272,7 @@ base::Result<Url> ParseAbsoluteInternal(std::string_view input)
   }
 
   Url url;
-  url.scheme_ = ToLowerAscii(scheme);
+  url.scheme_ = base::ToLower(scheme);
   std::string_view rest = input.substr(colon + 1);
 
   if (rest.size() >= 2 && rest[0] == '/' && rest[1] == '/') {

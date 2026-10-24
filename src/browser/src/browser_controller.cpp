@@ -801,22 +801,6 @@ std::string DefaultRendererExecutable()
   return {};
 }
 
-// Lowercases an ASCII string.
-std::string ToLower(std::string_view s)
-{
-  std::string out;
-  out.reserve(s.size());
-  for (char c : s) {
-    out.push_back(static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c));
-  }
-  return out;
-}
-
-bool StartsWith(std::string_view s, std::string_view prefix)
-{
-  return s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix;
-}
-
 // ---------------------------------------------------------------------------
 // Password-manager form inspection helpers.  The caller holds the page's DOM
 // lock (or owns the document outright, as in LoadBytes before publication).
@@ -855,7 +839,7 @@ std::vector<dom::Element*> CollectInputs(dom::Node& root)
 // Lowercased input type; a missing attribute means "text".
 std::string InputType(const dom::Element& input)
 {
-  return ToLower(input.GetAttribute("type").value_or("text"));
+  return base::ToLower(input.GetAttribute("type").value_or("text"));
 }
 
 // Text-entry controls that can hold a username.
@@ -1408,7 +1392,7 @@ void BrowserController::NavigateToUrl(Tab& tab,
 #endif
   // Local paths (and file:// URLs) are handled directly without the URL
   // parser (which does not support opaque file: URLs yet).
-  if (StartsWith(url_string, "file://")) {
+  if (base::AsciiStartsWith(url_string, "file://")) {
     // "file://<host>/<path>": only the empty-host form ("file:///path", the
     // form links and bookmarks produce) is supported, and the path is absolute
     // — stripping the leading slash here used to turn it into a relative path
@@ -2224,7 +2208,8 @@ bool BrowserController::PrepareFormSubmission(const std::string& document_url,
   // Method: enumerated attribute.  get/post are implemented; dialog is
   // explicitly NOT IMPLEMENTED (there is no dialog element/close algorithm),
   // so it falls back to GET rather than silently posting.
-  const std::string method_value = ToLower(std::string(Trim(attr_or_form("formmethod", "method"))));
+  const std::string method_value =
+      base::ToLower(std::string(Trim(attr_or_form("formmethod", "method"))));
   const bool post = method_value == "post";
 
   // Enctype: submitter's formenctype, else the form's enctype (invalid/missing
@@ -2290,7 +2275,7 @@ bool BrowserController::ApplyFormSubmission(Tab& tab, PreparedFormSubmission sub
   // cookies stay browser-side).  _self, _parent and _top all map to the
   // current tab, and a named target falls back to it as well: the engine has no
   // frame tree / named browsing contexts yet (documented approximation).
-  const std::string target_keyword = ToLower(submission.target);
+  const std::string target_keyword = base::ToLower(submission.target);
   if (target_keyword == "_blank") {
     const int new_tab = NewTab();
     static_cast<void>(NavigateWithRequestBody(new_tab,
@@ -3508,7 +3493,7 @@ void BrowserController::LoadBytes(Tab& tab,
                                   std::string_view content_type,
                                   const std::string& final_url)
 {
-  const std::string ct = ToLower(content_type);
+  const std::string ct = base::ToLower(content_type);
 
   // The security origin of the loaded content (Phase 10 M1): the tuple of the
   // final URL's scheme/host/port, "null" for non-URL content.  This is the

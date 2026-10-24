@@ -57,7 +57,4 @@ bool IsAsciiWhitespace(char c);
 // True when |c| is an ASCII letter or digit.
 bool IsAsciiAlnum(char c);
 
-// Lowercases an ASCII string.
-std::string ToLowerAscii(std::string_view s);
-
 } // namespace neko::html

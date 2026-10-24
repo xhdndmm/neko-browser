@@ -65,14 +65,4 @@ bool IsAsciiAlnum(char c)
   return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
 }
 
-std::string ToLowerAscii(std::string_view s)
-{
-  std::string out;
-  out.reserve(s.size());
-  for (const char c : s) {
-    out.push_back((c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c);
-  }
-  return out;
-}
-
 } // namespace neko::html

@@ -1,6 +1,7 @@
 #include "neko/storage/cookie_store.h"
 
 #include "neko/base/logging.h"
+#include "neko/base/string_util.h"
 #include "neko/security/public_suffix.h"
 #include "neko/storage/field_codec.h"
 #include "neko/storage/file_util.h"
@@ -258,16 +259,6 @@ std::string_view Trim(std::string_view s)
   return s;
 }
 
-std::string ToLowerAscii(std::string_view s)
-{
-  std::string out;
-  out.reserve(s.size());
-  for (char c : s) {
-    out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-  }
-  return out;
-}
-
 // Cookie name separators (RFC 6265 section 4.1.1).
 bool NameHasSeparator(std::string_view name)
 {
@@ -323,10 +314,10 @@ void SplitAttribute(std::string_view attr, std::string& name, std::string& value
 {
   const size_t eq = attr.find('=');
   if (eq == std::string_view::npos) {
-    name = ToLowerAscii(Trim(attr));
+    name = base::ToLower(Trim(attr));
     value.clear();
   } else {
-    name = ToLowerAscii(Trim(attr.substr(0, eq)));
+    name = base::ToLower(Trim(attr.substr(0, eq)));
     value = std::string(Trim(attr.substr(eq + 1)));
   }
 }
@@ -521,7 +512,7 @@ bool CookieStore::SetCookieFromHeader(const url::Url& origin, std::string_view h
           d.erase(d.begin());
         while (!d.empty() && d.back() == '.')
           d.pop_back();
-        domain = ToLowerAscii(d);
+        domain = base::ToLower(d);
         has_domain = !domain.empty();
       }
     } else if (attr_name == "path") {
@@ -534,7 +525,7 @@ bool CookieStore::SetCookieFromHeader(const url::Url& origin, std::string_view h
     } else if (attr_name == "httponly") {
       http_only = true;
     } else if (attr_name == "samesite") {
-      const std::string v = ToLowerAscii(attr_value);
+      const std::string v = base::ToLower(attr_value);
       if (v == "none" || v == "lax" || v == "strict") {
         same_site = v;
       }

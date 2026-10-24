@@ -1,5 +1,6 @@
 #include "neko/css/selector.h"
 
+#include "neko/base/string_util.h"
 #include "neko/base/utf8.h"
 #include "neko/dom/query.h"
 
@@ -25,16 +26,6 @@ bool IsNameChar(char c)
 bool IsWhitespace(char c)
 {
   return c == ' ' || c == '\t' || c == '\n' || c == '\r';
-}
-
-std::string ToLower(std::string_view s)
-{
-  std::string out;
-  out.reserve(s.size());
-  for (const char c : s) {
-    out.push_back((c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c);
-  }
-  return out;
 }
 
 // Splits a selector list on top-level commas.
@@ -172,7 +163,7 @@ bool ParseCompound(std::string_view text, CompoundSelector& out)
         return false;
       }
       AttributeSelector attr;
-      attr.name = ToLower(inner.substr(0, k));
+      attr.name = base::ToLower(inner.substr(0, k));
       std::string_view rest = inner.substr(k);
       while (!rest.empty() && (rest.front() == ' ' || rest.front() == '\t')) {
         rest.remove_prefix(1);
@@ -240,7 +231,7 @@ bool ParseCompound(std::string_view text, CompoundSelector& out)
       if (out.tag.has_value()) {
         return false;
       }
-      out.tag = ToLower(name);
+      out.tag = base::ToLower(name);
       i = j;
     } else {
       return false;

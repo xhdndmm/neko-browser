@@ -9,6 +9,7 @@
 #include "neko/network/dns.h"
 
 #include "neko/base/logging.h"
+#include "neko/base/string_util.h"
 #include "neko/platform/socket_platform.h"
 
 #include <algorithm>
@@ -331,15 +332,6 @@ bool LooksNumeric(std::string_view host)
   return platform::ParseIpv4(host, bytes);
 }
 
-std::string LowerAscii(std::string_view text)
-{
-  std::string out(text);
-  for (char& c : out) {
-    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  }
-  return out;
-}
-
 } // namespace
 
 DnsResolver::DnsResolver() = default;
@@ -362,7 +354,7 @@ std::vector<std::string> DnsResolver::LookupCached(std::string_view host) const
 {
   const auto now = clock_ ? clock_() : std::chrono::steady_clock::now();
   std::lock_guard<std::mutex> lock(mutex_);
-  const auto it = cache_.find(LowerAscii(host));
+  const auto it = cache_.find(base::ToLower(host));
   if (it == cache_.end() || it->second.expires <= now) {
     return {};
   }
@@ -417,7 +409,7 @@ std::vector<std::string> DnsResolver::HostsFileLookup(std::string_view host) con
   if (!input) {
     return {};
   }
-  const std::string wanted = LowerAscii(host);
+  const std::string wanted = base::ToLower(host);
   std::string line;
   while (std::getline(input, line)) {
     const std::size_t comment = line.find('#');
@@ -431,7 +423,7 @@ std::vector<std::string> DnsResolver::HostsFileLookup(std::string_view host) con
     }
     std::string name;
     while (stream >> name) {
-      if (LowerAscii(name) == wanted) {
+      if (base::ToLower(name) == wanted) {
         return {address};
       }
     }
@@ -458,7 +450,7 @@ std::vector<std::string> DnsResolver::ResolveUncached(std::string_view host, bas
   std::string last_error;
   std::uint32_t min_ttl = 0;
   bool first = true;
-  std::string current_host = LowerAscii(host);
+  std::string current_host = base::ToLower(host);
 
   // CNAME chains are followed up to a small bound (a loop must not hang).
   for (int hop = 0; hop < 8; ++hop) {
@@ -505,10 +497,11 @@ std::vector<std::string> DnsResolver::ResolveUncached(std::string_view host, bas
       const auto now = clock_ ? clock_() : std::chrono::steady_clock::now();
       std::lock_guard<std::mutex> lock(mutex_);
       if (cache_.size() < options_.max_cache_entries) {
-        cache_[LowerAscii(host)] = CacheEntry{{},
-                                              now + options_.negative_ttl,
-                                              true,
-                                              error != nullptr ? error->message() : std::string()};
+        cache_[base::ToLower(host)] =
+            CacheEntry{{},
+                       now + options_.negative_ttl,
+                       true,
+                       error != nullptr ? error->message() : std::string()};
       }
       return {};
     }
@@ -561,15 +554,15 @@ std::vector<std::string> DnsResolver::ResolveUncached(std::string_view host, bas
     if (cache_.size() >= options_.max_cache_entries) {
       cache_.clear(); // simple policy: drop everything rather than grow
     }
-    cache_[LowerAscii(host)] = CacheEntry{addresses, now + ttl, false, {}};
+    cache_[base::ToLower(host)] = CacheEntry{addresses, now + ttl, false, {}};
   } else if (addresses.empty()) {
     // Remember the failure briefly so the caller can fall back cheaply.
     std::lock_guard<std::mutex> lock(mutex_);
     if (cache_.size() < options_.max_cache_entries) {
-      cache_[LowerAscii(host)] = CacheEntry{{},
-                                            now + options_.negative_ttl,
-                                            true,
-                                            error != nullptr ? error->message() : std::string()};
+      cache_[base::ToLower(host)] = CacheEntry{{},
+                                               now + options_.negative_ttl,
+                                               true,
+                                               error != nullptr ? error->message() : std::string()};
     }
   }
   return addresses;
@@ -580,7 +573,7 @@ base::Result<std::vector<std::string>> DnsResolver::Resolve(std::string_view hos
   if (host.empty()) {
     return base::Err(base::Error::InvalidArgument("DNS: empty host name"));
   }
-  const std::string key = LowerAscii(host);
+  const std::string key = base::ToLower(host);
   {
     const auto now = clock_ ? clock_() : std::chrono::steady_clock::now();
     std::lock_guard<std::mutex> lock(mutex_);

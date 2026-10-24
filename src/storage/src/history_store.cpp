@@ -1,6 +1,7 @@
 #include "neko/storage/history_store.h"
 
 #include "neko/base/logging.h"
+#include "neko/base/string_util.h"
 #include "neko/storage/field_codec.h"
 #include "neko/storage/file_util.h"
 
@@ -24,16 +25,6 @@ bool ParseInt64(std::string_view s, int64_t* out)
   }
   *out = v;
   return true;
-}
-
-std::string ToLowerAscii(std::string_view s)
-{
-  std::string out;
-  out.reserve(s.size());
-  for (char c : s) {
-    out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-  }
-  return out;
 }
 
 } // namespace
@@ -135,11 +126,11 @@ std::vector<HistoryEntry> HistoryStore::Search(std::string_view query) const
   std::lock_guard<std::mutex> lock(mutex_);
   if (query.empty())
     return AllLocked();
-  const std::string needle = ToLowerAscii(query);
+  const std::string needle = base::ToLower(query);
   std::vector<HistoryEntry> out;
   for (const auto& e : entries_) {
-    if (ToLowerAscii(e.url).find(needle) != std::string::npos ||
-        ToLowerAscii(e.title).find(needle) != std::string::npos) {
+    if (base::ToLower(e.url).find(needle) != std::string::npos ||
+        base::ToLower(e.title).find(needle) != std::string::npos) {
       out.push_back(e);
     }
   }

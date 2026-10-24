@@ -3,6 +3,7 @@
 #include "neko/network/websocket.h"
 
 #include "neko/base/logging.h"
+#include "neko/base/string_util.h"
 #include "neko/network/socket.h"
 
 #include <algorithm>
@@ -71,16 +72,6 @@ std::string GenerateWebSocketKey()
 std::string ComputeAcceptKey(std::string_view key)
 {
   return Base64Encode(Sha1Hash(std::string(key) + kWebSocketMagicGuid));
-}
-
-std::string ToLower(std::string_view s)
-{
-  std::string r;
-  r.reserve(s.size());
-  for (char c : s) {
-    r.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-  }
-  return r;
 }
 
 std::string Trim(std::string_view s)
@@ -320,12 +311,12 @@ base::Result<WebSocket> WebSocket::Connect(const url::Url& url,
     if (colon == std::string::npos) {
       continue;
     }
-    std::string name = ToLower(Trim(line.substr(0, colon)));
+    std::string name = base::ToLower(Trim(line.substr(0, colon)));
     std::string value = Trim(line.substr(colon + 1));
 
-    if (name == "upgrade" && ToLower(value) == "websocket") {
+    if (name == "upgrade" && base::ToLower(value) == "websocket") {
       upgrade_ok = true;
-    } else if (name == "connection" && ToLower(value).find("upgrade") != std::string::npos) {
+    } else if (name == "connection" && base::ToLower(value).find("upgrade") != std::string::npos) {
       connection_ok = true;
     } else if (name == "sec-websocket-accept" && value == expected_accept) {
       accept_ok = true;

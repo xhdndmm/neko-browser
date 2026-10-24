@@ -1,5 +1,7 @@
 #include "neko/css/value.h"
 
+#include "neko/base/string_util.h"
+
 #include <cstdlib>
 #include <string>
 #include <string_view>
@@ -23,16 +25,6 @@ std::string_view TrimView(std::string_view text)
 bool IsDigit(char c)
 {
   return c >= '0' && c <= '9';
-}
-
-std::string ToLower(std::string_view s)
-{
-  std::string out;
-  out.reserve(s.size());
-  for (const char c : s) {
-    out.push_back((c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c);
-  }
-  return out;
 }
 
 } // namespace
@@ -78,7 +70,7 @@ CssValue ParseCssValue(std::string_view text)
       out.number = number;
       return out;
     }
-    const std::string unit = ToLower(rest);
+    const std::string unit = base::ToLower(rest);
     if (unit == "px" || unit == "em" || unit == "rem" || unit == "vw" || unit == "vh" ||
         unit == "vmin" || unit == "vmax") {
       out.type = CssValue::Type::kLength;
@@ -97,7 +89,7 @@ CssValue ParseCssValue(std::string_view text)
   }
 
   // Everything else is a keyword (or an unparsed multi-word value).
-  out.text = ToLower(t);
+  out.text = base::ToLower(t);
   if (out.text.find(' ') == std::string::npos && out.text.find('\t') == std::string::npos) {
     out.type = CssValue::Type::kKeyword;
   } else {

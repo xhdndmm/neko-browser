@@ -1,5 +1,7 @@
 #include "neko/dom/query.h"
 
+#include "neko/base/string_util.h"
+
 #include <algorithm>
 #include <optional>
 #include <string>
@@ -22,16 +24,6 @@ bool IsNameChar(char c)
 bool IsWhitespace(char c)
 {
   return c == ' ' || c == '\t' || c == '\r' || c == '\n';
-}
-
-std::string ToLower(std::string_view s)
-{
-  std::string out;
-  out.reserve(s.size());
-  for (const char c : s) {
-    out.push_back((c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c);
-  }
-  return out;
 }
 
 struct Compound
@@ -87,7 +79,7 @@ bool ParseCompound(std::string_view text, Compound& out)
         return false;
       }
       Compound::Attribute attribute;
-      attribute.name = ToLower(inner.substr(0, name_end));
+      attribute.name = base::ToLower(inner.substr(0, name_end));
       inner.remove_prefix(name_end);
       while (!inner.empty() && IsWhitespace(inner.front())) {
         inner.remove_prefix(1);
@@ -159,7 +151,7 @@ bool ParseCompound(std::string_view text, Compound& out)
       if (out.tag.has_value()) {
         return false;
       }
-      out.tag = ToLower(text.substr(i, j - i));
+      out.tag = base::ToLower(text.substr(i, j - i));
       i = j;
     } else {
       return false;
@@ -333,7 +325,7 @@ bool MatchesCheckedPseudo(const Element& element)
   if (tag != "input") {
     return false;
   }
-  const std::string type = ToLower(std::string(element.GetAttribute("type").value_or("")));
+  const std::string type = base::ToLower(std::string(element.GetAttribute("type").value_or("")));
   return (type == "checkbox" || type == "radio") && element.HasAttribute("checked");
 }
 

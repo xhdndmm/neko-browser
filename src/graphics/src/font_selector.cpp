@@ -1,5 +1,6 @@
 #include "neko/graphics/font_selector.h"
 
+#include "neko/base/string_util.h"
 #include "neko/graphics/font_face.h"
 #include "neko/graphics/font_library.h"
 #include "neko/graphics/system_fonts.h"
@@ -25,16 +26,6 @@ std::string Trim(std::string_view s)
     --end;
   }
   return std::string(s.substr(begin, end - begin));
-}
-
-std::string Lower(std::string_view s)
-{
-  std::string out;
-  out.reserve(s.size());
-  for (const char c : s) {
-    out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-  }
-  return out;
 }
 
 // Strips surrounding quotes from a CSS family name ("Noto Sans" or 'Noto').
@@ -97,7 +88,7 @@ void FontSelector::AddFamily(const FontLibrary& library, std::string_view family
   if (family_name.empty()) {
     return;
   }
-  const std::string key = Lower(Unquote(family_name));
+  const std::string key = base::ToLower(Unquote(family_name));
   GenericFamily generic = GenericFamily::kSansSerif;
   bool is_generic = true;
   if (key == "sans-serif" || key == "cursive" || key == "fantasy") {

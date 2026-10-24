@@ -1,5 +1,7 @@
 #include "neko/dom/element.h"
 
+#include "neko/base/string_util.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <string>
@@ -63,16 +65,6 @@ DecodedCodePoint DecodeCodePoint(std::string_view text, std::size_t offset)
 std::size_t Utf16Units(const DecodedCodePoint& code_point)
 {
   return code_point.value >= 0x10000U ? 2 : 1;
-}
-
-std::string AsciiLower(std::string_view text)
-{
-  std::string lower;
-  lower.reserve(text.size());
-  for (const char c : text) {
-    lower.push_back(c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c);
-  }
-  return lower;
 }
 
 } // namespace
@@ -168,7 +160,7 @@ bool SupportsTextControlSelection(const Element& element)
   if (tag != "input") {
     return false;
   }
-  const std::string type = AsciiLower(element.GetAttribute("type").value_or("text"));
+  const std::string type = base::ToLower(element.GetAttribute("type").value_or("text"));
   if (type == "text" || type == "search" || type == "url" || type == "tel" || type == "email" ||
       type == "password") {
     return true;

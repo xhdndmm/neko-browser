@@ -16,6 +16,7 @@
 #include "neko/image/svg_decoder.h"
 
 #include "neko/base/status.h"
+#include "neko/base/string_util.h"
 
 #include <algorithm>
 #include <cctype>
@@ -214,16 +215,6 @@ bool ParseColor(std::string_view text, Color& out, bool& is_none)
 // Minimal XML/SVG element parser
 // ---------------------------------------------------------------------------
 
-std::string ToLower(std::string_view s)
-{
-  std::string out;
-  out.reserve(s.size());
-  for (const char c : s) {
-    out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-  }
-  return out;
-}
-
 struct Element
 {
   std::string name; // lowercased
@@ -238,7 +229,7 @@ struct Element
   {
     // SVG attribute names are case-sensitive in XML (viewBox, ...); attribute
     // names are stored lowercased, so look up case-insensitively.
-    const std::string lower = ToLower(key);
+    const std::string lower = base::ToLower(key);
     for (const auto& attr : attrs) {
       if (attr.first == lower) {
         return &attr.second;
@@ -324,7 +315,7 @@ bool ParseElement(std::string_view data, std::size_t pos, Element& out, std::siz
          !std::isspace(static_cast<unsigned char>(data[i]))) {
     ++i;
   }
-  out.name = ToLower(data.substr(name_start, i - name_start));
+  out.name = base::ToLower(data.substr(name_start, i - name_start));
   if (out.name.empty()) {
     return false;
   }
@@ -354,7 +345,7 @@ bool ParseElement(std::string_view data, std::size_t pos, Element& out, std::siz
            !std::isspace(static_cast<unsigned char>(data[i]))) {
       ++i;
     }
-    const std::string attr_name = ToLower(data.substr(attr_start, i - attr_start));
+    const std::string attr_name = base::ToLower(data.substr(attr_start, i - attr_start));
     while (i < data.size() && std::isspace(static_cast<unsigned char>(data[i]))) {
       ++i;
     }
@@ -827,7 +818,7 @@ bool ParseTransform(std::string_view value, Mat& out)
     while (pos < s.size() && s[pos] != '(') {
       ++pos;
     }
-    const std::string name = ToLower(s.substr(name_start, pos - name_start));
+    const std::string name = base::ToLower(s.substr(name_start, pos - name_start));
     if (pos >= s.size() || s[pos] != '(') {
       break;
     }
@@ -910,7 +901,7 @@ void CollectGradientDefs(const Element& element, GradientDefs& defs)
 {
   if (element.name == "lineargradient" || element.name == "radialgradient") {
     if (const std::string* id = element.Attr("id"); id != nullptr && !id->empty()) {
-      defs.emplace(ToLower(*id), &element);
+      defs.emplace(base::ToLower(*id), &element);
     }
   }
   for (const Element& child : element.children) {
@@ -1045,7 +1036,7 @@ Paint MakePaint(const Color& fallback,
   if (gradient_id.empty()) {
     return paint;
   }
-  const auto it = defs.find(ToLower(gradient_id));
+  const auto it = defs.find(base::ToLower(gradient_id));
   if (it == defs.end()) {
     // Unresolvable reference: no paint, unless a fallback colour was given.
     if (none_if_unresolved) {
@@ -1068,7 +1059,7 @@ Paint MakePaint(const Color& fallback,
     if (href == nullptr || href->size() < 2 || (*href)[0] != '#') {
       break;
     }
-    const auto parent = defs.find(ToLower(href->substr(1)));
+    const auto parent = defs.find(base::ToLower(href->substr(1)));
     current = parent == defs.end() ? nullptr : parent->second;
   }
   const auto chain_attr = [&](const char* key) -> const std::string* {
@@ -1121,7 +1112,7 @@ Paint MakePaint(const Color& fallback,
   }
 
   const std::string* units = chain_attr("gradientunits");
-  const bool object_bounding_box = units == nullptr || ToLower(*units) != "userspaceonuse";
+  const bool object_bounding_box = units == nullptr || base::ToLower(*units) != "userspaceonuse";
   const double unit_w = object_bounding_box ? 1.0 : viewport_w;
   const double unit_h = object_bounding_box ? 1.0 : viewport_h;
   Mat gradient_transform;
@@ -1688,7 +1679,7 @@ void ApplyStyleDeclarations(PaintState& state, std::string_view style)
         style.substr(pos, end == std::string_view::npos ? std::string_view::npos : end - pos);
     const std::size_t colon = decl.find(':');
     if (colon != std::string_view::npos) {
-      std::string name(ToLower(decl.substr(0, colon)));
+      std::string name(base::ToLower(decl.substr(0, colon)));
       std::string_view value = decl.substr(colon + 1);
       while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
         value.remove_prefix(1);
@@ -1848,16 +1839,16 @@ void ApplyTextAttr(TextStyle& style, std::string_view attr, std::string_view val
       style.family = family;
     }
   } else if (attr == "font-weight") {
-    const std::string v = ToLower(value);
+    const std::string v = base::ToLower(value);
     style.bold = v == "bold" || v == "bolder" || std::strtod(v.c_str(), nullptr) >= 600;
   } else if (attr == "font-style") {
-    const std::string v = ToLower(value);
+    const std::string v = base::ToLower(value);
     style.italic = v == "italic" || v == "oblique";
   } else if (attr == "letter-spacing") {
-    const std::string v = ToLower(value);
+    const std::string v = base::ToLower(value);
     style.letter_spacing = v == "normal" ? 0.0 : std::strtod(v.c_str(), nullptr);
   } else if (attr == "text-anchor") {
-    const std::string v = ToLower(value);
+    const std::string v = base::ToLower(value);
     style.anchor = v == "middle" ? 1 : (v == "end" ? 2 : 0);
   }
 }
@@ -2052,7 +2043,7 @@ void RenderTextNode(RasterBuffer& buf,
               .substr(pos, end == std::string::npos ? std::string::npos : end - pos);
       const std::size_t colon = decl.find(':');
       if (colon != std::string_view::npos) {
-        std::string name(ToLower(decl.substr(0, colon)));
+        std::string name(base::ToLower(decl.substr(0, colon)));
         std::string_view value = decl.substr(colon + 1);
         while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
           value.remove_prefix(1);

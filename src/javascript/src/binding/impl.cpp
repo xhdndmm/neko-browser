@@ -7,6 +7,7 @@
 // plus its methods (wrapping, timers, event dispatch).
 
 #include "neko/base/status.h"
+#include "neko/base/string_util.h"
 #include "neko/base/version.h"
 #include "neko/dom/element.h"
 #include "neko/dom/node.h"
@@ -246,20 +247,17 @@ std::string ArgString(JSContext* ctx, JSValueConst value, bool* ok)
   return out;
 }
 
+// ASCII case conversion for the binding layer.  The implementation is
+// neko::base's (one copy in the tree); these wrappers keep the
+// binding-internal call sites terse.
 std::string ToLower(std::string s)
 {
-  std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
-    return static_cast<char>(std::tolower(c));
-  });
-  return s;
+  return base::ToLower(s);
 }
 
 std::string ToUpper(std::string s)
 {
-  std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
-    return static_cast<char>(std::toupper(c));
-  });
-  return s;
+  return base::ToUpper(s);
 }
 
 bool IsAncestorOf(const dom::Node* ancestor, const dom::Node* node)
@@ -368,7 +366,7 @@ base::Result<void> CheckCorsAccess(const std::string& page_url,
   // matrix discloses it).
   std::string allow;
   for (const auto& [name, value] : response.headers) {
-    if (ToLower(name) == "access-control-allow-origin") {
+    if (base::ToLower(name) == "access-control-allow-origin") {
       allow = value;
     }
   }
@@ -2106,7 +2104,7 @@ Impl::QueryLive(dom::Node* root, LiveKind kind, const std::string& arg) const
     }
     break;
   case LiveKind::kTagName: {
-    const std::string tag = ToLower(arg);
+    const std::string tag = base::ToLower(arg);
     CollectDescendantElements(
         *root, [&tag](const dom::Element& el) { return tag == "*" || el.tag_name() == tag; }, out);
     break;

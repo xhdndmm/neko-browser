@@ -1,5 +1,7 @@
 #include "neko/html/parser.h"
 
+#include "neko/base/string_util.h"
+
 #include <algorithm>
 #include <array>
 #include <memory>
@@ -66,7 +68,7 @@ bool IsHtmlIntegrationPoint(const dom::Element& element)
     if (!encoding.has_value()) {
       return false;
     }
-    const std::string lowered = ToLowerAscii(encoding.value());
+    const std::string lowered = base::ToLower(encoding.value());
     return lowered == "text/html" || lowered == "application/xhtml+xml";
   }
   return false;
@@ -684,7 +686,7 @@ void Parser::ProcessForeignContent(Token token)
       if (index == 0) {
         return; // topmost element; fragment case
       }
-      if (ToLowerAscii(node->tag_name()) == token.name) {
+      if (base::ToLower(node->tag_name()) == token.name) {
         while (!stack_.empty()) {
           dom::Element* popped = stack_.back();
           PopElement();
@@ -2752,7 +2754,7 @@ void Parser::ProcessStartTagInTable(Token token)
     // A hidden input is inserted and immediately popped; anything else is
     // handled by foster parenting (below).
     for (const Attribute& attr : token.attributes) {
-      if (attr.name == "type" && ToLowerAscii(attr.value) == "hidden") {
+      if (attr.name == "type" && base::ToLower(attr.value) == "hidden") {
         InsertElement(CreateElement(token));
         PopElement();
         return;

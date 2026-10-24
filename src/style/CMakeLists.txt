@@ -8,6 +8,7 @@
 add_library(neko_style
   src/style_engine.cpp
   src/computed_style.cpp
+  src/gradient_parser.cpp
 )
 add_library(neko::style ALIAS neko_style)
 
