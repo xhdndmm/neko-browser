@@ -1,0 +1,433 @@
+#!/usr/bin/env python3
+"""Migrates hand-written prototype registrations into the WebIDL manifest.
+
+This is a one-shot developer tool, not part of the build.  It reads the
+``Define<Interface>Prototype()`` functions in ``src/javascript/src/binding``
+and moves the *registration* of each member into ``.webidl`` files, deleting
+the original registration statements.  Function bodies (the implementation of
+the member) stay where they are: the IDL owns the surface, C++ owns the
+behaviour.
+
+It only rewrites registrations it fully understands:
+
+    DefineAccessor(ctx, impl.<x>_proto, "name",
+                   MakeGetter(ctx, "name", GetFn),
+                   MakeSetter(ctx, "name", SetFn));
+    DefineGetter(ctx, impl.<x>_proto, "name", MakeGetter(ctx, "name", GetFn));
+    MakeGetterMagic / MakeSetterMagic variants;
+    a fully regular `static const std::array<...> kMethods = {{...}};` plus the
+    `JS_SetPropertyFunctionList` call that consumes it.
+
+Everything else (conditional registration, raw JS_SetPropertyStr, unusual
+wrappers) is left untouched and reported, so the migration can never silently
+drop a member.
+
+Usage:
+    python3 tools/webidl/migrate.py [file ...]   # default: every binding .cpp
+"""
+
+from __future__ import annotations
+
+import pathlib
+import re
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+BINDING_DIR = ROOT / "src" / "javascript" / "src" / "binding"
+IDL_DIR = ROOT / "src" / "javascript" / "webidl"
+
+FUNC_RE = re.compile(
+    r"void\s+(Define\w+Prototype)\s*\(\s*JSContext\*\s*ctx\s*,\s*Impl&\s*impl\s*\)"
+)
+CALL_NAMES = ("DefineAccessor", "DefineGetter")
+GETTER_RE = re.compile(r'^MakeGetter\(\s*ctx\s*,\s*"([^"]*)"\s*,\s*(\w+)\s*\)$')
+GETTER_MAGIC_RE = re.compile(
+    r'^MakeGetterMagic\(\s*ctx\s*,\s*"([^"]*)"\s*,\s*(\w+)\s*,\s*(-?\d+)\s*\)$'
+)
+SETTER_RE = re.compile(r'^MakeSetter\(\s*ctx\s*,\s*"([^"]*)"\s*,\s*(\w+)\s*\)$')
+SETTER_MAGIC_RE = re.compile(
+    r'^MakeSetterMagic\(\s*ctx\s*,\s*"([^"]*)"\s*,\s*(\w+)\s*,\s*(-?\d+)\s*\)$'
+)
+METHOD_ARRAY_RE = re.compile(
+    r"static\s+const\s+std::array<JSCFunctionListEntry,\s*(\d+)>\s+kMethods\s*=\s*\{\{"
+)
+METHOD_ENTRY_RE = re.compile(r'JS_CFUNC_DEF\(\s*"([^"]+)"\s*,\s*(\d+)\s*,\s*(\w+)\s*\)')
+SET_PROPERTY_LIST_RE = re.compile(
+    r"JS_SetPropertyFunctionList\(\s*ctx\s*,\s*(impl\.\w+)\s*,\s*kMethods\.data\(\)\s*,"
+)
+
+
+# ---------------------------------------------------------------------------
+# Source scanning helpers
+# ---------------------------------------------------------------------------
+
+
+def match_brace(text: str, open_index: int) -> int:
+    """Index of the '}' matching the '{' at |open_index| (strings/comments aware)."""
+    depth = 0
+    i = open_index
+    while i < len(text):
+        c = text[i]
+        if c == "/" and i + 1 < len(text) and text[i + 1] == "/":
+            i = text.find("\n", i)
+            if i < 0:
+                return -1
+            continue
+        if c == "/" and i + 1 < len(text) and text[i + 1] == "*":
+            i = text.find("*/", i + 2)
+            if i < 0:
+                return -1
+            i += 2
+            continue
+        if c == '"' or c == "'":
+            quote = c
+            i += 1
+            while i < len(text) and text[i] != quote:
+                i += 2 if text[i] == "\\" else 1
+            i += 1
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return -1
+
+
+def match_paren(text: str, open_index: int) -> int:
+    depth = 0
+    i = open_index
+    while i < len(text):
+        c = text[i]
+        if c == '"' or c == "'":
+            quote = c
+            i += 1
+            while i < len(text) and text[i] != quote:
+                i += 2 if text[i] == "\\" else 1
+            i += 1
+            continue
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return -1
+
+
+def split_args(text: str) -> list[str]:
+    args: list[str] = []
+    depth = 0
+    start = 0
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if c == '"':
+            i += 1
+            while i < len(text) and text[i] != '"':
+                i += 2 if text[i] == "\\" else 1
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == "," and depth == 0:
+            args.append(text[start:i].strip())
+            start = i + 1
+        i += 1
+    tail = text[start:].strip()
+    if tail:
+        args.append(tail)
+    return args
+
+
+def camel(name: str) -> str:
+    parts = re.split(r"[^A-Za-z0-9]+", name)
+    return "".join(p[:1].upper() + p[1:] for p in parts if p)
+
+
+def line_of(text: str, index: int) -> int:
+    return text.count("\n", 0, index) + 1
+
+
+# ---------------------------------------------------------------------------
+# Extraction
+# ---------------------------------------------------------------------------
+
+
+class Member:
+    def __init__(self, kind: str, name: str, getter: str, setter: str | None,
+                 magic: str | None, readonly: bool, argc: int = 0):
+        self.kind = kind
+        self.name = name
+        self.getter = getter
+        self.setter = setter
+        self.magic = magic
+        self.readonly = readonly
+        self.argc = argc
+
+
+class FilePlan:
+    def __init__(self, path: pathlib.Path):
+        self.path = path
+        self.text = path.read_text(encoding="utf-8")
+        self.removals: list[tuple[int, int]] = []  # [start, end)
+        self.groups: dict[str, list[Member]] = {}
+        self.insertions: dict[str, list[str]] = {}  # function -> [proto]
+        self.skipped: list[str] = []
+
+    def proto_of(self, target: str) -> str | None:
+        if not target.startswith("impl."):
+            return None
+        field = target[5:]
+        if not field.endswith("_proto"):
+            return None
+        return field
+
+    def extract_function(self, name: str, body_start: int, body_end: int) -> None:
+        body = self.text[body_start:body_end]
+        base = body_start
+        touched: list[str] = []
+
+        # Accessors / getters.
+        for match in re.finditer(r"\b(DefineAccessor|DefineGetter)\s*\(", body):
+            call = match.group(1)
+            open_index = match.end() - 1
+            close_index = match_paren(body, open_index)
+            if close_index < 0:
+                continue
+            depth = body.count("{", 0, match.start()) - body.count("}", 0, match.start())
+            stmt_end = close_index + 1
+            while stmt_end < len(body) and body[stmt_end] in " \t":
+                stmt_end += 1
+            if stmt_end < len(body) and body[stmt_end] == ";":
+                stmt_end += 1
+            absolute = base + match.start()
+            if depth != 0:
+                self.skipped.append(
+                    f"{self.path.name}:{line_of(self.text, absolute)}: {call} inside a "
+                    "conditional -- left hand-written"
+                )
+                continue
+            args = split_args(body[open_index + 1 : close_index])
+            if len(args) < 4 or args[0] != "ctx":
+                self.skipped.append(
+                    f"{self.path.name}:{line_of(self.text, absolute)}: {call} has an "
+                    "unexpected argument list -- left hand-written"
+                )
+                continue
+            proto = self.proto_of(args[1])
+            if proto is None:
+                self.skipped.append(
+                    f"{self.path.name}:{line_of(self.text, absolute)}: {call} target "
+                    f"{args[1]!r} is not impl.<x>_proto -- left hand-written"
+                )
+                continue
+            name_match = re.fullmatch(r'"([^"]+)"', args[2])
+            if name_match is None:
+                self.skipped.append(
+                    f"{self.path.name}:{line_of(self.text, absolute)}: {call} name is "
+                    "not a string literal -- left hand-written"
+                )
+                continue
+            member_name = name_match.group(1)
+
+            getter_match = GETTER_RE.match(args[3]) or GETTER_MAGIC_RE.match(args[3])
+            if getter_match is None:
+                self.skipped.append(
+                    f"{self.path.name}:{line_of(self.text, absolute)}: {call} getter is "
+                    "not MakeGetter/MakeGetterMagic -- left hand-written"
+                )
+                continue
+            magic = None
+            if "Magic" in args[3]:
+                magic = GETTER_MAGIC_RE.match(args[3]).group(3)
+            if getter_match.group(1) != member_name:
+                self.skipped.append(
+                    f"{self.path.name}:{line_of(self.text, absolute)}: {call} register "
+                    "name differs from the getter name -- left hand-written"
+                )
+                continue
+
+            setter = None
+            if len(args) >= 5:
+                setter_match = SETTER_RE.match(args[4]) or SETTER_MAGIC_RE.match(args[4])
+                if setter_match is None:
+                    self.skipped.append(
+                        f"{self.path.name}:{line_of(self.text, absolute)}: {call} "
+                        "setter is not MakeSetter/MakeSetterMagic -- left hand-written"
+                    )
+                    continue
+                if setter_match.group(1) != member_name:
+                    self.skipped.append(
+                        f"{self.path.name}:{line_of(self.text, absolute)}: {call} "
+                        "register name differs from the setter name -- left hand-written"
+                    )
+                    continue
+                setter = setter_match.group(2)
+            if call == "DefineGetter" and setter is not None:
+                self.skipped.append(
+                    f"{self.path.name}:{line_of(self.text, absolute)}: DefineGetter with "
+                    "a setter -- left hand-written"
+                )
+                continue
+
+            self.removals.append((absolute, base + stmt_end))
+            self.groups.setdefault(proto, []).append(
+                Member("attribute", member_name, getter_match.group(2), setter, magic,
+                       readonly=setter is None)
+            )
+            touched.append(proto)
+
+        # Fully regular method tables.
+        for array_match in METHOD_ARRAY_RE.finditer(body):
+            declared = int(array_match.group(1))
+            open_index = body.find("{{", array_match.start())
+            close_index = body.find("}};", open_index)
+            if close_index < 0:
+                continue
+            array_body = body[open_index + 2 : close_index]
+            entries = METHOD_ENTRY_RE.findall(array_body)
+            residue = METHOD_ENTRY_RE.sub("", array_body)
+            residue = re.sub(r"//[^\n]*", "", residue)
+            residue = re.sub(r"[\s,]", "", residue)
+            if residue or len(entries) != declared:
+                self.skipped.append(
+                    f"{self.path.name}:{line_of(self.text, base + array_match.start())}: "
+                    "method table is not a regular JS_CFUNC_DEF list -- left hand-written"
+                )
+                continue
+            after = body.find(";", close_index) + 1
+            set_match = SET_PROPERTY_LIST_RE.search(body, after)
+            if set_match is None:
+                self.skipped.append(
+                    f"{self.path.name}:{line_of(self.text, base + array_match.start())}: "
+                    "method table has no matching JS_SetPropertyFunctionList -- left "
+                    "hand-written"
+                )
+                continue
+            target = set_match.group(1)
+            proto = self.proto_of(target)
+            if proto is None:
+                self.skipped.append(
+                    f"{self.path.name}:{line_of(self.text, base + array_match.start())}: "
+                    f"method target {target!r} is not impl.<x>_proto -- left hand-written"
+                )
+                continue
+            stmt_end = body.find(";", set_match.end()) + 1
+            self.removals.append((base + array_match.start(), base + stmt_end))
+            self.groups.setdefault(proto, []).extend(
+                Member("method", entry[0], entry[2], None, None, readonly=False,
+                       argc=int(entry[1]))
+                for entry in entries
+            )
+            touched.append(proto)
+
+        for proto in dict.fromkeys(touched):
+            self.insertions.setdefault(name, []).append(proto)
+
+    def plan(self) -> None:
+        for match in FUNC_RE.finditer(self.text):
+            open_index = self.text.find("{", match.end())
+            close_index = match_brace(self.text, open_index)
+            if close_index < 0:
+                continue
+            self.extract_function(match.group(1), open_index + 1, close_index)
+
+    def write(self) -> None:
+        # Deletions first (reverse order), then insert the generated calls.
+        text = self.text
+        for start, end in sorted(self.removals, reverse=True):
+            line_start = text.rfind("\n", 0, start) + 1
+            if text[line_start:start].strip() == "":
+                start = line_start
+            text = text[:start] + text[end:]
+
+        for func, protos in self.insertions.items():
+            marker = re.search(r"void\s+" + re.escape(func) + r"\s*\([^)]*\)\s*\{", text)
+            if marker is None:
+                continue
+            close_index = match_brace(text, marker.end() - 1)
+            calls = "".join(
+                f"  DefineGenerated{migrated_interface(self.path.stem, proto)}(ctx, impl);\n"
+                for proto in protos
+            )
+            text = text[:close_index] + calls + text[close_index:]
+
+        # Include the generated registration immediately before the first
+        # prototype function: the .inc references the file-local member
+        # implementations, so it must come after their definitions.
+        stem = self.path.stem
+        header = f'#include "generated/{stem}_generated.inc"'
+        if self.insertions and header not in text:
+            first = re.search(r"^void\s+Define\w+Prototype\s*\(", text, re.MULTILINE)
+            if first:
+                text = text[:first.start()] + header + "\n\n" + text[first.start():]
+        self.path.write_text(text, encoding="utf-8")
+
+    def write_idl(self) -> None:
+        if not self.groups:
+            return
+        stem = self.path.stem
+        blocks = [
+            "// Binding surface extracted from "
+            f"{self.path.relative_to(ROOT).as_posix()}.",
+            "// Function bodies stay hand-written; this file owns the registration.",
+            "",
+        ]
+        for proto, members in self.groups.items():
+            blocks.append(f"[Proto={proto}]")
+            blocks.append(f"interface {migrated_interface(stem, proto)} {{")
+            for member in members:
+                if member.kind == "method":
+                    params = ", ".join(f"any a{i}" for i in range(member.argc))
+                    blocks.append(
+                        f"  [CFunction={member.getter}] void {member.name}({params});"
+                    )
+                else:
+                    magic = f", Magic={member.magic}" if member.magic else ""
+                    if member.setter is None:
+                        blocks.append(
+                            f"  [Getter={member.getter}{magic}] readonly attribute any "
+                            f"{member.name};"
+                        )
+                    else:
+                        blocks.append(
+                            f"  [Getter={member.getter}, Setter={member.setter}{magic}] "
+                            f"attribute any {member.name};"
+                        )
+            blocks.append("};\n")
+        IDL_DIR.mkdir(parents=True, exist_ok=True)
+        (IDL_DIR / f"{stem}.webidl").write_text("\n".join(blocks), encoding="utf-8")
+
+
+def migrated_interface(stem: str, proto: str) -> str:
+    return camel(stem) + camel(proto)
+
+
+def main(argv: list[str]) -> int:
+    files = [pathlib.Path(arg).resolve() for arg in argv if arg.endswith(".cpp")]
+    if not files:
+        files = sorted(BINDING_DIR.glob("*_binding.cpp")) + [BINDING_DIR / "impl.cpp"]
+    plans = []
+    for path in files:
+        plan = FilePlan(path)
+        plan.plan()
+        plans.append(plan)
+
+    for plan in plans:
+        plan.write_idl()
+        plan.write()
+
+    for plan in plans:
+        moved = sum(len(v) for v in plan.groups.values())
+        print(f"{plan.path.name}: {moved} members moved to {plan.path.stem}.webidl")
+        for note in plan.skipped:
+            print(f"  skipped: {note}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

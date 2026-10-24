@@ -146,6 +146,8 @@ void EnsureCanvasClassRegistered(JSRuntime* runtime)
   JS_NewClass(runtime, g_canvas_class_id, &definition);
 }
 
+#include "generated/canvas_binding_generated.inc"
+
 void DefineCanvasPrototype(JSContext* ctx, Impl& impl)
 {
   impl.canvas_2d_proto = JS_NewObject(ctx);
@@ -155,11 +157,8 @@ void DefineCanvasPrototype(JSContext* ctx, Impl& impl)
                     JS_NewCFunction(ctx, CanvasGetContext, "getContext", 1));
   JS_SetPropertyStr(
       ctx, impl.canvas_2d_proto, "fillRect", JS_NewCFunction(ctx, CanvasFillRect, "fillRect", 4));
-  DefineAccessor(ctx,
-                 impl.canvas_2d_proto,
-                 "fillStyle",
-                 MakeGetter(ctx, "fillStyle", CanvasGetFillStyle),
-                 MakeSetter(ctx, "fillStyle", CanvasSetFillStyle));
+
+  DefineGeneratedCanvasBindingCanvas2dProto(ctx, impl);
 }
 
 } // namespace neko::javascript

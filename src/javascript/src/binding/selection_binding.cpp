@@ -874,52 +874,11 @@ JSValue DocGetSelection(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSV
   return MakeSelectionObject(ctx, *impl);
 }
 
+#include "generated/selection_binding_generated.inc"
+
 void DefineSelectionPrototype(JSContext* ctx, Impl& impl)
 {
   impl.selection_proto = JS_NewObject(ctx);
-
-  static const std::array<JSCFunctionListEntry, 14> kMethods = {{
-      JS_CFUNC_DEF("getRangeAt", 1, SelectionGetRangeAt),
-      JS_CFUNC_DEF("addRange", 1, SelectionAddRange),
-      JS_CFUNC_DEF("removeRange", 1, SelectionRemoveRange),
-      JS_CFUNC_DEF("removeAllRanges", 0, SelectionRemoveAllRanges),
-      JS_CFUNC_DEF("empty", 0, SelectionRemoveAllRanges),
-      JS_CFUNC_DEF("collapse", 0, SelectionCollapse),
-      JS_CFUNC_DEF("collapseToStart", 0, SelectionCollapseToStart),
-      JS_CFUNC_DEF("collapseToEnd", 0, SelectionCollapseToEnd),
-      JS_CFUNC_DEF("extend", 1, SelectionExtend),
-      JS_CFUNC_DEF("setBaseAndExtent", 4, SelectionSetBaseAndExtent),
-      JS_CFUNC_DEF("selectAllChildren", 1, SelectionSelectAllChildren),
-      JS_CFUNC_DEF("deleteFromDocument", 0, SelectionDeleteFromDocument),
-      JS_CFUNC_DEF("containsNode", 1, SelectionContainsNode),
-      JS_CFUNC_DEF("toString", 0, SelectionToString),
-  }};
-  JS_SetPropertyFunctionList(
-      ctx, impl.selection_proto, kMethods.data(), static_cast<int>(kMethods.size()));
-
-  DefineGetter(ctx,
-               impl.selection_proto,
-               "anchorNode",
-               MakeGetter(ctx, "anchorNode", SelectionGetAnchorNode));
-  DefineGetter(ctx,
-               impl.selection_proto,
-               "anchorOffset",
-               MakeGetter(ctx, "anchorOffset", SelectionGetAnchorOffset));
-  DefineGetter(
-      ctx, impl.selection_proto, "focusNode", MakeGetter(ctx, "focusNode", SelectionGetFocusNode));
-  DefineGetter(ctx,
-               impl.selection_proto,
-               "focusOffset",
-               MakeGetter(ctx, "focusOffset", SelectionGetFocusOffset));
-  DefineGetter(ctx,
-               impl.selection_proto,
-               "isCollapsed",
-               MakeGetter(ctx, "isCollapsed", SelectionGetIsCollapsed));
-  DefineGetter(ctx,
-               impl.selection_proto,
-               "rangeCount",
-               MakeGetter(ctx, "rangeCount", SelectionGetRangeCount));
-  DefineGetter(ctx, impl.selection_proto, "type", MakeGetter(ctx, "type", SelectionGetType));
 
   JSValue global = JS_GetGlobalObject(ctx);
   // Selection is not constructable from script (WebIDL [Exposed=Window]
@@ -929,6 +888,7 @@ void DefineSelectionPrototype(JSContext* ctx, Impl& impl)
   JS_SetPropertyStr(
       ctx, global, "getSelection", JS_NewCFunction(ctx, WindowGetSelection, "getSelection", 0));
   JS_FreeValue(ctx, global);
+  DefineGeneratedSelectionBindingSelectionProto(ctx, impl);
 }
 
 void EnsureSelectionClassRegistered(JSRuntime* rt)

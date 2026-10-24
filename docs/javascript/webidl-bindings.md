@@ -18,11 +18,16 @@ src/javascript/webidl/*.webidl
         │  tools/webidl/gen.py（词法 + 语法 + 校验 + 代码生成）
         │  生成后调用 clang-format（保证格式门禁通过）
         ▼
-src/javascript/src/binding/generated/*_generated.{h,cpp}
-        │  被手写的 Define<Interface>Prototype() 调用
+src/javascript/src/binding/generated/*_generated.inc
+        │  在 .cpp 的 namespace 内 #include（成员实现是文件内静态的）
         ▼
 QuickJS 原型对象
 ```
+
+为什么是 `.inc` 而不是独立 `.cpp`：成员实现函数（`DocGetTitle`、`ElementFocus`
+等）在各自文件里是内部链接的，独立 TU 引用不到。`.inc` 在同一个翻译单元里
+include，注册代码就能直接引用它们。这也意味着**函数体留在原文件，IDL 只拥有
+"接口表面"**——和浏览器里 IDL 生成胶水、C++ 实现行为的分工一致。
 
 生成文件**入库**（与 `tools/gen_encoding_tables.py` 生成的编码表同策略），
 构建时不需要 Python。`ctest -R webidl` 会跑 `gen.py --check`，保证入库文件
@@ -31,7 +36,33 @@ QuickJS 原型对象
 ```bash
 python3 tools/webidl/gen.py           # 重新生成
 python3 tools/webidl/gen.py --check   # 校验（CI）
+python3 tools/webidl/migrate.py       # 从手写注册迁移到 .webidl（一次性工具）
 ```
+
+## 当前覆盖
+
+`tools/webidl/migrate.py` 已把 `Define<Interface>Prototype()` 里**基于
+`impl.<x>_proto` 的常规注册**迁移到 IDL，覆盖 DOM 核心：
+
+| 文件 | 迁移成员数 |
+| --- | --- |
+| element_binding | 83 |
+| document_binding | 43 |
+| node_binding | 31 |
+| range_binding | 29 |
+| event_binding | 28 |
+| selection_binding | 21 |
+| style_binding | 3 |
+| canvas_binding | 1 |
+| **合计** | **196** |
+
+仍未迁移（保持手写，`migrate.py` 会逐条打印原因）：
+
+- 在 `Install<X>Global`/辅助函数里用**局部 `proto`** 注册的类（AbortSignal、
+  Headers、FormData、URLSearchParams、XHR、WebSocket、IDB request 等）；
+- 条件注册（例如只给 `<details>` 的 `open`、只给 `SVGElement` 的某些属性）；
+- 直接 `JS_SetPropertyStr` 挂的属性/常量/对象；
+- `impl.cpp` 里 window/global 对象上的注册。
 
 ## 支持的子集
 
@@ -61,7 +92,7 @@ python3 tools/webidl/gen.py --check   # 校验（CI）
 [Reflect=title] attribute DOMString title;
 ```
 
-生成结果（节选，`generated/html_element_generated.cpp`）：
+生成结果（节选，`generated/html_element_generated.inc`）：
 
 ```cpp
 JSValue GeneratedHTMLElementGetTitle(JSContext* ctx, JSValueConst this_val)

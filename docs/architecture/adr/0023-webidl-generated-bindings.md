@@ -74,6 +74,17 @@ DOM 绑定层（`src/javascript/src/binding/`）是 JavaScript 对象与 C++ 引
 - 生成代码依赖 clang-format 才能通过格式门禁；
 - `[CEReactions]` 的排队语义、重载、可空类型等尚未建模。
 
+## 实施结果（2026-10-24）
+
+- 生成器输出 `.inc` 而不是独立 `.cpp`：成员实现函数在绑定文件里是内部链接的，
+  注册代码必须在同一翻译单元内；这也把"IDL 管表面、C++ 管行为"的分工固定下来。
+- `tools/webidl/migrate.py` 把 `Define<Interface>Prototype()` 里基于
+  `impl.<x>_proto` 的注册自动迁移到 `.webidl`，共 **196 个成员**（element 83、
+  document 43、node 31、range 29、event 28、selection 21、style 3、canvas 1）。
+  迁移后手写绑定从 21,274 行降到 20,650 行，新增 IDL 337 行、生成代码 906 行。
+- 未迁移的部分（局部 `proto` 注册的类、条件注册、`JS_SetPropertyStr`）
+  由 `migrate.py` 逐条报告原因，保持手写，不静默丢失。
+
 ## 后续
 
 1. 支持 `long`/`unsigned long`/枚举/可空类型与默认值；

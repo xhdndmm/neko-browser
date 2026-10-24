@@ -9,7 +9,7 @@
 // The grammar and the meaning of the extended attributes are documented in
 // tools/webidl/gen.py.
 
-[Exposed=Window]
+[Exposed=Window, Proto=element_proto]
 interface HTMLElement : Element {
   // HTML §3.2.6.5: title/lang are plain DOMString reflections.
   [Reflect=title] attribute DOMString title;

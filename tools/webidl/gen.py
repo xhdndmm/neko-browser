@@ -2,41 +2,56 @@
 """WebIDL -> QuickJS binding generator (project subset).
 
 Reads every ``*.webidl`` file under ``src/javascript/webidl`` and writes the
-matching ``*_generated.{h,cpp}`` under
-``src/javascript/src/binding/generated``.
+matching ``*_generated.inc`` under ``src/javascript/src/binding/generated``.
+
+The output is an ``.inc`` included *inside* the hand-written translation unit:
+binding member implementations are file-local (anonymous namespace), so a
+separate TU cannot reference them.
 
 The generator is deliberately small: it implements the slice of WebIDL the
 project actually uses today, plus the extended attributes that tell it how a
 member maps onto the engine.  It refuses anything it cannot emit correctly
 instead of guessing -- an unsupported type is a hard error, not a stub.
 
-Supported subset
+Grammar (subset)
 ----------------
 
-    [Exposed=Window]
-    interface HTMLElement : Element {
-      [Reflect=title] attribute DOMString title;
-      [Reflect=inert] attribute boolean inert;
-      [CFunction=ElementFocus] void focus();
-    };
+    file      := interface*
+    interface := ExtendedAttrs "interface" Ident (":" Ident)? "{" member* "}" ";"
+    member    := ExtendedAttrs "readonly"? "attribute" Type Ident ";"
+               | ExtendedAttrs Type Ident "(" params? ")" ";"
 
-* one interface per file (the file name selects the output file);
-* members: ``attribute`` (optionally ``readonly``) and methods;
-* types: ``boolean`` and ``DOMString`` for reflected attributes; methods may
-  use any return type because their body is hand-written;
-* extended attributes:
-    - ``[Reflect=<content attribute>]`` -- the generator emits the getter and
-      setter that reflect the IDL attribute to that content attribute and mark
-      the DOM dirty.  Only ``boolean`` and ``DOMString`` are supported.
-    - ``[CFunction=<C++ symbol>]`` -- a method is registered by name against an
-      existing C++ function (declared in binding_internal.h).
-    - ``[Getter=<symbol>]`` / ``[Setter=<symbol>]`` -- register an existing
-      hand-written accessor pair (no body is generated).
+Extended attributes
+-------------------
 
-Anything else is an error.  Interfaces inherit nothing at code-generation time:
-members declared here are registered on the protocol passed to the generated
-``DefineGenerated<Interface>()`` function, which the hand-written
-``Define<Interface>Prototype()`` calls in the right place.
+Interface:
+
+* ``[Proto=<impl field>]`` -- **required**; the prototype every member of this
+  interface is registered on (e.g. ``element_proto``).  The generated function
+  takes the binder's ``Impl&`` and reads ``impl.<field>``.
+* ``[Exposed=...]`` is accepted and ignored.
+
+Members:
+
+* ``[Reflect=<content attribute>]`` -- the generator emits the getter and
+  setter that reflect the IDL attribute to a content attribute and mark the DOM
+  dirty.  Only ``boolean`` and ``DOMString`` are supported.
+* ``[Getter=<symbol>]`` / ``[Setter=<symbol>]`` -- register existing
+  hand-written accessors; no body is generated.  ``readonly`` means getter
+  only.
+* ``[Magic=<int>]`` -- with Getter/Setter, use ``MakeGetterMagic`` /
+  ``MakeSetterMagic``.
+* ``[CFunction=<symbol>]`` -- a method is registered by name against an
+  existing C++ function (declared in binding_internal.h).
+
+Generated API
+-------------
+
+For every interface, the header declares::
+
+    void DefineGenerated<Interface>(JSContext* ctx, Impl& impl);
+
+which registers the interface's members on ``impl.<Proto>``.
 
 Usage
 -----
@@ -93,7 +108,18 @@ class Interface:
     name: str
     base: str | None
     members: list[Member]
+    extended: dict[str, ExtendedAttr]
     line: int
+
+    @property
+    def proto(self) -> str:
+        attr = self.extended.get("Proto")
+        if attr is None or not attr.value:
+            raise IdlError(
+                f"interface {self.name} needs [Proto=<impl field>] "
+                f"(line {self.line})"
+            )
+        return attr.value
 
 
 class IdlError(Exception):
@@ -182,8 +208,6 @@ class Parser:
             if self.accept("="):
                 if self.peek()[0] == "ident":
                     value = self.next()[1]
-                elif self.peek()[1] == '"':
-                    value = self.parse_string()
                 else:
                     raise self.error("expected an extended attribute value")
             attrs[name] = ExtendedAttr(name, value, line)
@@ -192,18 +216,14 @@ class Parser:
             self.expect("]")
             return attrs
 
-    def parse_string(self) -> str:
-        self.expect('"')
-        out = []
-        for kind, value, _ in self.tokens[self.pos :]:
-            self.next()
-            if value == '"':
-                return "".join(out)
-            out.append(value)
-        raise self.error("unterminated string")
+    def parse(self) -> list[Interface]:
+        interfaces: list[Interface] = []
+        while self.peek()[0] != "eof":
+            interfaces.append(self.parse_interface())
+        return interfaces
 
-    def parse(self) -> Interface:
-        self.parse_extended_attrs()  # [Exposed=Window] -- informational
+    def parse_interface(self) -> Interface:
+        extended = self.parse_extended_attrs()
         self.expect("interface")
         _, name, line = self.next()
         base = None
@@ -214,9 +234,7 @@ class Parser:
         while not self.accept("}"):
             members.append(self.parse_member())
         self.expect(";")
-        if self.peek()[0] != "eof":
-            raise self.error("trailing content after the interface")
-        return Interface(name, base, members, line)
+        return Interface(name, base, members, extended, line)
 
     def parse_member(self) -> Member:
         extended = self.parse_extended_attrs()
@@ -225,17 +243,8 @@ class Parser:
             _, type_name, line = self.next()
             _, name, _ = self.next()
             self.expect(";")
-            if readonly:
-                # A readonly attribute is written like an accessor pair with a
-                # getter only; [Reflect] cannot express "no setter" yet.
-                if "Reflect" in extended:
-                    raise IdlError(
-                        f"{self.source}:{line}: [Reflect] on a readonly attribute is "
-                        "not supported yet; use [Getter=...]"
-                    )
             return Member("attribute", name, type_name, extended, line, readonly)
 
-        # Method: <return type> <name> "(" params? ")" ";"
         _, return_type, line = self.next()
         _, name, _ = self.next()
         self.expect("(")
@@ -251,8 +260,7 @@ class Parser:
                 self.expect(")")
                 break
         self.expect(";")
-        member = Member("method", name, return_type, extended, line, arg_count=argc)
-        return member
+        return Member("method", name, return_type, extended, line, arg_count=argc)
 
 
 # ---------------------------------------------------------------------------
@@ -263,12 +271,14 @@ _REFLECT_TYPES = {"boolean", "DOMString"}
 
 
 def validate(iface: Interface, source: str) -> None:
+    iface.proto  # raises when missing
     for member in iface.members:
         where = f"{source}:{member.line}"
         if member.kind == "attribute":
             has_reflect = "Reflect" in member.extended
-            has_accessors = "Getter" in member.extended or "Setter" in member.extended
-            if has_reflect and has_accessors:
+            has_getter = "Getter" in member.extended
+            has_setter = "Setter" in member.extended
+            if has_reflect and (has_getter or has_setter):
                 raise IdlError(f"{where}: use [Reflect] or [Getter]/[Setter], not both")
             if has_reflect:
                 if member.type not in _REFLECT_TYPES:
@@ -278,10 +288,14 @@ def validate(iface: Interface, source: str) -> None:
                     )
                 if not member.extended["Reflect"].value:
                     raise IdlError(f"{where}: [Reflect] needs a content attribute name")
+                if member.readonly:
+                    raise IdlError(f"{where}: [Reflect] on a readonly attribute is not supported")
                 continue
-            if has_accessors:
-                if not member.readonly and "Setter" not in member.extended:
+            if has_getter:
+                if not member.readonly and not has_setter:
                     raise IdlError(f"{where}: writable attribute needs [Setter=...]")
+                if "Magic" in member.extended and not member.extended["Magic"].value:
+                    raise IdlError(f"{where}: [Magic] needs an integer")
                 continue
             raise IdlError(
                 f"{where}: attribute {member.name!r} needs [Reflect=...] or "
@@ -296,18 +310,6 @@ def validate(iface: Interface, source: str) -> None:
 # C++ emitter
 # ---------------------------------------------------------------------------
 
-_CPP_KEYWORDS = {
-    "class",
-    "delete",
-    "new",
-    "namespace",
-    "operator",
-    "template",
-    "this",
-    "default",
-    "friend",
-}
-
 
 def cpp_ident(name: str) -> str:
     parts = re.split(r"[^A-Za-z0-9]+", name)
@@ -319,17 +321,15 @@ def cpp_ident(name: str) -> str:
     return out
 
 
-def symbol_suffix(member: Member) -> str:
-    """A stable, collision-free suffix for one member's generated symbols."""
+def member_suffix(member: Member) -> str:
     return cpp_ident(member.name)
 
 
-def emit_getter(iface: Interface, member: Member) -> str:
+def emit_reflect_getter(iface: Interface, member: Member) -> str:
     attr = member.extended["Reflect"].value
-    suffix = symbol_suffix(member)
-    fn = f"Generated{iface.name}Get{suffix}"
+    fn = f"Generated{iface.name}Get{member_suffix(member)}"
     if member.type == "boolean":
-        body = f"""JSValue {fn}(JSContext* ctx, JSValueConst this_val)
+        return f"""JSValue {fn}(JSContext* ctx, JSValueConst this_val)
 {{
   dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {{
@@ -337,8 +337,7 @@ def emit_getter(iface: Interface, member: Member) -> str:
   }}
   return JS_NewBool(ctx, element->HasAttribute("{attr}"));
 }}"""
-    else:
-        body = f"""JSValue {fn}(JSContext* ctx, JSValueConst this_val)
+    return f"""JSValue {fn}(JSContext* ctx, JSValueConst this_val)
 {{
   dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {{
@@ -348,15 +347,13 @@ def emit_getter(iface: Interface, member: Member) -> str:
   return value.has_value() ? JS_NewStringLen(ctx, value->data(), value->size())
                            : JS_NewStringLen(ctx, "", 0);
 }}"""
-    return body
 
 
-def emit_setter(iface: Interface, member: Member) -> str:
+def emit_reflect_setter(iface: Interface, member: Member) -> str:
     attr = member.extended["Reflect"].value
-    suffix = symbol_suffix(member)
-    fn = f"Generated{iface.name}Set{suffix}"
+    fn = f"Generated{iface.name}Set{member_suffix(member)}"
     if member.type == "boolean":
-        body = f"""JSValue {fn}(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+        return f"""JSValue {fn}(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {{
   dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {{
@@ -375,8 +372,7 @@ def emit_setter(iface: Interface, member: Member) -> str:
   ImplFor(ctx, this_val)->MarkAttrDirty(element, "{attr}");
   return JS_UNDEFINED;
 }}"""
-    else:
-        body = f"""JSValue {fn}(JSContext* ctx, JSValueConst this_val, JSValueConst value)
+    return f"""JSValue {fn}(JSContext* ctx, JSValueConst this_val, JSValueConst value)
 {{
   dom::Element* element = AsElement(UnwrapNode(ctx, this_val));
   if (element == nullptr) {{
@@ -395,91 +391,94 @@ def emit_setter(iface: Interface, member: Member) -> str:
   ImplFor(ctx, this_val)->MarkAttrDirty(element, "{attr}");
   return JS_UNDEFINED;
 }}"""
-    return body
 
 
-def emit_source(iface: Interface, source: str, stem: str) -> str:
-    name = iface.name
+def emit_source(interfaces: list[Interface], source: str, stem: str) -> str:
     out: list[str] = [HEADER.format(source=source)]
-    out.append(f'#include "{stem}_generated.h"\n')
-    out.append('#include "../binding_internal.h"\n')
+    out.append("// Included by the hand-written binding file, inside its namespace:")
+    out.append("// the member implementations are file-local and must stay visible.")
+    out.append("")
     out.append("#include <iterator>")
     out.append("#include <optional>")
     out.append("#include <string>")
     out.append("#include <string_view>\n")
-    out.append("namespace neko::javascript {")
-    out.append("namespace {\n")
 
-    for member in iface.members:
-        if member.kind != "attribute" or "Reflect" not in member.extended:
+    emitted_helpers = False
+    for iface in interfaces:
+        helpers = [
+            m
+            for m in iface.members
+            if m.kind == "attribute" and "Reflect" in m.extended
+        ]
+        if not helpers:
             continue
-        out.append(f"// [Reflect={member.extended['Reflect'].value}] "
-                   f"{'readonly ' if member.readonly else ''}attribute "
-                   f"{member.type} {member.name};")
-        out.append(emit_getter(iface, member))
-        out.append("")
-        if not member.readonly:
-            out.append(emit_setter(iface, member))
+        if not emitted_helpers:
+            out.append("namespace {\n")
+            emitted_helpers = True
+        for member in helpers:
+            out.append(f"// [Reflect={member.extended['Reflect'].value}] "
+                       f"attribute {member.type} {member.name};")
+            out.append(emit_reflect_getter(iface, member))
             out.append("")
+            out.append(emit_reflect_setter(iface, member))
+            out.append("")
+    if emitted_helpers:
+        out.append("} // namespace\n")
 
-    methods = [m for m in iface.members if m.kind == "method"]
-    if methods:
-        out.append("// Methods: the body is hand-written; the generator owns the")
-        out.append("// registration so the name and argument count cannot drift.")
-        out.append("constexpr JSCFunctionListEntry kMethods[] = {")
-        for member in methods:
-            c_function = member.extended["CFunction"].value
-            out.append(
-                f'    JS_CFUNC_DEF("{member.name}", {member.arg_count}, {c_function}),'
-            )
-        out.append("};\n")
-
-    out.append("} // namespace\n")
-    out.append(f"void DefineGenerated{name}(JSContext* ctx, JSValue proto)")
-    out.append("{")
-    if methods:
-        out.append("  JS_SetPropertyFunctionList(")
-        out.append("      ctx, proto, kMethods, static_cast<int>(std::size(kMethods)));")
-    for member in iface.members:
-        if member.kind != "attribute":
-            continue
-        suffix = symbol_suffix(member)
-        getter = f"Generated{name}Get{suffix}"
-        if "Reflect" in member.extended:
-            setter = f"Generated{name}Set{suffix}"
-            out.append(
-                f'  DefineAccessor(ctx, proto, "{member.name}", '
-                f'MakeGetter(ctx, "{member.name}", {getter}), '
-                f'MakeSetter(ctx, "{member.name}", {setter}));'
-            )
-        else:
-            getter_sym = member.extended["Getter"].value
-            if member.readonly:
+    for iface in interfaces:
+        methods = [m for m in iface.members if m.kind == "method"]
+        if methods:
+            out.append(f"namespace {{\n")
+            out.append(f"constexpr JSCFunctionListEntry k{iface.name}Methods[] = {{")
+            for member in methods:
                 out.append(
-                    f'  DefineGetter(ctx, proto, "{member.name}", '
-                    f'MakeGetter(ctx, "{member.name}", {getter_sym}));'
+                    f'    JS_CFUNC_DEF("{member.name}", {member.arg_count}, '
+                    f'{member.extended["CFunction"].value}),'
+                )
+            out.append("};\n")
+            out.append("} // namespace\n")
+
+        out.append(f"void DefineGenerated{iface.name}(JSContext* ctx, Impl& impl)")
+        out.append("{")
+        proto = f"impl.{iface.proto}"
+        if methods:
+            out.append(f"  JS_SetPropertyFunctionList(")
+            out.append(f"      ctx, {proto}, k{iface.name}Methods,")
+            out.append(f"      static_cast<int>(std::size(k{iface.name}Methods)));")
+        for member in iface.members:
+            if member.kind != "attribute":
+                continue
+            if "Reflect" in member.extended:
+                getter = f"Generated{iface.name}Get{member_suffix(member)}"
+                setter = f"Generated{iface.name}Set{member_suffix(member)}"
+            else:
+                getter = member.extended["Getter"].value
+                setter = member.extended["Setter"].value if "Setter" in member.extended else None
+            magic = member.extended.get("Magic")
+            if magic is not None:
+                getter_expr = (
+                    f'MakeGetterMagic(ctx, "{member.name}", {getter}, {magic.value})'
+                )
+                setter_expr = (
+                    f'MakeSetterMagic(ctx, "{member.name}", {setter}, {magic.value})'
+                    if setter
+                    else None
                 )
             else:
-                setter_sym = member.extended["Setter"].value
+                getter_expr = f'MakeGetter(ctx, "{member.name}", {getter})'
+                setter_expr = f'MakeSetter(ctx, "{member.name}", {setter})' if setter else None
+            if setter_expr is None:
                 out.append(
-                    f'  DefineAccessor(ctx, proto, "{member.name}", '
-                    f'MakeGetter(ctx, "{member.name}", {getter_sym}), '
-                    f'MakeSetter(ctx, "{member.name}", {setter_sym}));'
+                    f'  DefineGetter(ctx, {proto}, "{member.name}", {getter_expr});'
                 )
-    out.append("}\n")
-    out.append("} // namespace neko::javascript")
+            else:
+                out.append(
+                    f'  DefineAccessor(ctx, {proto}, "{member.name}", {getter_expr}, '
+                    f"{setter_expr});"
+                )
+        out.append("}\n")
+
     return "\n".join(out) + "\n"
-
-
-def emit_header(iface: Interface, source: str) -> str:
-    return (
-        HEADER.format(source=source)
-        + "\n#pragma once\n\n#include <quickjs.h>\n\n"
-        + "namespace neko::javascript {\n\n"
-        + f"// Registers the members declared in {source} on |proto|.\n"
-        + f"void DefineGenerated{iface.name}(JSContext* ctx, JSValue proto);\n\n"
-        + "} // namespace neko::javascript\n"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -488,12 +487,7 @@ def emit_header(iface: Interface, source: str) -> str:
 
 
 def format_cpp(text: str, filename: pathlib.Path) -> str:
-    """Runs clang-format so the checked-in output is exactly what CI checks.
-
-    The project's formatting gate covers src/, so generated files must be
-    clang-format clean too.  CLANG_FORMAT overrides the binary (same variable
-    tools/format.sh uses).
-    """
+    """Runs clang-format so the checked-in output is exactly what CI checks."""
     binary = os.environ.get("CLANG_FORMAT", "clang-format")
     try:
         proc = subprocess.run(
@@ -522,13 +516,14 @@ def generate() -> dict[pathlib.Path, str]:
     for path in sources:
         source = path.relative_to(ROOT).as_posix()
         text = path.read_text(encoding="utf-8")
-        iface = Parser(tokenize(text, source), source).parse()
-        validate(iface, source)
+        interfaces = Parser(tokenize(text, source), source).parse()
+        for iface in interfaces:
+            validate(iface, source)
         stem = path.stem
-        header_path = OUT_DIR / f"{stem}_generated.h"
-        source_path = OUT_DIR / f"{stem}_generated.cpp"
-        outputs[header_path] = format_cpp(emit_header(iface, source), header_path)
-        outputs[source_path] = format_cpp(emit_source(iface, source, stem), source_path)
+        source_path = OUT_DIR / f"{stem}_generated.inc"
+        outputs[source_path] = format_cpp(
+            emit_source(interfaces, source, stem), source_path
+        )
     return outputs
 
 

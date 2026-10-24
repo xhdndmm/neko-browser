@@ -189,15 +189,10 @@ JSValue StyleSetPropertyDirect(JSContext* ctx, JSValueConst this_val, JSValueCon
 // Global timer functions (setTimeout/setInterval/clearTimeout/clearInterval).
 // ---------------------------------------------------------------------------
 
+#include "generated/style_binding_generated.inc"
+
 void DefineStylePrototype(JSContext* ctx, Impl& impl)
 {
-  static const std::array<JSCFunctionListEntry, 3> kMethods = {{
-      JS_CFUNC_DEF("setProperty", 2, StyleSetProperty),
-      JS_CFUNC_DEF("getPropertyValue", 1, StyleGetPropertyValue),
-      JS_CFUNC_DEF("removeProperty", 1, StyleRemoveProperty),
-  }};
-  JS_SetPropertyFunctionList(
-      ctx, impl.style_proto, kMethods.data(), static_cast<int>(kMethods.size()));
 
   // Direct camelCase accessors for the documented property subset.
   for (std::size_t i = 0; i < kStyleProps.size(); ++i) {
@@ -219,6 +214,7 @@ void DefineStylePrototype(JSContext* ctx, Impl& impl)
                    MakeGetterMagic(ctx, camel.c_str(), StyleGetProperty, magic),
                    MakeSetterMagic(ctx, camel.c_str(), StyleSetPropertyDirect, magic));
   }
+  DefineGeneratedStyleBindingStyleProto(ctx, impl);
 }
 
 } // namespace neko::javascript

@@ -3,16 +3,14 @@
 // Generator: tools/webidl/gen.py (WebIDL subset; see that file for the grammar).
 // Regenerate: python3 tools/webidl/gen.py
 
-#include "html_element_generated.h"
-
-#include "../binding_internal.h"
+// Included by the hand-written binding file, inside its namespace:
+// the member implementations are file-local and must stay visible.
 
 #include <iterator>
 #include <optional>
 #include <string>
 #include <string_view>
 
-namespace neko::javascript {
 namespace {
 
 // [Reflect=title] attribute DOMString title;
@@ -139,37 +137,40 @@ JSValue GeneratedHTMLElementSetInert(JSContext* ctx, JSValueConst this_val, JSVa
   return JS_UNDEFINED;
 }
 
-// Methods: the body is hand-written; the generator owns the
-// registration so the name and argument count cannot drift.
-constexpr JSCFunctionListEntry kMethods[] = {
+} // namespace
+
+namespace {
+
+constexpr JSCFunctionListEntry kHTMLElementMethods[] = {
     JS_CFUNC_DEF("focus", 0, ElementFocus),
 };
 
 } // namespace
 
-void DefineGeneratedHTMLElement(JSContext* ctx, JSValue proto)
+void DefineGeneratedHTMLElement(JSContext* ctx, Impl& impl)
 {
-  JS_SetPropertyFunctionList(ctx, proto, kMethods, static_cast<int>(std::size(kMethods)));
+  JS_SetPropertyFunctionList(ctx,
+                             impl.element_proto,
+                             kHTMLElementMethods,
+                             static_cast<int>(std::size(kHTMLElementMethods)));
   DefineAccessor(ctx,
-                 proto,
+                 impl.element_proto,
                  "title",
                  MakeGetter(ctx, "title", GeneratedHTMLElementGetTitle),
                  MakeSetter(ctx, "title", GeneratedHTMLElementSetTitle));
   DefineAccessor(ctx,
-                 proto,
+                 impl.element_proto,
                  "lang",
                  MakeGetter(ctx, "lang", GeneratedHTMLElementGetLang),
                  MakeSetter(ctx, "lang", GeneratedHTMLElementSetLang));
   DefineAccessor(ctx,
-                 proto,
+                 impl.element_proto,
                  "hidden",
                  MakeGetter(ctx, "hidden", GeneratedHTMLElementGetHidden),
                  MakeSetter(ctx, "hidden", GeneratedHTMLElementSetHidden));
   DefineAccessor(ctx,
-                 proto,
+                 impl.element_proto,
                  "inert",
                  MakeGetter(ctx, "inert", GeneratedHTMLElementGetInert),
                  MakeSetter(ctx, "inert", GeneratedHTMLElementSetInert));
 }
-
-} // namespace neko::javascript

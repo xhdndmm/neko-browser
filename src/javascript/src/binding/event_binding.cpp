@@ -787,55 +787,13 @@ JSValue EventInitMouseEvent(JSContext* ctx, JSValueConst this_val, int argc, JSV
   return JS_UNDEFINED;
 }
 
+#include "generated/event_binding_generated.inc"
+
 void DefineEventPrototype(JSContext* ctx, Impl& impl)
 {
-  static const std::array<JSCFunctionListEntry, 7> kMethods = {{
-      JS_CFUNC_DEF("preventDefault", 0, EventPreventDefault),
-      JS_CFUNC_DEF("stopPropagation", 0, EventStopPropagation),
-      JS_CFUNC_DEF("stopImmediatePropagation", 0, EventStopImmediatePropagation),
-      JS_CFUNC_DEF("composedPath", 0, EventComposedPath),
-      JS_CFUNC_DEF("initEvent", 3, EventInitEvent),
-      JS_CFUNC_DEF("initCustomEvent", 4, EventInitCustomEvent),
-      JS_CFUNC_DEF("initMouseEvent", 15, EventInitMouseEvent),
-  }};
-  JS_SetPropertyFunctionList(
-      ctx, impl.event_proto, kMethods.data(), static_cast<int>(kMethods.size()));
 
-  DefineGetter(ctx, impl.event_proto, "type", MakeGetter(ctx, "type", EventGetType));
-  DefineGetter(ctx, impl.event_proto, "key", MakeGetter(ctx, "key", EventGetKey));
-  DefineGetter(ctx, impl.event_proto, "code", MakeGetter(ctx, "code", EventGetCode));
-  DefineGetter(ctx, impl.event_proto, "keyCode", MakeGetter(ctx, "keyCode", EventGetKeyCode));
-  DefineGetter(ctx, impl.event_proto, "clientX", MakeGetter(ctx, "clientX", EventGetClientX));
-  DefineGetter(ctx, impl.event_proto, "clientY", MakeGetter(ctx, "clientY", EventGetClientY));
-  DefineGetter(ctx, impl.event_proto, "button", MakeGetter(ctx, "button", EventGetButton));
-  DefineGetter(ctx, impl.event_proto, "deltaY", MakeGetter(ctx, "deltaY", EventGetDeltaY));
-  DefineGetter(ctx, impl.event_proto, "target", MakeGetter(ctx, "target", EventGetTarget));
-  DefineGetter(ctx,
-               impl.event_proto,
-               "currentTarget",
-               MakeGetter(ctx, "currentTarget", EventGetCurrentTarget));
-  DefineGetter(ctx, impl.event_proto, "bubbles", MakeGetter(ctx, "bubbles", EventGetBubbles));
-  DefineGetter(
-      ctx, impl.event_proto, "cancelable", MakeGetter(ctx, "cancelable", EventGetCancelable));
-  DefineGetter(ctx,
-               impl.event_proto,
-               "defaultPrevented",
-               MakeGetter(ctx, "defaultPrevented", EventGetDefaultPrevented));
-  DefineGetter(
-      ctx, impl.event_proto, "eventPhase", MakeGetter(ctx, "eventPhase", EventGetEventPhase));
-  DefineGetter(ctx, impl.event_proto, "timeStamp", MakeGetter(ctx, "timeStamp", EventGetTimeStamp));
-  DefineGetter(ctx, impl.event_proto, "isTrusted", MakeGetter(ctx, "isTrusted", EventGetIsTrusted));
-  DefineGetter(ctx, impl.message_event_proto, "data", MakeGetter(ctx, "data", MessageEventGetData));
-  DefineGetter(
-      ctx, impl.message_event_proto, "origin", MakeGetter(ctx, "origin", MessageEventGetOrigin));
-  DefineGetter(ctx,
-               impl.message_event_proto,
-               "lastEventId",
-               MakeGetter(ctx, "lastEventId", MessageEventGetLastEventId));
-  DefineGetter(
-      ctx, impl.message_event_proto, "source", MakeGetter(ctx, "source", MessageEventGetSource));
-  DefineGetter(
-      ctx, impl.message_event_proto, "ports", MakeGetter(ctx, "ports", MessageEventGetPorts));
+  DefineGeneratedEventBindingEventProto(ctx, impl);
+  DefineGeneratedEventBindingMessageEventProto(ctx, impl);
 }
 
 void DefineElementEventHandlers(JSContext* ctx, Impl& impl)

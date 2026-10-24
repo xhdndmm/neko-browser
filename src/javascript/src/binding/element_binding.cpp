@@ -12,7 +12,6 @@
 #include "neko/html/parser.h"
 
 #include "binding_internal.h"
-#include "generated/html_element_generated.h"
 
 #include <algorithm>
 #include <cstring>
@@ -1692,20 +1691,11 @@ ElementGetElementsByClassName(JSContext* ctx, JSValueConst this_val, int argc, J
 // Document methods and accessors.
 // ---------------------------------------------------------------------------
 
+#include "generated/element_binding_generated.inc"
+#include "generated/html_element_generated.inc"
+
 void DefineClassListPrototype(JSContext* ctx, Impl& impl)
 {
-  static const std::array<JSCFunctionListEntry, 7> kMethods = {{
-      JS_CFUNC_DEF("add", 1, ClassListAdd),
-      JS_CFUNC_DEF("remove", 1, ClassListRemove),
-      JS_CFUNC_DEF("toggle", 1, ClassListToggle),
-      JS_CFUNC_DEF("contains", 1, ClassListContains),
-      JS_CFUNC_DEF("replace", 2, ClassListReplace),
-      JS_CFUNC_DEF("item", 1, ClassListItem),
-      JS_CFUNC_DEF("toString", 0, ClassListToString),
-  }};
-  JS_SetPropertyFunctionList(
-      ctx, impl.class_list_proto, kMethods.data(), static_cast<int>(kMethods.size()));
-  DefineGetter(ctx, impl.class_list_proto, "length", MakeGetter(ctx, "length", ClassListGetLength));
 
   JSValue global = JS_GetGlobalObject(ctx);
   JSValue symbol = JS_GetPropertyStr(ctx, global, "Symbol");
@@ -1720,208 +1710,43 @@ void DefineClassListPrototype(JSContext* ctx, Impl& impl)
   JS_FreeValue(ctx, iterator_symbol);
   JS_FreeValue(ctx, symbol);
   JS_FreeValue(ctx, global);
+  DefineGeneratedElementBindingClassListProto(ctx, impl);
 }
 
 void DefineElementPrototype(JSContext* ctx, Impl& impl)
 {
-  static const std::array<JSCFunctionListEntry, 21> kMethods = {{
-      JS_CFUNC_DEF("getAttribute", 1, ElementGetAttribute),
-      JS_CFUNC_DEF("getAttributeNames", 0, ElementGetAttributeNames),
-      JS_CFUNC_DEF("setAttribute", 2, ElementSetAttribute),
-      JS_CFUNC_DEF("removeAttribute", 1, ElementRemoveAttribute),
-      JS_CFUNC_DEF("hasAttribute", 1, ElementHasAttribute),
-      JS_CFUNC_DEF("scrollIntoView", 1, ElementScrollIntoView),
-      JS_CFUNC_DEF("toggleAttribute", 1, ElementToggleAttribute),
-      JS_CFUNC_DEF("querySelector", 1, ElementQuerySelector),
-      JS_CFUNC_DEF("querySelectorAll", 1, ElementQuerySelectorAll),
-      JS_CFUNC_DEF("getElementsByTagName", 1, ElementGetElementsByTagName),
-      JS_CFUNC_DEF("getElementsByClassName", 1, ElementGetElementsByClassName),
-      JS_CFUNC_DEF("matches", 1, ElementMatches),
-      JS_CFUNC_DEF("closest", 1, ElementClosest),
-      JS_CFUNC_DEF("remove", 0, ElementRemove),
-      JS_CFUNC_DEF("blur", 0, ElementBlur),
-      JS_CFUNC_DEF("insertAdjacentHTML", 2, ElementInsertAdjacentHTML),
-      JS_CFUNC_DEF("insertAdjacentElement", 2, ElementInsertAdjacentElement),
-      JS_CFUNC_DEF("insertAdjacentText", 2, ElementInsertAdjacentText),
-      JS_CFUNC_DEF("getBoundingClientRect", 0, ElementGetBoundingClientRect),
-      JS_CFUNC_DEF("play", 0, ElementPlayVideo),
-      JS_CFUNC_DEF("pause", 0, ElementPauseVideo),
-  }};
-  JS_SetPropertyFunctionList(
-      ctx, impl.element_proto, kMethods.data(), static_cast<int>(kMethods.size()));
 
-  DefineGetter(ctx, impl.element_proto, "tagName", MakeGetter(ctx, "tagName", ElementGetTagName));
-  DefineGetter(ctx,
-               impl.element_proto,
-               "namespaceURI",
-               MakeGetter(ctx, "namespaceURI", ElementGetNamespaceURI));
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "id",
-                 MakeGetter(ctx, "id", ElementGetId),
-                 MakeSetter(ctx, "id", ElementSetId));
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "className",
-                 MakeGetter(ctx, "className", ElementGetClassName),
-                 MakeSetter(ctx, "className", ElementSetClassName));
-  DefineGetter(
-      ctx, impl.element_proto, "attributes", MakeGetter(ctx, "attributes", ElementGetAttributes));
   // Element layout geometry (getBoundingClientRect + offset/client series).
-  DefineGetter(ctx,
-               impl.element_proto,
-               "offsetWidth",
-               MakeGetter(ctx, "offsetWidth", ElementGetOffsetWidth));
-  DefineGetter(ctx,
-               impl.element_proto,
-               "offsetHeight",
-               MakeGetter(ctx, "offsetHeight", ElementGetOffsetHeight));
-  DefineGetter(
-      ctx, impl.element_proto, "offsetTop", MakeGetter(ctx, "offsetTop", ElementGetOffsetTop));
-  DefineGetter(
-      ctx, impl.element_proto, "offsetLeft", MakeGetter(ctx, "offsetLeft", ElementGetOffsetLeft));
-  DefineGetter(ctx,
-               impl.element_proto,
-               "offsetParent",
-               MakeGetter(ctx, "offsetParent", ElementGetOffsetParent));
-  DefineGetter(ctx,
-               impl.element_proto,
-               "clientWidth",
-               MakeGetter(ctx, "clientWidth", ElementGetClientWidth));
-  DefineGetter(ctx,
-               impl.element_proto,
-               "clientHeight",
-               MakeGetter(ctx, "clientHeight", ElementGetClientHeight));
-  DefineGetter(
-      ctx, impl.element_proto, "clientTop", MakeGetter(ctx, "clientTop", ElementGetClientTop));
-  DefineGetter(
-      ctx, impl.element_proto, "clientLeft", MakeGetter(ctx, "clientLeft", ElementGetClientLeft));
+
   // Element scroll geometry (documented subset: only documentElement/<body>
   // scroll; other elements report 0 and their setters no-op).
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "scrollTop",
-                 MakeGetter(ctx, "scrollTop", ElementGetScrollTop),
-                 MakeSetter(ctx, "scrollTop", ElementSetScrollTop));
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "scrollLeft",
-                 MakeGetter(ctx, "scrollLeft", ElementGetScrollLeft),
-                 MakeSetter(ctx, "scrollLeft", ElementSetScrollLeft));
-  DefineGetter(ctx,
-               impl.element_proto,
-               "scrollWidth",
-               MakeGetter(ctx, "scrollWidth", ElementGetScrollWidth));
-  DefineGetter(ctx,
-               impl.element_proto,
-               "scrollHeight",
-               MakeGetter(ctx, "scrollHeight", ElementGetScrollHeight));
+
   // Element-level global event handler attributes (element.onclick = fn);
   // the table and accessors live in event_binding.cpp.
   DefineElementEventHandlers(ctx, impl);
-  DefineGetter(
-      ctx, impl.element_proto, "children", MakeGetter(ctx, "children", ElementGetChildren));
-  DefineGetter(ctx,
-               impl.element_proto,
-               "firstElementChild",
-               MakeGetter(ctx, "firstElementChild", ElementGetFirstElementChild));
-  DefineGetter(ctx,
-               impl.element_proto,
-               "lastElementChild",
-               MakeGetter(ctx, "lastElementChild", ElementGetLastElementChild));
-  DefineGetter(ctx,
-               impl.element_proto,
-               "nextElementSibling",
-               MakeGetter(ctx, "nextElementSibling", ElementGetNextElementSibling));
-  DefineGetter(ctx,
-               impl.element_proto,
-               "previousElementSibling",
-               MakeGetter(ctx, "previousElementSibling", ElementGetPreviousElementSibling));
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "innerHTML",
-                 MakeGetter(ctx, "innerHTML", ElementGetInnerHTML),
-                 MakeSetter(ctx, "innerHTML", ElementSetInnerHTML));
-  DefineGetter(
-      ctx, impl.element_proto, "outerHTML", MakeGetter(ctx, "outerHTML", ElementGetOuterHTML));
+
   // innerText (read-only): an approximation returning the element's
   // textContent.  Real innerText reflects *rendered* text (hidden elements
   // excluded, whitespace normalized); the engine has no layout-backed innerText
   // yet, and bing reads innerText mainly to sniff page text during bootstrap.
-  DefineGetter(
-      ctx, impl.element_proto, "innerText", MakeGetter(ctx, "innerText", NodeGetTextContent));
-  DefineGetter(ctx, impl.element_proto, "style", MakeGetter(ctx, "style", ElementGetStyle));
-  DefineGetter(
-      ctx, impl.element_proto, "classList", MakeGetter(ctx, "classList", ElementGetClassList));
-  DefineGetter(ctx, impl.element_proto, "dataset", MakeGetter(ctx, "dataset", ElementGetDataset));
-  DefineGetter(
-      ctx, impl.svg_element_proto, "dataset", MakeGetter(ctx, "dataset", ElementGetDataset));
+
   // HTMLTemplateElement.prototype.content (HTML 4.12.3): only template
   // elements get the accessor, so `'content' in div` stays false.
-  DefineGetter(ctx,
-               impl.html_template_element_proto,
-               "content",
-               MakeGetter(ctx, "content", ElementGetTemplateContent));
+
   // HTMLDetailsElement.open (HTML 4.11.1): only <details> elements get the
   // accessor, so `'open' in div` stays false.
-  DefineAccessor(ctx,
-                 impl.html_details_element_proto,
-                 "open",
-                 MakeGetter(ctx, "open", ElementGetOpen),
-                 MakeSetter(ctx, "open", ElementSetOpen));
+
   // Reflected attributes generated from html_element.webidl: hidden, title,
   // lang and inert (plus the focus() registration).
-  DefineGeneratedHTMLElement(ctx, impl.element_proto);
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "dir",
-                 MakeGetter(ctx, "dir", ElementGetDir),
-                 MakeSetter(ctx, "dir", ElementSetDir));
+  DefineGeneratedHTMLElement(ctx, impl);
+
   // Focus-related attributes: tabindex drives sequential focus navigation and
   // inert removes a subtree from focus/activation (HTML §6.6.1).
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "tabIndex",
-                 MakeGetter(ctx, "tabIndex", ElementGetTabIndex),
-                 MakeSetter(ctx, "tabIndex", ElementSetTabIndex));
 
   // Form controls (input/textarea/select/option/button).
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "value",
-                 MakeGetter(ctx, "value", ElementGetValue),
-                 MakeSetter(ctx, "value", ElementSetValue));
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "checked",
-                 MakeGetter(ctx, "checked", ElementGetChecked),
-                 MakeSetter(ctx, "checked", ElementSetChecked));
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "type",
-                 MakeGetter(ctx, "type", ElementGetType),
-                 MakeSetter(ctx, "type", ElementSetType));
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "placeholder",
-                 MakeGetter(ctx, "placeholder", ElementGetPlaceholder),
-                 MakeSetter(ctx, "placeholder", ElementSetPlaceholder));
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "disabled",
-                 MakeGetter(ctx, "disabled", ElementGetDisabled),
-                 MakeSetter(ctx, "disabled", ElementSetDisabled));
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "name",
-                 MakeGetter(ctx, "name", ElementGetName),
-                 MakeSetter(ctx, "name", ElementSetName));
+
   // Links (<a>).
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "href",
-                 MakeGetter(ctx, "href", ElementGetHref),
-                 MakeSetter(ctx, "href", ElementSetHref));
+
   for (const auto& [name, part] :
        std::array<std::pair<const char*, AnchorUrlPart>, 7>{{{"protocol", AnchorUrlPart::kProtocol},
                                                              {"host", AnchorUrlPart::kHost},
@@ -1936,63 +1761,17 @@ void DefineElementPrototype(JSContext* ctx, Impl& impl)
                    MakeGetterMagic(ctx, name, ElementGetAnchorUrlPart, static_cast<int>(part)),
                    JS_UNDEFINED);
   }
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "target",
-                 MakeGetter(ctx, "target", ElementGetTarget),
-                 MakeSetter(ctx, "target", ElementSetTarget));
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "rel",
-                 MakeGetter(ctx, "rel", ElementGetRel),
-                 MakeSetter(ctx, "rel", ElementSetRel));
+
   // Images (<img>) and script src.
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "src",
-                 MakeGetter(ctx, "src", ElementGetSrc),
-                 MakeSetter(ctx, "src", ElementSetSrc));
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "currentSrc",
-                 MakeGetter(ctx, "currentSrc", ElementGetCurrentSrc),
-                 MakeSetter(ctx, "currentSrc", ElementSetSrc));
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "alt",
-                 MakeGetter(ctx, "alt", ElementGetAlt),
-                 MakeSetter(ctx, "alt", ElementSetAlt));
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "width",
-                 MakeGetter(ctx, "width", ElementGetWidth),
-                 MakeSetter(ctx, "width", ElementSetWidth));
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "height",
-                 MakeGetter(ctx, "height", ElementGetHeight),
-                 MakeSetter(ctx, "height", ElementSetHeight));
-  DefineGetter(ctx,
-               impl.element_proto,
-               "naturalWidth",
-               MakeGetter(ctx, "naturalWidth", ElementGetNaturalWidth));
-  DefineGetter(ctx,
-               impl.element_proto,
-               "naturalHeight",
-               MakeGetter(ctx, "naturalHeight", ElementGetNaturalHeight));
-  DefineGetter(
-      ctx, impl.element_proto, "complete", MakeGetter(ctx, "complete", ElementGetComplete));
+
   // Media (<video>): duration/currentTime/paused + play()/pause() (methods
   // above).  currentTime is seekable; non-video elements report the media
   // defaults (NaN duration, paused = true).
-  DefineGetter(
-      ctx, impl.element_proto, "duration", MakeGetter(ctx, "duration", ElementGetVideoDuration));
-  DefineAccessor(ctx,
-                 impl.element_proto,
-                 "currentTime",
-                 MakeGetter(ctx, "currentTime", ElementGetVideoCurrentTime),
-                 MakeSetter(ctx, "currentTime", ElementSetVideoCurrentTime));
-  DefineGetter(ctx, impl.element_proto, "paused", MakeGetter(ctx, "paused", ElementGetVideoPaused));
+
+  DefineGeneratedElementBindingElementProto(ctx, impl);
+  DefineGeneratedElementBindingSvgElementProto(ctx, impl);
+  DefineGeneratedElementBindingHtmlTemplateElementProto(ctx, impl);
+  DefineGeneratedElementBindingHtmlDetailsElementProto(ctx, impl);
 }
 
 void EnsureDatasetClassRegistered(JSRuntime* rt)
