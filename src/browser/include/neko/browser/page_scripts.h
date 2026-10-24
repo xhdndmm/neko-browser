@@ -178,6 +178,36 @@ struct ScriptRequestedFormSubmission
 // on the next microtask pump.  Bare import specifiers and import maps are
 // not supported yet (documented limitations).
 //
+// Dynamically inserted scripts (WHATWG HTML §4.12.1 "prepare the script
+// element") are prepared by the DOM binder (see PageApis::
+// execute_script_element) and executed by this file's callback:
+//   * a <script> that becomes connected through a DOM API (appendChild,
+//     insertBefore, replaceChild, insertAdjacentElement, append/prepend, or a
+//     detached subtree that is appended) runs exactly once; re-insertion and
+//     moves do not run it again.  A script inside a detached tree does not run
+//     until that tree is connected;
+//   * inline bodies execute in the global scope, external bodies are fetched
+//     through the same script transport as parse-time external scripts
+//     (cookies/redirects/no-cors request context); HTTP status >= 400 is a
+//     fetch failure;
+//   * document.currentScript is set for the body's duration and the previous
+//     value is restored (dynamic scripts may run re-entrantly inside another
+//     script); it is null while a dynamically inserted module evaluates;
+//   * load fires on success and error on fetch/eval failure (non-bubbling);
+//   * classic scripts execute synchronously during insertion, in insertion
+//     order.  This deliberately approximates the spec's async-by-default rule
+//     for dynamically inserted classic scripts: the engine's fetch is
+//     synchronous, and insertion-order execution is what an `async=false`
+//     sequential loader needs.  `defer` has no effect on dynamically inserted
+//     scripts (spec); `async` is accepted but does not reorder execution;
+//   * scripts created by innerHTML/insertAdjacentHTML fragment parsing are
+//     flagged "already started" and never execute, even if moved into the
+//     document later.  Parser-created scripts are executed only by the load
+//     passes above, never by the insertion hook;
+//   * dynamically inserted module scripts are evaluated as modules under
+//     their absolute URL (inline modules use the document URL); an import map
+//     inserted after load is ignored (DEFERRED: dynamic import maps).
+//
 // A failing script (parse/runtime/fetch) logs an error through |sink| (when
 // provided) and does not stop the remaining scripts.
 //

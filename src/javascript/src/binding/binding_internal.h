@@ -932,6 +932,15 @@ struct Impl
   // wrappers keep pointing at valid memory; freed when the binder dies.
   std::vector<std::unique_ptr<dom::Node>> retained;
 
+  // <script> elements whose "already started" flag is set (WHATWG HTML
+  // §4.12.1).  This covers parser-created scripts (executed by the document
+  // load pass, never by the insertion hook), scripts inserted by fragment
+  // parsing APIs such as innerHTML (which must never execute), and every
+  // dynamically inserted script the binder has already dispatched.  Keyed by
+  // element pointer: nodes stay alive for the binder's lifetime (|created| or
+  // |retained|), so a removed-and-reinserted script is still recognised.
+  std::unordered_set<const dom::Element*> started_scripts;
+
   // Live NodeList/HTMLCollection objects (childNodes, children,
   // getElementsByTagName/ClassName, document.forms/images/links/scripts).
   //
@@ -1202,6 +1211,23 @@ struct Impl
   {
     current_script = element;
   }
+
+  // The DomBinder that owns this Impl.  Set by the DomBinder constructor so
+  // the insertion hook can hand |apis.execute_script_element| a binder
+  // reference (the PageApis callback signature takes one).
+  DomBinder* owner = nullptr;
+
+  // Marks every <script> in |root|'s subtree as already started without
+  // running it.  Called for the document at binder construction (those are
+  // parser-created scripts) and for fragments obtained from innerHTML /
+  // insertAdjacentHTML before they are adopted into the tree.
+  void MarkScriptsAlreadyStarted(dom::Node& root);
+
+  // WHATWG HTML §4.12.1: for each <script> that just became connected through
+  // |added|, prepare (execute) it once.  Nodes that are not connected to this
+  // binder's document are skipped: a subtree inserted into a detached tree
+  // runs later, when the tree itself is connected.
+  void PrepareConnectedScripts(const std::vector<dom::Node*>& added);
 
   // DOMImplementation object (document.implementation): a small subset of
   // the DOM Core contract used by script bootstraps and legacy libraries.

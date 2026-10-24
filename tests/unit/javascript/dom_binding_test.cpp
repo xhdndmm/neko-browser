@@ -7026,5 +7026,130 @@ TEST_F(DomBinderTest, SvgTagNameKeepsItsCase)
   })())JS"));
 }
 
+// -----------------------------------------------------------------------------
+// Dynamic <script> insertion hook (WHATWG HTML §4.12.1).  The binder owns the
+// "already started" bookkeeping and delegates fetch/evaluate to the browser
+// layer through PageApis::execute_script_element; these tests pin the hook
+// contract with a recording callback.
+// -----------------------------------------------------------------------------
+
+TEST(DynamicScriptBindingTest, ConnectedScriptIsPreparedExactlyOnce)
+{
+  std::unique_ptr<dom::Document> document =
+      html::Parser("<html><body><div id='host'></div></body></html>").Parse();
+  PageApis apis;
+  apis.location_href = []() { return std::string("https://example.com/"); };
+  std::vector<dom::Element*> prepared;
+  apis.execute_script_element = [&prepared](DomBinder&, dom::Element& script) {
+    prepared.push_back(&script);
+  };
+  DomBinder binder(*document, apis);
+
+  ASSERT_TRUE(binder
+                  .Evaluate("var s=document.createElement('script');"
+                            "s.id='dyn';"
+                            "document.getElementById('host').appendChild(s);")
+                  .has_value());
+  ASSERT_EQ(prepared.size(), 1u);
+  EXPECT_EQ(prepared[0]->GetAttribute("id").value_or(""), "dyn");
+
+  // Appending an already-connected node moves it; the element must not run
+  // again.  insertAdjacentElement is just another DOM insertion path.
+  ASSERT_TRUE(binder
+                  .Evaluate("document.body.appendChild(s);"
+                            "document.body.insertAdjacentElement('afterbegin', s);")
+                  .has_value());
+  EXPECT_EQ(prepared.size(), 1u);
+}
+
+TEST(DynamicScriptBindingTest, DetachedSubtreeWaitsUntilConnected)
+{
+  std::unique_ptr<dom::Document> document = html::Parser("<html><body></body></html>").Parse();
+  PageApis apis;
+  apis.location_href = []() { return std::string("https://example.com/"); };
+  std::vector<dom::Element*> prepared;
+  apis.execute_script_element = [&prepared](DomBinder&, dom::Element& script) {
+    prepared.push_back(&script);
+  };
+  DomBinder binder(*document, apis);
+
+  ASSERT_TRUE(binder
+                  .Evaluate("var box=document.createElement('div');"
+                            "var s=document.createElement('script');"
+                            "s.id='nested';"
+                            "box.appendChild(s);")
+                  .has_value());
+  EXPECT_TRUE(prepared.empty());
+
+  ASSERT_TRUE(binder.Evaluate("document.body.appendChild(box);").has_value());
+  ASSERT_EQ(prepared.size(), 1u);
+  EXPECT_EQ(prepared[0]->GetAttribute("id").value_or(""), "nested");
+}
+
+TEST(DynamicScriptBindingTest, FragmentParsingScriptsNeverRun)
+{
+  std::unique_ptr<dom::Document> document = html::Parser("<html><body></body></html>").Parse();
+  PageApis apis;
+  apis.location_href = []() { return std::string("https://example.com/"); };
+  std::vector<dom::Element*> prepared;
+  apis.execute_script_element = [&prepared](DomBinder&, dom::Element& script) {
+    prepared.push_back(&script);
+  };
+  DomBinder binder(*document, apis);
+
+  // innerHTML parses a fragment; its script is inert even when moved into the
+  // document later (the parser-inserted fragment scripts carry "already
+  // started").  insertAdjacentHTML follows the same rule.
+  ASSERT_TRUE(binder
+                  .Evaluate("var d=document.createElement('div');"
+                            "d.innerHTML='<scr'+'ipt id=\"inner\"></scr'+'ipt>';"
+                            "document.body.appendChild(d);"
+                            "var inner=d.firstChild;"
+                            "document.head.appendChild(inner);"
+                            "var p=document.createElement('div');"
+                            "document.body.appendChild(p);"
+                            "p.insertAdjacentHTML('beforeend',"
+                            "  '<scr'+'ipt id=\"adjacent\"></scr'+'ipt>');")
+                  .has_value());
+  EXPECT_TRUE(prepared.empty());
+}
+
+TEST(DynamicScriptBindingTest, ExecutorSeesCurrentScriptAndDispatchesLoad)
+{
+  std::unique_ptr<dom::Document> document = html::Parser("<html><body></body></html>").Parse();
+  PageApis apis;
+  apis.location_href = []() { return std::string("https://example.com/"); };
+  apis.execute_script_element = [](DomBinder& binder, dom::Element& script) {
+    dom::Element* previous = binder.CurrentScript();
+    binder.SetCurrentScript(&script);
+    const base::Result<ScriptValue> result =
+        binder.Evaluate(script.TextContent(), "dynamic-script.js");
+    binder.SetCurrentScript(previous);
+    binder.DispatchNonBubblingEvent(script, result.has_value() ? "load" : "error");
+  };
+  DomBinder binder(*document, apis);
+  binder.SetConsoleSink([](std::string_view, std::string_view) {});
+
+  ASSERT_TRUE(binder
+                  .Evaluate(R"JS(
+    window.__dynamicRan = 0;
+    window.__dynamicLoaded = 0;
+    window.__dynamicSawCurrent = false;
+    var dynamicScript = document.createElement('script');
+    dynamicScript.textContent =
+        'window.__dynamicRan++;' +
+        'window.__dynamicSawCurrent = document.currentScript === dynamicScript;';
+    dynamicScript.onload = function() { window.__dynamicLoaded++; };
+    document.body.appendChild(dynamicScript);
+  )JS")
+                  .has_value());
+
+  EXPECT_EQ(binder.Evaluate("String(window.__dynamicRan)").value().ToString().value(), "1");
+  EXPECT_EQ(binder.Evaluate("String(window.__dynamicLoaded)").value().ToString().value(), "1");
+  EXPECT_EQ(binder.Evaluate("String(window.__dynamicSawCurrent)").value().ToString().value(),
+            "true");
+  EXPECT_EQ(binder.Evaluate("String(document.currentScript)").value().ToString().value(), "null");
+}
+
 } // namespace
 } // namespace neko::javascript

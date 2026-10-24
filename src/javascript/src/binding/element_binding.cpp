@@ -1275,6 +1275,10 @@ JSValue ElementSetInnerHTML(JSContext* ctx, JSValueConst this_val, JSValueConst 
   // content.  Scripts in the fragment are not executed (the parser only
   // builds elements; it never runs them).
   std::unique_ptr<dom::DocumentFragment> fragment = html::Parser(html, *element).ParseFragment();
+  // Scripts created by fragment parsing never execute, wherever the parsed
+  // nodes are later moved: flag them "already started" (HTML §4.12.1) so the
+  // dynamic-insertion hook leaves them inert.
+  impl->MarkScriptsAlreadyStarted(*fragment);
   while (target->first_child() != nullptr) {
     std::unique_ptr<dom::Node> removed = target->RemoveChild(target->first_child());
     impl->TakeOwnership(removed.get(), std::move(removed));
@@ -1370,6 +1374,11 @@ ElementInsertAdjacentHTML(JSContext* ctx, JSValueConst this_val, int argc, JSVal
     return JS_UNDEFINED; // detached element: nothing to do
   }
   std::vector<std::unique_ptr<dom::Node>> nodes = TakeFragmentChildren(html, *element);
+  // insertAdjacentHTML is fragment parsing: its <script> children must never
+  // execute, even if moved into the document later (HTML §4.12.1).
+  for (auto& node : nodes) {
+    impl->MarkScriptsAlreadyStarted(*node);
+  }
   for (auto& node : nodes) {
     parent->InsertBefore(std::move(node), reference);
   }

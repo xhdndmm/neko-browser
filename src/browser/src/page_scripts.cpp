@@ -483,7 +483,7 @@ RunPageScripts(renderer::Page& page,
     // ScriptEngine::SetModuleFetcher), and QuickJS calls it *synchronously* from
     // inside EvaluateModule -- so this timer is what separates "waiting for
     // module sources" from "compiling and running them" (see ScriptTimings).
-    apis.fetch = [fetch, page_site, &elapsed_ns, acc_owner](
+    apis.fetch = [fetch, page_site, elapsed_ns, acc_owner](
                      const std::string& url,
                      const std::vector<std::pair<std::string, std::string>>& extra_headers)
         -> base::Result<javascript::FetchResponse> {
@@ -537,6 +537,117 @@ RunPageScripts(renderer::Page& page,
           out_form_submission->request_submit = request_submit;
         };
   }
+
+  // Dynamically inserted <script> elements (WHATWG HTML §4.12.1 "prepare the
+  // script element").  The DOM binder calls this when a script becomes
+  // connected through a DOM API; it has already applied the "already started"
+  // rule and never calls this for parser-created scripts or for scripts
+  // produced by innerHTML/insertAdjacentHTML fragment parsing.
+  //
+  // Execution is synchronous, during the insertion call: the engine's network
+  // fetch is synchronous anyway, and running the body before appendChild
+  // returns keeps document.currentScript correct and preserves insertion order
+  // for the classic "async=false loader appends scripts sequentially" pattern.
+  // The spec's async-by-default rule for dynamically inserted classic scripts
+  // is therefore approximated (documented deviation, see page_scripts.h).
+  //
+  // The callbacks outlive RunPageScripts (scripts inserted by timers/event
+  // handlers run after it returns), so capture copies only -- never the local
+  // lambdas or |services|.
+  apis.execute_script_element = [base_url, page_site, fetch, error_sink](
+                                    javascript::DomBinder& binder, dom::Element& script) {
+    // Data blocks (application/json, ...) and import maps are configuration,
+    // not code.  Import maps added after load are deferred (see docs).
+    if (!IsExecutableScriptType(script) || IsImportMapScript(script)) {
+      return;
+    }
+    const bool is_module = IsModuleScript(script);
+    std::string filename = base_url;
+    std::string source;
+    if (script.HasAttribute("src")) {
+      const std::string src = std::string(script.GetAttribute("src").value_or(""));
+      const base::Result<url::Url> document_base = url::Url::Parse(base_url);
+      const base::Result<url::Url> target = document_base.has_value()
+                                                ? url::Url::Parse(src, document_base.value())
+                                                : url::Url::Parse(src);
+      const auto fail = [&](const std::string& message) {
+        NEKO_LOG_WARNING(message);
+        if (error_sink) {
+          error_sink("error", message);
+        }
+        binder.DispatchNonBubblingEvent(script, "error");
+      };
+      if (!target.has_value()) {
+        fail("script: cannot resolve src \"" + src + "\"");
+        return;
+      }
+      const std::string absolute = target.value().Serialize();
+      if (!fetch) {
+        fail("script: fetch failed for " + absolute + ": no script fetcher");
+        return;
+      }
+      // Same transport as parse-time external scripts: the page's cookies and
+      // request context, no extra headers (classic scripts are no-cors).
+      RequestContext internal_context;
+      internal_context.initiator_site = page_site;
+      const base::Result<network::HttpResponse> response = fetch(target.value(), internal_context);
+      if (!response.has_value()) {
+        fail("script: fetch failed for " + absolute + ": " + response.error().message());
+        return;
+      }
+      if (response.value().status_code >= 400) {
+        fail("script: HTTP " + std::to_string(response.value().status_code) + " for " + absolute);
+        return;
+      }
+      source = response.value().body;
+      filename = absolute;
+    } else {
+      source = script.TextContent();
+    }
+
+    if (is_module) {
+      // Module scripts evaluate under their absolute URL (import.meta.url and
+      // relative imports resolve against it).  document.currentScript is null
+      // during module evaluation, even when the insertion happened inside a
+      // classic script (spec).
+      dom::Element* previous = binder.CurrentScript();
+      binder.SetCurrentScript(nullptr);
+      const base::Result<javascript::ScriptValue> result = binder.EvaluateModule(source, filename);
+      if (!result.has_value()) {
+        NEKO_LOG_WARNING("dynamic module script error: " + result.error().message());
+        if (error_sink) {
+          error_sink("error", "Uncaught [" + filename + "] " + result.error().message());
+        }
+        binder.DispatchNonBubblingEvent(script, "error");
+        binder.SetCurrentScript(previous);
+        return;
+      }
+      binder.DispatchNonBubblingEvent(script, "load");
+      binder.SetCurrentScript(previous);
+      return;
+    }
+
+    // Classic script: set document.currentScript for the duration of the body
+    // and restore the previous value, because a dynamically inserted script
+    // can run re-entrantly inside another classic script.  The load/error
+    // events fire with currentScript null (no classic script body is running
+    // then), as in a browser where they are separate tasks.
+    dom::Element* previous = binder.CurrentScript();
+    binder.SetCurrentScript(&script);
+    const base::Result<javascript::ScriptValue> result = binder.Evaluate(source, filename);
+    binder.SetCurrentScript(nullptr);
+    if (!result.has_value()) {
+      NEKO_LOG_WARNING("dynamic script error: " + result.error().message());
+      if (error_sink) {
+        error_sink("error", "Uncaught [" + filename + "] " + result.error().message());
+      }
+      binder.DispatchNonBubblingEvent(script, "error");
+      binder.SetCurrentScript(previous);
+      return;
+    }
+    binder.DispatchNonBubblingEvent(script, "load");
+    binder.SetCurrentScript(previous);
+  };
 
   // window.history: script-visible session history.  The controller passes
   // pointers to the live tab state (worker thread).  back()/go() demand a

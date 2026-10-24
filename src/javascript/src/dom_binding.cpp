@@ -27,11 +27,20 @@ namespace neko::javascript {
 // ---------------------------------------------------------------------------
 
 DomBinder::DomBinder(dom::Document& document) : impl_(std::make_unique<Impl>(document, PageApis{}))
-{}
+{
+  impl_->owner = this;
+  // Every script present before the binder existed was created by the HTML
+  // parser and is executed by the document load pass (RunPageScripts), never
+  // by the dynamic-insertion hook.
+  impl_->MarkScriptsAlreadyStarted(document);
+}
 
 DomBinder::DomBinder(dom::Document& document, const PageApis& apis)
     : impl_(std::make_unique<Impl>(document, apis))
-{}
+{
+  impl_->owner = this;
+  impl_->MarkScriptsAlreadyStarted(document);
+}
 
 DomBinder::~DomBinder() = default;
 
@@ -52,6 +61,11 @@ base::Result<ScriptValue> DomBinder::EvaluateModule(std::string_view source, std
 void DomBinder::SetCurrentScript(dom::Element* element)
 {
   impl_->SetCurrentScript(element);
+}
+
+dom::Element* DomBinder::CurrentScript() const
+{
+  return impl_->current_script;
 }
 
 void DomBinder::SetConsoleSink(ScriptEngine::ConsoleSink sink)

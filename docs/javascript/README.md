@@ -152,7 +152,42 @@ CLI `--url` 路径同样执行脚本。
 - `defer`：在全部 classic 脚本之后按文档序执行（解析已完成，与规范一致）；
 - `async`：在 classic+defer 阶段之后按文档序执行 —— 同步引擎的文档化近似
   （不抢占管线，无法先于更早的 classic 运行）。
-- 外部脚本经同一网络栈（生产带 Cookie）抓取；module 与动态 import 不支持。
+- 外部脚本经同一网络栈（生产带 Cookie）抓取；`<script type="module">`
+  按 ES 模块求值（见兼容性矩阵的 ES 模块行），classic 脚本中的动态
+  `import()` 也已接通。
+
+**动态插入的 `<script>`**（2026-10，WHATWG HTML §4.12.1 "prepare the script
+element"）：页面通过 DOM API 插入的脚本现在会真正执行，而不只是进入 DOM。
+
+- **触发点**：`appendChild`/`insertBefore`/`replaceChild`/`append`/
+  `prepend`/`before`/`after`/`replaceWith`/`insertAdjacentElement`/
+  `Range.insertNode` 等插入路径统一经过 `InsertNodeChecked`；节点插入后
+  若已连到 document，则遍历插入子树收集 `<script>`，每个元素**只执行一次**
+  （"already started" 集合）。插入未连接的游离子树不执行，等整棵子树接入
+  document 时才执行；移动/重复插入不会再次执行。
+- **内联/外部**：内联脚本在全局作用域执行其文本；外部脚本经与解析期外部
+  脚本完全相同的 `ScriptFetcher` 路径抓取（Cookie、重定向、no-cors 请求
+  上下文），HTTP >= 400 视为抓取失败。
+- **`document.currentScript`**：执行期间指向该动态元素，结束后恢复此前值
+  （动态脚本可能在另一个 classic 脚本执行中被同步插入，因此必须保存/恢复）；
+  动态插入的 module 求值期间恒为 `null`。
+- **事件**：成功后在该元素上派发非冒泡 `load`，抓取/求值失败派发 `error`；
+  插入前设置的 `onload`/`addEventListener('load')` 不会被丢掉。
+- **执行时机**：classic 动态脚本在插入调用内同步执行，因此按插入顺序执行；
+  这是对规范“动态 classic 脚本默认 async”的文档化近似（引擎网络抓取本身
+  是同步的，且顺序执行正好满足 `async=false` 的顺序加载器）。`defer` 对
+  动态插入的脚本无效（与规范一致）；`async` 被接受但不改变顺序。
+- **不执行的路径**：解析器创建的脚本只由加载阶段执行；`innerHTML`/
+  `insertAdjacentHTML`/片段解析产生的 `<script>` 一律标记为已启动，即使
+  之后被移入 document 也不会执行（HTML §4.12.1）。
+- **module**：动态插入的 `<script type="module">` 按模块求值，外部模块以
+  自身绝对 URL、内联模块以 document URL 作为 import 解析基准；加载后插入的
+  import map 被忽略（DEFERRED）。
+
+`PageApis::execute_script_element` 是 JavaScript 绑定层与浏览器层的接缝：
+绑定层负责 connected/once/innerHTML 抑制与 `currentScript` 栈，浏览器层
+`browser::RunPageScripts` 负责抓取、module 求值与 load/error 派发。插入钩子
+对未接线 `PageApis` 的独立 `DomBinder` 是惰性的（不伪造执行）。
 
 **测试**：107 个 JS 单元测试 + 浏览器集成测试（脚本执行/console/错误/
 定时器/外部脚本/文档序/defer/async/失败不中断/生命周期事件/promise 泵送/

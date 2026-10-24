@@ -21,6 +21,8 @@ namespace neko::javascript {
 // Opaque per-document binding state (defined in dom_binding.cpp).
 struct Impl;
 
+class DomBinder;
+
 // The result of a JS fetch(): a minimal subset of the network response, kept
 // here so the javascript layer does not depend on the network types.
 struct FetchResponse
@@ -266,6 +268,21 @@ struct PageApis
   std::function<bool(dom::Element&)> blur_element;
   std::function<dom::Element*()> active_element;
   std::function<bool()> has_focus;
+
+  // Runs a <script> element that became connected through a DOM API
+  // (appendChild/insertBefore/replaceChild/insertAdjacentElement/..., or a
+  // detached subtree containing it being appended): WHATWG HTML §4.12.1
+  // "prepare the script element".  |binder| is the document's binder (the
+  // callback runs with it re-entrantly, during the insertion call), so the
+  // implementation can evaluate code and dispatch the element's load/error
+  // events through the same runtime.
+  //
+  // The binder owns the "already started" bookkeeping: it calls this once per
+  // element, never for parser-created scripts, and never for scripts inserted
+  // by innerHTML/insertAdjacentHTML fragment parsing.  The browser layer wires
+  // it to its script fetch + evaluate path (browser::RunPageScripts).  When
+  // absent (a standalone binder) dynamically inserted scripts are inert.
+  std::function<void(DomBinder&, dom::Element&)> execute_script_element;
 };
 
 // Binds a DOM document into a JavaScript runtime, exposing a practical subset
@@ -609,6 +626,11 @@ public:
   // script body and clears it afterwards; callers must always clear it (a
   // script element left set would leak into later timers/events).
   void SetCurrentScript(dom::Element* element);
+
+  // The element document.currentScript reports right now (null outside classic
+  // script execution).  Used to save/restore the value when a dynamically
+  // inserted script runs re-entrantly inside another script.
+  [[nodiscard]] dom::Element* CurrentScript() const;
 
   // Underlying engine (for tests and integration).
   ScriptEngine& engine();

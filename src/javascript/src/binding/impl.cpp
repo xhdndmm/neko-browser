@@ -1557,6 +1557,81 @@ Impl::Impl(dom::Document& doc, const PageApis& page_apis) : document(doc), apis(
   JS_FreeValue(ctx, global);
 }
 
+namespace {
+
+// True when |node| is connected to |document| (DOM §4.4 "connected"): the
+// root of its parent chain is the document itself.
+bool IsConnectedToDocument(const dom::Node& node, const dom::Document& document)
+{
+  const dom::Node* root = &node;
+  while (root->parent() != nullptr) {
+    root = root->parent();
+  }
+  return root == &document;
+}
+
+// Collects <script> elements in pre-order (document order), including |root|
+// itself when it is a script.
+void CollectScriptElements(dom::Node& root, std::vector<dom::Element*>& out)
+{
+  if (root.node_type() == dom::NodeType::kElement) {
+    auto& element = static_cast<dom::Element&>(root);
+    if (element.tag_name() == "script") {
+      out.push_back(&element);
+    }
+  }
+  for (dom::Node* child : root.ChildNodes()) {
+    CollectScriptElements(*child, out);
+  }
+}
+
+} // namespace
+
+void Impl::MarkScriptsAlreadyStarted(dom::Node& root)
+{
+  std::vector<dom::Element*> scripts;
+  CollectScriptElements(root, scripts);
+  for (dom::Element* script : scripts) {
+    started_scripts.insert(script);
+  }
+}
+
+// WHATWG HTML §4.12.1 "prepare the script element", reduced to the part this
+// engine can guarantee: a script that becomes connected through a DOM API is
+// prepared exactly once.  The browser layer supplies the fetch/evaluate steps
+// through |apis.execute_script_element|.
+//
+// Execution is synchronous, during the insertion call.  This is a documented
+// deviation from the spec's async-by-default rule for dynamically inserted
+// classic scripts: the engine's fetch is synchronous anyway, and running the
+// body before appendChild returns keeps document.currentScript correct and
+// preserves insertion order for the classic async=false loader pattern.
+void Impl::PrepareConnectedScripts(const std::vector<dom::Node*>& added)
+{
+  if (!apis.execute_script_element || owner == nullptr) {
+    return;
+  }
+  std::vector<dom::Element*> scripts;
+  // Collect first: executing a script can mutate the tree (including removing
+  // or moving a later script), which would invalidate a traversal in progress.
+  for (dom::Node* node : added) {
+    if (node == nullptr || !IsConnectedToDocument(*node, document)) {
+      continue;
+    }
+    CollectScriptElements(*node, scripts);
+  }
+  for (dom::Element* script : scripts) {
+    // The tree may have changed while an earlier script ran.
+    if (!IsConnectedToDocument(*script, document)) {
+      continue;
+    }
+    if (!started_scripts.insert(script).second) {
+      continue; // already started (parser script, re-insertion, or executed)
+    }
+    apis.execute_script_element(*owner, *script);
+  }
+}
+
 Impl::~Impl()
 {
   if (ctx == nullptr) {

@@ -1143,7 +1143,13 @@ JSValue ElementGetType(JSContext* ctx, JSValueConst this_val)
     return JS_ThrowTypeError(ctx, "not an element");
   }
   if (element->tag_name() != "input") {
-    return JS_NewStringLen(ctx, "", 0);
+    // Script/style/link (and the other type-bearing elements) reflect the
+    // content attribute directly; an absent attribute is the empty string.
+    const std::optional<std::string_view> type = element->GetAttribute("type");
+    if (!type.has_value()) {
+      return JS_NewStringLen(ctx, "", 0);
+    }
+    return JS_NewStringLen(ctx, type->data(), type->size());
   }
   // The type IDL attribute reflects the content attribute limited to known
   // keywords; the missing and invalid value defaults are the Text state.
@@ -1170,6 +1176,13 @@ JSValue ElementSetType(JSContext* ctx, JSValueConst this_val, JSValueConst value
     const std::string old_value = html::InputValue(*element);
     element->SetAttribute("type", type);
     html::InputTypeChanged(*element, old_type, old_value);
+  } else {
+    // For every other element the IDL `type` attribute is a plain string
+    // reflector: `<script>.type = "module"`, `<style>.type`, `<link>.type`.
+    // The old code only handled <input>, so assigning `script.type =
+    // "module"` silently did nothing and the element later ran as a classic
+    // script (dynamically inserted modules are a real loader pattern).
+    element->SetAttribute("type", type);
   }
   // Reflector setter: behaves like setAttribute (cascade may change).
   if (Impl* impl = ImplFor(ctx, this_val)) {

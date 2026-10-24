@@ -6054,5 +6054,315 @@ TEST(BrowserControllerTest, ScriptSetOpenRelayoutsDetails)
   EXPECT_TRUE(tab->page->ElementBoxGeometry(*body).has_value());
 }
 
+// Evaluates |expression| in the tab's page runtime and returns its string form
+// (or a diagnostic when there is no runtime / the evaluation threw).
+std::string EvaluatePageString(Tab& tab, std::string_view expression)
+{
+  if (tab.script_runtime == nullptr) {
+    return "<no runtime>";
+  }
+  const base::Result<javascript::ScriptValue> value = tab.script_runtime->Evaluate(expression);
+  if (!value.has_value()) {
+    return "<eval error: " + value.error().message() + ">";
+  }
+  const base::Result<std::string> text = value.value().ToString();
+  return text.has_value() ? text.value() : "<stringify error>";
+}
+
+// WHATWG HTML §4.12.1: a <script> appended through a DOM API is prepared and
+// run.  External bodies go through the page's script fetch path (cookies,
+// redirects) and the element fires load; document.currentScript points at the
+// dynamic element while it runs and is restored afterwards.
+TEST(BrowserControllerTest, DynamicallyInsertedExternalScriptRunsAndFiresLoad)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>before</title></head><body>"
+                               "<script id='loader'>"
+                               "var s=document.createElement('script');"
+                               "s.id='dyn';s.src='http://example.com/dyn.js';"
+                               "s.onload=function(){window.__load=1;"
+                               "window.__loadCurrent=document.currentScript;"
+                               "document.title='loaded';};"
+                               "s.onerror=function(){window.__error=1;};"
+                               "document.head.appendChild(s);"
+                               "window.__sameAfter=document.currentScript&&"
+                               "document.currentScript.id;"
+                               "</script>"
+                               "</body></html>"});
+  fetch.Add("http://example.com/dyn.js",
+            FakeFetcher::Route{200,
+                               {{"content-type", "application/javascript"}},
+                               "window.__dyn=1;"
+                               "window.__dynCurrent=document.currentScript&&"
+                               "document.currentScript.id;"
+                               "document.title='DYN';"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  controller.PumpScriptTimers();
+
+  EXPECT_EQ(EvaluatePageString(*tab, "String(window.__dyn)"), "1");
+  // The dynamic body sees itself as document.currentScript...
+  EXPECT_EQ(EvaluatePageString(*tab, "String(window.__dynCurrent)"), "dyn");
+  // ...and the enclosing script sees its own value restored afterwards.
+  EXPECT_EQ(EvaluatePageString(*tab, "String(window.__sameAfter)"), "loader");
+  // The load handler (set before insertion) runs after the body and sees the
+  // title the body assigned.
+  EXPECT_EQ(tab->title, "loaded");
+  EXPECT_EQ(EvaluatePageString(*tab, "String(window.__load)"), "1");
+  // load fires with no classic script body running (document.currentScript is
+  // null), even though the insertion happened inside the loader script.
+  EXPECT_EQ(EvaluatePageString(*tab, "String(window.__loadCurrent)"), "null");
+  EXPECT_EQ(EvaluatePageString(*tab, "String(window.__error)"), "undefined");
+  // The external body came through the script fetch path.
+  const std::vector<std::string> requests = fetch.Requests();
+  EXPECT_NE(std::find(requests.begin(), requests.end(), "http://example.com/dyn.js"),
+            requests.end());
+}
+
+// Inline dynamic scripts execute their text content in the page global scope.
+TEST(BrowserControllerTest, DynamicallyInsertedInlineScriptRuns)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>t</title></head><body>"
+                               "<script>"
+                               "window.__inlineFired=0;"
+                               "window.__inlineLoaded=0;"
+                               "var s=document.createElement('script');"
+                               "s.textContent='window.__inlineFired++;window.__inlineValue=42;';"
+                               "s.onload=function(){window.__inlineLoaded++;};"
+                               "document.head.appendChild(s);"
+                               "</script>"
+                               "</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  controller.PumpScriptTimers();
+
+  EXPECT_EQ(EvaluatePageString(*tab, "String(window.__inlineFired)"), "1");
+  EXPECT_EQ(EvaluatePageString(*tab, "String(window.__inlineValue)"), "42");
+  EXPECT_EQ(EvaluatePageString(*tab, "String(window.__inlineLoaded)"), "1");
+}
+
+// The "already started" flag: re-inserting or moving the same element does not
+// execute it again (appendChild moves an already-connected node).
+TEST(BrowserControllerTest, DynamicallyInsertedScriptExecutesOnceWhenMoved)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>t</title></head><body>"
+                               "<script>"
+                               "window.__movedCount=0;window.__replacedCount=0;"
+                               "var s=document.createElement('script');"
+                               "s.textContent='window.__movedCount++;';"
+                               "document.head.appendChild(s);"
+                               "document.body.appendChild(s);"
+                               "document.head.appendChild(s);"
+                               "document.body.insertAdjacentElement('beforeend', s);"
+                               "document.head.appendChild(s);"
+                               "var other=document.createElement('script');"
+                               "other.textContent='window.__replacedCount++;';"
+                               "document.head.replaceChild(other, s);"
+                               "</script>"
+                               "</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  controller.PumpScriptTimers();
+
+  EXPECT_EQ(EvaluatePageString(*tab, "String(window.__movedCount)"), "1");
+  EXPECT_EQ(EvaluatePageString(*tab, "String(window.__replacedCount)"), "1");
+}
+
+// A script inserted into a detached subtree is not prepared until the tree is
+// connected to the document.
+TEST(BrowserControllerTest, DynamicallyInsertedScriptInDetachedTreeWaitsForConnection)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>t</title></head><body>"
+                               "<script>"
+                               "window.__detachedRan=0;window.__before=-1;window.__after=-1;"
+                               "var box=document.createElement('div');"
+                               "var s=document.createElement('script');"
+                               "s.textContent='window.__detachedRan++;';"
+                               "box.appendChild(s);"
+                               "window.__before=window.__detachedRan;"
+                               "document.body.appendChild(box);"
+                               "window.__after=window.__detachedRan;"
+                               "</script>"
+                               "</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  controller.PumpScriptTimers();
+
+  EXPECT_EQ(EvaluatePageString(*tab, "String(window.__before)"), "0");
+  EXPECT_EQ(EvaluatePageString(*tab, "String(window.__after)"), "1");
+}
+
+// A failed fetch fires the element's error event and never runs a body.
+TEST(BrowserControllerTest, DynamicallyInsertedScriptFetchFailureFiresError)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>t</title></head><body>"
+                               "<script>"
+                               "window.__missingError=0;window.__missingLoad=0;"
+                               "var s=document.createElement('script');"
+                               "s.src='http://example.com/missing.js';"
+                               "s.onerror=function(){window.__missingError++;};"
+                               "s.onload=function(){window.__missingLoad++;};"
+                               "document.head.appendChild(s);"
+                               "</script>"
+                               "</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  controller.PumpScriptTimers();
+
+  EXPECT_EQ(EvaluatePageString(*tab, "String(window.__missingError)"), "1");
+  EXPECT_EQ(EvaluatePageString(*tab, "String(window.__missingLoad)"), "0");
+}
+
+// innerHTML/insertAdjacentHTML parse fragments; their <script> elements are
+// inert, even if moved into the document later (HTML §4.12.1).
+TEST(BrowserControllerTest, InnerHtmlScriptsDoNotExecute)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>t</title></head><body>"
+                               "<script>"
+                               "window.__innerRan=0;window.__innerMovedRan=0;"
+                               "window.__adjacentRan=0;"
+                               "var d=document.createElement('div');"
+                               "d.innerHTML='<scr'+'ipt>window.__innerRan++;</scr'+'ipt>';"
+                               "document.body.appendChild(d);"
+                               "var inner=d.firstChild;"
+                               "window.__innerTag=inner&&inner.tagName;"
+                               "document.head.appendChild(inner);"
+                               "window.__innerMovedRan=window.__innerRan;"
+                               "var p=document.createElement('div');"
+                               "document.body.appendChild(p);"
+                               "p.insertAdjacentHTML('beforeend',"
+                               "  '<scr'+'ipt>window.__adjacentRan++;</scr'+'ipt>');"
+                               "</script>"
+                               "</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  controller.PumpScriptTimers();
+
+  EXPECT_EQ(EvaluatePageString(*tab, "String(window.__innerTag)"), "SCRIPT");
+  EXPECT_EQ(EvaluatePageString(*tab, "String(window.__innerRan)"), "0");
+  EXPECT_EQ(EvaluatePageString(*tab, "String(window.__innerMovedRan)"), "0");
+  EXPECT_EQ(EvaluatePageString(*tab, "String(window.__adjacentRan)"), "0");
+}
+
+// A sequential loader that appends async=false scripts must run them in
+// insertion order: the second body may depend on the first's globals.
+TEST(BrowserControllerTest, DynamicallyInsertedScriptsKeepInsertionOrder)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>t</title></head><body>"
+                               "<script>"
+                               "window.__order=[];"
+                               "var a=document.createElement('script');"
+                               "a.src='http://example.com/a.js';a.async=false;"
+                               "var b=document.createElement('script');"
+                               "b.src='http://example.com/b.js';b.async=false;"
+                               "document.head.appendChild(a);"
+                               "document.head.appendChild(b);"
+                               "</script>"
+                               "</body></html>"});
+  fetch.Add("http://example.com/a.js",
+            FakeFetcher::Route{200,
+                               {{"content-type", "application/javascript"}},
+                               "window.__order.push('a');window.__a=1;"});
+  fetch.Add("http://example.com/b.js",
+            FakeFetcher::Route{200,
+                               {{"content-type", "application/javascript"}},
+                               "window.__order.push(window.__a===1?'b':'out-of-order');"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  controller.PumpScriptTimers();
+
+  EXPECT_EQ(EvaluatePageString(*tab, "window.__order.join(',')"), "a,b");
+}
+
+// A dynamically inserted module script evaluates as an ES module under the
+// document URL; document.currentScript is null during module evaluation.
+TEST(BrowserControllerTest, DynamicallyInsertedModuleScriptEvaluates)
+{
+  TempProfile tp;
+  FakeFetcher fetch;
+  fetch.Add("http://example.com/",
+            FakeFetcher::Route{200,
+                               {{"content-type", "text/html"}},
+                               "<html><head><title>t</title></head><body>"
+                               "<script id='loader'>"
+                               "window.__moduleRan=0;"
+                               "var m=document.createElement('script');"
+                               "m.type='module';"
+                               "m.textContent='window.__moduleRan=1;"
+                               "window.__moduleUrl=import.meta.url;"
+                               "window.__moduleCurrent=document.currentScript;';"
+                               "document.head.appendChild(m);"
+                               "window.__outerAfterModule=document.currentScript&&"
+                               "document.currentScript.id;"
+                               "</script>"
+                               "</body></html>"});
+  BrowserController controller(tp.path(), std::ref(fetch));
+  controller.NewTab();
+  ASSERT_TRUE(controller.NavigateActive("http://example.com/").has_value());
+  Tab* tab = controller.ActiveTab();
+  ASSERT_NE(tab, nullptr);
+  controller.PumpScriptTimers();
+
+  EXPECT_EQ(EvaluatePageString(*tab, "String(window.__moduleRan)"), "1");
+  EXPECT_EQ(EvaluatePageString(*tab, "String(window.__moduleUrl)"), "http://example.com/");
+  EXPECT_EQ(EvaluatePageString(*tab, "String(window.__moduleCurrent)"), "null");
+  EXPECT_EQ(EvaluatePageString(*tab, "String(window.__outerAfterModule)"), "loader");
+}
+
 } // namespace
 } // namespace neko::browser

@@ -140,6 +140,9 @@ JSValue InsertNodeChecked(JSContext* ctx,
     if (InsertBorrowedFragment(*impl, parent, child, reference, added)) {
       impl->RecordChildListMutation(parent, added, {});
       impl->MarkDomDirty(parent);
+      // A newly connected <script> (or a subtree containing one) is prepared
+      // now; detached insertions are skipped until their tree is connected.
+      impl->PrepareConnectedScripts(added);
       return impl->WrapNode(child);
     }
     return JS_ThrowTypeError(ctx, "insertion: internal ownership error");
@@ -148,6 +151,8 @@ JSValue InsertNodeChecked(JSContext* ctx,
   InsertNodeWithFragmentSemantics(*impl, parent, std::move(owned), reference, added);
   impl->RecordChildListMutation(parent, added, {});
   impl->MarkDomDirty(parent);
+  // WHATWG HTML §4.12.1: prepare dynamically inserted scripts once connected.
+  impl->PrepareConnectedScripts(added);
   return impl->WrapNode(child);
 }
 
@@ -932,6 +937,9 @@ JSValue NodeReplaceChild(JSContext* ctx, JSValueConst this_val, int argc, JSValu
   impl->TakeOwnership(old_child, std::move(removed_old));
   impl->RecordChildListMutation(parent, added, {old_child});
   impl->MarkDomDirty(parent);
+  // replaceChild is one of the DOM insertion APIs that prepares a newly
+  // connected <script> (HTML §4.12.1), like appendChild/insertBefore.
+  impl->PrepareConnectedScripts(added);
   return impl->WrapNode(new_child);
 }
 
