@@ -518,6 +518,25 @@ TEST(PageTest, PointerEventsNoneIsTransparentToHitTesting)
   EXPECT_EQ(hit2->GetAttribute("id").value_or(""), "veil");
 }
 
+// Floats paint (and therefore must hit-test) above the in-flow block
+// background.  baidu.com places its AI search input wrapper in a float; before
+// the renderer walked box.floats, the box rendered but every click fell
+// through to the form wrapper, so the search button could never be activated.
+TEST(PageTest, FloatedControlsAreHitTestable)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body style=\"margin:0\">"
+                            "<div id=\"bar\" style=\"width:400px;height:100px\">"
+                            "<div id=\"float\" style=\"float:left;width:200px;height:100px\">"
+                            "<button id=\"go\" style=\"width:100px;height:40px\">Go</button>"
+                            "</div></div></body>")
+                  .has_value());
+  page.Layout(400, 100);
+  const dom::Element* hit = page.ElementAt(50, 20);
+  ASSERT_NE(hit, nullptr);
+  EXPECT_EQ(hit->GetAttribute("id").value_or(""), "go");
+}
+
 // A descendant can re-enable hit testing inside a pointer-events:none
 // subtree (the property is inherited; pointer-events:auto opts back in).
 TEST(PageTest, PointerEventsAutoChildIsHittableInsideNoneSubtree)

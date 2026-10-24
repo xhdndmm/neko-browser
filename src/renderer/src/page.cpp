@@ -318,6 +318,17 @@ const dom::Element* ElementAt(const layout::LayoutBox& box,
       }
     }
   }
+  // Floats paint after in-flow block content and before the box's own
+  // background is hit (CSS 2.1 Appendix E).  The page's search form places the
+  // logo and the AI input wrapper in floats, so omitting them made those
+  // controls visible but unclickable (clicks fell through to the form
+  // wrapper).  Text runs are checked above so inline content still wins over
+  // an overlapping float.
+  for (const auto& floating : box.floats) {
+    if (const dom::Element* hit = ElementAt(*floating, x, y, scroll_y, in_fixed, styles)) {
+      return hit;
+    }
+  }
   // A click on the box's own border box (padding/background, or an empty
   // block-level element) resolves to the box itself.
   if (x >= box.x && x < box.x + box.width && y >= box.y && y < box.y + box.height &&
