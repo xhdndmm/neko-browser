@@ -909,6 +909,12 @@ struct Impl
   {
     std::weak_ptr<void> endpoint;
     std::vector<uint8_t> serialized_data;
+    // Strong reference to the receiving port's JS object.  A pending message
+    // must keep its port alive even when nothing else references the
+    // MessageChannel (San's nextTick and other schedulers create a channel,
+    // post, and drop every JS reference in the same turn).  Released by the
+    // pump once the task is delivered or discarded.
+    JSValue receiver = JS_UNDEFINED;
   };
   std::vector<MessagePortTask> message_port_tasks;
   std::vector<std::weak_ptr<void>> message_port_endpoints;

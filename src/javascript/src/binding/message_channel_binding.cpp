@@ -13,6 +13,10 @@ struct MessagePortEndpoint
   std::weak_ptr<MessagePortEndpoint> peer;
   JSValue onmessage = JS_NULL;
   std::vector<JSValue> listeners;
+  // Borrowed reference to the port's own JS object (set by NewPort, cleared by
+  // the finalizer).  PostMessage duplicates it into the queued task so a
+  // pending message keeps the receiving port alive without a JS-side handle.
+  JSValue own_object = JS_UNDEFINED;
   bool started = false;
   bool closed = false;
 };
@@ -34,6 +38,9 @@ void MessagePortFinalizer(JSRuntime* rt, JSValue object)
   auto endpoint = wrapper->endpoint;
   if (endpoint != nullptr) {
     endpoint->closed = true;
+    // Borrowed only: the object is being finalized.  A queued message holds
+    // its own strong reference, so it cannot get here before delivery.
+    endpoint->own_object = JS_UNDEFINED;
     for (JSValue listener : endpoint->listeners)
       JS_FreeValueRT(rt, listener);
     endpoint->listeners.clear();
@@ -72,6 +79,7 @@ JSValue NewPort(JSContext* ctx, Impl& impl, const std::shared_ptr<MessagePortEnd
     return object;
   auto* wrapper = new MessagePortWrapper{endpoint};
   JS_SetOpaque(object, wrapper);
+  endpoint->own_object = object;
   impl.message_port_endpoints.push_back(endpoint);
   return object;
 }
@@ -120,6 +128,8 @@ JSValue PostMessage(JSContext* ctx, JSValueConst this_value, int argc, JSValueCo
   auto peer = endpoint->peer.lock();
   if (endpoint->closed || peer == nullptr || peer->closed)
     return JS_UNDEFINED;
+  if (JS_IsUndefined(peer->own_object))
+    return JS_UNDEFINED;
 
   size_t size = 0;
   const JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
@@ -131,6 +141,7 @@ JSValue PostMessage(JSContext* ctx, JSValueConst this_value, int argc, JSValueCo
   Impl::MessagePortTask task;
   task.endpoint = peer;
   task.serialized_data.assign(bytes, bytes + size);
+  task.receiver = JS_DupValue(ctx, peer->own_object);
   js_free(ctx, bytes);
   endpoint->impl->message_port_tasks.push_back(std::move(task));
   return JS_UNDEFINED;
@@ -256,6 +267,9 @@ void CloseMessagePorts(Impl& impl)
     JS_FreeValue(impl.ctx, endpoint->onmessage);
     endpoint->onmessage = JS_UNDEFINED;
   }
+  for (const Impl::MessagePortTask& task : impl.message_port_tasks) {
+    JS_FreeValue(impl.ctx, task.receiver);
+  }
   impl.message_port_tasks.clear();
   impl.message_port_endpoints.clear();
 }
@@ -270,6 +284,8 @@ int RunPendingMessagePortTasks(Impl& impl)
     if (endpoint == nullptr || endpoint->closed || !endpoint->started) {
       if (endpoint != nullptr && !endpoint->closed) {
         impl.message_port_tasks.push_back(std::move(task));
+      } else {
+        JS_FreeValue(impl.ctx, task.receiver);
       }
       continue;
     }
@@ -277,6 +293,7 @@ int RunPendingMessagePortTasks(Impl& impl)
         impl.ctx, task.serialized_data.data(), task.serialized_data.size(), JS_READ_OBJ_REFERENCE);
     if (JS_IsException(data)) {
       JS_FreeValue(impl.ctx, JS_GetException(impl.ctx));
+      JS_FreeValue(impl.ctx, task.receiver);
       continue;
     }
     JSValue event_init = JS_NewObject(impl.ctx);
@@ -288,6 +305,7 @@ int RunPendingMessagePortTasks(Impl& impl)
     if (JS_IsException(event)) {
       JS_FreeValue(impl.ctx, JS_GetException(impl.ctx));
       JS_FreeValue(impl.ctx, data);
+      JS_FreeValue(impl.ctx, task.receiver);
       continue;
     }
     if (JS_IsFunction(impl.ctx, endpoint->onmessage)) {
@@ -298,6 +316,7 @@ int RunPendingMessagePortTasks(Impl& impl)
     }
     JS_FreeValue(impl.ctx, event);
     JS_FreeValue(impl.ctx, data);
+    JS_FreeValue(impl.ctx, task.receiver);
     impl.engine.RunPendingJobs();
     ++ran;
   }

@@ -3122,6 +3122,41 @@ TEST_F(DomBinderTest, MessagePortEventListenerRequiresStart)
   EXPECT_EQ(EvalNumber("window._messageHits"), 1.0);
 }
 
+// A pending message must keep its receiving port alive even when the script
+// drops every reference to the channel in the same turn.  San's nextTick
+// (used by the Baidu home page's chat input) creates a MessageChannel, posts,
+// and returns; the only remaining handle is the queued message.  Before the
+// task kept a strong reference to the receiver, the port was finalized before
+// the next pump and the callback (and therefore the whole UI) never ran.
+TEST_F(DomBinderTest, MessageChannelPendingMessageKeepsReceiverAliveWithoutHandle)
+{
+  ASSERT_TRUE(EvalBool("(function(){ window._aliveHits = 0;"
+                       " (function(){ var channel = new MessageChannel();"
+                       "   channel.port1.onmessage = function(event) {"
+                       "     window._aliveHits = event.data; };"
+                       "   channel.port2.postMessage(7);"
+                       " })();"
+                       " return window._aliveHits === 0; })()"));
+  EXPECT_EQ(binder_->RunPendingTimers(), 1);
+  EXPECT_EQ(EvalNumber("window._aliveHits"), 7.0);
+}
+
+// addEventListener requires start(); the pending message still keeps the port
+// object alive across the turn that starts it.
+TEST_F(DomBinderTest, MessageChannelPendingMessageSurvivesUntilStart)
+{
+  ASSERT_TRUE(EvalBool("(function(){ window._startedHits = 0;"
+                       " window._pendingChannel = new MessageChannel();"
+                       " window._pendingChannel.port1.addEventListener('message',"
+                       "   function(event) { window._startedHits = event.data; });"
+                       " window._pendingChannel.port2.postMessage(9);"
+                       " return window._startedHits === 0; })()"));
+  EXPECT_EQ(binder_->RunPendingTimers(), 0);
+  ASSERT_TRUE(EvalBool("(function(){ window._pendingChannel.port1.start(); return true; })()"));
+  EXPECT_EQ(binder_->RunPendingTimers(), 1);
+  EXPECT_EQ(EvalNumber("window._startedHits"), 9.0);
+}
+
 TEST_F(DomBinderTest, EventTargetDispatchesEventsAndIsMessagePortBase)
 {
   EXPECT_TRUE(EvalBool("(function(){ var target = new EventTarget(); var hits = 0; "
