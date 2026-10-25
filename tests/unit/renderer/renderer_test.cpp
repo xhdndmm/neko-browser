@@ -306,6 +306,24 @@ TEST(PageTest, ContentHeightIncludesOverflowingDescendants)
   EXPECT_GE(page.ContentHeight(), 300.0f) << "overflowing content still defines the scroll extent";
 }
 
+// Inline-block inner boxes already carry absolute coordinates (layout.cpp's
+// TranslateBox).  AccumulateContentBottom used to add the inline box's offset
+// again when recursing, so a footer nested that way doubled its contribution:
+// on baidu.com that reported 2075px of content where the boxes end at 841.
+TEST(PageTest, ContentHeightDoesNotDoubleCountInlineBlockOffsets)
+{
+  Page page;
+  ASSERT_TRUE(page.LoadHtml("<body style=\"margin:0\">"
+                            "<div style=\"height:500px\"></div>"
+                            "<div><span style=\"display:inline-block;width:10px;"
+                            "height:50px\"></span></div></body>")
+                  .has_value());
+  page.Layout(100, 100);
+  ASSERT_NE(page.layout_root(), nullptr);
+  EXPECT_GE(page.ContentHeight(), 550.0f);
+  EXPECT_LT(page.ContentHeight(), 700.0f) << "the inline-block offset is counted once";
+}
+
 TEST(PageTest, ContentHeightFollowsTheRootOnNormalPages)
 {
   Page page;

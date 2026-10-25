@@ -1847,6 +1847,20 @@ TEST(StyleTest, DetailsAndSummaryAreBlocks)
   EXPECT_EQ(summary.list_style_type, ListStyleType::kNone);
 }
 
+// `list-style` is a shorthand for list-style-type (plus position/image, not
+// modelled).  Ignoring it left the UA `ul { list-style-type: disc }` in place,
+// so a page's `list-style: none` still painted a bullet in front of every item
+// (baidu.com's hot-search list).
+TEST(StyleTest, ListStyleShorthandSetsTheMarkerType)
+{
+  auto doc = MakeDoc("<body><ul id=\"u\" style=\"list-style: none\">"
+                     "<li id=\"i\">x</li></ul></body>");
+  StyleEngine engine;
+  engine.ApplyStyles(*doc);
+  EXPECT_EQ(Style(engine, *doc, "#u").list_style_type, ListStyleType::kNone);
+  EXPECT_EQ(Style(engine, *doc, "#i").list_style_type, ListStyleType::kNone);
+}
+
 // CSS Cascade 5 §6.1: the origin order is UA normal < user normal < author
 // normal, so *every* author declaration beats *every* UA declaration whatever
 // their specificities.  This engine's cascade compares importance / specificity

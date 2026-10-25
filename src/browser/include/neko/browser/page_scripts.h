@@ -13,6 +13,7 @@
 #include "neko/storage/session_storage.h"
 #include "neko/url/url.h"
 
+#include <chrono>
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -255,9 +256,16 @@ RunPageScripts(renderer::Page& page,
 // time between turns is deliberately excluded: it is idle, not work.
 inline constexpr int kDefaultPumpIterations = 1000;
 inline constexpr int kPumpQuietBudgetMs = 250;
+// Wall-clock cap for one settle pass.  A page that keeps scheduling timers
+// (carousels, polling, a setInterval(0) animation loop -- baidu.com does this)
+// would otherwise run every iteration and block the caller for minutes: the
+// iteration cap bounds the work per turn, not the waiting between turns.
+inline constexpr int kPumpTotalBudgetMs = 2000;
 
-int PumpScriptTimersUntilQuiet(javascript::DomBinder& binder,
-                               int max_iterations = kDefaultPumpIterations,
-                               PumpStats* pump_stats = nullptr);
+int PumpScriptTimersUntilQuiet(
+    javascript::DomBinder& binder,
+    int max_iterations = kDefaultPumpIterations,
+    PumpStats* pump_stats = nullptr,
+    std::chrono::milliseconds total_budget = std::chrono::milliseconds(kPumpTotalBudgetMs));
 
 } // namespace neko::browser

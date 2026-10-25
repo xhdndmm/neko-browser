@@ -1254,11 +1254,19 @@ void ApplyScriptTimings(const ScriptTimings& timings, LoadPhases& phases)
 
 int PumpScriptTimersUntilQuiet(javascript::DomBinder& binder,
                                int max_iterations,
-                               PumpStats* pump_stats)
+                               PumpStats* pump_stats,
+                               std::chrono::milliseconds total_budget)
 {
   constexpr auto kQuietBudget = std::chrono::milliseconds(kPumpQuietBudgetMs);
+  const auto pump_start = std::chrono::steady_clock::now();
   int iterations = 0;
   for (; iterations < max_iterations; ++iterations) {
+    // A page can keep rescheduling work forever; the iteration cap alone does
+    // not bound wall-clock time because every turn may sleep up to the quiet
+    // budget.  Stop once the settle pass has used its total budget.
+    if (std::chrono::steady_clock::now() - pump_start >= total_budget) {
+      break;
+    }
     // Time one turn: this is where due timers run and queued XHR completions
     // are delivered, i.e. where a page's script work actually executes.
     // The binder fills a TurnBreakdown for this one turn; the browser-side

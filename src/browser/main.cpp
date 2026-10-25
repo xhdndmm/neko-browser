@@ -40,6 +40,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
@@ -611,6 +612,45 @@ int RunRendererChild()
   return 0;
 }
 
+// NEKO_DUMP_LAYOUT=1 prints the laid-out box tree to stderr.  A diagnostic
+// for "the page is blank / has a huge empty area" reports: it shows which box
+// owns a surprising position or height, which the DOM dump cannot.
+void DumpLayoutBox(const neko::layout::LayoutBox& box, int depth)
+{
+  if (depth > 40) {
+    return;
+  }
+  std::string label = "(anonymous)";
+  if (box.element != nullptr) {
+    label = std::string(box.element->tag_name());
+    if (const auto id = box.element->GetAttribute("id"); id.has_value() && !id->empty()) {
+      label += "#" + std::string(*id);
+    }
+    if (const auto cls = box.element->GetAttribute("class"); cls.has_value() && !cls->empty()) {
+      label += "." + std::string(*cls).substr(0, 40);
+    }
+  }
+  std::fprintf(stderr,
+               "%*s%s  %.0f,%.0f %.0fx%.0f  display=%s\n",
+               depth * 2,
+               "",
+               label.c_str(),
+               box.x,
+               box.y,
+               box.width,
+               box.height,
+               std::string(neko::style::ToString(box.style.display)).c_str());
+  for (const auto& child : box.children) {
+    DumpLayoutBox(*child, depth + 1);
+  }
+  for (const auto& child : box.positioned_children) {
+    DumpLayoutBox(*child, depth + 1);
+  }
+  for (const auto& child : box.floats) {
+    DumpLayoutBox(*child, depth + 1);
+  }
+}
+
 int main(int argc, char** argv)
 {
 #ifndef _WIN32
@@ -999,6 +1039,10 @@ int main(int argc, char** argv)
     std::cout << "no URL given; run with --url <url> to load a page.\n";
   }
 
+  if (std::getenv("NEKO_DUMP_LAYOUT") != nullptr && page.layout_root() != nullptr) {
+    DumpLayoutBox(*page.layout_root(), 0);
+  }
+
   if (parsed.options.dump_dom) {
     const std::string dump = renderer_result.has_value() ? renderer_result->dom : page.DumpDom();
     std::cout << dump;
@@ -1029,6 +1073,10 @@ int main(int argc, char** argv)
       // (html/body/... { height: 100% }) a definite basis to resolve against,
       // matching a browser window rather than an unbounded "whole page" canvas.
       page.Layout(kViewportWidth, kMinHeight);
+      if (std::getenv("NEKO_DUMP_LAYOUT") != nullptr && page.layout_root() != nullptr) {
+        std::fprintf(stderr, "content_height=%.0f\n", page.ContentHeight());
+        DumpLayoutBox(*page.layout_root(), 0);
+      }
       const float content_height =
           page.layout_root() != nullptr ? page.ContentHeight() : kMinHeight;
       const int height = std::max(kMinHeight, static_cast<int>(content_height) + 40);

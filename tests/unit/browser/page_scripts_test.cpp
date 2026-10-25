@@ -383,6 +383,33 @@ TEST(PageScriptsTest, RafBudgetIsDrainedByTheQuietPump)
   EXPECT_GE(iterations, 3);
 }
 
+// A page that keeps rescheduling a timer must not block the settle pass.  Each
+// turn may sleep up to the quiet budget, so the iteration cap alone does not
+// bound wall-clock time: baidu.com's repeating timer made headless
+// --screenshot / --dump-dom run for minutes.
+TEST(PageScriptsTest, PumpStopsAtItsTotalBudget)
+{
+  renderer::Page page;
+  ScriptFetcherRecorder recorder(0);
+  base::ThreadPool pool(4);
+  const std::string html = "<!DOCTYPE html><html><body><script>"
+                           "function tick() { setTimeout(tick, 200); }"
+                           "tick();"
+                           "</script></body></html>";
+  const std::shared_ptr<javascript::DomBinder> binder = RunScripts(page, html, recorder, pool);
+  ASSERT_NE(binder, nullptr);
+
+  const auto start = std::chrono::steady_clock::now();
+  const int iterations =
+      PumpScriptTimersUntilQuiet(*binder, 1000, nullptr, std::chrono::milliseconds(300));
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+  // The chain is still pending, so the pass ended on the budget, not on quiet.
+  EXPECT_TRUE(binder->NextTimerDeadline().has_value());
+  EXPECT_GE(iterations, 1);
+  EXPECT_LT(iterations, 100);
+  EXPECT_LT(elapsed, 1s);
+}
+
 // The binder outlives RunPageScripts, so apis.fetch is called again *after* the
 // load -- that is how a page's own fetch()/XHR works.  Anything that callback
 // touches must therefore be shared-owned: it used to capture a stack local by

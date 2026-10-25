@@ -271,6 +271,31 @@ std::vector<std::pair<std::string, std::string>> NormalizeDeclaration(const css:
     return {{"border-left", decl.value}};
   if (p == "border-inline-end")
     return {{"border-right", decl.value}};
+  if (p == "list-style") {
+    // Shorthand -> longhand, so the cascade compares it with the UA sheet's
+    // `ul { list-style-type: disc }` by origin/specificity like any other
+    // declaration.  Only the marker type is modelled (`inside`/`outside` and
+    // the image component are ignored); `none` suppresses the marker.
+    static constexpr std::string_view kTypes[] = {"none",
+                                                  "disc",
+                                                  "circle",
+                                                  "square",
+                                                  "decimal",
+                                                  "lower-alpha",
+                                                  "lower-latin",
+                                                  "upper-alpha",
+                                                  "upper-latin",
+                                                  "lower-roman",
+                                                  "upper-roman"};
+    for (const std::string& token : SplitWhitespace(decl.value)) {
+      for (const std::string_view type : kTypes) {
+        if (token == type) {
+          return {{"list-style-type", token}};
+        }
+      }
+    }
+    return {};
+  }
   if (p == "place-items") {
     // The inline (justify) value is not implemented; keep align-items only.
     const std::vector<std::string> parts = SplitWhitespace(decl.value);
@@ -2449,6 +2474,7 @@ void StyleEngine::ComputeElement(dom::Element& element,
 
   // list-style-type (CSS Lists 3 §4.1).  Inherited, so it applies to the
   // marker boxes of the element's <li> descendants.
+  //
   if (const css::Declaration* d = find("list-style-type")) {
     const css::CssValue v = css::ParseCssValue(d->value);
     if (v.type == css::CssValue::Type::kKeyword) {
