@@ -1542,6 +1542,31 @@ TEST(LayoutTest, FloatLeftHugsContainingBlockLeftEdge)
   EXPECT_FLOAT_EQ(f->height, 60.0f);
 }
 
+// CSS 2.2 §10.4: a float's used width is clamped by max-width.  Ignoring the
+// clamp left baidu.com's `float:left; width:369px; max-width:calc(50% - 9px)`
+// items at 369px, so they could not share a row and the two-column hot-search
+// list rendered as one column.
+TEST(LayoutTest, FloatWidthHonorsMaxWidth)
+{
+  auto doc = html::Parser("<body><div style=\"width:704px\">"
+                          "<span style=\"float:left;width:369px;max-width:340px;"
+                          "height:20px\"></span>"
+                          "<span style=\"float:left;width:369px;"
+                          "max-width:calc(50% - 9px);height:20px\"></span>"
+                          "</div></body>")
+                 .Parse();
+  style::StyleEngine styles;
+  styles.ApplyStyles(*doc);
+  layout::LayoutEngine engine(styles);
+  auto root = engine.BuildLayoutTree(*doc, 800);
+  const LayoutBox* div = FindBox(*root, "div", *doc);
+  ASSERT_NE(div, nullptr);
+  ASSERT_EQ(div->floats.size(), 2u);
+  EXPECT_FLOAT_EQ(div->floats[0]->width, 340.0f);
+  EXPECT_NEAR(div->floats[1]->width, 343.0f, 1.0f); // 50% of 704 minus 9
+  EXPECT_FLOAT_EQ(div->floats[0]->y, div->floats[1]->y) << "both fit on one row";
+}
+
 // Two left floats sit side by side when they fit in the containing block.
 TEST(LayoutTest, ConsecutiveLeftFloatsPlaceBeside)
 {

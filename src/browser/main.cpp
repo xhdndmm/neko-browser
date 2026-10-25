@@ -640,6 +640,13 @@ void DumpLayoutBox(const neko::layout::LayoutBox& box, int depth)
                box.width,
                box.height,
                std::string(neko::style::ToString(box.style.display)).c_str());
+  std::fprintf(stderr,
+               "%*s  float=%d width=%s maxw=%s\n",
+               depth * 2 + 2,
+               "",
+               static_cast<int>(box.style.floating),
+               box.style.width.has_value() ? "set" : "auto",
+               box.style.max_width.has_value() ? "set" : "auto");
   for (const auto& child : box.children) {
     DumpLayoutBox(*child, depth + 1);
   }
